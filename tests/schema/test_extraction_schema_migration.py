@@ -594,6 +594,9 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "report_lifecycle_events",
             "report_receipts",
             "report_transfer_sessions",
+            # WP05b: the hold ledger and the retention policy history.
+            "report_hold_events",
+            "report_retention_policy_events",
         }
     ),
 }

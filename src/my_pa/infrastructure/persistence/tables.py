@@ -10465,10 +10465,10 @@ intelligence_artifact_manifests = Table(
 
 # --- Reports Modernization WP01: the general report plane --------------------
 #
-# Eight tables, created by revision `4c37731671fc` with the triggers a `Table`
-# cannot declare: append-only on the six immutable tables, TRUNCATE refusal on
-# all eight, the guarded updates of `report_roots` (only its head and lifecycle
-# caches move, each by exactly one) and `report_transfer_sessions` (forward-only
+# Ten tables, created by revision `4c37731671fc` with the triggers a `Table`
+# cannot declare: append-only on the eight immutable tables, TRUNCATE refusal on
+# all ten, the guarded updates of `report_roots` (only its head, lifecycle and
+# hold caches move, each by exactly one) and `report_transfer_sessions` (forward-only
 # state; a token and `finalized_at` are set only by `open -> finalized`), the
 # insert guards `a_report_manifest_is_written_with_its_version` and
 # `a_report_association_is_written_with_its_version` (a manifest or association
@@ -10480,9 +10480,14 @@ intelligence_artifact_manifests = Table(
 # xids have passed is widened into the current epoch as a different xid, and
 # would be admitted if that aliased xid happened to be in progress), and the
 # deferred `a_report_version_has_its_manifest`,
-# `a_report_head_is_its_newest_version` and
-# `a_report_lifecycle_cache_is_its_newest_event` (at commit, the root caches
-# name the newest version and lifecycle event of the report).
+# `a_report_head_is_its_newest_version`,
+# `a_report_lifecycle_cache_is_its_newest_event` and
+# `a_report_hold_cache_is_its_newest_event` (at commit, the root caches name
+# the newest version, lifecycle event and hold event of the report), and the
+# retention insert guard `a_report_retention_event_continues_its_predecessor`
+# (WP05b: a retention event's previous period is its predecessor's period; a
+# composite reference over the nullable periods would be `MATCH SIMPLE` and
+# skip every unset period, so the reference below covers the non-null key only).
 #
 # Distinct from the Intelligence Artifact plane above: these are reports a
 # caller authors and versions, keyed by the `grpt`/`grver`/... kinds, not
@@ -10491,13 +10496,22 @@ intelligence_artifact_manifests = Table(
 #
 # Same-owner protection is declarative: every reference carries
 # `owner_principal_id`, so no row can name a root, version, content object or
-# event of another Principal. The two cache references on `report_roots` are
+# event of another Principal. The three cache references on `report_roots` are
 # `DEFERRABLE INITIALLY DEFERRED` and `use_alter`, because a root and its first
 # version name each other and are written in one transaction.
 
 _REPORT_STATES: Final = _literals(ReportLifecycleState)
 _REPORT_TYPE_SHAPE: Final = TYPE_TOKEN_PATTERN.pattern.replace(r"\A", "^").replace(r"\Z", "$")
 _REPORT_VERSION_KEY: Final = ["version_id", "owner_principal_id", "report_id", "version_number"]
+#: WP05b A1/A3: the hold operations, the retention period units and bounds.
+_REPORT_HOLD_OPERATIONS: Final = frozenset({"place", "release"})
+_REPORT_RETENTION_UNITS: Final = frozenset({"days", "years"})
+_REPORT_RETENTION_MAX_DAYS: Final = 36525
+_REPORT_RETENTION_MAX_YEARS: Final = 100
+_REPORT_ATTESTED_AUTHORITY: Final = (
+    f"authority_class IN ({_literals(ATTESTED_AUTHORITY_CLASSES)})",
+    f"decision_channel IN ({_literals(ATTESTED_DECISION_CHANNELS)})",
+)
 
 
 def _report_fk(
@@ -10650,6 +10664,10 @@ report_roots = Table(
     # WP05 A2: the server-derived creator pseudonym; immutable (root trigger).
     Column("created_by_kind", Text, nullable=False),
     Column("created_by_id", Text, nullable=False),
+    # WP05b A2: the hold cache of the hold ledger (revision 0: never held).
+    Column("hold_revision", Integer, nullable=False),
+    Column("hold_event_id", Text),
+    Column("held", Boolean, nullable=False),
     PrimaryKeyConstraint("report_id", name="report_roots_pkey"),
     _is_identifier("report_id", IdKind.REPORT),
     _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
@@ -10657,6 +10675,7 @@ report_roots = Table(
     _is_identifier("audit_id", IdKind.AUDIT),
     _is_identifier("head_version_id", IdKind.REPORT_VERSION),
     _is_identifier("lifecycle_event_id", IdKind.REPORT_LIFECYCLE_EVENT),
+    _is_identifier("hold_event_id", IdKind.REPORT_HOLD_EVENT),
     CheckConstraint("head_version_number >= 1", name="a_report_head_version_number_is_positive"),
     CheckConstraint(
         f"lifecycle_state IN ({_REPORT_STATES})", name="a_report_lifecycle_state_is_known"
@@ -10674,6 +10693,12 @@ report_roots = Table(
     CheckConstraint(
         f"created_by_id ~ '{REPORT_CREATOR_ID_PATTERN}'", name="a_report_creator_is_a_pseudonym"
     ),
+    CheckConstraint("hold_revision >= 0", name="a_report_hold_revision_is_not_negative"),
+    CheckConstraint(
+        "(hold_event_id IS NULL) = (hold_revision = 0)",
+        name="only_a_never_held_report_has_no_hold_event",
+    ),
+    CheckConstraint("hold_revision <> 0 OR NOT held", name="a_never_held_report_is_not_held"),
     UniqueConstraint(
         "report_id", "owner_principal_id", name="a_report_is_identified_with_its_owner"
     ),
@@ -10706,6 +10731,23 @@ report_roots = Table(
         initially="DEFERRED",
         use_alter=True,
         name="a_report_lifecycle_cache_is_an_event_of_the_report",
+    ),
+    # WP05b A2: the hold cache names a hold event of the report with its
+    # revision and resulting `held` (MATCH SIMPLE: a never-held root names none).
+    ForeignKeyConstraint(
+        ["hold_event_id", "owner_principal_id", "report_id", "hold_revision", "held"],
+        [
+            f"{SCHEMA}.report_hold_events.event_id",
+            f"{SCHEMA}.report_hold_events.owner_principal_id",
+            f"{SCHEMA}.report_hold_events.report_id",
+            f"{SCHEMA}.report_hold_events.hold_revision",
+            f"{SCHEMA}.report_hold_events.resulting_held",
+        ],
+        ondelete="RESTRICT",
+        deferrable=True,
+        initially="DEFERRED",
+        use_alter=True,
+        name="a_report_hold_cache_is_an_event_of_the_report",
     ),
     Index("report_roots_by_owner_and_state", "owner_principal_id", "lifecycle_state"),
     # WP04 C6: the catalog list order per owner, ids in code-point order.
@@ -11333,6 +11375,252 @@ report_transfer_sessions = Table(
         "report_content_objects",
         ["content_id", "owner_principal_id"],
         name="a_report_transfer_is_consumed_into_content_of_its_owner",
+    ),
+)
+
+
+#: WP05b A1: the append-only hold ledger of a report. Revision 1 is a `place`
+#: and `place`/`release` alternate (the predecessor reference carries the
+#: predecessor's `resulting_held`). The row is the operation's receipt and
+#: names the attested operator pair; a `place` names its sealed preservation
+#: copy, a `release` none.
+report_hold_events = Table(
+    "report_hold_events",
+    METADATA,
+    Column("event_id", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("report_id", Text, nullable=False),
+    Column("hold_revision", Integer, nullable=False),
+    Column("operation", Text, nullable=False),
+    Column("resulting_held", Boolean, nullable=False),
+    Column("predecessor_event_id", Text),
+    Column("predecessor_revision", Integer),
+    Column("predecessor_held", Boolean),
+    Column("reason", Text, nullable=False),
+    Column("intent_digest", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("authority_class", Text, nullable=False),
+    Column("decision_channel", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    Column("preservation_seal_object_id", Text),
+    Column("preservation_seal_sha256", Text),
+    Column("preservation_seal_byte_count", Integer),
+    Column("preserved_object_count", Integer),
+    Column("preserved_version_count", Integer),
+    Column("preserved_head_version_number", Integer),
+    Column("preserved_lifecycle_revision", Integer),
+    PrimaryKeyConstraint("event_id", name="report_hold_events_pkey"),
+    _is_identifier("event_id", IdKind.REPORT_HOLD_EVENT),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _is_identifier("report_id", IdKind.REPORT),
+    _is_identifier("predecessor_event_id", IdKind.REPORT_HOLD_EVENT),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    _is_identifier("preservation_seal_object_id", IdKind.REPORT_PRESERVATION_OBJECT),
+    CheckConstraint("hold_revision >= 1", name="a_report_hold_revision_is_positive"),
+    _one_of("operation", _REPORT_HOLD_OPERATIONS, name="a_report_hold_operation_is_known"),
+    CheckConstraint(
+        "(operation = 'place') = resulting_held", name="a_report_hold_is_held_exactly_after_a_place"
+    ),
+    CheckConstraint(
+        "(predecessor_event_id IS NULL) = (predecessor_revision IS NULL) AND "
+        "(predecessor_event_id IS NULL) = (predecessor_held IS NULL)",
+        name="a_report_hold_predecessor_is_whole",
+    ),
+    CheckConstraint(
+        "(hold_revision = 1) = (predecessor_event_id IS NULL)",
+        name="only_the_first_report_hold_event_has_no_predecessor",
+    ),
+    CheckConstraint(
+        "hold_revision <> 1 OR operation = 'place'", name="the_first_report_hold_event_is_a_place"
+    ),
+    CheckConstraint(
+        "predecessor_revision IS NULL OR predecessor_revision = hold_revision - 1",
+        name="a_report_hold_predecessor_is_the_prior_revision",
+    ),
+    CheckConstraint(
+        "predecessor_held IS NULL OR predecessor_held <> resulting_held",
+        name="report_hold_events_alternate",
+    ),
+    CheckConstraint(
+        f"char_length(reason) BETWEEN 1 AND {MAX_REPORT_REASON_CHARACTERS}",
+        name="a_report_hold_reason_is_bounded",
+    ),
+    _report_sha("intent_digest", name="a_report_hold_intent_is_a_digest"),
+    CheckConstraint(
+        "char_length(idempotency_key) BETWEEN 1 AND 128", name="a_report_hold_key_is_bounded"
+    ),
+    CheckConstraint(_REPORT_ATTESTED_AUTHORITY[0], name="a_report_hold_authority_is_attested"),
+    CheckConstraint(_REPORT_ATTESTED_AUTHORITY[1], name="a_report_hold_channel_is_attested"),
+    _report_sha(
+        "preservation_seal_sha256", name="a_report_hold_seal_digest_is_sha256", nullable=True
+    ),
+    CheckConstraint(
+        "(preservation_seal_byte_count IS NULL OR preservation_seal_byte_count >= 1) AND "
+        "(preserved_object_count IS NULL OR preserved_object_count >= 1) AND "
+        "(preserved_version_count IS NULL OR preserved_version_count >= 1) AND "
+        "(preserved_head_version_number IS NULL OR preserved_head_version_number >= 1) AND "
+        "(preserved_lifecycle_revision IS NULL OR preserved_lifecycle_revision >= 0)",
+        name="report_hold_preservation_counts_are_in_range",
+    ),
+    CheckConstraint(
+        "(operation = 'place' AND preservation_seal_object_id IS NOT NULL AND "
+        "preservation_seal_sha256 IS NOT NULL AND preservation_seal_byte_count IS NOT NULL AND "
+        "preserved_object_count IS NOT NULL AND preserved_version_count IS NOT NULL AND "
+        "preserved_head_version_number IS NOT NULL AND preserved_lifecycle_revision IS NOT "
+        "NULL) OR (operation <> 'place' AND preservation_seal_object_id IS NULL AND "
+        "preservation_seal_sha256 IS NULL AND preservation_seal_byte_count IS NULL AND "
+        "preserved_object_count IS NULL AND preserved_version_count IS NULL AND "
+        "preserved_head_version_number IS NULL AND preserved_lifecycle_revision IS NULL)",
+        name="only_a_report_hold_placement_is_preserved",
+    ),
+    UniqueConstraint(
+        "owner_principal_id",
+        "report_id",
+        "hold_revision",
+        name="one_report_hold_event_per_revision",
+    ),
+    UniqueConstraint(
+        "owner_principal_id",
+        "operation",
+        "idempotency_key",
+        name="a_report_hold_key_admits_one_request_per_operation",
+    ),
+    UniqueConstraint(
+        "preservation_seal_object_id", name="a_report_hold_seal_preserves_one_placement"
+    ),
+    # The target of the predecessor reference and of `report_roots`' hold cache.
+    UniqueConstraint(
+        "event_id",
+        "owner_principal_id",
+        "report_id",
+        "hold_revision",
+        "resulting_held",
+        name="a_report_hold_event_is_identified_with_its_result",
+    ),
+    _report_fk(
+        [
+            "predecessor_event_id",
+            "owner_principal_id",
+            "report_id",
+            "predecessor_revision",
+            "predecessor_held",
+        ],
+        "report_hold_events",
+        ["event_id", "owner_principal_id", "report_id", "hold_revision", "resulting_held"],
+        name="a_report_hold_predecessor_is_an_event_of_its_report",
+    ),
+    _report_fk(
+        ["report_id", "owner_principal_id"],
+        "report_roots",
+        ["report_id", "owner_principal_id"],
+        name="a_report_hold_event_names_a_report_of_its_owner",
+    ),
+)
+
+
+def _report_retention_period(prefix: str, *, name: str) -> CheckConstraint:
+    count, unit = f"{prefix}period_count", f"{prefix}period_unit"
+    return CheckConstraint(
+        f"{unit} IS NULL OR ({unit} = 'days' AND {count} BETWEEN 1 AND "
+        f"{_REPORT_RETENTION_MAX_DAYS}) OR ({unit} = 'years' AND {count} BETWEEN 1 AND "
+        f"{_REPORT_RETENTION_MAX_YEARS})",
+        name=name,
+    )
+
+
+#: WP05b A3: the append-only retention policy history of an owner Principal.
+#: A NULL period is "unset"; each event records the previous period, which the
+#: `BEFORE INSERT` guard proves equal to its predecessor's period.
+report_retention_policy_events = Table(
+    "report_retention_policy_events",
+    METADATA,
+    Column("event_id", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("policy_revision", Integer, nullable=False),
+    Column("period_count", Integer),
+    Column("period_unit", Text),
+    Column("previous_period_count", Integer),
+    Column("previous_period_unit", Text),
+    Column("predecessor_event_id", Text),
+    Column("predecessor_revision", Integer),
+    Column("reason", Text, nullable=False),
+    Column("intent_digest", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("authority_class", Text, nullable=False),
+    Column("decision_channel", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    PrimaryKeyConstraint("event_id", name="report_retention_policy_events_pkey"),
+    _is_identifier("event_id", IdKind.REPORT_RETENTION_EVENT),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _is_identifier("predecessor_event_id", IdKind.REPORT_RETENTION_EVENT),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    CheckConstraint("policy_revision >= 1", name="a_report_retention_revision_is_positive"),
+    _one_of("period_unit", _REPORT_RETENTION_UNITS, name="a_report_retention_unit_is_known"),
+    _one_of(
+        "previous_period_unit",
+        _REPORT_RETENTION_UNITS,
+        name="a_report_retention_previous_unit_is_known",
+    ),
+    CheckConstraint(
+        "(period_count IS NULL) = (period_unit IS NULL)",
+        name="a_report_retention_period_is_whole",
+    ),
+    CheckConstraint(
+        "(previous_period_count IS NULL) = (previous_period_unit IS NULL)",
+        name="a_report_retention_previous_period_is_whole",
+    ),
+    _report_retention_period("", name="a_report_retention_period_is_bounded"),
+    _report_retention_period("previous_", name="a_report_retention_previous_period_is_bounded"),
+    CheckConstraint(
+        "(predecessor_event_id IS NULL) = (predecessor_revision IS NULL)",
+        name="a_report_retention_predecessor_is_whole",
+    ),
+    CheckConstraint(
+        "(policy_revision = 1) = (predecessor_event_id IS NULL)",
+        name="only_the_first_report_retention_event_has_no_predecessor",
+    ),
+    CheckConstraint(
+        "predecessor_revision IS NULL OR predecessor_revision = policy_revision - 1",
+        name="a_report_retention_predecessor_is_the_prior_revision",
+    ),
+    CheckConstraint(
+        "policy_revision <> 1 OR previous_period_count IS NULL",
+        name="the_first_report_retention_event_follows_no_policy",
+    ),
+    CheckConstraint(
+        f"char_length(reason) BETWEEN 1 AND {MAX_REPORT_REASON_CHARACTERS}",
+        name="a_report_retention_reason_is_bounded",
+    ),
+    _report_sha("intent_digest", name="a_report_retention_intent_is_a_digest"),
+    CheckConstraint(
+        "char_length(idempotency_key) BETWEEN 1 AND 128",
+        name="a_report_retention_key_is_bounded",
+    ),
+    CheckConstraint(_REPORT_ATTESTED_AUTHORITY[0], name="a_report_retention_authority_is_attested"),
+    CheckConstraint(_REPORT_ATTESTED_AUTHORITY[1], name="a_report_retention_channel_is_attested"),
+    UniqueConstraint(
+        "owner_principal_id", "policy_revision", name="one_report_retention_event_per_revision"
+    ),
+    UniqueConstraint(
+        "owner_principal_id", "idempotency_key", name="a_report_retention_key_admits_one_request"
+    ),
+    UniqueConstraint(
+        "event_id",
+        "owner_principal_id",
+        "policy_revision",
+        name="a_report_retention_event_is_identified_with_its_revision",
+    ),
+    _report_fk(
+        ["predecessor_event_id", "owner_principal_id", "predecessor_revision"],
+        "report_retention_policy_events",
+        ["event_id", "owner_principal_id", "policy_revision"],
+        name="a_report_retention_predecessor_is_an_event_of_its_owner",
     ),
 )
 

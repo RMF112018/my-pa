@@ -13,33 +13,38 @@ order it:
 1. sets `lock_timeout` to 10 s for this revision's transaction only
    (`SET LOCAL`), so a lock that cannot be taken aborts the whole revision with
    `55P03` and leaves the database at `2a90f91dd786`;
-2. creates the 8 plane tables in foreign-key order, as frozen DDL text (never
+2. creates the 10 plane tables in foreign-key order, as frozen DDL text (never
    the live `Table` objects, never an enum): `report_content_objects`,
    `report_roots`, `report_versions`, `report_version_manifests`,
-   `report_associations`, `report_lifecycle_events`, `report_receipts` and
-   `report_transfer_sessions`, each with its foreign keys among the new tables
+   `report_associations`, `report_lifecycle_events`, `report_receipts`,
+   `report_transfer_sessions`, `report_hold_events` and
+   `report_retention_policy_events` (WP05b), each with its foreign keys among
+   the new tables
    only (`ON DELETE RESTRICT NOT DEFERRABLE`) and its indexes; no statement
    of steps 1 to 5 names an existing table;
-3. adds the two deferred cache foreign keys on `report_roots`
-   (`DEFERRABLE INITIALLY DEFERRED`, the `e9b2c4d7a150` precedent), once both
-   targets exist: the head names a version of the report with its number, and
-   the lifecycle cache names an event of the report with its revision and
-   resulting state;
-4. creates the 8 plane functions;
-5. creates every trigger on the new tables: append-only on the 6 immutable
-   tables, TRUNCATE refusal on all 8 (only while the table holds a row), the
+3. adds the three deferred cache foreign keys on `report_roots`
+   (`DEFERRABLE INITIALLY DEFERRED`, the `e9b2c4d7a150` precedent), once every
+   target exists: the head names a version of the report with its number, the
+   lifecycle cache names an event of the report with its revision and
+   resulting state, and the hold cache (WP05b) names a hold event of the
+   report with its revision and resulting `held`;
+4. creates the 10 plane functions;
+5. creates the 27 triggers on the new tables: append-only on the 8 immutable
+   tables, TRUNCATE refusal on all 10 (only while the table holds a row), the
    guarded updates of `report_roots` and `report_transfer_sessions` (a
    transfer token and `finalized_at` are set only by the `open -> finalized`
    move, so a session aborted or expired from `open` carries no token), the
    2 insert guards `a_report_manifest_is_written_with_its_version` and
-   `a_report_association_is_written_with_its_version`, and the 3 deferred
-   constraint triggers: `a_report_version_has_its_manifest`, and
-   `a_report_head_is_its_newest_version` and
-   `a_report_lifecycle_cache_is_its_newest_event`, which, at the commit of a
-   new version or lifecycle event, require the root cache to name the newest
-   version and the newest event of the report. With the deferred foreign keys
-   (which prove the cache names *a* version and *an* event of the report),
-   the cache equals the ledger at every commit;
+   `a_report_association_is_written_with_its_version`, the retention insert
+   guard `a_report_retention_event_continues_its_predecessor` (WP05b), and the
+   4 deferred constraint triggers: `a_report_version_has_its_manifest`, and
+   `a_report_head_is_its_newest_version`,
+   `a_report_lifecycle_cache_is_its_newest_event` and
+   `a_report_hold_cache_is_its_newest_event`, which, at the commit of a new
+   version, lifecycle event or hold event, require the root cache to name the
+   newest version, lifecycle event and hold event of the report. With the
+   deferred foreign keys (which prove the cache names *a* version and *an*
+   event of the report), the cache equals the ledger at every commit;
 6. restates `capability_is_known` and `purpose_is_known` on
    `knowledge.audit_events` in place (the `0641c354ca85` precedent: `DROP
    CONSTRAINT` then `ADD CONSTRAINT ... CHECK`, `ACCESS EXCLUSIVE` on
@@ -50,8 +55,11 @@ order it:
    `reports.restore`, WP03); purposes with the frozen sorted set of 63, the 62
    `621ef6786c64` left plus exactly `report_lifecycle` (WP03 RD-14; the other
    two report purposes, `report_authoring` and `report_read`, were already
-   admitted). These are the only statements that name a table that existed
-   before this revision, and a widening cannot fail on an existing row.
+   admitted). The WP05b hold and retention names are not admitted yet: the
+   domain declares them with their registration, and the widening follows it
+   (the head audit vocabulary equals the domain). These are the only statements that
+   name a table that existed before this revision, and a widening cannot fail
+   on an existing row.
 
 The receipts admit one applied write per version and per event: the partial
 unique indexes `a_report_version_is_applied_by_one_receipt` (`version_id`,
@@ -140,6 +148,29 @@ pair checked by a named CHECK with frozen literals. The root's creator is
 immutable (the root trigger's immutable column list); versions are append-only.
 The `created_by` catalog filter is served by `report_roots_by_owner_and_creator`.
 
+Holds and retention (WP05b A1-A5, amended into this unmerged revision in
+place): `report_hold_events` is the append-only hold ledger of a report, one
+event per `hold_revision`, `place` and `release` alternating from a first
+`place` (the predecessor reference carries the predecessor's `resulting_held`
+and `report_hold_events_alternate` requires it to differ); the event row is the
+receipt (`UNIQUE (owner_principal_id, operation, idempotency_key)`), carries the
+attested authority pair (`local_operator`; `local_cli` or `local_web`), and a
+`place` carries its sealed preservation copy's identity, digest and counts, a
+`release` none (`only_a_report_hold_placement_is_preserved`). The root's hold
+cache (`hold_revision`, `hold_event_id`, `held`) moves only by one revision
+with a new event, proven at commit by the deferred reference and
+`a_report_hold_cache_is_its_newest_event`; a new report has revision 0, no
+event and is not held. `report_retention_policy_events` is the append-only
+retention policy history of an owner Principal, one event per
+`policy_revision`, a NULL period meaning unset; each event's previous period
+equals its predecessor's period. That equality is the `BEFORE INSERT` guard
+`a_report_retention_event_continues_its_predecessor`, not a composite foreign
+key: under `MATCH SIMPLE` a reference over the nullable period columns would
+be skipped for every row whose old or new period is unset, so the reference
+covers only the non-null predecessor key `(predecessor_event_id,
+owner_principal_id, predecessor_revision)`. No retention row is ever enforced
+here: retention gates only purge eligibility, and purge does not exist.
+
 Every closed set and bound is a frozen literal equal to the general report
 domain vocabulary module, which this revision does not import.
 
@@ -149,10 +180,11 @@ step 6; each BEFORE text is a byte copy of the AT text `621ef6786c64` left,
 the latest prior restatement of `capability_is_known` and of
 `purpose_is_known`.
 
-No backfill: this revision writes no row. `downgrade` first locks the 8 plane
+No backfill: this revision writes no row. `downgrade` first locks the 10 plane
 tables `ACCESS EXCLUSIVE`, then refuses with `restrict_violation`, deleting
-nothing, while any plane row exists or any audit event names one of the 6
-general report capabilities or the purpose `report_lifecycle`; otherwise it
+nothing, while any plane row exists or any audit event names one of the 10
+general report capabilities or one of the purposes `report_lifecycle`,
+`report_hold` and `report_retention`; otherwise it
 restores the BEFORE texts of `capability_is_known` and `purpose_is_known` and
 drops everything above in reverse order, the deferred foreign keys before the
 tables.
@@ -209,6 +241,18 @@ _MANIFEST_SCHEMAS: Final = "'report_version_manifest_v1'"
 _CREATOR_KINDS: Final = "'local_principal', 'remote_client'"
 #: A creator / author pseudonym: `gcrt_` and 40 lowercase hex digits (WP05 A1).
 _CREATOR_PATTERN: Final = "'^gcrt_[0-9a-f]{40}$'"
+#: The 2 hold operations (WP05b A1).
+_HOLD_OPERATIONS: Final = "'place', 'release'"
+#: The 2 retention period units (WP05b A3).
+_RETENTION_UNITS: Final = "'days', 'years'"
+#: The attested authority classes and decision channels a hold or retention
+#: event carries: the lineage attested pair (`ATTESTED_AUTHORITY_CLASSES`,
+#: `ATTESTED_DECISION_CHANNELS`), written out.
+_ATTESTED_AUTHORITY_CLASSES: Final = "'local_operator'"
+_ATTESTED_DECISION_CHANNELS: Final = "'local_cli', 'local_web'"
+#: A retention period: 1..36525 days or 1..100 years (WP05b A3).
+_RETENTION_MAX_DAYS: Final = 36525
+_RETENTION_MAX_YEARS: Final = 100
 #: A report type and an association relation token.
 _TYPE_PATTERN: Final = "'^[a-z][a-z0-9_]{0,63}$'"
 
@@ -461,7 +505,7 @@ _SEARCH_DOCUMENT: Final = (
     "setweight(to_tsvector('english', search_text), 'B')"
 )
 
-# ---- the 8 tables (contract section 3) ---------------------------------------------
+# ---- the 10 tables (contract section 3; WP05b A1, A3) ----------------------------
 
 #: `(table, CREATE TABLE, its indexes)` in creation order. No statement here
 #: names a table that existed before this revision.
@@ -555,6 +599,9 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
           lifecycle_event_id TEXT,
           created_by_kind TEXT NOT NULL,
           created_by_id TEXT NOT NULL,
+          hold_revision INTEGER NOT NULL,
+          hold_event_id TEXT,
+          held BOOLEAN NOT NULL,
           CONSTRAINT report_roots_pkey PRIMARY KEY (report_id),
           {_id("report_id", "grpt")},
           {_id("owner_principal_id", "prn")},
@@ -562,6 +609,7 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
           {_id("audit_id", "audit")},
           {_id("head_version_id", "grver")},
           {_id("lifecycle_event_id", "grlev")},
+          {_id("hold_event_id", "grhld")},
           CONSTRAINT a_report_head_version_number_is_positive CHECK (head_version_number >= 1),
           CONSTRAINT a_report_lifecycle_state_is_known CHECK (lifecycle_state IN ({_STATES})),
           CONSTRAINT a_report_lifecycle_revision_is_not_negative CHECK (lifecycle_revision
@@ -574,6 +622,10 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
               ({_CREATOR_KINDS})),
           CONSTRAINT a_report_creator_is_a_pseudonym CHECK (created_by_id ~
               {_CREATOR_PATTERN}),
+          CONSTRAINT a_report_hold_revision_is_not_negative CHECK (hold_revision >= 0),
+          CONSTRAINT only_a_never_held_report_has_no_hold_event CHECK ((hold_event_id IS
+              NULL) = (hold_revision = 0)),
+          CONSTRAINT a_never_held_report_is_not_held CHECK (hold_revision <> 0 OR NOT held),
           CONSTRAINT a_report_is_identified_with_its_owner UNIQUE (report_id,
               owner_principal_id)
         )
@@ -1038,12 +1090,200 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
         """,
         (),
     ),
+    (
+        "report_hold_events",
+        f"""
+        CREATE TABLE knowledge.report_hold_events (
+          event_id TEXT NOT NULL,
+          owner_principal_id TEXT NOT NULL,
+          report_id TEXT NOT NULL,
+          hold_revision INTEGER NOT NULL,
+          operation TEXT NOT NULL,
+          resulting_held BOOLEAN NOT NULL,
+          predecessor_event_id TEXT,
+          predecessor_revision INTEGER,
+          predecessor_held BOOLEAN,
+          reason TEXT NOT NULL,
+          intent_digest TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          authority_class TEXT NOT NULL,
+          decision_channel TEXT NOT NULL,
+          recorded_at TIMESTAMP WITH TIME ZONE NOT NULL,
+          correlation_id TEXT NOT NULL,
+          audit_id TEXT NOT NULL,
+          preservation_seal_object_id TEXT,
+          preservation_seal_sha256 TEXT,
+          preservation_seal_byte_count INTEGER,
+          preserved_object_count INTEGER,
+          preserved_version_count INTEGER,
+          preserved_head_version_number INTEGER,
+          preserved_lifecycle_revision INTEGER,
+          CONSTRAINT report_hold_events_pkey PRIMARY KEY (event_id),
+          {_id("event_id", "grhld")},
+          {_id("owner_principal_id", "prn")},
+          {_id("report_id", "grpt")},
+          {_id("predecessor_event_id", "grhld")},
+          {_id("correlation_id", "corr")},
+          {_id("audit_id", "audit")},
+          {_id("preservation_seal_object_id", "grprv")},
+          CONSTRAINT a_report_hold_revision_is_positive CHECK (hold_revision >= 1),
+          CONSTRAINT a_report_hold_operation_is_known CHECK (operation IN
+              ({_HOLD_OPERATIONS})),
+          CONSTRAINT a_report_hold_is_held_exactly_after_a_place CHECK ((operation =
+              'place') = resulting_held),
+          CONSTRAINT a_report_hold_predecessor_is_whole CHECK ((predecessor_event_id IS
+              NULL) = (predecessor_revision IS NULL) AND (predecessor_event_id IS NULL) =
+              (predecessor_held IS NULL)),
+          CONSTRAINT only_the_first_report_hold_event_has_no_predecessor CHECK
+              ((hold_revision = 1) = (predecessor_event_id IS NULL)),
+          CONSTRAINT the_first_report_hold_event_is_a_place CHECK (hold_revision <> 1 OR
+              operation = 'place'),
+          CONSTRAINT a_report_hold_predecessor_is_the_prior_revision CHECK
+              (predecessor_revision IS NULL OR predecessor_revision = hold_revision - 1),
+          CONSTRAINT report_hold_events_alternate CHECK (predecessor_held IS NULL OR
+              predecessor_held <> resulting_held),
+          CONSTRAINT a_report_hold_reason_is_bounded CHECK (char_length(reason) BETWEEN 1
+              AND 500),
+          {_sha("intent_digest", "a_report_hold_intent_is_a_digest")},
+          CONSTRAINT a_report_hold_key_is_bounded CHECK (char_length(idempotency_key)
+              BETWEEN 1 AND 128),
+          CONSTRAINT a_report_hold_authority_is_attested CHECK (authority_class IN
+              ({_ATTESTED_AUTHORITY_CLASSES})),
+          CONSTRAINT a_report_hold_channel_is_attested CHECK (decision_channel IN
+              ({_ATTESTED_DECISION_CHANNELS})),
+          {_sha("preservation_seal_sha256", "a_report_hold_seal_digest_is_sha256", nullable=True)},
+          CONSTRAINT report_hold_preservation_counts_are_in_range CHECK
+              ((preservation_seal_byte_count IS NULL OR preservation_seal_byte_count >= 1)
+              AND (preserved_object_count IS NULL OR preserved_object_count >= 1) AND
+              (preserved_version_count IS NULL OR preserved_version_count >= 1) AND
+              (preserved_head_version_number IS NULL OR preserved_head_version_number >= 1)
+              AND (preserved_lifecycle_revision IS NULL OR preserved_lifecycle_revision >=
+              0)),
+          CONSTRAINT only_a_report_hold_placement_is_preserved CHECK ((operation = 'place'
+              AND preservation_seal_object_id IS NOT NULL AND preservation_seal_sha256 IS
+              NOT NULL AND preservation_seal_byte_count IS NOT NULL AND
+              preserved_object_count IS NOT NULL AND preserved_version_count IS NOT NULL AND
+              preserved_head_version_number IS NOT NULL AND preserved_lifecycle_revision IS
+              NOT NULL) OR (operation <> 'place' AND preservation_seal_object_id IS NULL AND
+              preservation_seal_sha256 IS NULL AND preservation_seal_byte_count IS NULL AND
+              preserved_object_count IS NULL AND preserved_version_count IS NULL AND
+              preserved_head_version_number IS NULL AND preserved_lifecycle_revision IS
+              NULL)),
+          CONSTRAINT one_report_hold_event_per_revision UNIQUE (owner_principal_id,
+              report_id, hold_revision),
+          CONSTRAINT a_report_hold_key_admits_one_request_per_operation UNIQUE
+              (owner_principal_id, operation, idempotency_key),
+          CONSTRAINT a_report_hold_seal_preserves_one_placement UNIQUE
+              (preservation_seal_object_id),
+          CONSTRAINT a_report_hold_event_is_identified_with_its_result UNIQUE (event_id,
+              owner_principal_id, report_id, hold_revision, resulting_held),
+          {
+            _restrict(
+                "a_report_hold_predecessor_is_an_event_of_its_report",
+                "predecessor_event_id, owner_principal_id, report_id, predecessor_revision, "
+                "predecessor_held",
+                "report_hold_events",
+                "event_id, owner_principal_id, report_id, hold_revision, resulting_held",
+            )
+        },
+          {
+            _restrict(
+                "a_report_hold_event_names_a_report_of_its_owner",
+                "report_id, owner_principal_id",
+                "report_roots",
+                "report_id, owner_principal_id",
+            )
+        }
+        )
+        """,
+        (),
+    ),
+    (
+        "report_retention_policy_events",
+        f"""
+        CREATE TABLE knowledge.report_retention_policy_events (
+          event_id TEXT NOT NULL,
+          owner_principal_id TEXT NOT NULL,
+          policy_revision INTEGER NOT NULL,
+          period_count INTEGER,
+          period_unit TEXT,
+          previous_period_count INTEGER,
+          previous_period_unit TEXT,
+          predecessor_event_id TEXT,
+          predecessor_revision INTEGER,
+          reason TEXT NOT NULL,
+          intent_digest TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          authority_class TEXT NOT NULL,
+          decision_channel TEXT NOT NULL,
+          recorded_at TIMESTAMP WITH TIME ZONE NOT NULL,
+          correlation_id TEXT NOT NULL,
+          audit_id TEXT NOT NULL,
+          CONSTRAINT report_retention_policy_events_pkey PRIMARY KEY (event_id),
+          {_id("event_id", "grrtn")},
+          {_id("owner_principal_id", "prn")},
+          {_id("predecessor_event_id", "grrtn")},
+          {_id("correlation_id", "corr")},
+          {_id("audit_id", "audit")},
+          CONSTRAINT a_report_retention_revision_is_positive CHECK (policy_revision >= 1),
+          CONSTRAINT a_report_retention_unit_is_known CHECK (period_unit IN
+              ({_RETENTION_UNITS})),
+          CONSTRAINT a_report_retention_previous_unit_is_known CHECK (previous_period_unit IN
+              ({_RETENTION_UNITS})),
+          CONSTRAINT a_report_retention_period_is_whole CHECK ((period_count IS NULL) =
+              (period_unit IS NULL)),
+          CONSTRAINT a_report_retention_previous_period_is_whole CHECK
+              ((previous_period_count IS NULL) = (previous_period_unit IS NULL)),
+          CONSTRAINT a_report_retention_period_is_bounded CHECK (period_unit IS NULL OR
+              (period_unit = 'days' AND period_count BETWEEN 1 AND {_RETENTION_MAX_DAYS}) OR
+              (period_unit = 'years' AND period_count BETWEEN 1 AND {_RETENTION_MAX_YEARS})),
+          CONSTRAINT a_report_retention_previous_period_is_bounded CHECK
+              (previous_period_unit IS NULL OR (previous_period_unit = 'days' AND
+              previous_period_count BETWEEN 1 AND {_RETENTION_MAX_DAYS}) OR
+              (previous_period_unit = 'years' AND previous_period_count BETWEEN 1 AND
+              {_RETENTION_MAX_YEARS})),
+          CONSTRAINT a_report_retention_predecessor_is_whole CHECK ((predecessor_event_id
+              IS NULL) = (predecessor_revision IS NULL)),
+          CONSTRAINT only_the_first_report_retention_event_has_no_predecessor CHECK
+              ((policy_revision = 1) = (predecessor_event_id IS NULL)),
+          CONSTRAINT a_report_retention_predecessor_is_the_prior_revision CHECK
+              (predecessor_revision IS NULL OR predecessor_revision = policy_revision - 1),
+          CONSTRAINT the_first_report_retention_event_follows_no_policy CHECK
+              (policy_revision <> 1 OR previous_period_count IS NULL),
+          CONSTRAINT a_report_retention_reason_is_bounded CHECK (char_length(reason) BETWEEN
+              1 AND 500),
+          {_sha("intent_digest", "a_report_retention_intent_is_a_digest")},
+          CONSTRAINT a_report_retention_key_is_bounded CHECK (char_length(idempotency_key)
+              BETWEEN 1 AND 128),
+          CONSTRAINT a_report_retention_authority_is_attested CHECK (authority_class IN
+              ({_ATTESTED_AUTHORITY_CLASSES})),
+          CONSTRAINT a_report_retention_channel_is_attested CHECK (decision_channel IN
+              ({_ATTESTED_DECISION_CHANNELS})),
+          CONSTRAINT one_report_retention_event_per_revision UNIQUE (owner_principal_id,
+              policy_revision),
+          CONSTRAINT a_report_retention_key_admits_one_request UNIQUE (owner_principal_id,
+              idempotency_key),
+          CONSTRAINT a_report_retention_event_is_identified_with_its_revision UNIQUE
+              (event_id, owner_principal_id, policy_revision),
+          {
+            _restrict(
+                "a_report_retention_predecessor_is_an_event_of_its_owner",
+                "predecessor_event_id, owner_principal_id, predecessor_revision",
+                "report_retention_policy_events",
+                "event_id, owner_principal_id, policy_revision",
+            )
+        }
+        )
+        """,
+        (),
+    ),
 )
 
-#: The deferred cache references on `report_roots`, added once both targets
-#: exist (step 3): `(name, definition)`. A root is written with its first
-#: version, and its cache is moved with each new version or lifecycle event, in
-#: one transaction; the reference is checked at commit.
+#: The deferred cache references on `report_roots`, added once every target
+#: exists (step 3): `(name, definition)`. A root is written with its first
+#: version, and its cache is moved with each new version, lifecycle event or
+#: hold event, in one transaction; the reference is checked at commit. A root
+#: never held names no hold event (`MATCH SIMPLE` skips the NULL reference).
 _DEFERRED_FOREIGN_KEYS: Final = (
     (
         "a_report_head_is_a_version_of_the_report",
@@ -1057,6 +1297,12 @@ _DEFERRED_FOREIGN_KEYS: Final = (
         "lifecycle_state) REFERENCES knowledge.report_lifecycle_events (event_id, "
         "owner_principal_id, report_id, lifecycle_revision, resulting_state) ON DELETE "
         "RESTRICT DEFERRABLE INITIALLY DEFERRED",
+    ),
+    (
+        "a_report_hold_cache_is_an_event_of_the_report",
+        "FOREIGN KEY(hold_event_id, owner_principal_id, report_id, hold_revision, held) "
+        "REFERENCES knowledge.report_hold_events (event_id, owner_principal_id, report_id, "
+        "hold_revision, resulting_held) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED",
     ),
 )
 
@@ -1124,6 +1370,13 @@ _FUNCTIONS: Final[tuple[tuple[str, str], ...]] = (
               OR NEW.lifecycle_event_id IS DISTINCT FROM OLD.lifecycle_event_id)
              AND NEW.lifecycle_revision IS DISTINCT FROM OLD.lifecycle_revision + 1 THEN
             RAISE EXCEPTION 'a report lifecycle advances by exactly one revision'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          IF (NEW.hold_revision IS DISTINCT FROM OLD.hold_revision
+              OR NEW.hold_event_id IS DISTINCT FROM OLD.hold_event_id
+              OR NEW.held IS DISTINCT FROM OLD.held)
+             AND NEW.hold_revision IS DISTINCT FROM OLD.hold_revision + 1 THEN
+            RAISE EXCEPTION 'a report hold advances by exactly one revision'
               USING ERRCODE = 'restrict_violation';
           END IF;
           RETURN NEW;
@@ -1297,11 +1550,68 @@ _FUNCTIONS: Final[tuple[tuple[str, str], ...]] = (
         END; $$
         """,
     ),
+    (
+        "a_report_hold_cache_is_its_newest_event",
+        """
+        CREATE FUNCTION knowledge.a_report_hold_cache_is_its_newest_event() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM knowledge.report_roots r
+              JOIN knowledge.report_hold_events e
+                ON e.event_id = r.hold_event_id
+               AND e.owner_principal_id = r.owner_principal_id
+               AND e.report_id = r.report_id
+               AND e.hold_revision = r.hold_revision
+               AND e.resulting_held = r.held
+             WHERE r.report_id = NEW.report_id
+               AND r.owner_principal_id = NEW.owner_principal_id
+               AND r.hold_revision = (
+                 SELECT max(n.hold_revision) FROM knowledge.report_hold_events n
+                  WHERE n.report_id = NEW.report_id
+                    AND n.owner_principal_id = NEW.owner_principal_id)
+          ) THEN
+            RAISE EXCEPTION 'a report hold cache is its newest event'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          RETURN NULL;
+        END; $$
+        """,
+    ),
+    (
+        "a_report_retention_event_continues_its_predecessor",
+        """
+        CREATE FUNCTION knowledge.a_report_retention_event_continues_its_predecessor()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        DECLARE
+          prior_count integer;
+          prior_unit text;
+        BEGIN
+          IF NEW.predecessor_event_id IS NULL THEN
+            RETURN NEW;
+          END IF;
+          SELECT p.period_count, p.period_unit INTO prior_count, prior_unit
+            FROM knowledge.report_retention_policy_events p
+           WHERE p.event_id = NEW.predecessor_event_id
+             AND p.owner_principal_id = NEW.owner_principal_id;
+          IF NOT FOUND THEN
+            RAISE EXCEPTION 'a report retention event follows a visible predecessor'
+              USING ERRCODE = 'foreign_key_violation';
+          END IF;
+          IF NEW.previous_period_count IS DISTINCT FROM prior_count
+             OR NEW.previous_period_unit IS DISTINCT FROM prior_unit THEN
+            RAISE EXCEPTION 'a report retention event''s previous period is its predecessor''s'
+              USING ERRCODE = 'check_violation';
+          END IF;
+          RETURN NEW;
+        END; $$
+        """,
+    ),
 )
 
 # ---- triggers ----------------------------------------------------------------------
 
-#: The 6 append-only tables (every plane table but the root and the transfer
+#: The 8 append-only tables (every plane table but the root and the transfer
 #: session, whose updates are guarded instead).
 _APPEND_ONLY: Final = (
     "report_content_objects",
@@ -1310,19 +1620,32 @@ _APPEND_ONLY: Final = (
     "report_associations",
     "report_lifecycle_events",
     "report_receipts",
+    "report_hold_events",
+    "report_retention_policy_events",
 )
 
-#: All 8 tables. A TRUNCATE is refused only while the table holds a row, so a
+#: All 10 tables. A TRUNCATE is refused only while the table holds a row, so a
 #: fixture's `TRUNCATE ... CASCADE` through an empty plane table still passes.
 _TRUNCATE_REFUSALS: Final = tuple(name for name, _ddl, _indexes in _TABLES)
 
-#: The row-level guards: `(trigger = function, table, timing)`.
+#: The row-level guards: `(trigger = function, table, timing)`. A retention
+#: event's previous period must equal its predecessor's period: a composite
+#: reference over the nullable period columns would be `MATCH SIMPLE` and skip
+#: every row whose old or new period is unset, so the equality is this
+#: `BEFORE INSERT` guard, beside the reference on the non-null predecessor key.
+#: The guard finds the predecessor by id and owner only (its revision is the
+#: reference's and the CHECKs'), and refuses one it cannot see.
 _ROW_GUARDS: Final = (
     ("a_report_root_moves_only_its_caches", "report_roots", "BEFORE UPDATE OR DELETE"),
     (
         "a_report_transfer_session_moves_forward",
         "report_transfer_sessions",
         "BEFORE UPDATE OR DELETE",
+    ),
+    (
+        "a_report_retention_event_continues_its_predecessor",
+        "report_retention_policy_events",
+        "BEFORE INSERT",
     ),
 )
 
@@ -1336,12 +1659,13 @@ _WRITTEN_WITH_THEIR_VERSION: Final = (
 
 #: The deferred commit checks: `(trigger = function, table, events)`. A new
 #: version must have its manifest, and the root cache must name the newest
-#: version and the newest lifecycle event of its report, when the transaction
-#: that writes them commits.
+#: version, the newest lifecycle event and the newest hold event of its report,
+#: when the transaction that writes them commits.
 _DEFERRED: Final = (
     ("a_report_version_has_its_manifest", "report_versions", "INSERT"),
     ("a_report_head_is_its_newest_version", "report_versions", "INSERT"),
     ("a_report_lifecycle_cache_is_its_newest_event", "report_lifecycle_events", "INSERT"),
+    ("a_report_hold_cache_is_its_newest_event", "report_hold_events", "INSERT"),
 )
 
 
@@ -1403,13 +1727,15 @@ def _triggers() -> tuple[tuple[str, str, str], ...]:
 
 # ---- downgrade -----------------------------------------------------------------------
 
-#: `downgrade` locks the 8 plane tables before it checks them, so no plane row
+#: `downgrade` locks the 10 plane tables before it checks them, so no plane row
 #: can commit between the refusal check and the drops.
 _LOCK_PLANE: Final = (
     "LOCK TABLE knowledge.report_content_objects, knowledge.report_roots, "
     "knowledge.report_versions, knowledge.report_version_manifests, "
     "knowledge.report_associations, knowledge.report_lifecycle_events, "
-    "knowledge.report_receipts, knowledge.report_transfer_sessions IN ACCESS EXCLUSIVE MODE"
+    "knowledge.report_receipts, knowledge.report_transfer_sessions, "
+    "knowledge.report_hold_events, knowledge.report_retention_policy_events "
+    "IN ACCESS EXCLUSIVE MODE"
 )
 
 #: `downgrade` refuses while any plane row exists, or any audit event names a
@@ -1425,15 +1751,20 @@ _REFUSE_DOWNGRADE: Final = """
          OR EXISTS (SELECT 1 FROM knowledge.report_associations)
          OR EXISTS (SELECT 1 FROM knowledge.report_lifecycle_events)
          OR EXISTS (SELECT 1 FROM knowledge.report_receipts)
-         OR EXISTS (SELECT 1 FROM knowledge.report_transfer_sessions) THEN
+         OR EXISTS (SELECT 1 FROM knowledge.report_transfer_sessions)
+         OR EXISTS (SELECT 1 FROM knowledge.report_hold_events)
+         OR EXISTS (SELECT 1 FROM knowledge.report_retention_policy_events) THEN
         RAISE EXCEPTION 'general report plane state exists; refusing to downgrade 4c37731671fc'
           USING ERRCODE = 'restrict_violation';
       END IF;
       IF EXISTS (
            SELECT 1 FROM knowledge.audit_events
             WHERE capability IN ('reports.archive', 'reports.delete', 'reports.history',
-                                 'reports.publish', 'reports.restore', 'reports.update')
-               OR purpose = 'report_lifecycle') THEN
+                                 'reports.hold.place', 'reports.hold.release',
+                                 'reports.publish', 'reports.restore',
+                                 'reports.retention.get', 'reports.retention.set',
+                                 'reports.update')
+               OR purpose IN ('report_hold', 'report_lifecycle', 'report_retention')) THEN
         RAISE EXCEPTION 'general report audit history exists; refusing to downgrade 4c37731671fc'
           USING ERRCODE = 'restrict_violation';
       END IF;

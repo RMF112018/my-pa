@@ -67,8 +67,11 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: its GIN index) and the root catalog-order index; `captures` is untouched.
 #: Moved again by Reports Modernization WP05 A2, which declares the root
 #: creator and version author columns, their four CHECKs and the root
-#: creator-filter index; `captures` is untouched.
-TABLES_SHA256: Final = "1047746c99d6309f15b52b600926823a86d06960b4bba1376b7fd813bc9e4f39"
+#: creator-filter index; `captures` is untouched. Moved again by Reports
+#: Modernization WP05b A1-A3, which declares the root hold cache (three columns,
+#: three CHECKs, the deferred hold-cache reference), `report_hold_events` and
+#: `report_retention_policy_events`; `captures` is untouched.
+TABLES_SHA256: Final = "d31b6dec821d8ee12151a15e2b6e7eb73b5b6cec9a7e7abcbbbdf9e0a826b634"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

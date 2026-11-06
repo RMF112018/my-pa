@@ -191,7 +191,7 @@ _S62_APPEND_ONLY: Final = (
     "schedule_scenario_write_refusals",
 )
 
-#: Reports Modernization WP01's six append-only general report tables.
+#: Reports Modernization WP01's eight append-only general report tables (WP05b: +2).
 _GENERAL_REPORT_APPEND_ONLY: Final = (
     "report_content_objects",
     "report_versions",
@@ -199,6 +199,8 @@ _GENERAL_REPORT_APPEND_ONLY: Final = (
     "report_associations",
     "report_lifecycle_events",
     "report_receipts",
+    "report_hold_events",
+    "report_retention_policy_events",
 )
 
 #: Exact delta between the frozen capture revision and the current head. This is
@@ -341,6 +343,9 @@ LINEAGE_TRIGGERS: Final[frozenset[str]] = frozenset(
         "a_report_version_has_its_manifest",
         "a_report_head_is_its_newest_version",
         "a_report_lifecycle_cache_is_its_newest_event",
+        # WP05b.
+        "a_report_hold_cache_is_its_newest_event",
+        "a_report_retention_event_continues_its_predecessor",
     }
 )
 

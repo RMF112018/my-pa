@@ -384,7 +384,8 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "schedule_scenario_outputs",
         "schedule_scenario_write_requests",
         "schedule_scenario_write_refusals",
-        # Reports Modernization WP01 stacks the eight general report tables.
+        # Reports Modernization WP01 stacks the ten general report tables
+        # (WP05b: the hold ledger and the retention policy history).
         "report_content_objects",
         "report_roots",
         "report_versions",
@@ -393,6 +394,8 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "report_lifecycle_events",
         "report_receipts",
         "report_transfer_sessions",
+        "report_hold_events",
+        "report_retention_policy_events",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

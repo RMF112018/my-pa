@@ -10,7 +10,7 @@ module proves:
   (`my_pa`) even in prose, spells every closed set as a sorted literal equal
   to the domain vocabulary symbol it freezes and every bound as the domain
   constant, and names every column, constraint and index `tables.py` declares
-  for the 8 plane tables;
+  for the 10 plane tables;
 * **offline SQL** -- the upgrade writes no row and names no table that existed
   before it but `audit_events`, whose `capability_is_known` and
   `purpose_is_known` it restates exactly once each, last; the downgrade locks
@@ -19,16 +19,23 @@ module proves:
   `621ef6786c64` left; the capability AT text is it plus exactly the 6 general
   report capabilities (WP02 `reports.publish`, WP03 `reports.update`,
   `.history`, `.archive`, `.delete`, `.restore`) and the purpose AT text is it
-  plus exactly `report_lifecycle` (WP03);
-* on disposable databases: empty to head creates exactly the 8 tables, the 8
-  functions and their 21 triggers (3 of them deferred); the declared metadata
+  plus exactly `report_lifecycle` (WP03); the downgrade refusal already names
+  the WP05b hold and retention vocabulary;
+* on disposable databases: empty to head creates exactly the 10 tables, the 10
+  functions and their 27 triggers (4 of them deferred); the declared metadata
   equals the migrated schema, definition for definition; the predecessor head with Intelligence,
   Capture and managed-document rows upgrades with every pre-existing table's
   rows and catalog unchanged but the `capability_is_known` and
   `purpose_is_known` definitions; the upgrade admits a `reports.publish` and a
-  `reports.archive`/`report_lifecycle` audit event; the downgrade refuses while
-  a publish, a lone transfer session or such an audit event exists, and an
-  empty plane downgrades cleanly and upgrades again;
+  `reports.archive`/`report_lifecycle` audit event; the downgrade refuses
+  while a publish, a hold, a lone transfer session, a lone retention policy
+  event or such an audit event exists, and an empty plane downgrades cleanly
+  and upgrades again;
+* **holds and retention (WP05b)** -- the hold ledger and the retention policy
+  history are append-only, a hold alternates from a first `place`, a `place`
+  alone carries its preservation copy, the root hold cache moves only by one
+  revision with a new hold event (proven at commit), and a retention event's
+  previous period is its predecessor's period, unset (NULL) periods included;
 * **every guard** -- from a baseline write that commits, one mutation that
   only the guard under test can refuse is refused with that guard's name; and
   for a representative set, dropping only that guard lets the same mutation
@@ -76,6 +83,10 @@ from sqlalchemy import Connection, Engine, MetaData, Table, text
 from sqlalchemy.exc import DBAPIError
 
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.lineage.vocabulary import (
+    ATTESTED_AUTHORITY_CLASSES,
+    ATTESTED_DECISION_CHANNELS,
+)
 from my_pa.domain.reports.creator import CREATOR_ID_PATTERN, CreatorKind
 from my_pa.domain.reports.errors import ReportLifecycleRefusal, ReportValidationError
 from my_pa.domain.reports.lifecycle import decide_lifecycle_transition
@@ -130,6 +141,8 @@ PLANE_TABLES: Final = (
     "report_lifecycle_events",
     "report_receipts",
     "report_transfer_sessions",
+    "report_hold_events",
+    "report_retention_policy_events",
 )
 DECLARED: Final[tuple[Table, ...]] = tuple(
     tables.METADATA.tables[f"{SCHEMA}.{name}"] for name in PLANE_TABLES
@@ -143,6 +156,8 @@ PLANE_FUNCTIONS: Final = (
     "a_report_head_is_its_newest_version",
     "a_report_lifecycle_cache_is_its_newest_event",
     "report_rows_are_written_with_their_version",
+    "a_report_hold_cache_is_its_newest_event",
+    "a_report_retention_event_continues_its_predecessor",
 )
 #: The insert guards, each on the table whose INSERT it checks.
 INSERT_GUARDS: Final = {
@@ -154,7 +169,10 @@ DEFERRED_TRIGGERS: Final = {
     "a_report_version_has_its_manifest": "report_versions",
     "a_report_head_is_its_newest_version": "report_versions",
     "a_report_lifecycle_cache_is_its_newest_event": "report_lifecycle_events",
+    "a_report_hold_cache_is_its_newest_event": "report_hold_events",
 }
+#: WP05b A3: the retention insert guard (previous period = predecessor's period).
+RETENTION_GUARD: Final = "a_report_retention_event_continues_its_predecessor"
 APPEND_ONLY: Final = (
     "report_content_objects",
     "report_versions",
@@ -162,10 +180,13 @@ APPEND_ONLY: Final = (
     "report_associations",
     "report_lifecycle_events",
     "report_receipts",
+    "report_hold_events",
+    "report_retention_policy_events",
 )
 DEFERRED_FOREIGN_KEYS: Final = (
     "a_report_head_is_a_version_of_the_report",
     "a_report_lifecycle_cache_is_an_event_of_the_report",
+    "a_report_hold_cache_is_an_event_of_the_report",
 )
 P: Final = "prn_rptmigowner0001"
 #: The foreign principal of the owner-mismatch cases.
@@ -182,7 +203,16 @@ AUDIT_REFUSAL: Final = f"general report audit history exists; refusing to downgr
 AUDIT_SOURCE: Final = MIGRATIONS / "20261028_621ef6786c64_cpm_workbench_vocabulary.py"
 #: The capability WP02 admits (contract section A4), the one the audit rows below use.
 ADMITTED: Final = "reports.publish"
-#: Every capability this revision admits: WP02's and WP03's five (WP03 D14).
+#: The 4 hold and retention capabilities (WP05b A5).
+HOLD_AND_RETENTION_CAPABILITIES: Final = (
+    "reports.hold.place",
+    "reports.hold.release",
+    "reports.retention.get",
+    "reports.retention.set",
+)
+#: Every capability this revision admits: WP02's and WP03's five (WP03 D14). The
+#: WP05b four are named by the downgrade refusal only, until the domain declares
+#: them (the head audit vocabulary equals the domain).
 ADMITTED_CAPABILITIES: Final = frozenset(
     {
         "reports.publish",
@@ -193,8 +223,12 @@ ADMITTED_CAPABILITIES: Final = frozenset(
         "reports.restore",
     }
 )
-#: The one purpose this revision admits (WP03 D1, D14).
+#: The lifecycle purpose this revision admits (WP03 D1, D14).
 ADMITTED_PURPOSE: Final = "report_lifecycle"
+#: The hold and retention purposes (WP05b A5).
+HOLD_AND_RETENTION_PURPOSES: Final = ("report_hold", "report_retention")
+#: Every purpose this revision admits.
+ADMITTED_PURPOSES: Final = frozenset({ADMITTED_PURPOSE})
 _WHITESPACE: Final = re.compile(r"\s+")
 
 
@@ -323,6 +357,7 @@ def test_the_revision_writes_no_row_grants_nothing_and_never_cascades() -> None:
 def test_frozen_literals_equal_the_domain_symbols() -> None:
     """Every closed set is written out, sorted, and equal to the symbol it freezes."""
     module = _module()
+    assert module["_RETENTION_MAX_DAYS"] == 36525 and module["_RETENTION_MAX_YEARS"] == 100
     expected = {
         "_FORMATS": _values(ContentFormat),
         "_ENCODINGS": _values(ContentEncoding),
@@ -337,6 +372,13 @@ def test_frozen_literals_equal_the_domain_symbols() -> None:
         "_TRANSFER_STATES": _values(TransferState),
         "_MANIFEST_SCHEMAS": [MANIFEST_SCHEMA],
         "_CREATOR_KINDS": _values(CreatorKind),
+        # WP05b A1/A3: the hold operations and retention units (the domain
+        # enums arrive with the hold and retention domain, WP05b B1), and the
+        # attested pair, equal to the lineage vocabulary.
+        "_HOLD_OPERATIONS": ["place", "release"],
+        "_RETENTION_UNITS": ["days", "years"],
+        "_ATTESTED_AUTHORITY_CLASSES": sorted(ATTESTED_AUTHORITY_CLASSES),
+        "_ATTESTED_DECISION_CHANNELS": sorted(ATTESTED_DECISION_CHANNELS),
     }
     for name, values in expected.items():
         assert _literals(module[name]) == values, name
@@ -382,6 +424,18 @@ def test_frozen_bounds_equal_the_domain_constants() -> None:
         "a_report_search_text_is_bounded": (
             f"char_length(search_text) <= {MAX_SEARCH_TEXT_CHARACTERS}"
         ),
+        "a_report_hold_reason_is_bounded": f"BETWEEN 1 AND {MAX_REASON_CHARACTERS}",
+        "a_report_retention_reason_is_bounded": f"BETWEEN 1 AND {MAX_REASON_CHARACTERS}",
+        "a_report_hold_key_is_bounded": "BETWEEN 1 AND 128",
+        "a_report_retention_key_is_bounded": "BETWEEN 1 AND 128",
+        "a_report_retention_period_is_bounded": (
+            "period_count BETWEEN 1 AND 36525) OR (period_unit = 'years' AND period_count "
+            "BETWEEN 1 AND 100)"
+        ),
+        "a_report_retention_previous_period_is_bounded": (
+            "previous_period_count BETWEEN 1 AND 36525) OR (previous_period_unit = 'years' AND "
+            "previous_period_count BETWEEN 1 AND 100)"
+        ),
     }
     for name, bound in bounds.items():
         assert bound in checks[name], (name, checks[name])
@@ -413,15 +467,30 @@ def test_frozen_identifier_prefixes_equal_the_id_kinds() -> None:
         "owner_principal_id": IdKind.PRINCIPAL,
         "correlation_id": IdKind.CORRELATION,
         "audit_id": IdKind.AUDIT,
+        # WP05b A2: the root hold cache.
+        "hold_event_id": IdKind.REPORT_HOLD_EVENT,
+    }
+    #: WP05b A1/A3: the two ledgers name their own event kinds.
+    per_table = {
+        "report_hold_events": {
+            "event_id": IdKind.REPORT_HOLD_EVENT,
+            "predecessor_event_id": IdKind.REPORT_HOLD_EVENT,
+            "preservation_seal_object_id": IdKind.REPORT_PRESERVATION_OBJECT,
+        },
+        "report_retention_policy_events": {
+            "event_id": IdKind.REPORT_RETENTION_EVENT,
+            "predecessor_event_id": IdKind.REPORT_RETENTION_EVENT,
+        },
     }
     seen: set[str] = set()
-    for ddl in _tables_ddl().values():
+    for table, ddl in _tables_ddl().items():
+        kinds = expected | per_table.get(table, {})
         for column, prefix in re.findall(
             r"CONSTRAINT (\w+)_is_an_opaque_identifier CHECK \(\1 ~ '\^(\w+?)_", _flat(ddl)
         ):
-            assert prefix == expected[column].value, column
+            assert prefix == kinds[column].value, (table, column)
             seen.add(column)
-    assert seen == set(expected)
+    assert seen == set(expected) | {"preservation_seal_object_id"}
 
 
 def test_the_audit_before_texts_are_byte_copies_and_at_adds_exactly_the_report_vocabulary() -> None:
@@ -439,8 +508,8 @@ def test_the_audit_before_texts_are_byte_copies_and_at_adds_exactly_the_report_v
     purposes_before = _literals(mine["_PURPOSES_BEFORE_THIS_REVISION"])
     purposes_at = _literals(mine["_PURPOSES_AT_THIS_REVISION"])
     assert purposes_at == sorted(purposes_at) and len(set(purposes_at)) == len(purposes_at) == 63
-    assert len(purposes_before) == 62 and ADMITTED_PURPOSE not in purposes_before
-    assert sorted([*purposes_before, ADMITTED_PURPOSE]) == purposes_at
+    assert len(purposes_before) == 62 and not ADMITTED_PURPOSES & set(purposes_before)
+    assert sorted([*purposes_before, *ADMITTED_PURPOSES]) == purposes_at
     # No later revision on this chain restates either before this one.
     script = ScriptDirectory.from_config(_config())
     walked = script.get_revision(PREVIOUS)
@@ -455,7 +524,13 @@ def test_the_audit_before_texts_are_byte_copies_and_at_adds_exactly_the_report_v
     assert AUDIT_REFUSAL in refusal
     for name in ADMITTED_CAPABILITIES:
         assert f"'{name}'" in refusal, name
-    assert f"purpose = '{ADMITTED_PURPOSE}'" in refusal
+    for name in ADMITTED_PURPOSES:
+        assert f"'{name}'" in refusal, name
+    # WP05b A4: the refusal already names the hold and retention vocabulary.
+    for name in (*HOLD_AND_RETENTION_CAPABILITIES, *HOLD_AND_RETENTION_PURPOSES):
+        assert f"'{name}'" in refusal, name
+        assert f"'{name}'" not in str(mine["_CAPABILITIES_AT_THIS_REVISION"]), name
+        assert f"'{name}'" not in str(mine["_PURPOSES_AT_THIS_REVISION"]), name
 
 
 def _ddl_columns(ddl: str) -> list[tuple[str, bool]]:
@@ -464,7 +539,7 @@ def _ddl_columns(ddl: str) -> list[tuple[str, bool]]:
     return [
         (match.group(1), match.group(2) is None)
         for match in re.finditer(
-            r"^\s+(\w+) (?:TEXT|INTEGER|JSONB|BYTEA|DATE|TIMESTAMP WITH TIME ZONE|TSVECTOR)"
+            r"^\s+(\w+) (?:TEXT|INTEGER|BOOLEAN|JSONB|BYTEA|DATE|TIMESTAMP WITH TIME ZONE|TSVECTOR)"
             r"( NOT NULL)?(?:,| GENERATED ALWAYS AS \(.*\) STORED,)$",
             ddl,
             re.MULTILINE,
@@ -599,7 +674,8 @@ def test_offline_downgrade_locks_and_refuses_before_any_drop(
         assert f"'{name}'" not in restored, name
     restored_purposes = rendered[purposes_restore : rendered.index(";", purposes_restore)]
     assert "'report_authoring'" in restored_purposes
-    assert f"'{ADMITTED_PURPOSE}'" not in restored_purposes
+    for name in ADMITTED_PURPOSES:
+        assert f"'{name}'" not in restored_purposes, name
     for table in PLANE_TABLES:
         assert rendered.index(f"DROP TABLE knowledge.{table} RESTRICT") > refusal
     # The deferred foreign keys go before the tables.
@@ -674,6 +750,7 @@ _EXPECTED_TRIGGERS: Final = frozenset(
     | {
         "report_roots.a_report_root_moves_only_its_caches",
         "report_transfer_sessions.a_report_transfer_session_moves_forward",
+        f"report_retention_policy_events.{RETENTION_GUARD}",
     }
     | {f"{table}.{trigger}" for trigger, table in DEFERRED_TRIGGERS.items()}
     | {f"{table}.{trigger}" for trigger, table in INSERT_GUARDS.items()}
@@ -682,7 +759,7 @@ _EXPECTED_TRIGGERS: Final = frozenset(
 
 @pytest.mark.database
 @pytest.mark.migration_empty_to_head
-def test_empty_to_head_creates_exactly_the_eight_tables(
+def test_empty_to_head_creates_exactly_the_ten_tables(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
@@ -699,8 +776,8 @@ def test_empty_to_head_creates_exactly_the_eight_tables(
     assert before <= _relations(engine)
     assert _functions(engine) - functions_before == set(PLANE_FUNCTIONS)
     assert _triggers(engine) - triggers_before == _EXPECTED_TRIGGERS
-    assert len(_EXPECTED_TRIGGERS) == 21
-    assert len(PLANE_FUNCTIONS) == 8
+    assert len(_EXPECTED_TRIGGERS) == 27
+    assert len(PLANE_FUNCTIONS) == 10
     with engine.connect() as connection:
         deferred = {
             str(name): bool(flag)
@@ -761,7 +838,7 @@ def test_runtime_metadata_matches_the_revision(disposable_database: str, engine:
     """The declared tables, built by SQLAlchemy beside the migrated ones, agree.
 
     Every constraint (`pg_get_constraintdef`), column (type, nullability,
-    default, precision, identity) and index (`pg_get_indexdef`) of the 8 plane
+    default, precision, identity) and index (`pg_get_indexdef`) of the 10 plane
     tables built from `tables.py` into a scratch schema equals the revision's.
     """
     del disposable_database
@@ -1011,7 +1088,7 @@ def test_predecessor_with_legacy_evidence_upgrades_unchanged(
         removed,
         added,
         ("capability_is_known", "purpose_is_known"),
-        (ADMITTED_CAPABILITIES, {ADMITTED_PURPOSE}),
+        (ADMITTED_CAPABILITIES, ADMITTED_PURPOSES),
         strict=True,
     ):
         assert old.startswith(f"{name} CHECK ")
@@ -1079,6 +1156,19 @@ def _ids(tag: str, owner: str) -> dict[str, str]:
         "corr": f"corr_{tag}",
         "audit": f"audit_{tag}",
         "spare": f"grver_{tag}z",
+        # WP05b: hold events, preservation seals, retention policy events, and
+        # the owner of this tag's retention history (retention is per owner, so
+        # each tag gets its own).
+        "h1": f"grhld_{tag}a",
+        "h2": f"grhld_{tag}b",
+        "h3": f"grhld_{tag}c",
+        "seal1": f"grprv_{tag}a",
+        "seal2": f"grprv_{tag}b",
+        "t1": f"grrtn_{tag}a",
+        "t2": f"grrtn_{tag}b",
+        "t3": f"grrtn_{tag}c",
+        "t4": f"grrtn_{tag}d",
+        "retention_owner": f"prn_{tag}ret",
     }
 
 
@@ -1302,6 +1392,9 @@ def _publish(ids: dict[str, str], variant: str = "md") -> list[Op]:
                 "lifecycle_event_id": None,
                 "created_by_kind": "local_principal",
                 "created_by_id": _CREATOR_ID,
+                "hold_revision": 0,
+                "hold_event_id": None,
+                "held": False,
             },
         ),
         _version_row(ids, "v1", 1, "c1", "initial"),
@@ -1405,6 +1498,126 @@ def _session_move(ids: dict[str, str], **fields: object) -> Op:
     )
 
 
+def _hold_event(
+    ids: dict[str, str],
+    revision: int,
+    operation: str,
+    predecessor: tuple[str, int, bool] | None = None,
+    seal: str | None = None,
+) -> Op:
+    """Hold event `h<revision>`: a `place` names its preservation seal, a `release` none."""
+    key = f"h{revision}"
+    place = operation == "place"
+    preserved = seal is not None
+    return Op(
+        "hold_event",
+        "report_hold_events",
+        {
+            "event_id": ids[key],
+            "owner_principal_id": ids["owner"],
+            "report_id": ids["report"],
+            "hold_revision": revision,
+            "operation": operation,
+            "resulting_held": place,
+            "predecessor_event_id": None if predecessor is None else ids[predecessor[0]],
+            "predecessor_revision": None if predecessor is None else predecessor[1],
+            "predecessor_held": None if predecessor is None else predecessor[2],
+            "reason": "Synthetic hold reason",
+            "intent_digest": _sha(f"{ids['report']}-{key}"),
+            "idempotency_key": f"key-{ids['report']}-{key}",
+            "authority_class": "local_operator",
+            "decision_channel": "local_cli",
+            "recorded_at": NOW,
+            "correlation_id": ids["corr"],
+            "audit_id": ids["audit"],
+            "preservation_seal_object_id": ids[seal] if seal is not None else None,
+            "preservation_seal_sha256": _sha(f"seal-{ids[seal]}") if seal is not None else None,
+            "preservation_seal_byte_count": 512 if preserved else None,
+            "preserved_object_count": 1 if preserved else None,
+            "preserved_version_count": 1 if preserved else None,
+            "preserved_head_version_number": 1 if preserved else None,
+            "preserved_lifecycle_revision": 0 if preserved else None,
+        },
+    )
+
+
+def _hold(
+    ids: dict[str, str],
+    *,
+    revision: int,
+    operation: str,
+    predecessor: tuple[str, int, bool] | None = None,
+    seal: str | None = None,
+) -> list[Op]:
+    """One hold transaction: the event, and the root cache moved to it."""
+    return [
+        _hold_event(ids, revision, operation, predecessor, seal),
+        _root_move(
+            ids,
+            hold_revision=revision,
+            hold_event_id=ids[f"h{revision}"],
+            held=operation == "place",
+        ),
+    ]
+
+
+#: The preservation columns of a hold event, unset (a `release`'s).
+_NO_PRESERVATION: Final = {
+    "preservation_seal_object_id": None,
+    "preservation_seal_sha256": None,
+    "preservation_seal_byte_count": None,
+    "preserved_object_count": None,
+    "preserved_version_count": None,
+    "preserved_head_version_number": None,
+    "preserved_lifecycle_revision": None,
+}
+#: A whole set of preservation columns, for a mutation that turns a release into
+#: a place (the seal id is never committed: a CHECK refuses first).
+_SOME_PRESERVATION: Final = {
+    "preservation_seal_object_id": "grprv_synthetic0001",
+    "preservation_seal_sha256": "e" * 64,
+    "preservation_seal_byte_count": 512,
+    "preserved_object_count": 1,
+    "preserved_version_count": 1,
+    "preserved_head_version_number": 1,
+    "preserved_lifecycle_revision": 0,
+}
+
+
+def _retention_event(
+    ids: dict[str, str],
+    revision: int,
+    period: tuple[int, str] | None,
+    previous: tuple[int, str] | None,
+) -> Op:
+    """Retention policy event `t<revision>` of the tag's own owner; `None` is unset."""
+    key = f"t{revision}"
+    owner = ids["retention_owner"]
+    return Op(
+        "retention_event",
+        "report_retention_policy_events",
+        {
+            "event_id": ids[key],
+            "owner_principal_id": owner,
+            "policy_revision": revision,
+            "period_count": None if period is None else period[0],
+            "period_unit": None if period is None else period[1],
+            "previous_period_count": None if previous is None else previous[0],
+            "previous_period_unit": None if previous is None else previous[1],
+            "predecessor_event_id": None if revision == 1 else ids[f"t{revision - 1}"],
+            "predecessor_revision": None if revision == 1 else revision - 1,
+            "reason": "Synthetic retention reason",
+            "intent_digest": _sha(f"{owner}-{key}"),
+            "idempotency_key": f"key-{owner}-{key}",
+            "authority_class": "local_operator",
+            "decision_channel": "local_web",
+            "recorded_at": NOW,
+            "correlation_id": ids["corr"],
+            "audit_id": ids["audit"],
+        },
+    )
+
+
 _TRANSACTIONS: Final[dict[str, Callable[[dict[str, str]], list[Op]]]] = {
     "publish": _publish,
     "publish_gz": lambda ids: _publish(ids, "gz"),
@@ -1478,6 +1691,17 @@ _TRANSACTIONS: Final[dict[str, Callable[[dict[str, str]], list[Op]]]] = {
             consumed_at=NOW + timedelta(minutes=2),
         ),
     ],
+    # WP05b: place, release, place again.
+    "hold": lambda ids: _hold(ids, revision=1, operation="place", seal="seal1"),
+    "release": lambda ids: _hold(ids, revision=2, operation="release", predecessor=("h1", 1, True)),
+    "rehold": lambda ids: _hold(
+        ids, revision=3, operation="place", predecessor=("h2", 2, False), seal="seal2"
+    ),
+    # WP05b: set 5 years, change to 30 days, unset, set 2 years from unset.
+    "retention": lambda ids: [_retention_event(ids, 1, (5, "years"), None)],
+    "retention_change": lambda ids: [_retention_event(ids, 2, (30, "days"), (5, "years"))],
+    "retention_unset": lambda ids: [_retention_event(ids, 3, None, (30, "days"))],
+    "retention_reset": lambda ids: [_retention_event(ids, 4, (2, "years"), None)],
 }
 CHAINS: Final[dict[str, tuple[str, ...]]] = {
     "publish": ("publish",),
@@ -1497,6 +1721,13 @@ CHAINS: Final[dict[str, tuple[str, ...]]] = {
     "transfer": ("transfer",),
     "finalize": ("transfer", "finalize"),
     "consume": ("transfer", "finalize", "consume"),
+    "hold": ("publish", "hold"),
+    "release": ("publish", "hold", "release"),
+    "rehold": ("publish", "hold", "release", "rehold"),
+    "retention": ("retention",),
+    "retention_change": ("retention", "retention_change"),
+    "retention_unset": ("retention", "retention_change", "retention_unset"),
+    "retention_reset": ("retention", "retention_change", "retention_unset", "retention_reset"),
 }
 
 
@@ -1725,6 +1956,25 @@ _IDENTIFIER_COLUMNS: Final = (
     ("transfer", "session", "report_transfer_sessions", "session_id"),
     ("transfer", "session", "report_transfer_sessions", "owner_principal_id"),
     ("consume", "session_update", "report_transfer_sessions", "consumed_content_id"),
+    # WP05b.
+    ("hold", "root_update", "report_roots", "hold_event_id"),
+    ("hold", "hold_event", "report_hold_events", "event_id"),
+    ("hold", "hold_event", "report_hold_events", "owner_principal_id"),
+    ("hold", "hold_event", "report_hold_events", "report_id"),
+    ("release", "hold_event", "report_hold_events", "predecessor_event_id"),
+    ("hold", "hold_event", "report_hold_events", "correlation_id"),
+    ("hold", "hold_event", "report_hold_events", "audit_id"),
+    ("hold", "hold_event", "report_hold_events", "preservation_seal_object_id"),
+    ("retention", "retention_event", "report_retention_policy_events", "event_id"),
+    ("retention", "retention_event", "report_retention_policy_events", "owner_principal_id"),
+    (
+        "retention_change",
+        "retention_event",
+        "report_retention_policy_events",
+        "predecessor_event_id",
+    ),
+    ("retention", "retention_event", "report_retention_policy_events", "correlation_id"),
+    ("retention", "retention_event", "report_retention_policy_events", "audit_id"),
 )
 
 _C: Final = "report_content_objects"
@@ -1735,6 +1985,12 @@ _A: Final = "report_associations"
 _E: Final = "report_lifecycle_events"
 _RC: Final = "report_receipts"
 _T: Final = "report_transfer_sessions"
+_H: Final = "report_hold_events"
+_RT: Final = "report_retention_policy_events"
+_NO_SUCH_HOLD: Final = "grhld_nosuchevent0001"
+#: The retention insert guard's two refusals (WP05b A3).
+_RETENTION_PREDECESSOR: Final = "a report retention event follows a visible predecessor"
+_RETENTION_CONTINUES: Final = "a report retention event's previous period is its predecessor's"
 _DIGEST: Final = "e" * 64
 _UPPER: Final = "A" * 64
 
@@ -1962,6 +2218,52 @@ def _root_cases() -> list[Case]:
             _refused("a report lifecycle advances by exactly one revision"),
             {"root_update": {"lifecycle_revision": 2}},
         ),
+        # WP05b A2: the hold cache.
+        Case(
+            "hold_revision_not_negative",
+            "publish",
+            _check(_R, "a_report_hold_revision_is_not_negative"),
+            {"root": {"hold_revision": -1, "hold_event_id": "grhld_synthetic0001"}},
+        ),
+        Case(
+            "never_held_has_no_hold_event",
+            "publish",
+            _check(_R, "only_a_never_held_report_has_no_hold_event"),
+            {"root": {"hold_event_id": "grhld_synthetic0001"}},
+        ),
+        Case(
+            "never_held_is_not_held",
+            "publish",
+            _check(_R, "a_never_held_report_is_not_held"),
+            {"root": {"held": True}},
+        ),
+        Case(
+            "deferred_hold_cache_fk",
+            "publish",
+            _fk(_R, "a_report_hold_cache_is_an_event_of_the_report"),
+            then=lambda ids: [
+                _root_move(ids, hold_revision=1, hold_event_id=_NO_SUCH_HOLD, held=True)
+            ],
+        ),
+        Case(
+            "root_guard_hold_skip",
+            "hold",
+            _refused("a report hold advances by exactly one revision"),
+            {"root_update": {"hold_revision": 2}},
+        ),
+        Case(
+            "root_guard_hold_without_revision",
+            "hold",
+            _refused("a report hold advances by exactly one revision"),
+            then=lambda ids: [_root_move(ids, held=False)],
+        ),
+        # The cache names the new event at its revision but not its result.
+        Case(
+            "hold_cache_names_its_result",
+            "hold",
+            _refused("a report hold cache is its newest event"),
+            {"root_update": {"held": False}},
+        ),
         Case(
             "root_guard_delete",
             "publish",
@@ -2180,6 +2482,12 @@ def _trailing_cache_cases() -> list[Case]:
             "newest_lifecycle_trailing_event",
             "archive",
             _refused("a report lifecycle cache is its newest event"),
+            {"root_update": None},
+        ),
+        Case(
+            "newest_hold_trailing_event",
+            "hold",
+            _refused("a report hold cache is its newest event"),
             {"root_update": None},
         ),
     ]
@@ -2660,6 +2968,352 @@ def _transfer_cases() -> list[Case]:
     ]
 
 
+def _second_place(ids: dict[str, str], **fields: object) -> list[Op]:
+    """After `release`: a revision-3 place, with `fields` changed."""
+    event = _hold_event(ids, 3, "place", ("h2", 2, False), "seal2")
+    return [Op(event.label, event.table, {**event.values, **fields})]
+
+
+def _hold_cases() -> list[Case]:
+    def case(id_: str, chain: str, fields: dict[str, object], expect: Expect) -> Case:
+        return Case(id_, chain, expect, {"hold_event": fields})
+
+    return [
+        # A revision below 1 is only reachable with a predecessor of revision - 1.
+        case(
+            "revision_positive",
+            "hold",
+            {
+                "hold_revision": 0,
+                "predecessor_event_id": _NO_SUCH_HOLD,
+                "predecessor_revision": -1,
+                "predecessor_held": False,
+            },
+            _check(_H, "a_report_hold_revision_is_positive"),
+        ),
+        case(
+            "operation_known",
+            "release",
+            {"operation": "freeze"},
+            _check(_H, "a_report_hold_operation_is_known"),
+        ),
+        case(
+            "held_exactly_after_a_place",
+            "hold",
+            {"resulting_held": False},
+            _check(_H, "a_report_hold_is_held_exactly_after_a_place"),
+        ),
+        case(
+            "predecessor_whole",
+            "release",
+            {"predecessor_held": None},
+            _check(_H, "a_report_hold_predecessor_is_whole"),
+        ),
+        case(
+            "first_has_no_predecessor",
+            "hold",
+            {
+                "predecessor_event_id": _NO_SUCH_HOLD,
+                "predecessor_revision": 0,
+                "predecessor_held": False,
+            },
+            _check(_H, "only_the_first_report_hold_event_has_no_predecessor"),
+        ),
+        # Release first: refused.
+        Case(
+            "release_first",
+            "hold",
+            _check(_H, "the_first_report_hold_event_is_a_place"),
+            {
+                "hold_event": {"operation": "release", "resulting_held": False, **_NO_PRESERVATION},
+                "root_update": {"held": False},
+            },
+        ),
+        case(
+            "predecessor_prior_revision",
+            "release",
+            {"predecessor_revision": 0},
+            _check(_H, "a_report_hold_predecessor_is_the_prior_revision"),
+        ),
+        # Place after place: refused.
+        Case(
+            "place_after_place",
+            "release",
+            _check(_H, "report_hold_events_alternate"),
+            {
+                "hold_event": {"operation": "place", "resulting_held": True, **_SOME_PRESERVATION},
+                "root_update": {"held": True},
+            },
+        ),
+        # Release after release, claiming the predecessor was a place: the
+        # predecessor reference carries its real `resulting_held`.
+        Case(
+            "lying_predecessor_held",
+            "rehold",
+            _fk(_H, "a_report_hold_predecessor_is_an_event_of_its_report"),
+            {
+                "hold_event": {
+                    "operation": "release",
+                    "resulting_held": False,
+                    "predecessor_held": True,
+                    **_NO_PRESERVATION,
+                },
+                "root_update": {"held": False},
+            },
+        ),
+        case(
+            "predecessor_fk",
+            "release",
+            {"predecessor_event_id": _NO_SUCH_HOLD},
+            _fk(_H, "a_report_hold_predecessor_is_an_event_of_its_report"),
+        ),
+        case(
+            "reason_bounded", "hold", {"reason": ""}, _check(_H, "a_report_hold_reason_is_bounded")
+        ),
+        case(
+            "reason_bounded_above",
+            "hold",
+            {"reason": "x" * (MAX_REASON_CHARACTERS + 1)},
+            _check(_H, "a_report_hold_reason_is_bounded"),
+        ),
+        case(
+            "intent_digest",
+            "hold",
+            {"intent_digest": _UPPER},
+            _check(_H, "a_report_hold_intent_is_a_digest"),
+        ),
+        case(
+            "key_bounded",
+            "hold",
+            {"idempotency_key": ""},
+            _check(_H, "a_report_hold_key_is_bounded"),
+        ),
+        case(
+            "authority_attested",
+            "hold",
+            {"authority_class": "remote_operator_attested"},
+            _check(_H, "a_report_hold_authority_is_attested"),
+        ),
+        case(
+            "channel_attested",
+            "hold",
+            {"decision_channel": "local_unattested"},
+            _check(_H, "a_report_hold_channel_is_attested"),
+        ),
+        case(
+            "seal_digest",
+            "hold",
+            {"preservation_seal_sha256": _UPPER},
+            _check(_H, "a_report_hold_seal_digest_is_sha256"),
+        ),
+        case(
+            "preservation_counts",
+            "hold",
+            {"preserved_object_count": 0},
+            _check(_H, "report_hold_preservation_counts_are_in_range"),
+        ),
+        # Preservation columns iff place, both ways.
+        case(
+            "place_is_preserved",
+            "hold",
+            {"preserved_version_count": None},
+            _check(_H, "only_a_report_hold_placement_is_preserved"),
+        ),
+        case(
+            "release_is_not_preserved",
+            "release",
+            {"preservation_seal_sha256": _DIGEST},
+            _check(_H, "only_a_report_hold_placement_is_preserved"),
+        ),
+        Case(
+            "one_event_per_revision",
+            "release",
+            _unique(_H, "one_report_hold_event_per_revision"),
+            then=lambda ids: _second_place(ids, hold_revision=2, predecessor_revision=1),
+        ),
+        Case(
+            "key_once_per_operation",
+            "release",
+            _unique(_H, "a_report_hold_key_admits_one_request_per_operation"),
+            then=lambda ids: _second_place(ids, idempotency_key=f"key-{ids['report']}-h1"),
+        ),
+        Case(
+            "seal_once",
+            "release",
+            _unique(_H, "a_report_hold_seal_preserves_one_placement"),
+            then=lambda ids: _second_place(ids, preservation_seal_object_id=ids["seal1"]),
+        ),
+    ]
+
+
+def _second_retention(ids: dict[str, str], revision: int, **fields: object) -> list[Op]:
+    """A retention event at `revision` continuing the committed chain, with `fields` changed."""
+    previous = {2: (5, "years"), 3: (30, "days")}[revision]
+    event = _retention_event(ids, revision, None, previous)
+    return [Op(event.label, event.table, {**event.values, **fields})]
+
+
+def _retention_cases() -> list[Case]:
+    def case(id_: str, chain: str, fields: dict[str, object], expect: Expect) -> Case:
+        return Case(id_, chain, expect, {"retention_event": fields})
+
+    bounded = _check(_RT, "a_report_retention_period_is_bounded")
+    previous_bounded = _check(_RT, "a_report_retention_previous_period_is_bounded")
+    return [
+        case(
+            "revision_positive",
+            "retention_change",
+            {"policy_revision": 0, "predecessor_revision": -1},
+            _check(_RT, "a_report_retention_revision_is_positive"),
+        ),
+        # An unknown unit is outside the bound first (CHECKs run in name order);
+        # `MASKED` shows each unit CHECK behind its bound.
+        case("unit_known", "retention", {"period_unit": "weeks"}, bounded),
+        case(
+            "previous_unit_known",
+            "retention",
+            {"previous_period_count": 5, "previous_period_unit": "weeks"},
+            previous_bounded,
+        ),
+        case(
+            "period_whole",
+            "retention",
+            {"period_unit": None},
+            _check(_RT, "a_report_retention_period_is_whole"),
+        ),
+        case(
+            "previous_period_whole",
+            "retention",
+            {"previous_period_unit": "years"},
+            _check(_RT, "a_report_retention_previous_period_is_whole"),
+        ),
+        case("period_bounded_years", "retention", {"period_count": 101}, bounded),
+        case(
+            "period_bounded_days",
+            "retention",
+            {"period_unit": "days", "period_count": 36526},
+            bounded,
+        ),
+        case("period_bounded_zero", "retention", {"period_count": 0}, bounded),
+        case(
+            "previous_period_bounded",
+            "retention",
+            {"previous_period_count": 0, "previous_period_unit": "days"},
+            previous_bounded,
+        ),
+        case(
+            "predecessor_whole",
+            "retention_change",
+            {"predecessor_revision": None},
+            _check(_RT, "a_report_retention_predecessor_is_whole"),
+        ),
+        case(
+            "first_has_no_predecessor",
+            "retention_change",
+            {"policy_revision": 1, "predecessor_revision": 0},
+            _check(_RT, "only_the_first_report_retention_event_has_no_predecessor"),
+        ),
+        case(
+            "first_follows_no_policy",
+            "retention",
+            {"previous_period_count": 5, "previous_period_unit": "years"},
+            _check(_RT, "the_first_report_retention_event_follows_no_policy"),
+        ),
+        case(
+            "predecessor_prior_revision",
+            "retention_change",
+            {"predecessor_revision": 0},
+            _check(_RT, "a_report_retention_predecessor_is_the_prior_revision"),
+        ),
+        case(
+            "reason_bounded",
+            "retention",
+            {"reason": ""},
+            _check(_RT, "a_report_retention_reason_is_bounded"),
+        ),
+        case(
+            "intent_digest",
+            "retention",
+            {"intent_digest": "x"},
+            _check(_RT, "a_report_retention_intent_is_a_digest"),
+        ),
+        case(
+            "key_bounded",
+            "retention",
+            {"idempotency_key": "k" * 129},
+            _check(_RT, "a_report_retention_key_is_bounded"),
+        ),
+        case(
+            "authority_attested",
+            "retention",
+            {"authority_class": "ordinary_reviewer"},
+            _check(_RT, "a_report_retention_authority_is_attested"),
+        ),
+        case(
+            "channel_attested",
+            "retention",
+            {"decision_channel": "remote_interactive"},
+            _check(_RT, "a_report_retention_channel_is_attested"),
+        ),
+        # The previous period is the predecessor's, unset (NULL) included: a
+        # composite reference over the periods would skip every NULL here.
+        case(
+            "previous_is_predecessors",
+            "retention_change",
+            {"previous_period_count": 4},
+            _refused(_RETENTION_CONTINUES, CHECK_VIOLATION),
+        ),
+        case(
+            "unset_previous_is_predecessors",
+            "retention_unset",
+            {"previous_period_count": None, "previous_period_unit": None},
+            _refused(_RETENTION_CONTINUES, CHECK_VIOLATION),
+        ),
+        case(
+            "previous_of_unset_is_unset",
+            "retention_reset",
+            {"previous_period_count": 30, "previous_period_unit": "days"},
+            _refused(_RETENTION_CONTINUES, CHECK_VIOLATION),
+        ),
+        case(
+            "predecessor_visible",
+            "retention_change",
+            {"predecessor_event_id": "grrtn_nosuchevent0001"},
+            _refused(_RETENTION_PREDECESSOR, FOREIGN_KEY_VIOLATION),
+        ),
+        # The guard passes (the named event's period is the previous period);
+        # the reference refuses the event at another revision.
+        Case(
+            "predecessor_names_its_revision",
+            "retention_change",
+            _fk(_RT, "a_report_retention_predecessor_is_an_event_of_its_owner"),
+            then=lambda ids: _second_retention(
+                ids,
+                3,
+                predecessor_event_id=ids["t1"],
+                previous_period_count=5,
+                previous_period_unit="years",
+            ),
+        ),
+        Case(
+            "one_event_per_revision",
+            "retention_change",
+            _unique(_RT, "one_report_retention_event_per_revision"),
+            then=lambda ids: _second_retention(
+                ids, 2, event_id=ids["t3"], idempotency_key="key-another-request"
+            ),
+        ),
+        Case(
+            "key_once",
+            "retention_change",
+            _unique(_RT, "a_report_retention_key_admits_one_request"),
+            then=lambda ids: _second_retention(
+                ids, 3, idempotency_key=f"key-{ids['retention_owner']}-t1"
+            ),
+        ),
+    ]
+
+
 _APPEND_ONLY_TARGETS: Final = {
     "report_content_objects": ("content_id", "c1", "created_at = created_at + interval '1 second'"),
     "report_versions": ("version_id", "v1", "title = 'Rewritten synthetic title'"),
@@ -2676,11 +3330,23 @@ _APPEND_ONLY_TARGETS: Final = {
     "report_lifecycle_events": ("event_id", "e1", "reason = 'Rewritten synthetic reason'"),
     "report_receipts": ("receipt_id", "r_publish", "issued_at = issued_at + interval '1 second'"),
 }
+#: WP05b: the two ledgers, each from the chain that writes its rows.
+_APPEND_ONLY_LEDGERS: Final = {
+    "report_hold_events": ("rehold", "event_id", "h1", "reason = 'Rewritten synthetic reason'"),
+    "report_retention_policy_events": (
+        "retention_change",
+        "event_id",
+        "t1",
+        "reason = 'Rewritten synthetic reason'",
+    ),
+}
 
 
 def _append_only_cases() -> list[Case]:
     cases: list[Case] = []
-    for table, (column, key, assignment) in _APPEND_ONLY_TARGETS.items():
+    targets = [("archive", *target) for target in _APPEND_ONLY_TARGETS.items()]
+    targets += [(chain, table, rest) for table, (chain, *rest) in _APPEND_ONLY_LEDGERS.items()]
+    for chain, table, (column, key, assignment) in targets:
         for action in ("update", "delete"):
             statement = (
                 f"UPDATE knowledge.{table} SET {assignment} WHERE {column} = :id"  # noqa: S608
@@ -2690,7 +3356,7 @@ def _append_only_cases() -> list[Case]:
             cases.append(
                 Case(
                     f"{table}_{action}",
-                    "archive",
+                    chain,
                     _refused(f"{table} is append-only"),
                     then=_statement_after(table, statement, key),
                 )
@@ -2812,6 +3478,14 @@ def _owner_cases() -> list[Case]:
             "v1",
             _fk(_R, "a_report_head_is_a_version_of_the_report"),
         ),
+        case(
+            "hold_report",
+            "hold",
+            "hold_event",
+            "report_id",
+            "report",
+            _fk(_H, "a_report_hold_event_names_a_report_of_its_owner"),
+        ),
         # The cache moves alone, with no event INSERT, so the newest-event
         # trigger does not fire and only the owner-scoped reference can refuse.
         Case(
@@ -2835,6 +3509,10 @@ _GUARDED_IDENTIFIERS: Final = {
 
 
 def _identifier_expect(table: str, column: str) -> Expect:
+    # The retention insert guard (a BEFORE trigger) finds no predecessor by a
+    # malformed id first; it falls to its identifier CHECK in `MASKED`.
+    if (table, column) == (_RT, "predecessor_event_id"):
+        return _refused(_RETENTION_PREDECESSOR, FOREIGN_KEY_VIOLATION)
     guarded = _GUARDED_IDENTIFIERS.get((table, column))
     if guarded is not None:
         return _refused(guarded)
@@ -2863,6 +3541,8 @@ CASES: Final[tuple[Case, ...]] = (
     *(Case(f"lifecycle_{c.id}", c.chain, c.expect, c.change, c.then) for c in _lifecycle_cases()),
     *(Case(f"receipt_{c.id}", c.chain, c.expect, c.change, c.then) for c in _receipt_cases()),
     *(Case(f"transfer_{c.id}", c.chain, c.expect, c.change, c.then) for c in _transfer_cases()),
+    *(Case(f"hold_{c.id}", c.chain, c.expect, c.change, c.then) for c in _hold_cases()),
+    *(Case(f"retention_{c.id}", c.chain, c.expect, c.change, c.then) for c in _retention_cases()),
     *(
         Case(f"append_only_{c.id}", c.chain, c.expect, c.change, c.then)
         for c in _append_only_cases()
@@ -2873,12 +3553,13 @@ _BY_ID: Final = {case.id: case for case in CASES}
 
 
 def test_the_guard_cases_name_every_plane_check_and_reference() -> None:
-    """Every CHECK and foreign key of the 8 tables has a case, but the masked ones.
+    """Every CHECK and foreign key of the 10 tables has a case, but the masked ones.
 
     `a_report_lifecycle_{operation,prior_state,resulting_state}_is_known` are
     implied by `a_report_lifecycle_transition_is_valid`, which enumerates every
     admitted value: no row can break one of them alone (see
-    `test_masked_lifecycle_vocabulary_checks`).
+    `test_masked_lifecycle_vocabulary_checks`). A guard another guard masks is
+    covered by its `MASKED` backstop case.
     """
     masked = {
         "a_report_lifecycle_operation_is_known",
@@ -2886,6 +3567,7 @@ def test_the_guard_cases_name_every_plane_check_and_reference() -> None:
         "a_report_lifecycle_resulting_state_is_known",
     }
     covered = {case.expect.constraint for case in CASES if case.expect.constraint}
+    covered |= {backstop.constraint for *_, backstop in MASKED if backstop.constraint}
     for table in DECLARED:
         for constraint in table.constraints:
             kind = type(constraint).__name__
@@ -3161,6 +3843,7 @@ def test_an_open_or_aborted_transfer_session_may_be_deleted(plane_engine: Engine
 _TRAILING_CACHE: Final = {
     "update": "a report head is its newest version",
     "archive": "a report lifecycle cache is its newest event",
+    "hold": "a report hold cache is its newest event",
 }
 
 
@@ -3184,7 +3867,7 @@ def _plane_rows(engine: Engine) -> dict[str, tuple[int, str]]:
 def _truncate_seed(table: str, ids: dict[str, str]) -> Op:
     ops = [
         op
-        for name in (*CHAINS["restore"], "transfer")
+        for name in (*CHAINS["restore"], "transfer", "hold", "retention")
         for op in _TRANSACTIONS[name](ids)
         if op.key is None and op.sql is None
     ]
@@ -3393,6 +4076,63 @@ LOAD_BEARING: Final = (
         "inline_report_content_keeps_its_original_digest",
         "content_inline_original_is_its_digest",
     ),
+    # WP05b.
+    (
+        "hold_alternation_check",
+        "ALTER TABLE knowledge.report_hold_events DROP CONSTRAINT report_hold_events_alternate",
+        "hold_place_after_place",
+    ),
+    (
+        "hold_first_is_a_place_check",
+        "ALTER TABLE knowledge.report_hold_events DROP CONSTRAINT "
+        "the_first_report_hold_event_is_a_place",
+        "hold_release_first",
+    ),
+    (
+        "hold_preservation_iff_place_check",
+        "ALTER TABLE knowledge.report_hold_events DROP CONSTRAINT "
+        "only_a_report_hold_placement_is_preserved",
+        "hold_place_is_preserved",
+    ),
+    (
+        "hold_predecessor_fk",
+        "ALTER TABLE knowledge.report_hold_events DROP CONSTRAINT "
+        "a_report_hold_predecessor_is_an_event_of_its_report",
+        "hold_lying_predecessor_held",
+    ),
+    (
+        "hold_cache_fk",
+        "ALTER TABLE knowledge.report_roots DROP CONSTRAINT "
+        "a_report_hold_cache_is_an_event_of_the_report",
+        "root_deferred_hold_cache_fk",
+    ),
+    (
+        "newest_hold_trigger",
+        "DROP TRIGGER a_report_hold_cache_is_its_newest_event ON knowledge.report_hold_events",
+        "newest_hold_trailing_event",
+    ),
+    (
+        "hold_events_append_only_trigger",
+        "DROP TRIGGER report_hold_events_are_append_only ON knowledge.report_hold_events",
+        "append_only_report_hold_events_update",
+    ),
+    (
+        "retention_append_only_trigger",
+        "DROP TRIGGER report_retention_policy_events_are_append_only "
+        "ON knowledge.report_retention_policy_events",
+        "append_only_report_retention_policy_events_update",
+    ),
+    (
+        "retention_continuation_guard",
+        f"DROP TRIGGER {RETENTION_GUARD} ON knowledge.report_retention_policy_events",
+        "retention_unset_previous_is_predecessors",
+    ),
+    (
+        "retention_key_unique",
+        "ALTER TABLE knowledge.report_retention_policy_events DROP CONSTRAINT "
+        "a_report_retention_key_admits_one_request",
+        "retention_key_once",
+    ),
 )
 
 
@@ -3470,6 +4210,50 @@ MASKED: Final = (
         "ON knowledge.report_associations",
         "foreign_association_version",
         _fk(_A, "a_report_association_is_frozen_to_its_version"),
+    ),
+    # WP05b: an unknown unit is outside the period bound, which is checked
+    # first (CHECKs run in name order).
+    (
+        "retention_unit_behind_its_bound",
+        "ALTER TABLE knowledge.report_retention_policy_events DROP CONSTRAINT "
+        "a_report_retention_period_is_bounded",
+        "retention_unit_known",
+        _check(_RT, "a_report_retention_unit_is_known"),
+    ),
+    (
+        "retention_previous_unit_behind_its_bound",
+        "ALTER TABLE knowledge.report_retention_policy_events DROP CONSTRAINT "
+        "a_report_retention_previous_period_is_bounded",
+        "retention_previous_unit_known",
+        _check(_RT, "a_report_retention_previous_unit_is_known"),
+    ),
+    # The retention guard finds no predecessor first; without it, a malformed
+    # id falls to its CHECK and an absent one to the reference.
+    (
+        "retention_predecessor_identifier_behind_its_guard",
+        f"DROP TRIGGER {RETENTION_GUARD} ON knowledge.report_retention_policy_events",
+        "identifier_report_retention_policy_events_predecessor_event_id_retention_change",
+        _check(_RT, "predecessor_event_id_is_an_opaque_identifier"),
+    ),
+    (
+        "retention_predecessor_reference_behind_its_guard",
+        f"DROP TRIGGER {RETENTION_GUARD} ON knowledge.report_retention_policy_events",
+        "retention_predecessor_visible",
+        _fk(_RT, "a_report_retention_predecessor_is_an_event_of_its_owner"),
+    ),
+    # The root guard's hold branch is backed at commit: a skipped revision by the
+    # newest-hold trigger, a cache move without an event by the reference.
+    (
+        "root_guard_hold_skip_behind_the_newest_hold_trigger",
+        "DROP TRIGGER a_report_root_moves_only_its_caches ON knowledge.report_roots",
+        "root_root_guard_hold_skip",
+        _refused("a report hold cache is its newest event"),
+    ),
+    (
+        "root_guard_hold_move_behind_the_hold_cache_reference",
+        "DROP TRIGGER a_report_root_moves_only_its_caches ON knowledge.report_roots",
+        "root_root_guard_hold_without_revision",
+        _fk(_R, "a_report_hold_cache_is_an_event_of_the_report"),
     ),
 )
 
@@ -3889,6 +4673,25 @@ def test_without_the_audit_refusal_the_before_text_fails_on_the_audit_row(
 _DOWNGRADE_STATES: Final[dict[str, Callable[[dict[str, str]], list[Op]]]] = {
     "publish": lambda ids: [op for op in _publish(ids) if not op.label.startswith("association")],
     "transfer_session_only": lambda ids: [_session(ids)],
+    # WP05b: a held report, and a lone retention policy event.
+    "hold": lambda ids: [
+        *(op for op in _publish(ids) if not op.label.startswith("association")),
+        *_TRANSACTIONS["hold"](ids),
+    ],
+    "retention_only": lambda ids: _TRANSACTIONS["retention"](ids),
+}
+_PUBLISH_ROWS: Final = (
+    "report_content_objects",
+    "report_roots",
+    "report_versions",
+    "report_version_manifests",
+    "report_receipts",
+)
+_DOWNGRADE_HOLDING: Final = {
+    "publish": _PUBLISH_ROWS,
+    "transfer_session_only": ("report_transfer_sessions",),
+    "hold": (*_PUBLISH_ROWS, "report_hold_events"),
+    "retention_only": ("report_retention_policy_events",),
 }
 
 
@@ -3903,19 +4706,7 @@ def test_downgrade_refuses_while_plane_state_exists(
     _execute(engine, _DOWNGRADE_STATES[state](ids))
     rows, catalog = _plane_rows(engine), _full_catalog(engine)
     holding = {table for table, (count, _) in rows.items() if count}
-    if state == "publish":
-        assert holding == {
-            f"{SCHEMA}.{t}"
-            for t in (
-                "report_content_objects",
-                "report_roots",
-                "report_versions",
-                "report_version_manifests",
-                "report_receipts",
-            )
-        }
-    else:
-        assert holding == {f"{SCHEMA}.report_transfer_sessions"}
+    assert holding == {f"{SCHEMA}.{t}" for t in _DOWNGRADE_HOLDING[state]}
     with pytest.raises(DBAPIError) as refused:
         command.downgrade(_config(), PREVIOUS)
     assert getattr(refused.value.orig, "sqlstate", None) == RESTRICT_VIOLATION
@@ -3973,9 +4764,96 @@ def test_an_empty_plane_downgrades_cleanly_and_upgrades_again(
     assert _full_catalog(engine) == at_head
 
 
+# ---- holds and retention (WP05b) ---------------------------------------------------------
+
+
+def _hold_cache(engine: Engine, report: str) -> tuple[object, ...]:
+    with engine.connect() as connection:
+        return tuple(
+            connection.execute(
+                text(
+                    "SELECT hold_revision, hold_event_id, held FROM knowledge.report_roots "
+                    "WHERE report_id = :r"
+                ),
+                {"r": report},
+            ).one()
+        )
+
+
+@pytest.mark.database
+def test_a_hold_places_releases_and_places_again_moving_the_root_cache(
+    plane_engine: Engine,
+) -> None:
+    """Each hold event moves the root hold cache to itself, in its own transaction."""
+    ids = _ids(uuid.uuid4().hex[:16], P)
+    _execute(plane_engine, _TRANSACTIONS["publish"](ids))
+    assert _hold_cache(plane_engine, ids["report"]) == (0, None, False)
+    expected = {
+        "hold": (1, ids["h1"], True),
+        "release": (2, ids["h2"], False),
+        "rehold": (3, ids["h3"], True),
+    }
+    for step, cache in expected.items():
+        _execute(plane_engine, _TRANSACTIONS[step](ids))
+        assert _hold_cache(plane_engine, ids["report"]) == cache, step
+    # The lifecycle moves while held: the schema gates no lifecycle on a hold.
+    _execute(plane_engine, _TRANSACTIONS["archive"](ids))
+    assert _root(plane_engine, ids["report"])[2:4] == ("archived", 1)
+    with plane_engine.connect() as connection:
+        events = connection.execute(
+            text(
+                "SELECT hold_revision, operation, resulting_held, predecessor_held, "
+                "preservation_seal_object_id IS NOT NULL FROM knowledge.report_hold_events "
+                "WHERE report_id = :r ORDER BY hold_revision"
+            ),
+            {"r": ids["report"]},
+        ).all()
+    assert [tuple(row) for row in events] == [
+        (1, "place", True, None, True),
+        (2, "release", False, True, False),
+        (3, "place", True, False, True),
+    ]
+
+
+@pytest.mark.database
+def test_the_retention_history_records_old_and_new_through_an_unset_period(
+    plane_engine: Engine,
+) -> None:
+    """Set, change, unset and set again: each event's previous period is the one before."""
+    ids = _ids(uuid.uuid4().hex[:16], P)
+    for step in CHAINS["retention_reset"]:
+        _execute(plane_engine, _TRANSACTIONS[step](ids))
+    with plane_engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT policy_revision, period_count, period_unit, previous_period_count, "
+                "previous_period_unit FROM knowledge.report_retention_policy_events "
+                "WHERE owner_principal_id = :o ORDER BY policy_revision"
+            ),
+            {"o": ids["retention_owner"]},
+        ).all()
+    assert [tuple(row) for row in rows] == [
+        (1, 5, "years", None, None),
+        (2, 30, "days", 5, "years"),
+        (3, None, None, 30, "days"),
+        (4, 2, "years", None, None),
+    ]
+
+
+@pytest.mark.database
+@pytest.mark.parametrize(
+    "period", [(1, "days"), (36525, "days"), (1, "years"), (100, "years"), None]
+)
+def test_a_retention_period_at_its_bounds_or_unset_is_admitted(
+    plane_engine: Engine, period: tuple[int, str] | None
+) -> None:
+    ids = _ids(uuid.uuid4().hex[:16], P)
+    _execute(plane_engine, [_retention_event(ids, 1, period, None)])
+
+
 #: Every test in this module that touches a server, for the tier guard below.
 _DATABASE_TESTS: Final[tuple[Callable[..., None], ...]] = (
-    test_empty_to_head_creates_exactly_the_eight_tables,
+    test_empty_to_head_creates_exactly_the_ten_tables,
     test_runtime_metadata_matches_the_revision,
     test_predecessor_with_legacy_evidence_upgrades_unchanged,
     test_each_guard_refuses_exactly_its_mutation,
@@ -4001,6 +4879,9 @@ _DATABASE_TESTS: Final[tuple[Callable[..., None], ...]] = (
     test_the_upgrade_admits_reports_publish_and_the_downgrade_refuses_while_audited,
     test_a_report_lifecycle_audit_event_is_admitted_and_holds_the_downgrade,
     test_without_the_audit_refusal_the_before_text_fails_on_the_audit_row,
+    test_a_hold_places_releases_and_places_again_moving_the_root_cache,
+    test_the_retention_history_records_old_and_new_through_an_unset_period,
+    test_a_retention_period_at_its_bounds_or_unset_is_admitted,
 )
 
 

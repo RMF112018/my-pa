@@ -551,6 +551,10 @@ def _write_publication(
                     # WP05 A2: the root's creator is version 1's author.
                     "created_by_kind": creator.kind.value,
                     "created_by_id": creator.creator_id,
+                    # WP05b A2: a new report has no hold event and is not held.
+                    "hold_revision": 0,
+                    "hold_event_id": None,
+                    "held": False,
                 },
                 report_roots,
                 context,

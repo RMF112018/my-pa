@@ -12,8 +12,9 @@ identifier or nothing; the location is derived here:
 
     <root>/<namespace>/<shard>/<object_id>/{decoded,original}
 
-where `<namespace>` is a member of the closed `ReportContentNamespace` (only
-`content` today; WP05b adds `preservation`), `<shard>` is the first two
+where `<namespace>` is a member of the closed `ReportContentNamespace`
+(`content`, admitting only `grcnt_` ids, and WP05b's `preservation`, admitting
+only `grprv_` ids), `<shard>` is the first two
 characters of the identifier's suffix, and `<object_id>` is the identifier
 itself, so a directory found in the tree turns back into the object it holds.
 An identifier is admitted only if `validate_identifier` accepts it as one of
@@ -104,6 +105,8 @@ class ReportContentRootError(Exception):
 #: entry here cannot be constructed.
 NAMESPACE_KINDS: Final[Mapping[ReportContentNamespace, frozenset[IdKind]]] = {
     ReportContentNamespace.CONTENT: frozenset({IdKind.REPORT_CONTENT}),
+    # WP05b B5: preservation objects and seals only; never a content id.
+    ReportContentNamespace.PRESERVATION: frozenset({IdKind.REPORT_PRESERVATION_OBJECT}),
 }
 
 #: Characters of the identifier suffix naming the shard directory.

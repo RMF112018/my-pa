@@ -93,6 +93,10 @@ class ReportRootRecord:
     lifecycle_revision: int
     #: WP05 A2: who published the report; immutable, equal to version 1's author.
     creator: ReportCreator
+    #: WP05b A2: the root's hold cache (revision 0: never held, no event).
+    hold_revision: int = 0
+    hold_event_id: str | None = None
+    held: bool = False
 
 
 @dataclass(frozen=True, slots=True)

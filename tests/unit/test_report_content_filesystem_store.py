@@ -235,7 +235,8 @@ def test_the_root_is_refused_unless_it_is_an_existing_real_directory(tmp_path: P
     with pytest.raises(ReportContentRootError, match="symbolic link"):
         FilesystemReportContentStore(link)
     with pytest.raises(ReportContentRootError):
-        FilesystemReportContentStore(real, "preservation")  # type: ignore[arg-type]
+        # WP05b made `preservation` a namespace; anything else stays refused.
+        FilesystemReportContentStore(real, "archive")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("relation", ["same", "inside", "contains"])

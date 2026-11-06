@@ -145,11 +145,16 @@ from my_pa.contracts.ports import (
     ReportAssociationTargetNotFoundError,
     ReportContentIntegrityError,
     ReportContentMissingError,
+    ReportContentNamespace,
     ReportContentPart,
     ReportContentStore,
     ReportContentStoreError,
+    ReportHeldError,
+    ReportHoldStateError,
     ReportIdempotencyConflictError,
     ReportNotFoundError,
+    ReportPreservationUnavailableError,
+    ReportStaleHoldRevisionError,
     ReportStaleLifecycleRevisionError,
     ReportStaleVersionError,
     ReportWithdrawnError,
@@ -431,6 +436,16 @@ from my_pa.domain.reports.content import (
     validate_content,
 )
 from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
+from my_pa.domain.reports.custody import (
+    CustodyAuthority,
+    HoldOperation,
+    HoldPreservation,
+    HoldRequest,
+    HoldResult,
+    PreservedLifecycleEvent,
+    PreservedRoot,
+    ReportHoldEventRecord,
+)
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.lifecycle import decide_lifecycle_transition
 from my_pa.domain.reports.manifest import build_initial_manifest, build_version_manifest
@@ -531,6 +546,11 @@ from my_pa.domain.task.lifecycle import (
 )
 from my_pa.domain.task.role import TaskRole
 from my_pa.domain.task.task import Task as TaskV2
+from my_pa.infrastructure.persistence.report_custody import (
+    PreservationSource,
+    preservation_source,
+    seal_preservation_copy,
+)
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
 
 pytest_plugins = ("tests.db.fixtures", "tests.ci_shard")
@@ -990,6 +1010,10 @@ class World:
         default_factory=dict
     )
     general_report_lifecycle_receipts: dict[tuple[str, str, str], LifecycleResult] = field(
+        default_factory=dict
+    )
+    #: WP05b: each report's hold ledger, oldest first, by (principal, report).
+    general_report_hold_events: dict[tuple[str, str], list[ReportHoldEventRecord]] = field(
         default_factory=dict
     )
     #: The relationship-intelligence entity plane. Flat lists for the reason
@@ -9725,20 +9749,26 @@ class InMemoryReportContentStore(ReportContentStore):
     The port's rules without a filesystem: an exclusive `put` (an existing
     object refuses), `read`/`verify` comparing size and SHA-256
     (`ReportContentMissingError` / `ReportContentIntegrityError`), and only
-    `grcnt_` identifiers. `objects` is public so a test can tamper with or
-    delete a part; `puts` counts calls, and `fail_puts` makes `put` raise
-    `ReportContentStoreError` before storing anything.
+    `grcnt_` identifiers (`grprv_` in the `preservation` namespace). `objects`
+    is public so a test can tamper with or delete a part; `puts` counts calls,
+    and `fail_puts` makes `put` raise `ReportContentStoreError` before storing
+    anything.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, namespace: ReportContentNamespace = ReportContentNamespace.CONTENT) -> None:
         self.objects: dict[str, dict[ReportContentPart, bytes]] = {}
         self.puts = 0
         self.fail_puts = False
+        # WP05b B5: `preservation` admits only `grprv_`, `content` only `grcnt_`.
+        self._kind = (
+            IdKind.REPORT_PRESERVATION_OBJECT
+            if namespace is ReportContentNamespace.PRESERVATION
+            else IdKind.REPORT_CONTENT
+        )
 
-    @staticmethod
-    def _admit(object_id: str) -> None:
+    def _admit(self, object_id: str) -> None:
         try:
-            validate_identifier(object_id, IdKind.REPORT_CONTENT)
+            validate_identifier(object_id, self._kind)
         except InvalidIdentifierError:
             raise ReportContentStoreError(
                 "the report content object identifier is not admitted"
@@ -10187,6 +10217,8 @@ class _GeneralReports(GeneralReportRepository):
             return replace(stored, replayed=True)
         if root.lifecycle_revision != request.expected_lifecycle_revision:
             raise ReportStaleLifecycleRevisionError()
+        if request.operation is LifecycleOperation.DELETE and root.held:
+            raise ReportHeldError()  # WP05b B4: a hold blocks trashing only
         key = (principal_id, request.report_id)
         events = self._world.general_report_events.setdefault(key, [])
         current = events[-1] if events else None
@@ -10246,6 +10278,188 @@ class _GeneralReports(GeneralReportRepository):
         )
         self._world.general_report_lifecycle_receipts[receipt_key] = result
         return result
+
+    # ---- WP05b holds: the SQL order (B3), sealing through the shared helper ----
+
+    def place_hold(
+        self,
+        request: HoldRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+        preservation_store: ReportContentStore | None,
+        content_store: ReportContentStore | None,
+    ) -> HoldResult:
+        return self._hold(
+            request,
+            HoldOperation.PLACE,
+            principal_id=principal_id,
+            idempotency_key=idempotency_key,
+            authority=authority,
+            recorded_at=recorded_at,
+            correlation_id=correlation_id,
+            audit_id=audit_id,
+            preservation_store=preservation_store,
+            content_store=content_store,
+        )
+
+    def release_hold(
+        self,
+        request: HoldRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> HoldResult:
+        return self._hold(
+            request,
+            HoldOperation.RELEASE,
+            principal_id=principal_id,
+            idempotency_key=idempotency_key,
+            authority=authority,
+            recorded_at=recorded_at,
+            correlation_id=correlation_id,
+            audit_id=audit_id,
+            preservation_store=None,
+            content_store=None,
+        )
+
+    def _hold(
+        self,
+        request: HoldRequest,
+        operation: HoldOperation,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+        preservation_store: ReportContentStore | None,
+        content_store: ReportContentStore | None,
+    ) -> HoldResult:
+        if not isinstance(request, HoldRequest):
+            raise ReportValidationError("hold_request", "type")
+        if request.operation is not operation:
+            raise ReportValidationError("hold_operation", "mismatch")
+        attested = CustodyAuthority(*authority).validated()
+        root = self._root(principal_id, request.report_id)
+        if root is None:
+            raise ReportNotFoundError()
+        for events in (
+            ledger
+            for (owner, _report), ledger in self._world.general_report_hold_events.items()
+            if owner == principal_id
+        ):
+            for event in events:
+                if event.operation is operation and event.idempotency_key == idempotency_key:
+                    if event.intent_digest != request.intent_digest:
+                        raise ReportIdempotencyConflictError()
+                    return HoldResult.of(event, replayed=True)
+        if root.hold_revision != request.expected_hold_revision:
+            raise ReportStaleHoldRevisionError()
+        if root.held is (operation is HoldOperation.PLACE):
+            raise ReportHoldStateError()
+        event_id = issue_identifier(IdKind.REPORT_HOLD_EVENT)
+        preservation: HoldPreservation | None = None
+        if operation is HoldOperation.PLACE:
+            if preservation_store is None:
+                raise ReportPreservationUnavailableError()
+            preservation = self._preserve(
+                principal_id, root, event_id, recorded_at, preservation_store, content_store
+            )
+        revision = root.hold_revision + 1
+        held = operation is HoldOperation.PLACE
+        event = ReportHoldEventRecord(
+            event_id=event_id,
+            report_id=request.report_id,
+            hold_revision=revision,
+            operation=operation,
+            resulting_held=held,
+            predecessor_event_id=root.hold_event_id,
+            reason=request.reason,
+            intent_digest=request.intent_digest,
+            idempotency_key=idempotency_key,
+            authority=attested,
+            recorded_at=recorded_at,
+            correlation_id=correlation_id,
+            audit_id=audit_id,
+            preservation=preservation,
+        )
+        self._world.general_report_hold_events.setdefault(
+            (principal_id, request.report_id), []
+        ).append(event)
+        self._set_root(
+            principal_id,
+            request.report_id,
+            replace(root, hold_revision=revision, hold_event_id=event_id, held=held),
+        )
+        return HoldResult.of(event, replayed=False)
+
+    def _preserve(
+        self,
+        principal_id: str,
+        root: ReportRootRecord,
+        event_id: str,
+        recorded_at: datetime,
+        preservation_store: ReportContentStore,
+        content_store: ReportContentStore | None,
+    ) -> HoldPreservation:
+        sources: dict[str, PreservationSource] = {}
+        versions = []
+        manifests = []
+        for kept in self._versions(principal_id, root.report_id):
+            stored = _as_read(kept)
+            source = sources.get(stored.content_id)
+            if source is None:
+                source = sources[stored.content_id] = preservation_source(stored, content_store)
+            versions.append((stored.version, source))
+            manifests.append(stored.manifest)
+        return seal_preservation_copy(
+            preservation_store,
+            root=PreservedRoot(
+                report_id=root.report_id,
+                owner_principal_id=principal_id,
+                head_version_id=root.head_version_id,
+                head_version_number=root.head_version_number,
+                lifecycle_state=root.lifecycle_state.value,
+                lifecycle_revision=root.lifecycle_revision,
+                created_by_kind=root.creator.kind.value,
+                created_by_id=root.creator.creator_id,
+            ),
+            hold_event_id=event_id,
+            sealed_at=recorded_at,
+            versions=versions,
+            manifests=manifests,
+            lifecycle_events=[
+                PreservedLifecycleEvent(
+                    event_id=item.event_id,
+                    lifecycle_revision=item.lifecycle_revision,
+                    operation=item.operation.value,
+                    prior_state=item.prior_state.value,
+                    resulting_state=item.resulting_state.value,
+                    reason=item.reason,
+                    transitioned_at=item.transitioned_at,
+                )
+                for item in self._world.general_report_events.get(
+                    (principal_id, root.report_id), []
+                )
+            ],
+        )
+
+    def hold_events(
+        self, report_id: str, *, principal_id: str
+    ) -> tuple[ReportHoldEventRecord, ...] | None:
+        if self._root(principal_id, report_id) is None:
+            return None
+        return tuple(self._world.general_report_hold_events.get((principal_id, report_id), []))
 
     @staticmethod
     def _page(value: object, maximum: int) -> int:

@@ -78,6 +78,18 @@ Every table it names is scoped by `_mine`, every join and the association
 `EXISTS` by `matching_partition_criterion`, so a forged position or a foreign
 association target only ever narrows the caller's own rows.
 
+**Legal holds (WP05b B3-B5).** `place_hold`/`release_hold` lock the root
+`FOR UPDATE`, settle the key on the hold event (the event row is the receipt,
+`UNIQUE (owner, operation, key)`), compare `hold_revision`, refuse the wrong
+state, and only then write one hold event at revision + 1 and move the root's
+hold cache. A placement first seals the report's preservation copy into the
+`preservation` namespace of the report content store and verifies it
+(`report_custody.seal_preservation_copy`); a failure there writes no row,
+and the objects already put remain (the store has no delete). A release
+never touches the copy. A `delete` (trash) of a held report is refused with
+`ReportHeldError` after the lock, the key and the revision check; nothing
+else is gated by a hold.
+
 Nothing here writes to a `knowledge.intelligence_*` table;
 `intelligence_artifacts` is only read, to resolve an `intelligence_report`
 association target.
@@ -111,9 +123,13 @@ from my_pa.contracts.ports import (
     GeneralReportRepository,
     ReportAssociationTargetNotFoundError,
     ReportContentStore,
+    ReportHeldError,
+    ReportHoldStateError,
     ReportIdempotencyConflictError,
     ReportIntegrityError,
     ReportNotFoundError,
+    ReportPreservationUnavailableError,
+    ReportStaleHoldRevisionError,
     ReportStaleLifecycleRevisionError,
     ReportStaleVersionError,
     ReportWithdrawnError,
@@ -134,6 +150,16 @@ from my_pa.domain.reports.content import (
     content_of,
 )
 from my_pa.domain.reports.creator import CreatorKind, ReportCreator
+from my_pa.domain.reports.custody import (
+    CustodyAuthority,
+    HoldOperation,
+    HoldPreservation,
+    HoldRequest,
+    HoldResult,
+    PreservedLifecycleEvent,
+    PreservedRoot,
+    ReportHoldEventRecord,
+)
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.lifecycle import LifecycleDecision, decide_lifecycle_transition
 from my_pa.domain.reports.manifest import (
@@ -195,12 +221,18 @@ from my_pa.infrastructure.persistence.principal_scope import (
     partition_criterion,
     principal_bound_values,
 )
+from my_pa.infrastructure.persistence.report_custody import (
+    PreservationSource,
+    preservation_source,
+    seal_preservation_copy,
+)
 from my_pa.infrastructure.persistence.tables import (
     entities,
     intelligence_artifacts,
     projects,
     report_associations,
     report_content_objects,
+    report_hold_events,
     report_lifecycle_events,
     report_receipts,
     report_roots,
@@ -218,6 +250,8 @@ __all__ = [
 
 #: The receipt constraint that admits one request per (owner, operation, key).
 _KEY_CONSTRAINT: Final = "a_report_key_admits_one_request_per_operation"
+#: WP05b A1: the hold event is its own receipt, one per (owner, operation, key).
+_HOLD_KEY_CONSTRAINT: Final = "a_report_hold_key_admits_one_request_per_operation"
 _MAX_KEY_CHARACTERS: Final = 128
 
 #: The table and identifier column each resolvable association kind names.
@@ -695,6 +729,9 @@ def _root(row: Row[Any]) -> ReportRootRecord:
         lifecycle_state=LifecycleState(m["lifecycle_state"]),
         lifecycle_revision=int(m["lifecycle_revision"]),
         creator=_creator(m["created_by_kind"], m["created_by_id"]),
+        hold_revision=int(m["hold_revision"]),
+        hold_event_id=None if m["hold_event_id"] is None else str(m["hold_event_id"]),
+        held=bool(m["held"]),
     )
 
 
@@ -1506,6 +1543,240 @@ def _write_transition(
     )
 
 
+# ---- holds (WP05b) -----------------------------------------------------------------
+
+
+def _hold_request(request: object, operation: HoldOperation) -> HoldRequest:
+    if not isinstance(request, HoldRequest):
+        raise ReportValidationError("hold_request", "type")
+    if request.operation is not operation:
+        raise ReportValidationError("hold_operation", "mismatch")
+    return request
+
+
+def _attested(authority: object) -> CustodyAuthority:
+    if not isinstance(authority, tuple) or len(authority) != 2:
+        raise ReportValidationError("authority", "attested")
+    return CustodyAuthority(*authority).validated()
+
+
+def _hold_event(row: Row[Any]) -> ReportHoldEventRecord:
+    m = row._mapping
+    preservation = (
+        None
+        if m["preservation_seal_object_id"] is None
+        else HoldPreservation(
+            seal_object_id=str(m["preservation_seal_object_id"]),
+            seal_sha256=str(m["preservation_seal_sha256"]),
+            seal_byte_count=int(m["preservation_seal_byte_count"]),
+            object_count=int(m["preserved_object_count"]),
+            version_count=int(m["preserved_version_count"]),
+            head_version_number=int(m["preserved_head_version_number"]),
+            lifecycle_revision=int(m["preserved_lifecycle_revision"]),
+        )
+    )
+    return ReportHoldEventRecord(
+        event_id=str(m["event_id"]),
+        report_id=str(m["report_id"]),
+        hold_revision=int(m["hold_revision"]),
+        operation=HoldOperation(m["operation"]),
+        resulting_held=bool(m["resulting_held"]),
+        predecessor_event_id=m["predecessor_event_id"],
+        reason=str(m["reason"]),
+        intent_digest=str(m["intent_digest"]),
+        idempotency_key=str(m["idempotency_key"]),
+        authority=CustodyAuthority(str(m["authority_class"]), str(m["decision_channel"])),
+        recorded_at=m["recorded_at"],
+        correlation_id=str(m["correlation_id"]),
+        audit_id=str(m["audit_id"]),
+        preservation=preservation,
+    )
+
+
+def _find_hold(
+    connection: Connection,
+    operation: HoldOperation,
+    idempotency_key: str,
+    context: PrincipalContext,
+) -> ReportHoldEventRecord | None:
+    """The hold event (the receipt) this Principal's key is bound to for `operation`."""
+    row = connection.execute(
+        select(report_hold_events).where(
+            _mine(report_hold_events, context),
+            report_hold_events.c.operation == operation.value,
+            report_hold_events.c.idempotency_key == idempotency_key,
+        )
+    ).one_or_none()
+    return None if row is None else _hold_event(row)
+
+
+def _settle_hold(stored: ReportHoldEventRecord, intent_digest: str) -> HoldResult:
+    if stored.intent_digest != intent_digest:
+        raise ReportIdempotencyConflictError()
+    return HoldResult.of(stored, replayed=True)
+
+
+def _hold_ledger(
+    connection: Connection, report_id: str, context: PrincipalContext
+) -> tuple[ReportHoldEventRecord, ...]:
+    rows = connection.execute(
+        select(report_hold_events)
+        .where(_mine(report_hold_events, context), report_hold_events.c.report_id == report_id)
+        .order_by(report_hold_events.c.hold_revision)
+    ).all()
+    return tuple(_hold_event(row) for row in rows)
+
+
+def _preserve(
+    connection: Connection,
+    root: ReportRootRecord,
+    *,
+    context: PrincipalContext,
+    principal_id: str,
+    hold_event_id: str,
+    recorded_at: datetime,
+    preservation_store: ReportContentStore,
+    content_store: ReportContentStore | None,
+) -> HoldPreservation:
+    """Read the whole report under the root lock and seal its preservation copy (B5).
+
+    Every version ascending, verified as a read verifies it (content digests
+    recomputed, the manifest rebuilt and compared), each distinct content
+    object's bytes once (inline from the verified row, `managed_blob` read
+    verified from `content_store`), and every lifecycle event; then
+    `seal_preservation_copy` puts and verifies the copy. Writes no row.
+    """
+    version_rows = connection.execute(
+        select(report_versions)
+        .where(_mine(report_versions, context), report_versions.c.report_id == root.report_id)
+        .order_by(report_versions.c.version_number)
+    ).all()
+    sources: dict[str, PreservationSource] = {}
+    versions: list[tuple[ReportVersionRecord, PreservationSource]] = []
+    manifests: list[Mapping[str, Any]] = []
+    for row in version_rows:
+        stored = _stored_version(connection, root, row, context)
+        source = sources.get(stored.content_id)
+        if source is None:
+            source = sources[stored.content_id] = preservation_source(stored, content_store)
+        versions.append((stored.version, source))
+        manifests.append(stored.manifest)
+    events = connection.execute(
+        select(report_lifecycle_events)
+        .where(
+            _mine(report_lifecycle_events, context),
+            report_lifecycle_events.c.report_id == root.report_id,
+        )
+        .order_by(report_lifecycle_events.c.lifecycle_revision)
+    ).all()
+    return seal_preservation_copy(
+        preservation_store,
+        root=PreservedRoot(
+            report_id=root.report_id,
+            owner_principal_id=principal_id,
+            head_version_id=root.head_version_id,
+            head_version_number=root.head_version_number,
+            lifecycle_state=root.lifecycle_state.value,
+            lifecycle_revision=root.lifecycle_revision,
+            created_by_kind=root.creator.kind.value,
+            created_by_id=root.creator.creator_id,
+        ),
+        hold_event_id=hold_event_id,
+        sealed_at=recorded_at,
+        versions=versions,
+        manifests=manifests,
+        lifecycle_events=[
+            PreservedLifecycleEvent(
+                event_id=str(m["event_id"]),
+                lifecycle_revision=int(m["lifecycle_revision"]),
+                operation=str(m["operation"]),
+                prior_state=str(m["prior_state"]),
+                resulting_state=str(m["resulting_state"]),
+                reason=m["reason"],
+                transitioned_at=m["transitioned_at"],
+            )
+            for m in (event._mapping for event in events)
+        ],
+    )
+
+
+def _write_hold(
+    connection: Connection,
+    request: HoldRequest,
+    root: ReportRootRecord,
+    *,
+    context: PrincipalContext,
+    event_id: str,
+    preservation: HoldPreservation | None,
+    authority: CustodyAuthority,
+    idempotency_key: str,
+    intent_digest: str,
+    recorded_at: datetime,
+    correlation_id: str,
+    audit_id: str,
+) -> HoldResult:
+    """The hold event (the receipt) at revision + 1, then the root's hold cache."""
+    revision = root.hold_revision + 1
+    held = request.operation is HoldOperation.PLACE
+    first = root.hold_revision == 0
+    values: dict[str, object] = {
+        "event_id": event_id,
+        "report_id": root.report_id,
+        "hold_revision": revision,
+        "operation": request.operation.value,
+        "resulting_held": held,
+        "predecessor_event_id": None if first else root.hold_event_id,
+        "predecessor_revision": None if first else root.hold_revision,
+        "predecessor_held": None if first else root.held,
+        "reason": request.reason,
+        "intent_digest": intent_digest,
+        "idempotency_key": idempotency_key,
+        "authority_class": authority.authority_class,
+        "decision_channel": authority.decision_channel,
+        "recorded_at": recorded_at,
+        "correlation_id": correlation_id,
+        "audit_id": audit_id,
+    }
+    if preservation is not None:
+        values.update(
+            preservation_seal_object_id=preservation.seal_object_id,
+            preservation_seal_sha256=preservation.seal_sha256,
+            preservation_seal_byte_count=preservation.seal_byte_count,
+            preserved_object_count=preservation.object_count,
+            preserved_version_count=preservation.version_count,
+            preserved_head_version_number=preservation.head_version_number,
+            preserved_lifecycle_revision=preservation.lifecycle_revision,
+        )
+    connection.execute(
+        report_hold_events.insert().values(**_bound(values, report_hold_events, context))
+    )
+    moved = connection.execute(
+        report_roots.update()
+        .where(
+            _mine(report_roots, context),
+            report_roots.c.report_id == root.report_id,
+            report_roots.c.hold_revision == root.hold_revision,
+        )
+        .values(hold_revision=revision, hold_event_id=event_id, held=held)
+    ).rowcount
+    if moved != 1:
+        raise ReportStaleHoldRevisionError()
+    return HoldResult(
+        report_id=root.report_id,
+        operation=request.operation,
+        held=held,
+        hold_revision=revision,
+        event_id=event_id,
+        preservation=preservation,
+        idempotency_key=idempotency_key,
+        intent_digest=intent_digest,
+        recorded_at=recorded_at,
+        correlation_id=correlation_id,
+        audit_id=audit_id,
+        replayed=False,
+    )
+
+
 # ---- history -----------------------------------------------------------------------
 
 
@@ -2053,6 +2324,9 @@ class SqlGeneralReportRepository(GeneralReportRepository):
             return _settle_transition(stored, intent_digest)
         if root.lifecycle_revision != request.expected_lifecycle_revision:
             raise ReportStaleLifecycleRevisionError()
+        if request.operation is LifecycleOperation.DELETE and root.held:
+            # WP05b B4 / H2: a legal hold blocks trashing, and nothing else.
+            raise ReportHeldError()
         current = _current_event(connection, root, context)
         trashed_from = (
             LifecycleState(current._mapping["prior_state"])
@@ -2085,6 +2359,134 @@ class SqlGeneralReportRepository(GeneralReportRepository):
             "knowledge.report_receipts",
         )
         return _settle_transition(winner, intent_digest)
+
+    def place_hold(
+        self,
+        request: HoldRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+        preservation_store: ReportContentStore | None,
+        content_store: ReportContentStore | None,
+    ) -> HoldResult:
+        return self._hold(
+            _hold_request(request, HoldOperation.PLACE),
+            principal_id=principal_id,
+            idempotency_key=idempotency_key,
+            authority=authority,
+            recorded_at=recorded_at,
+            correlation_id=correlation_id,
+            audit_id=audit_id,
+            preservation_store=preservation_store,
+            content_store=content_store,
+        )
+
+    def release_hold(
+        self,
+        request: HoldRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> HoldResult:
+        return self._hold(
+            _hold_request(request, HoldOperation.RELEASE),
+            principal_id=principal_id,
+            idempotency_key=idempotency_key,
+            authority=authority,
+            recorded_at=recorded_at,
+            correlation_id=correlation_id,
+            audit_id=audit_id,
+            preservation_store=None,
+            content_store=None,
+        )
+
+    def _hold(
+        self,
+        request: HoldRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+        preservation_store: ReportContentStore | None,
+        content_store: ReportContentStore | None,
+    ) -> HoldResult:
+        """B3: lock, key, revision, state, (place: store, seal), then the writes."""
+        context = capture_context(principal_id)
+        recorded = self._admit(idempotency_key, correlation_id, audit_id, recorded_at)
+        attested = _attested(authority)
+        intent_digest = request.intent_digest
+        operation = request.operation
+        connection = self._connection
+        root = _find_root(connection, request.report_id, context, lock=True)
+        if root is None:
+            raise ReportNotFoundError()
+        stored = _find_hold(connection, operation, idempotency_key, context)
+        if stored is not None:
+            return _settle_hold(stored, intent_digest)
+        if root.hold_revision != request.expected_hold_revision:
+            raise ReportStaleHoldRevisionError()
+        if root.held is (operation is HoldOperation.PLACE):
+            raise ReportHoldStateError()
+        event_id = issue_identifier(IdKind.REPORT_HOLD_EVENT)
+        preservation: HoldPreservation | None = None
+        if operation is HoldOperation.PLACE:
+            if preservation_store is None:
+                raise ReportPreservationUnavailableError()
+            # H4: the copy is written AND verified before any hold row exists.
+            preservation = _preserve(
+                connection,
+                root,
+                context=context,
+                principal_id=principal_id,
+                hold_event_id=event_id,
+                recorded_at=recorded,
+                preservation_store=preservation_store,
+                content_store=content_store,
+            )
+        try:
+            with connection.begin_nested():
+                return _write_hold(
+                    connection,
+                    request,
+                    root,
+                    context=context,
+                    event_id=event_id,
+                    preservation=preservation,
+                    authority=attested,
+                    idempotency_key=idempotency_key,
+                    intent_digest=intent_digest,
+                    recorded_at=recorded,
+                    correlation_id=correlation_id,
+                    audit_id=audit_id,
+                )
+        except IntegrityError as error:
+            if _constraint_name(error) != _HOLD_KEY_CONSTRAINT:
+                raise
+        # The same key was committed for another report while this one ran.
+        winner = conflicting_row(
+            _find_hold(connection, operation, idempotency_key, context),
+            "knowledge.report_hold_events",
+        )
+        return _settle_hold(winner, intent_digest)
+
+    def hold_events(
+        self, report_id: str, *, principal_id: str
+    ) -> tuple[ReportHoldEventRecord, ...] | None:
+        context = capture_context(principal_id)
+        if _find_root(self._connection, report_id, context) is None:
+            return None
+        return _hold_ledger(self._connection, report_id, context)
 
     def version_history(
         self,

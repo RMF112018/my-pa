@@ -260,6 +260,12 @@ from my_pa.domain.relationship.reenrichment import (
 from my_pa.domain.reports.catalog import CatalogCursor, CatalogFilters
 from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES
 from my_pa.domain.reports.creator import ReportCreator
+from my_pa.domain.reports.custody import (
+    CustodyAuthority,
+    HoldRequest,
+    HoldResult,
+    ReportHoldEventRecord,
+)
 from my_pa.domain.reports.publication import PublicationRequest, PublicationResult
 from my_pa.domain.reports.records import (
     CatalogEntry,
@@ -7794,6 +7800,45 @@ class ReportWithdrawnError(PortError):
     """
 
 
+# --- Reports Modernization WP05b (B8): holds, retention and preservation ------
+
+
+class ReportHeldError(PortError):
+    """`reports.delete` named a report under a legal hold (H2). Nothing was written.
+
+    Public `denied` (`report_held`): it only ever describes the caller's own
+    root, a foreign or absent one being `ReportNotFoundError` first.
+    """
+
+
+class ReportHoldStateError(PortError):
+    """A placement named a held report, or a release one not held. Nothing was written."""
+
+
+class ReportStaleHoldRevisionError(PortError):
+    """A hold request's `expected_hold_revision` is not current. Nothing was written."""
+
+
+class ReportStalePolicyRevisionError(PortError):
+    """A retention change's `expected_policy_revision` is not current. Nothing was written."""
+
+
+class ReportPreservationUnavailableError(PortError):
+    """No report content store is configured, so no hold can be placed (H4). Nothing written."""
+
+
+class ReportPreservationError(PortError):
+    """The preservation copy could not be written or did not verify. No hold was recorded.
+
+    Objects already put remain in the store (the port has no delete); no hold
+    row or root change commits. Names no object, path, digest or value.
+    """
+
+
+class ReportTrashPreflightError(PortError):
+    """A report's content is not durably present and intact, so it is not trashed (H4)."""
+
+
 class GeneralReportRepository(ABC):
     """The general report plane (Reports Modernization WP02), inside one transaction.
 
@@ -7941,7 +7986,72 @@ class GeneralReportRepository(ABC):
         its predecessor, the root cache moved, an `applied` receipt. Archive on
         `archived` is a `no_op` receipt at the current revision. No version,
         content, manifest or association row is ever touched or removed.
+
+        WP05b B4: a `delete` of a report under a legal hold raises
+        `ReportHeldError` after the lock, the key settle and the revision
+        check, before the lifecycle decision; archive and restore are never
+        gated by a hold.
         """
+
+    @abstractmethod
+    def place_hold(
+        self,
+        request: HoldRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+        preservation_store: ReportContentStore | None,
+        content_store: ReportContentStore | None,
+    ) -> HoldResult:
+        """Place a legal hold on a report after sealing its preservation copy (WP05b B3/B5).
+
+        One transaction, in this order: lock the root `FOR UPDATE` (missing or
+        foreign -> `ReportNotFoundError`); the `place` event of this key, if
+        any, replays its original result (`replayed=True`, nothing put or
+        written) or, bound to another intent digest, raises
+        `ReportIdempotencyConflictError`; `hold_revision` other than
+        `expected_hold_revision` raises `ReportStaleHoldRevisionError`; an
+        already held report raises `ReportHoldStateError`; no
+        `preservation_store` raises `ReportPreservationUnavailableError`. Then
+        the seal: every version (verified as a read verifies it), every
+        distinct content object (inline recomputed from its row, `managed_blob`
+        read verified from `content_store`), every lifecycle event; one
+        preservation object per distinct content object and the seal are
+        `put`, then every part verified and the seal read back byte-equal.
+        Any failure raises `ReportPreservationError` and writes no row (the
+        objects already put remain). Only then the `place` event and the
+        root's hold cache. Allowed in every lifecycle state. `authority` is
+        the attested operator pair the event records.
+        """
+
+    @abstractmethod
+    def release_hold(
+        self,
+        request: HoldRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> HoldResult:
+        """Release a report's legal hold (WP05b B3), keeping its preservation copy.
+
+        The order of `place_hold` (lock, key, revision), then a report not held
+        raises `ReportHoldStateError`; then the `release` event and the root's
+        hold cache. No preservation object is read, written or removed.
+        """
+
+    @abstractmethod
+    def hold_events(
+        self, report_id: str, *, principal_id: str
+    ) -> tuple[ReportHoldEventRecord, ...] | None:
+        """The report's whole hold ledger, oldest first, or `None` if not found."""
 
     @abstractmethod
     def version_history(
@@ -8094,10 +8204,12 @@ class ReportContentNamespace(StrEnum):
 
     Each names one subdirectory of the store's root and admits only the object
     identifiers of its own kind: `content` admits `grcnt_` report content
-    objects. WP05b adds `preservation`; nothing else is a namespace.
+    objects; `preservation` (WP05b B5) admits only `grprv_` preservation
+    objects and seals. Nothing else is a namespace.
     """
 
     CONTENT = "content"
+    PRESERVATION = "preservation"
 
 
 class ReportContentStoreError(PortError):

@@ -696,6 +696,7 @@ from my_pa.contracts.ports import (
     ReportContentPart,
     ReportContentStore,
     ReportContentStoreError,
+    ReportHeldError,
     ReportIdempotencyConflictError,
     ReportIntegrityError,
     ReportNotFoundError,
@@ -16641,7 +16642,8 @@ class ApplicationService:
         A stale revision is `conflict` on `expected_lifecycle_revision`, as
         `capture.archive`; a move the current state does not admit is
         `conflict` on `lifecycle_state`. No version, content, manifest or
-        association is touched; a delete is the recoverable Trash.
+        association is touched; a delete is the recoverable Trash. A delete of
+        a report under a legal hold is `denied` (`report_held`, WP05b B4).
         """
         request = lifecycle_request(command)
         refusal: ApplicationError
@@ -16662,6 +16664,9 @@ class ApplicationService:
             refusal = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
         except ReportStaleLifecycleRevisionError:
             refusal = ConflictError(SafeDetail.EXPECTED_LIFECYCLE_REVISION)
+        except ReportHeldError:
+            # WP05b B4 / H2: a legal hold blocks trashing; archive/restore never.
+            refusal = DeniedError(SafeDetail.REPORT_HELD)
         except ReportLifecycleRefusal:
             refusal = ConflictError(SafeDetail.LIFECYCLE_STATE)
         except ReportIntegrityError:

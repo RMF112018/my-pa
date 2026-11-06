@@ -693,6 +693,11 @@ class SafeDetail(StrEnum):
     #: Reports Modernization WP05 (A5): the standalone/all `created_by` filter,
     #: a creator pseudonym from a read or list item (never its value).
     CREATED_BY = "created_by"
+    #: Reports Modernization WP05b (B4): `REPORT_HELD`, the `denied` subject
+    #: when `reports.delete` names a report under a legal hold the caller owns
+    #: (a foreign or absent one is still `not_found`, so it only ever describes
+    #: the caller's own root, exactly as `REPORT_WITHDRAWN`).
+    REPORT_HELD = "report_held"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

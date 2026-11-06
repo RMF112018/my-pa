@@ -10418,6 +10418,14 @@ class _GeneralReports(GeneralReportRepository):
             ),
         )
 
+    def hold_seal_events(self) -> tuple[ReportHoldEventRecord, ...]:
+        return tuple(
+            event
+            for ledger in self._world.general_report_hold_events.values()
+            for event in ledger
+            if event.operation is HoldOperation.PLACE
+        )
+
     # ---- WP05b holds: the SQL order (B3), sealing through the shared helper ----
 
     def place_hold(

@@ -8069,6 +8069,17 @@ class GeneralReportRepository(ABC):
         """The report's whole hold ledger, oldest first, or `None` if not found."""
 
     @abstractmethod
+    def hold_seal_events(self) -> tuple[ReportHoldEventRecord, ...]:
+        """Every `place` hold event (with its seal), across Principals, oldest first.
+
+        **Unpartitioned on purpose**, as `known_managed_content_ids`: the
+        preservation scan's orphan direction subtracts every sealed object of
+        every Principal from the `preservation` namespace, and a partitioned
+        answer would report every other Principal's copy as an orphan. Operator
+        use from the reconciliation path only, never a request.
+        """
+
+    @abstractmethod
     def set_retention(
         self,
         request: RetentionSetRequest,

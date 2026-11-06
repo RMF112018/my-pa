@@ -1,4 +1,4 @@
-"""Operator command: scan, back up, and restore the report content store (WP05 C7).
+"""Operator command: scan, back up, and restore the report content store (WP05 C7, WP05b).
 
     MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \\
         .venv/bin/python apps/cli/report_content.py verify --principal prn_...
@@ -8,11 +8,24 @@
     MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \\
         .venv/bin/python apps/cli/report_content.py restore \\
             --principal prn_... --source /path/to/backup
+    MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \\
+        .venv/bin/python apps/cli/report_content.py preservation-verify
 
 The shape of `apps/cli/managed_documents.py`, for the same reason: a write plane
-with no reconciliation, backup and restore is not finished. Three subcommands
-and no fourth -- nothing here deletes an object, reclaims an orphan or repairs a
+with no reconciliation, backup and restore is not finished. Four subcommands
+and no fifth -- nothing here deletes an object, reclaims an orphan or repairs a
 row.
+
+**`preservation-verify` (WP05b B5)** scans the `preservation` namespace: every
+legal hold's sealed preservation copy, across Principals (the orphan direction
+cannot be partitioned), re-verified seal and parts, plus orphaned preservation
+objects and unreadable entries (`scan_report_preservation`). It takes no
+`--principal`.
+
+**Backups do not include the preservation namespace.** `backup` and `restore`
+copy only the `content` objects `managed_blob` rows name (operator decision:
+backups need not honor holds). After a restore, `preservation-verify` reports
+any preservation copy the restored store lacks as missing parts.
 
 **An operator command, not a capability.** It builds no `ApplicationService`,
 resolves no `Principal` from a credential and names no `Capability`; the
@@ -30,7 +43,7 @@ database first, then this command copies each row's object back, verified
 against the restored rows.
 
 **No path, body or digest is printed.** Exit `0` on success, `1` on refusal,
-`2` when `verify` finds the plane inconsistent.
+`2` when `verify` or `preservation-verify` finds the plane inconsistent.
 """
 
 from __future__ import annotations
@@ -46,7 +59,12 @@ from my_pa.application.report_content import (
     restore_report_content,
     scan_report_content,
 )
-from my_pa.bootstrap.gateway import report_content_backup_store, report_content_store
+from my_pa.application.report_preservation import scan_report_preservation
+from my_pa.bootstrap.gateway import (
+    report_content_backup_store,
+    report_content_store,
+    report_preservation_store,
+)
 from my_pa.bootstrap.settings import load_settings
 from my_pa.contracts.ports import ReportContentStore, ReportContentStoreError
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -95,6 +113,34 @@ def _verify(args: argparse.Namespace) -> int:
         print(f"mismatch {item.content_id} {item.part.value} {item.mismatch}")
     for content_id in scan.orphans:
         print(f"orphan {content_id}")
+    return EXIT_OK if scan.consistent else EXIT_INCONSISTENT
+
+
+def _preservation_verify(args: argparse.Namespace) -> int:
+    del args
+    engine = _engine()
+    try:
+        store = report_preservation_store(load_settings(), engine)
+        if store is None:
+            raise ReportContentRootError(
+                "MY_PA_REPORT_CONTENT_ROOT is unset; there is no report content store "
+                "in this process to operate on"
+            )
+        with engine.begin() as connection:
+            scan = scan_report_preservation(SqlGeneralReportRepository(connection), store)
+    finally:
+        engine.dispose()
+    print(f"holds_checked {scan.checked}")
+    print(f"missing_parts {len(scan.missing)}")
+    print(f"mismatched_parts {len(scan.mismatched)}")
+    print(f"orphaned_objects {len(scan.orphans)}")
+    print(f"unreadable_entries {len(scan.unreadable)}")
+    for object_id, part in scan.missing:
+        print(f"missing {object_id} {part.value}")
+    for item in scan.mismatched:
+        print(f"mismatch {item.object_id} {item.part.value} {item.mismatch}")
+    for object_id in scan.orphans:
+        print(f"orphan {object_id}")
     return EXIT_OK if scan.consistent else EXIT_INCONSISTENT
 
 
@@ -149,6 +195,11 @@ def build_parser() -> argparse.ArgumentParser:
     verify = subcommands.add_parser("verify", help="compare managed_blob rows against the store")
     verify.add_argument("--principal", required=True, help="the prn_... whose rows are checked")
     verify.set_defaults(handler=_verify)
+    preservation = subcommands.add_parser(
+        "preservation-verify",
+        help="re-verify every legal hold's sealed preservation copy and find orphans",
+    )
+    preservation.set_defaults(handler=_preservation_verify)
     backup = subcommands.add_parser("backup", help="copy verified objects to a backup root")
     backup.add_argument("--principal", required=True, help="the prn_... whose objects are copied")
     backup.add_argument("--destination", required=True, help="an existing directory to copy into")

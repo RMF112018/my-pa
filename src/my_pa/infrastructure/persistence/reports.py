@@ -2713,6 +2713,17 @@ class SqlGeneralReportRepository(GeneralReportRepository):
             return None
         return _hold_ledger(self._connection, report_id, context)
 
+    def hold_seal_events(self) -> tuple[ReportHoldEventRecord, ...]:
+        # WP05b B5 (W3): unpartitioned on purpose (see the port), as
+        # `known_managed_content_ids`: the preservation scan's orphan direction.
+        table = report_hold_events
+        rows = self._connection.execute(
+            select(table)
+            .where(table.c.operation == HoldOperation.PLACE.value)
+            .order_by(table.c.recorded_at, table.c.event_id)
+        ).all()
+        return tuple(_hold_event(row) for row in rows)
+
     def set_retention(
         self,
         request: RetentionSetRequest,

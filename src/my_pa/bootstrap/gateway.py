@@ -612,6 +612,27 @@ def report_content_store(settings: Settings, work_engine: Engine) -> ReportConte
     )
 
 
+def report_preservation_store(settings: Settings, work_engine: Engine) -> ReportContentStore | None:
+    """The `preservation` namespace of the report content store, or `None` (WP05b B5).
+
+    The same root, constructor and refusals as `report_content_store`, under
+    `ReportContentNamespace.PRESERVATION` (admitting only `grprv_` objects).
+    `None` when `MY_PA_REPORT_CONTENT_ROOT` is unset: no hold can be placed.
+    """
+    configured = settings.report_content_root.strip()
+    if not configured:
+        return None
+    with work_engine.begin() as connection:
+        source_roots = configured_source_roots(connection)
+    managed = settings.managed_document_root.strip()
+    return FilesystemReportContentStore(
+        Path(configured),
+        ReportContentNamespace.PRESERVATION,
+        source_roots=[Path(root) for root in source_roots],
+        managed_documents_root=Path(managed) if managed else None,
+    )
+
+
 def report_content_backup_store(
     settings: Settings, work_engine: Engine, location: Path
 ) -> FilesystemReportContentStore:

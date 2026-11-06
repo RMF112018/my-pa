@@ -156,6 +156,7 @@ from my_pa.contracts.ports import (
     ReportPreservationUnavailableError,
     ReportStaleHoldRevisionError,
     ReportStaleLifecycleRevisionError,
+    ReportStalePolicyRevisionError,
     ReportStaleVersionError,
     ReportWithdrawnError,
     RepositoryFailureError,
@@ -437,6 +438,8 @@ from my_pa.domain.reports.content import (
 )
 from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
 from my_pa.domain.reports.custody import (
+    DEFAULT_RETENTION_HISTORY,
+    MAX_RETENTION_HISTORY,
     CustodyAuthority,
     HoldOperation,
     HoldPreservation,
@@ -444,7 +447,12 @@ from my_pa.domain.reports.custody import (
     HoldResult,
     PreservedLifecycleEvent,
     PreservedRoot,
+    ReportEligibilityInputs,
     ReportHoldEventRecord,
+    RetentionPolicyEventRecord,
+    RetentionPolicyView,
+    RetentionResult,
+    RetentionSetRequest,
 )
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.lifecycle import decide_lifecycle_transition
@@ -1014,6 +1022,10 @@ class World:
     )
     #: WP05b: each report's hold ledger, oldest first, by (principal, report).
     general_report_hold_events: dict[tuple[str, str], list[ReportHoldEventRecord]] = field(
+        default_factory=dict
+    )
+    #: WP05b W3: each owner's retention policy history, oldest first, by principal.
+    general_report_retention_events: dict[str, list[RetentionPolicyEventRecord]] = field(
         default_factory=dict
     )
     #: The relationship-intelligence entity plane. Flat lists for the reason
@@ -10278,6 +10290,72 @@ class _GeneralReports(GeneralReportRepository):
         )
         self._world.general_report_lifecycle_receipts[receipt_key] = result
         return result
+
+    # ---- WP05b W3 retention: the SQL order (B6) -----------------------------
+
+    def set_retention(
+        self,
+        request: RetentionSetRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> RetentionResult:
+        if not isinstance(request, RetentionSetRequest):
+            raise ReportValidationError("retention_request", "type")
+        attested = CustodyAuthority(*authority).validated()
+        ledger = self._world.general_report_retention_events.setdefault(principal_id, [])
+        for event in ledger:
+            if event.idempotency_key == idempotency_key:
+                if event.intent_digest != request.intent_digest:
+                    raise ReportIdempotencyConflictError()
+                return RetentionResult.of(event, replayed=True)
+        newest = ledger[-1] if ledger else None
+        if (0 if newest is None else newest.policy_revision) != request.expected_policy_revision:
+            raise ReportStalePolicyRevisionError()
+        event = RetentionPolicyEventRecord(
+            event_id=issue_identifier(IdKind.REPORT_RETENTION_EVENT),
+            policy_revision=1 if newest is None else newest.policy_revision + 1,
+            period=request.period,
+            previous_period=None if newest is None else newest.period,
+            predecessor_event_id=None if newest is None else newest.event_id,
+            reason=request.reason,
+            intent_digest=request.intent_digest,
+            idempotency_key=idempotency_key,
+            authority=attested,
+            recorded_at=recorded_at,
+            correlation_id=correlation_id,
+            audit_id=audit_id,
+        )
+        ledger.append(event)
+        return RetentionResult.of(event, replayed=False)
+
+    def retention_policy(
+        self, *, principal_id: str, history_limit: int = DEFAULT_RETENTION_HISTORY
+    ) -> RetentionPolicyView:
+        if type(history_limit) is not int or not 1 <= history_limit <= MAX_RETENTION_HISTORY:
+            raise ReportValidationError("history_limit", "bounds")
+        ledger = self._world.general_report_retention_events.get(principal_id, [])
+        history = tuple(reversed(ledger))[:history_limit]
+        return RetentionPolicyView(current=next(iter(history), None), history=history)
+
+    def retention_eligibility_inputs(
+        self, report_id: str, *, principal_id: str
+    ) -> ReportEligibilityInputs | None:
+        root = self._root(principal_id, report_id)
+        if root is None:
+            return None
+        return ReportEligibilityInputs(
+            report_id=report_id,
+            lifecycle_state=root.lifecycle_state,
+            held=root.held,
+            lifecycle_events=tuple(
+                self._world.general_report_events.get((principal_id, report_id), [])
+            ),
+        )
 
     # ---- WP05b holds: the SQL order (B3), sealing through the shared helper ----
 

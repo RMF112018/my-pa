@@ -261,10 +261,15 @@ from my_pa.domain.reports.catalog import CatalogCursor, CatalogFilters
 from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES
 from my_pa.domain.reports.creator import ReportCreator
 from my_pa.domain.reports.custody import (
+    DEFAULT_RETENTION_HISTORY,
     CustodyAuthority,
     HoldRequest,
     HoldResult,
+    ReportEligibilityInputs,
     ReportHoldEventRecord,
+    RetentionPolicyView,
+    RetentionResult,
+    RetentionSetRequest,
 )
 from my_pa.domain.reports.publication import PublicationRequest, PublicationResult
 from my_pa.domain.reports.records import (
@@ -8052,6 +8057,46 @@ class GeneralReportRepository(ABC):
         self, report_id: str, *, principal_id: str
     ) -> tuple[ReportHoldEventRecord, ...] | None:
         """The report's whole hold ledger, oldest first, or `None` if not found."""
+
+    @abstractmethod
+    def set_retention(
+        self,
+        request: RetentionSetRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> RetentionResult:
+        """Append one retention policy event for this Principal (WP05b B6).
+
+        The key of this Principal, if already bound, replays its original
+        event (`replayed=True`, nothing written) or, bound to another intent
+        digest, raises `ReportIdempotencyConflictError`. Then the newest
+        `policy_revision` (0 when none) must equal `expected_policy_revision`
+        (else `ReportStalePolicyRevisionError`); the event is written at
+        revision + 1 with the newest event's period as its previous period. A
+        concurrent writer of the same revision loses at the unique constraint:
+        a winner of the same key is replayed, any other is stale. Append-only;
+        no row is ever updated or deleted. Nothing is enforced by a policy.
+        """
+
+    @abstractmethod
+    def retention_policy(
+        self, *, principal_id: str, history_limit: int = DEFAULT_RETENTION_HISTORY
+    ) -> RetentionPolicyView:
+        """This Principal's current policy and its newest-first history (limit 1..50)."""
+
+    @abstractmethod
+    def retention_eligibility_inputs(
+        self, report_id: str, *, principal_id: str
+    ) -> ReportEligibilityInputs | None:
+        """One report's lifecycle state, hold cache and lifecycle ledger, or `None`.
+
+        Foreign and missing are the same `None`. Reads only; never locks.
+        """
 
     @abstractmethod
     def version_history(

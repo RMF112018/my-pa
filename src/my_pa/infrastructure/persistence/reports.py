@@ -90,6 +90,14 @@ never touches the copy. A `delete` (trash) of a held report is refused with
 `ReportHeldError` after the lock, the key and the revision check; nothing
 else is gated by a hold.
 
+**Retention policy (WP05b B6, W3).** `set_retention` appends one event to the
+owner's policy history (no root to lock): the key settles first (replay or
+conflict), then the newest `policy_revision` is compared, and the insert at
+revision + 1 runs under a SAVEPOINT; a concurrent writer of the same revision
+loses at `one_report_retention_event_per_revision` and is stale (or replays,
+when the winner holds its key). The BEFORE INSERT guard proves the previous
+period is the predecessor's. Nothing here enforces or consumes a policy.
+
 Nothing here writes to a `knowledge.intelligence_*` table;
 `intelligence_artifacts` is only read, to resolve an `intelligence_report`
 association target.
@@ -131,6 +139,7 @@ from my_pa.contracts.ports import (
     ReportPreservationUnavailableError,
     ReportStaleHoldRevisionError,
     ReportStaleLifecycleRevisionError,
+    ReportStalePolicyRevisionError,
     ReportStaleVersionError,
     ReportWithdrawnError,
 )
@@ -151,6 +160,8 @@ from my_pa.domain.reports.content import (
 )
 from my_pa.domain.reports.creator import CreatorKind, ReportCreator
 from my_pa.domain.reports.custody import (
+    DEFAULT_RETENTION_HISTORY,
+    MAX_RETENTION_HISTORY,
     CustodyAuthority,
     HoldOperation,
     HoldPreservation,
@@ -158,7 +169,14 @@ from my_pa.domain.reports.custody import (
     HoldResult,
     PreservedLifecycleEvent,
     PreservedRoot,
+    ReportEligibilityInputs,
     ReportHoldEventRecord,
+    RetentionPeriod,
+    RetentionPolicyEventRecord,
+    RetentionPolicyView,
+    RetentionResult,
+    RetentionSetRequest,
+    RetentionUnit,
 )
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.lifecycle import LifecycleDecision, decide_lifecycle_transition
@@ -235,6 +253,7 @@ from my_pa.infrastructure.persistence.tables import (
     report_hold_events,
     report_lifecycle_events,
     report_receipts,
+    report_retention_policy_events,
     report_roots,
     report_version_manifests,
     report_versions,
@@ -252,6 +271,9 @@ __all__ = [
 _KEY_CONSTRAINT: Final = "a_report_key_admits_one_request_per_operation"
 #: WP05b A1: the hold event is its own receipt, one per (owner, operation, key).
 _HOLD_KEY_CONSTRAINT: Final = "a_report_hold_key_admits_one_request_per_operation"
+#: WP05b A3: one retention event per (owner, key) and per (owner, revision).
+_RETENTION_KEY_CONSTRAINT: Final = "a_report_retention_key_admits_one_request"
+_RETENTION_REVISION_CONSTRAINT: Final = "one_report_retention_event_per_revision"
 _MAX_KEY_CHARACTERS: Final = 128
 
 #: The table and identifier column each resolvable association kind names.
@@ -1777,6 +1799,131 @@ def _write_hold(
     )
 
 
+# ---- retention policy (WP05b B6) -------------------------------------------------
+
+
+def _retention_period(count: object, unit: object) -> RetentionPeriod | None:
+    """A stored period (both NULL = unset); a row the schema should have refused is integrity."""
+    if count is None and unit is None:
+        return None
+    try:
+        return RetentionPeriod(int(str(count)), RetentionUnit(str(unit)))
+    except (ReportValidationError, ValueError):
+        raise ReportIntegrityError() from None
+
+
+def _retention_event(row: Row[Any]) -> RetentionPolicyEventRecord:
+    m = row._mapping
+    return RetentionPolicyEventRecord(
+        event_id=str(m["event_id"]),
+        policy_revision=int(m["policy_revision"]),
+        period=_retention_period(m["period_count"], m["period_unit"]),
+        previous_period=_retention_period(m["previous_period_count"], m["previous_period_unit"]),
+        predecessor_event_id=m["predecessor_event_id"],
+        reason=str(m["reason"]),
+        intent_digest=str(m["intent_digest"]),
+        idempotency_key=str(m["idempotency_key"]),
+        authority=CustodyAuthority(str(m["authority_class"]), str(m["decision_channel"])),
+        recorded_at=m["recorded_at"],
+        correlation_id=str(m["correlation_id"]),
+        audit_id=str(m["audit_id"]),
+    )
+
+
+def _find_retention(
+    connection: Connection, idempotency_key: str, context: PrincipalContext
+) -> RetentionPolicyEventRecord | None:
+    """The retention event (the receipt) this Principal's key is bound to, or `None`."""
+    table = report_retention_policy_events
+    row = connection.execute(
+        select(table).where(_mine(table, context), table.c.idempotency_key == idempotency_key)
+    ).one_or_none()
+    return None if row is None else _retention_event(row)
+
+
+def _settle_retention(stored: RetentionPolicyEventRecord, intent_digest: str) -> RetentionResult:
+    if stored.intent_digest != intent_digest:
+        raise ReportIdempotencyConflictError()
+    return RetentionResult.of(stored, replayed=True)
+
+
+def _retention_history(
+    connection: Connection, context: PrincipalContext, limit: int
+) -> tuple[RetentionPolicyEventRecord, ...]:
+    table = report_retention_policy_events
+    rows = connection.execute(
+        select(table)
+        .where(_mine(table, context))
+        .order_by(table.c.policy_revision.desc())
+        .limit(limit)
+    ).all()
+    return tuple(_retention_event(row) for row in rows)
+
+
+def _write_retention(
+    connection: Connection,
+    request: RetentionSetRequest,
+    newest: RetentionPolicyEventRecord | None,
+    *,
+    context: PrincipalContext,
+    authority: CustodyAuthority,
+    idempotency_key: str,
+    intent_digest: str,
+    recorded_at: datetime,
+    correlation_id: str,
+    audit_id: str,
+) -> RetentionResult:
+    event_id = issue_identifier(IdKind.REPORT_RETENTION_EVENT)
+    previous = None if newest is None else newest.period
+    event = RetentionPolicyEventRecord(
+        event_id=event_id,
+        policy_revision=1 if newest is None else newest.policy_revision + 1,
+        period=request.period,
+        previous_period=previous,
+        predecessor_event_id=None if newest is None else newest.event_id,
+        reason=request.reason,
+        intent_digest=intent_digest,
+        idempotency_key=idempotency_key,
+        authority=authority,
+        recorded_at=recorded_at,
+        correlation_id=correlation_id,
+        audit_id=audit_id,
+    )
+    connection.execute(
+        report_retention_policy_events.insert().values(
+            **_bound(
+                {
+                    "event_id": event.event_id,
+                    "policy_revision": event.policy_revision,
+                    "period_count": None if event.period is None else event.period.count,
+                    "period_unit": None if event.period is None else event.period.unit.value,
+                    "previous_period_count": None if previous is None else previous.count,
+                    "previous_period_unit": None if previous is None else previous.unit.value,
+                    "predecessor_event_id": event.predecessor_event_id,
+                    "predecessor_revision": None if newest is None else newest.policy_revision,
+                    "reason": event.reason,
+                    "intent_digest": intent_digest,
+                    "idempotency_key": idempotency_key,
+                    "authority_class": authority.authority_class,
+                    "decision_channel": authority.decision_channel,
+                    "recorded_at": recorded_at,
+                    "correlation_id": correlation_id,
+                    "audit_id": audit_id,
+                },
+                report_retention_policy_events,
+                context,
+            )
+        )
+    )
+    return RetentionResult.of(event, replayed=False)
+
+
+def _history_limit(value: object) -> int:
+    if type(value) is not int or not 1 <= value <= MAX_RETENTION_HISTORY:
+        raise ReportValidationError("history_limit", "bounds")
+    return value
+
+
 # ---- history -----------------------------------------------------------------------
 
 
@@ -2487,6 +2634,98 @@ class SqlGeneralReportRepository(GeneralReportRepository):
         if _find_root(self._connection, report_id, context) is None:
             return None
         return _hold_ledger(self._connection, report_id, context)
+
+    def set_retention(
+        self,
+        request: RetentionSetRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> RetentionResult:
+        """B6: key, CAS on the newest revision, then the append under a SAVEPOINT."""
+        if not isinstance(request, RetentionSetRequest):
+            raise ReportValidationError("retention_request", "type")
+        context = capture_context(principal_id)
+        recorded = self._admit(idempotency_key, correlation_id, audit_id, recorded_at)
+        attested = _attested(authority)
+        intent_digest = request.intent_digest
+        connection = self._connection
+        stored = _find_retention(connection, idempotency_key, context)
+        if stored is not None:
+            return _settle_retention(stored, intent_digest)
+        newest = next(iter(_retention_history(connection, context, 1)), None)
+        current = 0 if newest is None else newest.policy_revision
+        if current != request.expected_policy_revision:
+            raise ReportStalePolicyRevisionError()
+        try:
+            with connection.begin_nested():
+                return _write_retention(
+                    connection,
+                    request,
+                    newest,
+                    context=context,
+                    authority=attested,
+                    idempotency_key=idempotency_key,
+                    intent_digest=intent_digest,
+                    recorded_at=recorded,
+                    correlation_id=correlation_id,
+                    audit_id=audit_id,
+                )
+        except IntegrityError as error:
+            if _constraint_name(error) not in (
+                _RETENTION_KEY_CONSTRAINT,
+                _RETENTION_REVISION_CONSTRAINT,
+            ):
+                raise
+        # A concurrent writer committed first: its key replays, else we are stale.
+        winner = _find_retention(connection, idempotency_key, context)
+        if winner is None:
+            raise ReportStalePolicyRevisionError()
+        return _settle_retention(winner, intent_digest)
+
+    def retention_policy(
+        self, *, principal_id: str, history_limit: int = DEFAULT_RETENTION_HISTORY
+    ) -> RetentionPolicyView:
+        limit = _history_limit(history_limit)
+        history = _retention_history(self._connection, capture_context(principal_id), limit)
+        return RetentionPolicyView(current=next(iter(history), None), history=history)
+
+    def retention_eligibility_inputs(
+        self, report_id: str, *, principal_id: str
+    ) -> ReportEligibilityInputs | None:
+        context = capture_context(principal_id)
+        root = _find_root(self._connection, report_id, context)
+        if root is None:
+            return None
+        events = self._connection.execute(
+            select(report_lifecycle_events)
+            .where(
+                _mine(report_lifecycle_events, context),
+                report_lifecycle_events.c.report_id == root.report_id,
+            )
+            .order_by(report_lifecycle_events.c.lifecycle_revision)
+        ).all()
+        return ReportEligibilityInputs(
+            report_id=root.report_id,
+            lifecycle_state=root.lifecycle_state,
+            held=root.held,
+            lifecycle_events=tuple(
+                ReportLifecycleEventRecord(
+                    event_id=str(m["event_id"]),
+                    lifecycle_revision=int(m["lifecycle_revision"]),
+                    operation=LifecycleOperation(m["operation"]),
+                    prior_state=LifecycleState(m["prior_state"]),
+                    resulting_state=LifecycleState(m["resulting_state"]),
+                    reason=m["reason"],
+                    transitioned_at=m["transitioned_at"],
+                )
+                for m in (row._mapping for row in events)
+            ),
+        )
 
     def version_history(
         self,

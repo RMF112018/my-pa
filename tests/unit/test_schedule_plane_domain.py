@@ -93,8 +93,9 @@ def test_the_eight_prefixes_are_s61s_patterns() -> None:
             outputs._VERSION_ID if kind is IdKind.SCHEDULE_SCENARIO_VERSION else outputs._RUN_ID
         )
         assert pattern.fullmatch(identifier)
-    # 164 at S6-2; Reports Modernization WP01 appended seven `gr*` kinds after.
-    assert len(IdKind) == 171
+    # 164 at S6-2; Reports Modernization WP01 appended seven `gr*` kinds after,
+    # and WP05b three more (hold, retention, preservation).
+    assert len(IdKind) == 174
     new = [
         IdKind.SCHEDULE_SCENARIO,
         IdKind.SCHEDULE_SCENARIO_VERSION,

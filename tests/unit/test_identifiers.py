@@ -280,6 +280,11 @@ def test_contract_prefixes_are_stable() -> None:
         "grlev",
         "grrc",
         "grxfr",
+        # Reports Modernization WP05b: hold events, retention policy events
+        # and sealed preservation objects.
+        "grhld",
+        "grrtn",
+        "grprv",
     }
 
 

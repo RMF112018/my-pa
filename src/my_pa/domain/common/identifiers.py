@@ -575,6 +575,17 @@ class IdKind(StrEnum):
     REPORT_LIFECYCLE_EVENT = "grlev"
     REPORT_RECEIPT = "grrc"
     REPORT_TRANSFER_SESSION = "grxfr"
+    #: Reports Modernization WP05b (holds and retention): one hold ledger
+    #: event (`place` or `release`), one retention policy history event and one
+    #: sealed preservation object in the report content store. Checked against
+    #: all 171 prior members before use (a grep of each `<prefix>_` over `src`,
+    #: `tests`, `web/src` and `migrations`, and the uniqueness assertion in
+    #: `tests/unit/test_identifiers.py`): none collides, no member is a prefix
+    #: of any, none is a prefix of a member, and no two of the 3 prefix each
+    #: other (nearest: `grpt`, `grrc`).
+    REPORT_HOLD_EVENT = "grhld"
+    REPORT_RETENTION_EVENT = "grrtn"
+    REPORT_PRESERVATION_OBJECT = "grprv"
 
 
 class InvalidIdentifierError(ValueError):

@@ -2279,6 +2279,7 @@ def _catalog_page(
             root.c.lifecycle_revision,
             root.c.created_by_kind,
             root.c.created_by_id,
+            root.c.held,
             version.c.title,
             version.c.report_type,
             version.c.topics,
@@ -2322,6 +2323,7 @@ def _catalog_page(
                 rank=None if m["rank"] is None else int(m["rank"]),
                 snippet=None if m["snippet"] is None else str(m["snippet"]),
                 creator=_creator(m["created_by_kind"], m["created_by_id"]),
+                held=bool(m["held"]),
             )
         )
     return tuple(entries)

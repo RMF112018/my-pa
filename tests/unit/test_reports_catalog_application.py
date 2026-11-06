@@ -46,6 +46,8 @@ STANDALONE_KEYS: Final = {
     "created_at",
     "updated_at",
     "creator",
+    # WP05b B7: the root's hold cache.
+    "held",
 }
 INTELLIGENCE_KEYS: Final = {
     "plane",
@@ -299,6 +301,8 @@ def test_the_standalone_list_shape_has_no_count_and_no_content(scene: Scene) -> 
                 CreatorKind.LOCAL_PRINCIPAL, scene.principal.principal_id
             ).creator_id,
         },
+        # WP05b B7: the root's hold cache, never a reason, actor or seal.
+        "held": False,
     }
     assert item["head_version_id"].startswith("grver_")
     assert answer["disclosure"]["truncation"] == {

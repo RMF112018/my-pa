@@ -10816,6 +10816,7 @@ class _GeneralReports(GeneralReportRepository):
                 rank=rank,
                 snippet=None if rank is None else (version.summary or version.title),
                 creator=root.creator,
+                held=root.held,
             )
             found.append(((rank or 0, root.created_at, report_id), entry))
         found.sort(key=lambda item: item[0], reverse=True)

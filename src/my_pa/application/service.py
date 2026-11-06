@@ -3688,6 +3688,8 @@ def _standalone_catalog_item(entry: CatalogEntry, *, search: bool) -> dict[str, 
         "created_at": format_rfc3339(entry.created_at),
         "updated_at": format_rfc3339(entry.updated_at),
         "creator": _creator_payload(entry.creator),
+        # WP05b B7: the root's hold cache only (never a reason, actor or seal).
+        "held": entry.held,
     }
     if search:
         item["snippet"] = _catalog_snippet(entry.snippet)
@@ -3736,6 +3738,8 @@ def _general_history_payload(
         "head_version_number": root.head_version_number,
         "lifecycle_state": root.lifecycle_state.value,
         "lifecycle_revision": root.lifecycle_revision,
+        # WP05b B7: the root's hold cache only (never a reason, actor or seal).
+        "held": root.held,
         "entries": page.entries.value,
         "items": items,
         "next_cursor": page.next_cursor,
@@ -3868,6 +3872,8 @@ def _general_read_payload(
         "head_version_number": root.head_version_number,
         "lifecycle_state": root.lifecycle_state.value,
         "lifecycle_revision": root.lifecycle_revision,
+        # WP05b B7: the root's hold cache only (never a reason, actor or seal).
+        "held": root.held,
         "version_id": version.version_id,
         "version_number": version.version_number,
         "supersedes_version_id": version.supersedes_version_id,

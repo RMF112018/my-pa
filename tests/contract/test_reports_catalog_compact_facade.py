@@ -124,6 +124,8 @@ STANDALONE_KEYS: Final = frozenset(
         "created_at",
         "updated_at",
         "creator",
+        # WP05b B7: the root's hold cache.
+        "held",
     }
 )
 INTELLIGENCE_KEYS: Final = frozenset(

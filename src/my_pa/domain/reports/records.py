@@ -81,6 +81,8 @@ class CatalogEntry:
     snippet: str | None
     #: WP05 A4: the root's creator (who published the report).
     creator: ReportCreator
+    #: WP05b B7: the root's hold cache (`report_roots.held`), nothing else of the hold.
+    held: bool = False
 
 
 @dataclass(frozen=True, slots=True)

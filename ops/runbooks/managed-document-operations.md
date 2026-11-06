@@ -237,3 +237,140 @@ scan cycle is exercised against
 temporary roots and a disposable database by
 `tests/recovery/test_report_content_recovery.py`; nothing here has been run
 against a real deployment root, which remains an operator action.
+
+## 8. Report holds and retention (Reports Modernization WP05b)
+
+**What a hold does.** A legal hold is placed and released by the operator only:
+`reports.hold.place` and `reports.hold.release` (purpose `report_hold`) are
+operator-only capabilities attested to the local operator surface — the CLI
+(`apps/cli/invoke.py`) or the HTTP gateway's stamped operator surface. A held
+report cannot be moved to the Trash: `reports.delete` is refused `denied
+[report_held]` and writes no lifecycle row, and any future purge is blocked the
+same way. Nothing else is: archive, restore, update, `reports.read`,
+`reports.history`, list and search all work on a held report, and `reports.read`
+and `reports.history` answer `"held": true`. Placing a hold first writes a
+sealed, digest-verified **preservation copy** of every version, content object
+and lifecycle event to the report content store, in the `preservation`
+namespace (`<root>/preservation/<shard>/<grprv_id>/...`, beside section 7's
+`content` namespace), reads it back and verifies it, and only then records the
+hold. The copy is kept after the hold is released; the store has no delete.
+Every `reports.delete` also preflights the report's content integrity, so a
+report with a missing or altered part is refused `internal_error` with no
+lifecycle row, held or not.
+
+**What retention does.** Retention is an operator policy per Principal:
+`reports.retention.set` and `reports.retention.get` (purpose
+`report_retention`), operator-only on the same terms. It is **unset by default**:
+no period applies until the operator sets one. Every change is appended to the
+policy history (who, when, old period, new period, reason); nothing is
+overwritten. Retention gates only **purge eligibility**, which
+`reports.retention.get` reports for one report as information: purge is not
+implemented, and retention never blocks an update, archive, restore or Trash.
+Eligibility is decided in this order: `no_policy`, `held`, `not_trashed`,
+`retention_running`, `eligible`. **Open operator decisions:** the retention
+clock start (the implemented default is the report's most recent move to the
+Trash, `most_recent_trash_event`) and the period itself (a five-year period is
+a proposal, not a default; nothing in the repository sets or assumes one).
+
+**Commands.** All four run through `apps/cli/invoke.py` as the local operator,
+with `MY_PA_DATABASE_URL` set and, for a placement, `MY_PA_REPORT_CONTENT_ROOT`
+(section 7). `--principal-id` is the local operator Principal; `--requested-at`
+is the request time in RFC 3339. Reasons are required (1..500 characters) and
+are recorded, never echoed. `expected_hold_revision` is the `hold_revision` you
+last read (0 for a report never held); `expected_policy_revision` is the
+`policy_revision` you last read (0 before the first change). A retry with the
+same `idempotency_key` and the same request replays (`"replayed": true`).
+
+```sh
+MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \
+  .venv/bin/python apps/cli/invoke.py reports.hold.place \
+    --request-id req-hold-0001 --purpose report_hold \
+    --principal-id prn_... --requested-at 2026-11-06T12:00:00Z \
+    --payload '{"report_id": "grpt_...", "expected_hold_revision": 0, "reason": "Litigation hold.", "idempotency_key": "hold-0001"}'
+
+.venv/bin/python apps/cli/invoke.py reports.hold.release \
+    --request-id req-hold-0002 --purpose report_hold \
+    --principal-id prn_... --requested-at 2026-11-06T12:00:00Z \
+    --payload '{"report_id": "grpt_...", "expected_hold_revision": 1, "reason": "Hold lifted.", "idempotency_key": "hold-0002"}'
+
+.venv/bin/python apps/cli/invoke.py reports.retention.set \
+    --request-id req-retention-0001 --purpose report_retention \
+    --principal-id prn_... --requested-at 2026-11-06T12:00:00Z \
+    --payload '{"expected_policy_revision": 0, "reason": "Policy adopted.", "idempotency_key": "retention-0001", "period": {"count": 5, "unit": "years"}}'
+
+.venv/bin/python apps/cli/invoke.py reports.retention.set \
+    --request-id req-retention-0002 --purpose report_retention \
+    --principal-id prn_... --requested-at 2026-11-06T12:00:00Z \
+    --payload '{"expected_policy_revision": 1, "reason": "Policy withdrawn.", "idempotency_key": "retention-0002", "unset": true}'
+
+.venv/bin/python apps/cli/invoke.py reports.retention.get \
+    --request-id req-retention-0003 --purpose report_retention \
+    --principal-id prn_... --requested-at 2026-11-06T12:00:00Z \
+    --payload '{"report_id": "grpt_...", "history_limit": 20}'
+```
+
+`reports.retention.set` takes exactly one of `period` (`{"count", "unit"}`:
+1..36525 `days` or 1..100 `years`) and `"unset": true`. `reports.retention.get`
+takes an optional `report_id` (for that report's eligibility) and an optional
+`history_limit` (1..50, default 20).
+
+**Outputs** (the `result` of the one-line JSON envelope the CLI prints):
+
+* hold place/release: `plane` (`standalone`), `report_id`, `operation`
+  (`place`/`release`), `held`, `hold_revision`, `event_id`, `recorded_at`,
+  `replayed`, and on a placement `preservation` {`seal_object_id`,
+  `seal_sha256`, `seal_byte_count`, `object_count`, `version_count`} — the
+  sealed copy's identity and size, never its content or the reason;
+* retention set: `policy_revision`, `period` (or `null` when unset),
+  `previous_period`, `event_id`, `recorded_at`, `replayed`;
+* retention get: `policy` {`policy_revision`, `period`, `set_at`, `reason`} or
+  `null` when never set, `history` (newest first: `event_id`,
+  `policy_revision`, `period`, `previous_period`, `reason`, `authority_class`,
+  `decision_channel`, `recorded_at`), and with `report_id` an `eligibility`
+  {`report_id`, `eligible`, `reason`, `clock_start`, `eligible_at`,
+  `clock_start_strategy`}.
+
+**Refusals** (`code [safe_details]`):
+
+* `denied [report_held]` — `reports.delete` on a held report; nothing written.
+* `unavailable [preservation_store]` — a placement in a process without
+  `MY_PA_REPORT_CONTENT_ROOT`; no hold row is written.
+* `conflict [expected_hold_revision]` / `conflict [expected_policy_revision]` —
+  a stale revision; `conflict [hold_state]` — placing a hold on a held report
+  or releasing one not held; `conflict [idempotency_key]` — a key reused for a
+  different request; `not_found [artifact_id]` — no such report of yours.
+* `internal_error` — the preservation copy could not be written or did not
+  verify; no hold row is written.
+* `denied` (no detail) — any of the four from a surface that is not the local
+  operator surface (stdio MCP, an unattested local caller); nothing is read or
+  written.
+* Remote and compact ChatLLM facade: these custody operations are absent from
+  `my_pa.describe` and every remote tool list, and naming one is `unsupported`,
+  even with a forged grant. The ChatLLM capability policy classifies all four
+  `CONTROL_PLANE_EXCLUDED`.
+
+**Verifying preservation copies.**
+
+```sh
+MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \
+  .venv/bin/python apps/cli/report_content.py preservation-verify
+```
+
+It takes no `--principal` (the orphan direction cannot be partitioned) and
+prints `holds_checked`, `missing_parts`, `mismatched_parts`, `orphaned_objects`
+and `unreadable_entries`, then one `missing`, `mismatch` or `orphan` line per
+finding (identifiers only; no path, body or digest). Exit `0` consistent, `1`
+refused (for example, no root), `2` inconsistent. A placement that failed after
+writing some objects leaves them as **orphans**: they are reported, never
+deleted, and no hold row names them.
+
+**Backups do not copy the preservation namespace.** Section 7's `backup` and
+`restore` copy only `content` objects (operator decision: backups need not
+honor holds). After a restore, `preservation-verify` reports any preservation
+copy the restored store lacks as missing parts.
+
+The end-to-end CLI sequence above (publish, place, delete refused, archive,
+restore, update, retention get/set/get, release, delete, store-less refusal,
+unstamped `denied`) is exercised against a disposable database and a temporary
+root by `tests/database/test_reports_custody_cli.py`; nothing here has been run
+against a real deployment root, which remains an operator action.

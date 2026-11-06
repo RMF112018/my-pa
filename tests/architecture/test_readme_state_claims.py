@@ -528,6 +528,8 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     241: "Two hundred and forty-one",
     # Reports Modernization WP03: its five additions, 241 -> 246.
     246: "Two hundred and forty-six",
+    # Reports Modernization WP05b: its four custody additions, 246 -> 250.
+    250: "Two hundred and fifty",
 }
 
 
@@ -673,7 +675,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert implemented == 246
+    assert implemented == 250
     assert len(withheld_families) == 127
     assert unwired == set()
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
@@ -730,7 +732,10 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # family, so the default grows by one and the withheld figure is unchanged.
     # Reports Modernization WP03's five are core and in no withheld family, so
     # the default grows by five and the withheld figure is unchanged.
-    assert default == 119 and total == 246 and withheld == 127
+    # Reports Modernization WP05b's four custody names are operator-only, core
+    # and in no withheld family, so the default grows by four and the withheld
+    # figure is unchanged.
+    assert default == 123 and total == 250 and withheld == 127
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -757,7 +762,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert authenticated_mcp_capabilities == {
         capability.value for capability in application_capabilities
     }
-    assert len(local_mcp_capabilities) == default - 3 == 116
+    assert len(local_mcp_capabilities) == default - 3 == 120
     assert authenticated_mcp_capabilities - local_mcp_capabilities == {
         "goodnotes.pull",
         "goodnotes.complete",

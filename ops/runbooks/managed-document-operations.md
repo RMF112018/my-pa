@@ -228,7 +228,12 @@ may also be an object whose transaction has not committed yet) and unreadable
 entries, and copies verified objects to and from a backup root clear of the
 live one. It never deletes or repairs anything. The database is backed up with `pg_dump` and
 restored first; the objects are then restored and verified against the restored
-rows. The full dump, copy, restore and scan cycle is exercised against
+rows. A `restore` stops at the first damaged object it meets, whether a damaged
+copy in the backup root or a damaged object already in the live store (which it
+verifies but never overwrites): run `verify` first, move each damaged object it
+reports aside (out of the live store root), and move any damaged copy aside out
+of the backup root before restoring again. The full dump, copy, restore and
+scan cycle is exercised against
 temporary roots and a disposable database by
 `tests/recovery/test_report_content_recovery.py`; nothing here has been run
 against a real deployment root, which remains an operator action.

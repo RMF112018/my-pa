@@ -359,9 +359,12 @@ INTERACTION_LOG_ROW_TIMEOUT_SECONDS: Final = 30.0
 #: 16 MiB of markdown), whatever the concurrency, and only when a report content
 #: store is composed (without one a gzip upload is never inflated past the
 #: inline threshold, 512 KiB by default). It does NOT fit the ~80 MiB margin: the sum is
-#: about 786 MiB against 768 MiB. That is an operator decision, not changed
-#: here: raise `MY_PA_REMOTE_MEMORY` (for example to 896m) before composing a
-#: report content store on the remote gateway, or accept the risk.
+#: about 786 MiB against 768 MiB. The repo template
+#: (`ops/nas/remote/compose.env.example`) therefore carries
+#: `MY_PA_REMOTE_MEMORY=896m` (WP05b), and `ops/nas/remote/validate.py` pins
+#: that template to exactly 896m (it reads only the template, never an operator
+#: env file). The live deployment keeps 768m until the operator applies 896m
+#: when enabling the report content store on the remote gateway.
 INTERACTION_LOG_WORKER_MEMORY_BYTES: Final = 256 * 1024 * 1024
 
 

@@ -95,9 +95,12 @@ def validate(root: Path = ROOT) -> list[str]:
             continue
         key, value = line.split("=", 1)
         environment.setdefault(key, []).append(value)
+    # Pins the repo template only (`compose.env.example` under `root`); an
+    # operator env file outside Git is never read here. 896m is the template
+    # value for the report content store budget (Reports Modernization WP05b).
     expected_environment = {
         "MY_PA_REMOTE_CPUSET": ["0"],
-        "MY_PA_REMOTE_MEMORY": ["768m"],
+        "MY_PA_REMOTE_MEMORY": ["896m"],
         "MY_PA_CLOUDFLARED_CPUSET": ["1"],
         "MY_PA_CLOUDFLARED_MEMORY": ["256m"],
     }

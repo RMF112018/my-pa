@@ -297,15 +297,19 @@ stored.
   never trips the start breaker. **The cap is enforced on Linux only**: macOS
   cannot lower `RLIMIT_AS`, so on a developer Mac the worker runs uncapped (the
   builder records this as `memory_limited = False`).
-- **Report content decode is a line this budget did not have** (Reports
+- **The gzip report content inflation permit is a line this budget did not have** (Reports
   Modernization WP05): one process-wide permit (`REPORT_CONTENT_DECODE_PERMITS`
   = 1) x about 94 MiB measured live peak for a 16 MiB `gzip+base64` publish or
   update (68 MiB for 16 MiB of markdown), whatever the number of concurrent
   calls, and only when a report content store is composed; without one a gzip
   upload is never inflated past the inline threshold (512 KiB by default). **It does not
-  fit the ~80 MiB margin** (about 786 MiB against 768 MiB): before composing a
-  report content store on the remote gateway, the operator either raises
-  `MY_PA_REMOTE_MEMORY` (for example to 896m) or accepts the risk.
+  fit the ~80 MiB margin** (about 786 MiB against 768 MiB). The repo template
+  `ops/nas/remote/compose.env.example` therefore carries
+  `MY_PA_REMOTE_MEMORY=896m` (Reports Modernization WP05b), and
+  `ops/nas/remote/validate.py` pins that template to exactly 896m; it reads
+  only the template, never the operator's env file outside Git. The live
+  deployment is unchanged at 768m until the operator applies 896m when
+  enabling the report content store on the remote gateway.
 - Measured with a 1 ms ticker thread in the gateway process, building a row
   in-thread stalled every other thread for 83 ms (1 MiB body) up to 1.34 s
   (16 MiB) idle, and up to 4.1 s under heavy CPU contention; through the worker
@@ -377,7 +381,9 @@ After enabling the log on the NAS (and after each deployment of it):
    `resource_tracker` process: the worker is not started through
    `multiprocessing`.)
 4. Watch `docker stats` during a large response and confirm memory stays well
-   under the container's 768m limit and latency is acceptable. The worker adds
+   under the container's `mem_limit` (`MY_PA_REMOTE_MEMORY`: 768m on the live
+   deployment until the operator applies the template's 896m at report content
+   store enablement) and latency is acceptable. The worker adds
    about 20 MiB idle, up to about 84 MiB for a 16 MiB text row, and never more
    than its 256 MiB cap: a row that would need more (a large list of records,
    many tiny objects) shows up as one `capture_error` and no row, while the

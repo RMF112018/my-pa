@@ -51,6 +51,23 @@ def test_remote_runtime_contract_refuses_unsupported_synology_cgroup_controls(
     assert "resource_example_contract" in gate.validate(remote)
 
 
+def test_remote_memory_template_is_896m_and_other_values_are_refused(tmp_path: Path) -> None:
+    gate = _module(ROOT / "ops/nas/remote/validate.py")
+    remote = tmp_path / "remote"
+    shutil.copytree(ROOT / "ops/nas/remote", remote)
+    environment = remote / "compose.env.example"
+    template = environment.read_text()
+    assert template.splitlines().count("MY_PA_REMOTE_MEMORY=896m") == 1
+    assert "resource_example_contract" not in gate.validate(remote)
+    for refused in ("768m", "1g", ""):
+        environment.write_text(
+            template.replace("MY_PA_REMOTE_MEMORY=896m", f"MY_PA_REMOTE_MEMORY={refused}")
+        )
+        assert "resource_example_contract" in gate.validate(remote), refused
+    environment.write_text(template + "MY_PA_REMOTE_MEMORY=896m\n")
+    assert "resource_example_contract" in gate.validate(remote)
+
+
 def test_production_remote_contract_is_local_operator_and_has_no_entra_dependency() -> None:
     environment = (ROOT / "ops/nas/remote/remote.env.example").read_text()
     compose = (ROOT / "ops/nas/remote/compose.yml").read_text()

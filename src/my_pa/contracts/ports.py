@@ -7980,6 +7980,7 @@ class GeneralReportRepository(ABC):
         recorded_at: datetime,
         correlation_id: str,
         audit_id: str,
+        content_store: ReportContentStore | None = None,
     ) -> LifecycleResult:
         """Archive, delete (to the recoverable Trash) or restore a report (WP03 D7).
 
@@ -7996,6 +7997,15 @@ class GeneralReportRepository(ABC):
         `ReportHeldError` after the lock, the key settle and the revision
         check, before the lifecycle decision; archive and restore are never
         gated by a hold.
+
+        WP05b B4 trash preflight (H4): an applied `delete`, after the lifecycle
+        decision and before any event, receipt or root write, verifies every
+        content object any version of the report references -- inline rows
+        recomputed from their stored bytes (decoded, and original for gzip,
+        digest and byte count), `managed_blob` parts `verify`-ed through
+        `content_store` (no store is a missing part). Any failure raises
+        `ReportTrashPreflightError` and writes nothing. Archive and restore
+        never preflight.
         """
 
     @abstractmethod

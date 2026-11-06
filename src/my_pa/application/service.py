@@ -702,6 +702,7 @@ from my_pa.contracts.ports import (
     ReportNotFoundError,
     ReportStaleLifecycleRevisionError,
     ReportStaleVersionError,
+    ReportTrashPreflightError,
     ReportWithdrawnError,
     ReviewDecisionRequest,
     ScheduleUnitOfWork,
@@ -16643,7 +16644,10 @@ class ApplicationService:
         `capture.archive`; a move the current state does not admit is
         `conflict` on `lifecycle_state`. No version, content, manifest or
         association is touched; a delete is the recoverable Trash. A delete of
-        a report under a legal hold is `denied` (`report_held`, WP05b B4).
+        a report under a legal hold is `denied` (`report_held`, WP05b B4). A
+        delete whose content is not durably present and intact (the trash
+        preflight, H4) is `internal_error`, as any integrity fault: a server
+        fault the caller cannot correct, naming nothing of the content.
         """
         request = lifecycle_request(command)
         refusal: ApplicationError
@@ -16655,6 +16659,7 @@ class ApplicationService:
                 recorded_at=authorization.at,
                 correlation_id=authorization.correlation_id,
                 audit_id=authorization.audit_id,
+                content_store=self._report_content_store,
             )
         except ReportValidationError as error:
             refusal = report_revision_refusal(error)
@@ -16669,7 +16674,8 @@ class ApplicationService:
             refusal = DeniedError(SafeDetail.REPORT_HELD)
         except ReportLifecycleRefusal:
             refusal = ConflictError(SafeDetail.LIFECYCLE_STATE)
-        except ReportIntegrityError:
+        except (ReportIntegrityError, ReportTrashPreflightError):
+            # WP05b B4: no detail token -- `internal_error` carries none anywhere.
             refusal = InternalError()
         else:
             return _Result(

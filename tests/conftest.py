@@ -158,6 +158,7 @@ from my_pa.contracts.ports import (
     ReportStaleLifecycleRevisionError,
     ReportStalePolicyRevisionError,
     ReportStaleVersionError,
+    ReportTrashPreflightError,
     ReportWithdrawnError,
     RepositoryFailureError,
     ReviewDecisionRequest,
@@ -490,6 +491,7 @@ from my_pa.domain.reports.vocabulary import (
     AssociationTargetKind,
     AssociationVerification,
     ChangeKind,
+    ContentEncoding,
     LifecycleOperation,
     LifecycleState,
     ReceiptOutcome,
@@ -10216,8 +10218,13 @@ class _GeneralReports(GeneralReportRepository):
         recorded_at: datetime,
         correlation_id: str,
         audit_id: str,
+        content_store: ReportContentStore | None = None,
     ) -> LifecycleResult:
-        """The SQL order (D7): not found, key, stale revision, decide, then the write."""
+        """The SQL order (D7): not found, key, stale revision, decide, then the write.
+
+        WP05b B4: a held delete refuses before the decision; an applied delete
+        then runs the trash preflight (`_trash_preflight`) before any write.
+        """
         root = self._root(principal_id, request.report_id)
         if root is None:
             raise ReportNotFoundError()
@@ -10242,6 +10249,8 @@ class _GeneralReports(GeneralReportRepository):
         decision = decide_lifecycle_transition(
             root.lifecycle_state, request.operation, trashed_from=trashed_from
         )
+        if request.operation is LifecycleOperation.DELETE:
+            self._trash_preflight(principal_id, request.report_id, content_store)
         event_id: str | None
         if decision.outcome is ReceiptOutcome.NO_OP:
             event_id = (
@@ -10290,6 +10299,58 @@ class _GeneralReports(GeneralReportRepository):
         )
         self._world.general_report_lifecycle_receipts[receipt_key] = result
         return result
+
+    def _trash_preflight(
+        self, principal_id: str, report_id: str, content_store: ReportContentStore | None
+    ) -> None:
+        """The SQL preflight (B4) over the world: every distinct content object verified.
+
+        Inline: the held bytes re-hashed and re-counted against the content's
+        own digests (decoded, and the original for gzip). `managed_blob`:
+        every part `verify`-ed through `content_store`; no store is missing.
+        """
+        seen: set[str] = set()
+        for stored in self._versions(principal_id, report_id):
+            if stored.content_id in seen:
+                continue
+            seen.add(stored.content_id)
+            content = stored.content
+            gzip_encoded = content.encoding is ContentEncoding.GZIP_BASE64
+            if stored.storage_kind is StorageKind.MANAGED_BLOB:
+                if content_store is None:
+                    raise ReportTrashPreflightError()
+                parts = [
+                    (ReportContentPart.DECODED, content.decoded_sha256, content.decoded_byte_count)
+                ]
+                if gzip_encoded:
+                    parts.append(
+                        (
+                            ReportContentPart.ORIGINAL,
+                            content.original_sha256,
+                            content.original_byte_count,
+                        )
+                    )
+                for part, sha256, byte_count in parts:
+                    try:
+                        content_store.verify(
+                            stored.content_id,
+                            part,
+                            expected_sha256=sha256,
+                            expected_byte_count=byte_count,
+                        )
+                    except ReportContentStoreError:
+                        raise ReportTrashPreflightError() from None
+                continue
+            checks = [(content.decoded, content.decoded_sha256, content.decoded_byte_count)]
+            if gzip_encoded:
+                if content.original is None:
+                    raise ReportTrashPreflightError()
+                checks.append(
+                    (content.original, content.original_sha256, content.original_byte_count)
+                )
+            for data, sha256, byte_count in checks:
+                if hashlib.sha256(data).hexdigest() != sha256 or len(data) != byte_count:
+                    raise ReportTrashPreflightError()
 
     # ---- WP05b W3 retention: the SQL order (B6) -----------------------------
 

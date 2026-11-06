@@ -90,6 +90,15 @@ never touches the copy. A `delete` (trash) of a held report is refused with
 `ReportHeldError` after the lock, the key and the revision check; nothing
 else is gated by a hold.
 
+**Trash preflight (WP05b B4, W3).** Every applied `delete`, held or not, after
+the lifecycle decision and before its event, receipt or root write, verifies
+every content object any version of the report references
+(`_trash_preflight`): an inline row is recomputed from its stored bytes as a
+read recomputes it, a `managed_blob` row's parts are `verify`-ed through the
+report content store (no store is a missing part). A failure is
+`ReportTrashPreflightError` and nothing is written. Archive and restore do
+not preflight.
+
 **Retention policy (WP05b B6, W3).** `set_retention` appends one event to the
 owner's policy history (no root to lock): the key settles first (replay or
 conflict), then the newest `policy_revision` is compared, and the insert at
@@ -130,7 +139,9 @@ from sqlalchemy.exc import IntegrityError
 from my_pa.contracts.ports import (
     GeneralReportRepository,
     ReportAssociationTargetNotFoundError,
+    ReportContentPart,
     ReportContentStore,
+    ReportContentStoreError,
     ReportHeldError,
     ReportHoldStateError,
     ReportIdempotencyConflictError,
@@ -141,6 +152,7 @@ from my_pa.contracts.ports import (
     ReportStaleLifecycleRevisionError,
     ReportStalePolicyRevisionError,
     ReportStaleVersionError,
+    ReportTrashPreflightError,
     ReportWithdrawnError,
 )
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
@@ -1799,6 +1811,65 @@ def _write_hold(
     )
 
 
+# ---- trash preflight (WP05b B4) --------------------------------------------------
+
+
+def _trash_preflight(
+    connection: Connection,
+    root: ReportRootRecord,
+    context: PrincipalContext,
+    content_store: ReportContentStore | None,
+) -> int:
+    """Verify every content object of every version of `root` (H4); how many were checked.
+
+    Inline: `_verified_content` recomputes the decoded (and, for gzip, the
+    original) digest and byte count from the stored row bytes and compares
+    them with the row. `managed_blob`: the row's facts, then every part
+    `verify`-ed through `content_store`; no store is a missing part. Any
+    failure is `ReportTrashPreflightError`. Reads only.
+    """
+    content, version = report_content_objects, report_versions
+    rows = connection.execute(
+        select(content)
+        .where(
+            _mine(content, context),
+            content.c.content_id.in_(
+                select(version.c.content_id).where(
+                    _mine(version, context), version.c.report_id == root.report_id
+                )
+            ),
+        )
+        .order_by(content.c.content_id)
+    ).all()
+    if not rows:
+        raise ReportTrashPreflightError()
+    for row in rows:
+        try:
+            facts = _verified_content(row)
+        except ReportIntegrityError:
+            raise ReportTrashPreflightError() from None
+        if row._mapping["storage_kind"] != StorageKind.MANAGED_BLOB.value:
+            continue
+        if content_store is None:
+            raise ReportTrashPreflightError()
+        parts = [(ReportContentPart.DECODED, facts.decoded_sha256, facts.decoded_byte_count)]
+        if facts.encoding is ContentEncoding.GZIP_BASE64:
+            parts.append(
+                (ReportContentPart.ORIGINAL, facts.original_sha256, facts.original_byte_count)
+            )
+        for part, sha256, byte_count in parts:
+            try:
+                content_store.verify(
+                    str(row._mapping["content_id"]),
+                    part,
+                    expected_sha256=sha256,
+                    expected_byte_count=byte_count,
+                )
+            except ReportContentStoreError:
+                raise ReportTrashPreflightError() from None
+    return len(rows)
+
+
 # ---- retention policy (WP05b B6) -------------------------------------------------
 
 
@@ -2457,6 +2528,7 @@ class SqlGeneralReportRepository(GeneralReportRepository):
         recorded_at: datetime,
         correlation_id: str,
         audit_id: str,
+        content_store: ReportContentStore | None = None,
     ) -> LifecycleResult:
         context = capture_context(principal_id)
         recorded = self._admit(idempotency_key, correlation_id, audit_id, recorded_at)
@@ -2483,6 +2555,10 @@ class SqlGeneralReportRepository(GeneralReportRepository):
         decision = decide_lifecycle_transition(
             root.lifecycle_state, request.operation, trashed_from=trashed_from
         )
+        if request.operation is LifecycleOperation.DELETE:
+            # WP05b B4 / H4: every content object durably present and intact
+            # before anything of the trash is written; archive/restore never.
+            _trash_preflight(connection, root, context, content_store)
         try:
             with connection.begin_nested():
                 return _write_transition(

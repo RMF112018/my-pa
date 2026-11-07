@@ -20,7 +20,11 @@ row.
 legal hold's sealed preservation copy, across Principals (the orphan direction
 cannot be partitioned), re-verified seal and parts, plus orphaned preservation
 objects and unreadable entries (`scan_report_preservation`). It takes no
-`--principal`.
+`--principal`. Integrity findings (a missing or mismatched part or seal of a
+copy a hold references, a malformed seal or a wrong object count, an
+unreadable entry) are kept apart from orphans (preservation objects no hold
+seal references, e.g. left by a failed placement; informational, never
+deleted), which are printed in their own section.
 
 **Backups do not include the preservation namespace.** `backup` and `restore`
 copy only the `content` objects `managed_blob` rows name (operator decision:
@@ -42,8 +46,15 @@ also be clear of the live root.
 database first, then this command copies each row's object back, verified
 against the restored rows.
 
-**No path, body or digest is printed.** Exit `0` on success, `1` on refusal,
-`2` when `verify` or `preservation-verify` finds the plane inconsistent.
+**No path, body or digest is printed.** Exit codes:
+
+* `verify`, `backup`, `restore`: `0` on success, `1` on refusal (usage or
+  operational error), `2` when `verify` finds the plane inconsistent.
+* `preservation-verify`: `0` when there is no integrity finding (orphans may
+  be present and are reported); `2` on any integrity finding; `3` when
+  `--fail-on-orphans` is given, there is no integrity finding and at least
+  one orphan exists (an integrity finding takes precedence: `2`); `1` on
+  refusal (usage or operational error, e.g. no report content root).
 """
 
 from __future__ import annotations
@@ -74,6 +85,8 @@ from my_pa.infrastructure.report_content_stores.filesystem import ReportContentR
 EXIT_OK = 0
 EXIT_REFUSED = 1
 EXIT_INCONSISTENT = 2
+#: `preservation-verify --fail-on-orphans` only: orphans and no integrity finding.
+EXIT_ORPHANS = 3
 
 
 def _engine() -> Engine:
@@ -117,7 +130,6 @@ def _verify(args: argparse.Namespace) -> int:
 
 
 def _preservation_verify(args: argparse.Namespace) -> int:
-    del args
     engine = _engine()
     try:
         store = report_preservation_store(load_settings(), engine)
@@ -135,13 +147,22 @@ def _preservation_verify(args: argparse.Namespace) -> int:
     print(f"mismatched_parts {len(scan.mismatched)}")
     print(f"orphaned_objects {len(scan.orphans)}")
     print(f"unreadable_entries {len(scan.unreadable)}")
+    print(f"integrity_findings {scan.integrity_findings}")
+    print(f"orphans {len(scan.orphans)}")
     for object_id, part in scan.missing:
         print(f"missing {object_id} {part.value}")
     for item in scan.mismatched:
         print(f"mismatch {item.object_id} {item.part.value} {item.mismatch}")
-    for object_id in scan.orphans:
-        print(f"orphan {object_id}")
-    return EXIT_OK if scan.consistent else EXIT_INCONSISTENT
+    if scan.orphans:
+        # Their own section: informational, never deleted, not an integrity finding.
+        print("orphans_informational (referenced by no hold seal; never deleted)")
+        for object_id in scan.orphans:
+            print(f"orphan {object_id}")
+    if not scan.intact:
+        return EXIT_INCONSISTENT
+    if scan.orphans and args.fail_on_orphans:
+        return EXIT_ORPHANS
+    return EXIT_OK
 
 
 def _backup(args: argparse.Namespace) -> int:
@@ -197,7 +218,16 @@ def build_parser() -> argparse.ArgumentParser:
     verify.set_defaults(handler=_verify)
     preservation = subcommands.add_parser(
         "preservation-verify",
-        help="re-verify every legal hold's sealed preservation copy and find orphans",
+        help=(
+            "re-verify every legal hold's sealed preservation copy and find orphans; "
+            "exit 0 with no integrity finding (orphans are reported), 2 on any "
+            "integrity finding, 3 with --fail-on-orphans and only orphans, 1 on refusal"
+        ),
+    )
+    preservation.add_argument(
+        "--fail-on-orphans",
+        action="store_true",
+        help="exit 3 when orphans exist and there is no integrity finding (which exits 2)",
     )
     preservation.set_defaults(handler=_preservation_verify)
     backup = subcommands.add_parser("backup", help="copy verified objects to a backup root")
@@ -212,7 +242,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    arguments = sys.argv[1:] if argv is None else argv
+    try:
+        args = build_parser().parse_args(arguments)
+    except SystemExit as stop:
+        # argparse exits 2 on a usage error; for `preservation-verify` 2 means an
+        # integrity finding, so its usage errors are refusals (1). The other
+        # subcommands keep argparse's behaviour.
+        if stop.code == 2 and "preservation-verify" in arguments:
+            return EXIT_REFUSED
+        raise
     try:
         return int(args.handler(args))
     except (ReportContentRootError, ReportContentStoreError, ValueError) as error:

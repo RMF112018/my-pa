@@ -16,7 +16,9 @@ proves:
 * `held` on the SQL catalog page;
 * the preservation scan and `apps/cli/report_content.py preservation-verify`:
   exit 0 when every copy verifies, 2 with a corrupted part, a missing part
-  and an orphan, each named by identifier and part only.
+  and an orphan, each named by identifier and part only; orphans apart from
+  integrity findings (finding 2): orphans alone exit 0 (listed), 3 with
+  `--fail-on-orphans`, an integrity finding 2 whatever the flag, a refusal 1.
 
 Every identifier, title and byte is synthetic.
 """
@@ -448,3 +450,66 @@ def test_preservation_verify_finds_a_corrupt_part_a_missing_part_and_an_orphan(
 
     monkeypatch.setenv("MY_PA_REPORT_CONTENT_ROOT", "")
     assert report_content_cli.main(["preservation-verify"]) == 1
+
+
+def test_preservation_verify_exit_codes_keep_orphans_apart_from_integrity_findings(
+    migrated_engine: Engine,
+    stores: Stores,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    engine = migrated_engine
+    placed = _hold(
+        engine, HoldOperation.PLACE, _publish(engine, key="a"), "h-a", 0, store=stores.preservation
+    )
+    monkeypatch.setenv("MY_PA_REPORT_CONTENT_ROOT", str(stores.root))
+
+    def run(*flags: str) -> tuple[int, str]:
+        code = report_content_cli.main(["preservation-verify", *flags])
+        out = capsys.readouterr().out
+        assert str(stores.root) not in out
+        return code, out
+
+    # Clean: 0, with or without the flag.
+    for flags in ((), ("--fail-on-orphans",)):
+        code, out = run(*flags)
+        assert code == report_content_cli.EXIT_OK == 0
+        assert "integrity_findings 0" in out and "orphans 0" in out
+        assert "orphans_informational" not in out
+
+    # Orphan only: 0 and listed in its own section; 3 with --fail-on-orphans.
+    orphan = issue_identifier(IdKind.REPORT_PRESERVATION_OBJECT)
+    stores.preservation.put(orphan, decoded=b"left behind by a failed placement", original=None)
+    code, out = run()
+    assert code == 0
+    assert "integrity_findings 0" in out and "orphans 1" in out
+    section = out.index("orphans_informational")
+    assert out.index(f"orphan {orphan}") > section
+    code, out = run("--fail-on-orphans")
+    assert code == report_content_cli.EXIT_ORPHANS == 3 and f"orphan {orphan}" in out
+
+    seal = stores.part_path(placed.preservation.seal_object_id, ReportContentPart.DECODED)
+    (listed,) = {p.preservation_object_id for p in preservation_seal_parts(seal.read_bytes())}
+    path = stores.part_path(listed, ReportContentPart.DECODED)
+    kept = path.read_bytes()
+    path.chmod(0o600)
+
+    # A corrupt referenced part (an orphan present too): 2, with or without the flag.
+    path.write_bytes(kept[:-1] + b"Z")
+    for flags in ((), ("--fail-on-orphans",)):
+        code, out = run(*flags)
+        assert code == report_content_cli.EXIT_INCONSISTENT == 2
+        assert f"mismatch {listed} decoded digest" in out and "integrity_findings 1" in out
+        assert f"orphan {orphan}" in out
+
+    # A missing referenced part: 2.
+    path.unlink()
+    code, out = run()
+    assert code == 2 and f"missing {listed} decoded" in out and "missing_parts 1" in out
+
+    # Operational errors and usage errors: 1.
+    code, _out = run("--no-such-flag")
+    assert code == report_content_cli.EXIT_REFUSED == 1
+    monkeypatch.setenv("MY_PA_REPORT_CONTENT_ROOT", "")
+    code, _out = run("--fail-on-orphans")
+    assert code == 1

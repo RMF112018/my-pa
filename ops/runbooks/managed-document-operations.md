@@ -353,16 +353,35 @@ takes an optional `report_id` (for that report's eligibility) and an optional
 
 ```sh
 MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \
-  .venv/bin/python apps/cli/report_content.py preservation-verify
+  .venv/bin/python apps/cli/report_content.py preservation-verify [--fail-on-orphans]
 ```
 
 It takes no `--principal` (the orphan direction cannot be partitioned) and
-prints `holds_checked`, `missing_parts`, `mismatched_parts`, `orphaned_objects`
-and `unreadable_entries`, then one `missing`, `mismatch` or `orphan` line per
-finding (identifiers only; no path, body or digest). Exit `0` consistent, `1`
-refused (for example, no root), `2` inconsistent. A placement that failed after
-writing some objects leaves them as **orphans**: they are reported, never
-deleted, and no hold row names them.
+prints `holds_checked`, `missing_parts`, `mismatched_parts`, `orphaned_objects`,
+`unreadable_entries`, `integrity_findings` and `orphans`, then one `missing` or
+`mismatch` line per integrity finding and, in their own section headed
+`orphans_informational`, one `orphan` line per orphan (identifiers only; no
+path, body or digest).
+
+* **Integrity findings** — a missing, mismatched or corrupt part of a copy a
+  hold seal references, a missing or malformed seal, a seal listing another
+  number of objects than its hold row records, and unreadable store entries.
+  A copy is damaged.
+* **Orphans** — preservation objects no hold seal references. A placement that
+  failed after writing some objects leaves them behind by design: they are
+  reported, never deleted, and no hold row names them. Informational.
+
+Exit codes of `preservation-verify`:
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | no integrity finding (orphans may be present and are reported) |
+| `1` | refused: a usage or operational error (for example, no root configured) |
+| `2` | at least one integrity finding (with or without orphans, with or without `--fail-on-orphans`) |
+| `3` | `--fail-on-orphans` given, no integrity finding, at least one orphan |
+
+The other subcommands are unchanged: section 7's `verify` exits `0`
+consistent, `1` refused, `2` inconsistent.
 
 **Backups do not copy the preservation namespace.** Section 7's `backup` and
 `restore` copy only `content` objects (operator decision: backups need not

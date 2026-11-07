@@ -28,6 +28,15 @@ raising, plus the orphans (stored preservation ids that are neither a seal
 of a hold row nor listed by any readable seal) and the store's unreadable
 entries. It reports and never repairs, deletes or reclaims anything.
 
+The scan keeps two kinds of result apart (finding 2). **Integrity findings**
+-- a missing or mismatched part or seal of a copy a hold row references
+(including a malformed seal or an object count other than the row's), and an
+unreadable store entry -- mean a copy is damaged (`intact` is false).
+**Orphans** are informational: a placement that failed after some puts
+leaves its objects behind by design (the store has no delete), so they are
+reported apart and do not make the copy damaged. `consistent` is the fully
+clean case: intact AND no orphan.
+
 Nothing here returns a body, a path or a digest value.
 """
 
@@ -181,8 +190,19 @@ class ReportPreservationScan:
     unreadable: tuple[str, ...]
 
     @property
+    def integrity_findings(self) -> int:
+        """Missing and mismatched parts or seals of referenced copies, and unreadable entries."""
+        return len(self.missing) + len(self.mismatched) + len(self.unreadable)
+
+    @property
+    def intact(self) -> bool:
+        """No integrity finding; orphans may be present (they are informational)."""
+        return self.integrity_findings == 0
+
+    @property
     def consistent(self) -> bool:
-        return not (self.missing or self.mismatched or self.orphans or self.unreadable)
+        """Fully clean: intact and no orphan."""
+        return self.intact and not self.orphans
 
 
 def scan_report_preservation(

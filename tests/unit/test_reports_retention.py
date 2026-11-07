@@ -693,7 +693,14 @@ def test_the_scan_finds_corrupted_and_missing_parts_and_orphans(scene: Scene) ->
     clean = scan_report_preservation(reports, preservation)
     # Across Principals: the other Principal's copy is checked, not an orphan.
     assert (clean.checked, clean.missing, clean.mismatched, clean.orphans) == (2, (), (), ())
-    assert clean.consistent
+    assert clean.consistent and clean.intact and clean.integrity_findings == 0
+
+    # An orphan alone (finding 2) is informational: intact, but not fully consistent.
+    early = issue_identifier(IdKind.REPORT_PRESERVATION_OBJECT)
+    preservation.put(early, decoded=b"left behind earlier", original=None)
+    orphaned = scan_report_preservation(reports, preservation)
+    assert orphaned.orphans == (early,) and orphaned.integrity_findings == 0
+    assert orphaned.intact and not orphaned.consistent
 
     def listed(result: Any) -> list[str]:  # noqa: ANN401
         data = preservation.objects[result.preservation.seal_object_id][ReportContentPart.DECODED]
@@ -714,7 +721,9 @@ def test_the_scan_finds_corrupted_and_missing_parts_and_orphans(scene: Scene) ->
     assert [(m.object_id, m.part, m.mismatch) for m in scan.mismatched] == [
         (corrupted, ReportContentPart.DECODED, "digest")
     ]
-    assert scan.orphans == (orphan,)
+    assert scan.orphans == tuple(sorted((early, orphan)))
+    # The two orphans are not integrity findings; the corrupt and the missing part are.
+    assert scan.integrity_findings == 2 and not scan.intact
 
     # A missing seal is reported as missing; its objects cannot be attributed.
     del preservation.objects[seal]

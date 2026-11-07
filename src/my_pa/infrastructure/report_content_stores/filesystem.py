@@ -85,6 +85,25 @@ from my_pa.domain.common.identifiers import (
     parse_identifier,
     validate_identifier,
 )
+from my_pa.infrastructure.report_content_stores._anchoring import (
+    ANCHORING_IS_AVAILABLE as _ANCHORING_IS_AVAILABLE,
+)
+from my_pa.infrastructure.report_content_stores._anchoring import (
+    CREATE_FLAGS as _CREATE_FLAGS,
+)
+from my_pa.infrastructure.report_content_stores._anchoring import (
+    DIRECTORY_FLAGS as _DIRECTORY_FLAGS,
+)
+from my_pa.infrastructure.report_content_stores._anchoring import (
+    READ_FLAGS as _READ_FLAGS,
+)
+from my_pa.infrastructure.report_content_stores._anchoring import (
+    ReportContentRootError,
+    resolve_clear_root,
+)
+from my_pa.infrastructure.report_content_stores._anchoring import (
+    close as _close,
+)
 
 __all__ = [
     "NAMESPACE_KINDS",
@@ -93,16 +112,9 @@ __all__ = [
 ]
 
 
-class ReportContentRootError(Exception):
-    """The configured report content root is unusable, or overlaps a root it must avoid.
-
-    A configuration defect, raised at construction (composition refuses to
-    start), never a request-time answer. Names no path.
-    """
-
-
 #: The identifier kinds each namespace admits. Closed: a namespace with no
-#: entry here cannot be constructed.
+#: entry here cannot be constructed -- `TRANSFER` (WP06 T13) deliberately has
+#: none, so this store can never be pointed at the transfer staging tree.
 NAMESPACE_KINDS: Final[Mapping[ReportContentNamespace, frozenset[IdKind]]] = {
     ReportContentNamespace.CONTENT: frozenset({IdKind.REPORT_CONTENT}),
     # WP05b B5: preservation objects and seals only; never a content id.
@@ -112,15 +124,7 @@ NAMESPACE_KINDS: Final[Mapping[ReportContentNamespace, frozenset[IdKind]]] = {
 #: Characters of the identifier suffix naming the shard directory.
 _SHARD: Final = 2
 
-_NOFOLLOW: Final = getattr(os, "O_NOFOLLOW", 0)
-_DIRECTORY_FLAGS: Final = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _NOFOLLOW
-_CREATE_FLAGS: Final = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW
-_READ_FLAGS: Final = os.O_RDONLY | _NOFOLLOW
 _CHUNK_BYTES: Final = 1 << 20
-
-_ANCHORING_IS_AVAILABLE: Final = all(
-    call in os.supports_dir_fd for call in (os.open, os.link, os.unlink, os.mkdir, os.rmdir)
-)
 
 _PART_NAMES: Final = frozenset(part.value for part in ReportContentPart)
 
@@ -128,41 +132,6 @@ _PART_NAMES: Final = frozenset(part.value for part in ReportContentPart)
 def _temporary(part: ReportContentPart) -> str:
     """The temporary name of one part inside its (freshly created) object directory."""
     return f".{part.value}.tmp"
-
-
-def _resolved_directory(candidate: Path) -> Path:
-    try:
-        if candidate.is_symlink():
-            raise ReportContentRootError("the configured report content root is a symbolic link")
-        resolved = candidate.resolve(strict=True)
-    except ReportContentRootError:
-        raise
-    except (OSError, RuntimeError):
-        raise ReportContentRootError(
-            "the configured report content root could not be resolved"
-        ) from None
-    if not resolved.is_dir():
-        raise ReportContentRootError(
-            "the configured report content root is not an existing directory"
-        )
-    return resolved
-
-
-def _comparable(path: Path) -> Path:
-    """A root to stay clear of, resolved; an unresolvable one compared as configured."""
-    try:
-        return Path(path).resolve()
-    except (OSError, RuntimeError):
-        return Path(path).absolute()
-
-
-def _overlaps(one: Path, other: Path) -> bool:
-    return one == other or one.is_relative_to(other) or other.is_relative_to(one)
-
-
-def _close(descriptor: int | None) -> None:
-    if descriptor is not None:
-        os.close(descriptor)
 
 
 class FilesystemReportContentStore(ReportContentStore):
@@ -184,18 +153,12 @@ class FilesystemReportContentStore(ReportContentStore):
             )
         if namespace not in NAMESPACE_KINDS:
             raise ReportContentRootError("the report content namespace is not a known one")
-        resolved = _resolved_directory(Path(root))
-        avoided = [*source_roots, *other_roots]
-        if managed_documents_root is not None:
-            avoided.append(managed_documents_root)
-        for other in avoided:
-            if _overlaps(resolved, _comparable(Path(other))):
-                raise ReportContentRootError(
-                    "the report content root is the same tree as a root it must stay "
-                    "clear of, or lies inside one, or contains one -- a configured "
-                    "source root, the managed document root, or (for a backup) the "
-                    "live report content root"
-                )
+        resolved = resolve_clear_root(
+            Path(root),
+            source_roots=source_roots,
+            managed_documents_root=managed_documents_root,
+            other_roots=other_roots,
+        )
         self._root: Final = resolved
         self._namespace: Final = namespace
         self._kinds: Final = NAMESPACE_KINDS[namespace]
@@ -407,6 +370,95 @@ class FilesystemReportContentStore(ReportContentStore):
             expected_byte_count=expected_byte_count,
             keep=False,
         )
+
+    def read_range(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        offset: int,
+        length: int,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> bytes:
+        """WP06 T15: one range of a part, the whole part streamed through `_check`'s checks.
+
+        The file is read in `_CHUNK_BYTES` slices; only the bytes inside
+        `[offset, offset + length)` are kept, so memory is O(`length`) plus
+        one slice. Nothing is returned unless the whole part verifies.
+        """
+        if not isinstance(part, ReportContentPart):
+            raise ReportContentStoreError("the report content part is not a known one")
+        if type(expected_byte_count) is not int or expected_byte_count < 0:
+            raise ReportContentStoreError("the expected report content size is not admitted")
+        if (
+            type(offset) is not int
+            or type(length) is not int
+            or not 0 <= offset <= expected_byte_count
+            or length < 1
+        ):
+            raise ReportContentStoreError("the report content range is not admitted")
+        namespace, shard, name = self._components(object_id)
+        object_fd = self._walk((namespace, shard, name), create=False)
+        try:
+            return self._check_range(
+                object_fd,
+                part.value,
+                offset=offset,
+                end=min(offset + length, expected_byte_count),
+                expected_sha256=expected_sha256,
+                expected_byte_count=expected_byte_count,
+            )
+        finally:
+            os.close(object_fd)
+
+    def _check_range(
+        self,
+        directory_fd: int,
+        entry: str,
+        *,
+        offset: int,
+        end: int,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> bytes:
+        """`_check` keeping only `[offset, end)`: the same refusals, in the same order."""
+        try:
+            descriptor = os.open(entry, _READ_FLAGS, dir_fd=directory_fd)
+        except OSError:
+            raise ReportContentMissingError("the report content part is not readable") from None
+        try:
+            status = os.fstat(descriptor)
+            if not S_ISREG(status.st_mode) or status.st_nlink > 1:
+                raise ReportContentMissingError("the report content part is not readable")
+            digest = hashlib.sha256()
+            kept: list[bytes] = []
+            total = 0
+            while True:
+                # At most one byte past the expected size is ever read.
+                want = min(_CHUNK_BYTES, expected_byte_count + 1 - total)
+                if want <= 0:
+                    break
+                chunk = os.read(descriptor, want)
+                if not chunk:
+                    break
+                start = total
+                total += len(chunk)
+                digest.update(chunk)
+                low = max(offset, start)
+                high = min(end, total)
+                if low < high:
+                    kept.append(chunk[low - start : high - start])
+                del chunk
+        except OSError:
+            raise ReportContentMissingError("the report content part is not readable") from None
+        finally:
+            os.close(descriptor)
+        if total != expected_byte_count:
+            raise ReportContentIntegrityError("size")
+        if digest.hexdigest() != expected_sha256:
+            raise ReportContentIntegrityError("digest")
+        return b"".join(kept)
 
     def _read_or_verify(
         self,

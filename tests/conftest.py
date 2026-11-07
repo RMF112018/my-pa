@@ -9834,6 +9834,32 @@ class InMemoryReportContentStore(ReportContentStore):
             expected_byte_count=expected_byte_count,
         )
 
+    def read_range(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        offset: int,
+        length: int,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> bytes:
+        """WP06 T15: the whole part verified as `read` does, then only the range."""
+        if (
+            type(offset) is not int
+            or type(length) is not int
+            or not 0 <= offset <= expected_byte_count
+            or length < 1
+        ):
+            raise ReportContentStoreError("the report content range is not admitted")
+        stored = self.read(
+            object_id,
+            part,
+            expected_sha256=expected_sha256,
+            expected_byte_count=expected_byte_count,
+        )
+        return stored[offset : offset + length]
+
     def has(self, object_id: str) -> bool:
         self._admit(object_id)
         return object_id in self.objects

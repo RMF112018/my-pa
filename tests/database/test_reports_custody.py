@@ -500,6 +500,25 @@ class _Delegating(ReportContentStore):
             expected_byte_count=expected_byte_count,
         )
 
+    def read_range(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        offset: int,
+        length: int,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> bytes:
+        return self.inner.read_range(
+            object_id,
+            part,
+            offset=offset,
+            length=length,
+            expected_sha256=expected_sha256,
+            expected_byte_count=expected_byte_count,
+        )
+
     def has(self, object_id: str) -> bool:
         return self.inner.has(object_id)
 

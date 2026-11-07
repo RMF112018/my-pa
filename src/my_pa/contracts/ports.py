@@ -8271,11 +8271,16 @@ class ReportContentNamespace(StrEnum):
     Each names one subdirectory of the store's root and admits only the object
     identifiers of its own kind: `content` admits `grcnt_` report content
     objects; `preservation` (WP05b B5) admits only `grprv_` preservation
-    objects and seals. Nothing else is a namespace.
+    objects and seals. `transfer` (WP06 T13) is the directory the transfer
+    staging adapter (`ReportTransferStaging`) keeps its chunks under, in the
+    same root: staging only, NEVER a content-store namespace -- the report
+    content store refuses to be constructed on it, so neither port can be
+    pointed at the other's tree. Nothing else is a namespace.
     """
 
     CONTENT = "content"
     PRESERVATION = "preservation"
+    TRANSFER = "transfer"
 
 
 class ReportContentStoreError(PortError):
@@ -8352,6 +8357,28 @@ class ReportContentStore(ABC):
         """`read`'s checks, streamed, returning nothing. Raises as `read` does."""
 
     @abstractmethod
+    def read_range(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        offset: int,
+        length: int,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> bytes:
+        """The bytes `[offset, offset + length)` of one part, the WHOLE part verified (WP06 T15).
+
+        Streams the entire part through the size and SHA-256 checks `read`
+        makes and keeps only the requested range, so memory is O(`length`);
+        the range is cut at the part's end (`offset == expected_byte_count`
+        gives `b""`). Bytes of a part that does not verify are never returned:
+        raises as `read` does, wherever in the part the damage is. `offset`
+        (an `int`, `0 <= offset <= expected_byte_count`) and `length` (an
+        `int` >= 1) outside their bounds raise `ReportContentStoreError`.
+        """
+
+    @abstractmethod
     def has(self, object_id: str) -> bool:
         """Whether an object of this identifier is present."""
 
@@ -8362,6 +8389,65 @@ class ReportContentStore(ABC):
     @abstractmethod
     def unreadable_entries(self) -> tuple[str, ...]:
         """Store entries that are not well-formed objects or parts, for the operator."""
+
+
+class ReportTransferStagingError(PortError):
+    """A transfer staging operation could not be performed (WP06 T13).
+
+    Names no path, identifier or value; the application answers it as
+    `internal_error`.
+    """
+
+
+class ReportTransferStaging(ABC):
+    """Where a transfer session's chunks wait until the session is consumed (WP06 T13).
+
+    A separate port from `ReportContentStore`, which keeps NO delete: staging
+    is transient by design, and `discard` exists only here. **No method takes
+    a path**: a session is named by its `grxfr_` identifier (only that kind is
+    admitted) and a chunk by its sequence and SHA-256; the location is derived
+    by the implementation under a constant `transfer` directory of its root,
+    so nothing here can name a content or preservation object.
+
+    A chunk is written once (an exclusive create, named by sequence AND
+    digest, so a retry with different bytes never overwrites); an identical
+    chunk already present (a crashed attempt) is verified and accepted.
+    """
+
+    @abstractmethod
+    def put_chunk(self, session_id: str, sequence: int, *, chunk_sha256: str, data: bytes) -> None:
+        """Stage one chunk durably: on the device, re-read and verified, under its final name.
+
+        `chunk_sha256` must be the SHA-256 hex of `data`. Any failure raises
+        `ReportTransferStagingError`.
+        """
+
+    @abstractmethod
+    def read_chunk(
+        self, session_id: str, sequence: int, *, chunk_sha256: str, expected_byte_count: int
+    ) -> bytes:
+        """One staged chunk's bytes, verified (size, digest); else `ReportTransferStagingError`."""
+
+    @abstractmethod
+    def has_session(self, session_id: str) -> bool:
+        """Whether anything is staged for this session."""
+
+    @abstractmethod
+    def staged_session_ids(self) -> tuple[str, ...]:
+        """Every well-formed staged session identifier, sorted (for the GC)."""
+
+    @abstractmethod
+    def unreadable_entries(self) -> tuple[str, ...]:
+        """Staging entries that are not well-formed sessions or chunks, for the operator."""
+
+    @abstractmethod
+    def discard(self, session_id: str) -> bool:
+        """Remove one session's staged chunks and its directory; `True` if anything was removed.
+
+        Idempotent: an absent session is `False`. Removes only well-formed
+        chunk files (and their temporaries) of that session; anything else is
+        left in place and reported by `unreadable_entries`.
+        """
 
 
 # --- WP-TM-02: canonical Task mutation, receipts, idempotency, concurrency --

@@ -238,6 +238,59 @@ temporary roots and a disposable database by
 `tests/recovery/test_report_content_recovery.py`; nothing here has been run
 against a real deployment root, which remains an operator action.
 
+### 7.1 Transfer staging garbage collection (Reports Modernization WP06)
+
+Content larger than one request is uploaded in chunks through
+`reports.transfer.begin` / `append` / `finalize` and consumed by
+`reports.publish` or `reports.update`. Until a session is consumed or aborted
+its chunks are **transfer staging** under the same root, in its own constant
+directory `<root>/transfer/<shard>/<grxfr_id>/<sequence>-<sha256>`, beside the
+`content` and `preservation` namespaces. A consume or abort discards the
+session's staging after its commit, best effort; an expired session, a failed
+discard, or a staging directory with no session row is left for the
+collector:
+
+```sh
+MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \
+  .venv/bin/python apps/cli/report_content.py transfer-gc [--limit N] [--discard-orphans]
+```
+
+**Schedule it hourly as an operator step.** Nothing in the repository
+creates a scheduler, timer or cron entry; run it from the operator's own
+schedule (and by hand after an incident). It is bounded (`--limit`, 1..1000,
+default 100, per step) and idempotent, so an overlapping or repeated run is
+harmless; a session a request holds is skipped (`FOR UPDATE SKIP LOCKED`) and
+collected next time.
+
+**What one run does.** (1) Moves up to `--limit` `open` or `finalized`
+sessions whose `expires_at` has passed to `expired` (no row is deleted). (2)
+Discards the staging of consumed, aborted and expired sessions (at most
+`--limit`). (3) Reports staging directories that have no session row
+(orphans, e.g. after a database restore) and, only with `--discard-orphans`,
+discards them (at most `--limit`). Unreadable staging entries (anything that
+is not a well-formed session directory or chunk file, links included) are
+counted and never removed; inspect them by hand.
+
+**What it can remove.** Only consumed, aborted, expired or orphaned transfer
+staging, and only under `<root>/transfer/`: the staging port admits only
+`grxfr_` session identifiers, takes no path, walks the directory anchored
+without following links and unlinks only chunk-named regular files. The
+`content` and `preservation` namespaces are never touched (the content store
+has no delete), and the session queries it uses are operator scans across
+every Principal by design (staging is one directory for all owners).
+
+**Output and exit codes.** One JSON object of counts, no identifier, path or
+byte: `expired`, `discarded`, `orphans_found`, `orphans_discarded`,
+`orphans_remaining`, `unreadable`, `more_remaining`. Exit `0` when clean; `3`
+when a bound left more to do (`more_remaining`), orphans remain unremoved, or
+unreadable entries exist (run again, or add `--discard-orphans` after
+checking the orphans are not a restore in progress); `1` on refusal (usage
+error, no `MY_PA_REPORT_CONTENT_ROOT`, a staging failure).
+
+**Backups need not include `transfer/`.** Staging is transient: `backup` and
+`restore` copy only `content` objects, and a session whose staging is lost
+can only be aborted and uploaded again (the client begins a new session).
+
 ## 8. Report holds and retention (Reports Modernization WP05b)
 
 **What a hold does.** A legal hold is placed and released by the operator only:

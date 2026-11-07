@@ -10,11 +10,27 @@
             --principal prn_... --source /path/to/backup
     MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \\
         .venv/bin/python apps/cli/report_content.py preservation-verify
+    MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \\
+        .venv/bin/python apps/cli/report_content.py transfer-gc [--limit N] [--discard-orphans]
 
 The shape of `apps/cli/managed_documents.py`, for the same reason: a write plane
-with no reconciliation, backup and restore is not finished. Four subcommands
-and no fifth -- nothing here deletes an object, reclaims an orphan or repairs a
-row.
+with no reconciliation, backup and restore is not finished. Nothing here
+deletes a content or preservation object, reclaims a content orphan or repairs
+a row; the one removal is `transfer-gc`'s, of transient transfer staging only.
+
+**`transfer-gc` (WP06 T19)** collects transfer sessions
+(`collect_report_transfers`): up to `--limit` (1..1000, default 100) open or
+finalized sessions past their `expires_at` move to `expired`; the staging of
+consumed, aborted and expired sessions is discarded (at most `--limit`);
+staging directories with no session row are orphans, reported, and discarded
+only with `--discard-orphans`. It removes nothing but staging under the root's
+`transfer` directory (the staging port admits only `grxfr_` ids and has no
+path parameter; the content and preservation namespaces are never touched).
+It prints one JSON object of counts (`expired`, `discarded`, `orphans_found`,
+`orphans_discarded`, `orphans_remaining`, `unreadable`, `more_remaining`), no
+identifier, path or byte. Exit `0` when clean; `3` when a bound left more to
+do, orphans remain unremoved, or unreadable staging entries exist (run again,
+or inspect); `1` on refusal (usage, no report content root, a staging failure).
 
 **`preservation-verify` (WP05b B5)** scans the `preservation` namespace: every
 legal hold's sealed preservation copy, across Principals (the orphan direction
@@ -60,7 +76,12 @@ against the restored rows.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import Engine
@@ -71,14 +92,24 @@ from my_pa.application.report_content import (
     scan_report_content,
 )
 from my_pa.application.report_preservation import scan_report_preservation
+from my_pa.application.report_transfer_gc import (
+    DEFAULT_TRANSFER_GC_LIMIT,
+    collect_report_transfers,
+)
 from my_pa.bootstrap.gateway import (
     report_content_backup_store,
     report_content_store,
     report_preservation_store,
+    report_transfer_staging,
 )
 from my_pa.bootstrap.settings import load_settings
-from my_pa.contracts.ports import ReportContentStore, ReportContentStoreError
+from my_pa.contracts.ports import (
+    ReportContentStore,
+    ReportContentStoreError,
+    ReportTransferStagingError,
+)
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence.report_transfers import SqlReportTransferRepository
 from my_pa.infrastructure.persistence.reports import SqlGeneralReportRepository
 from my_pa.infrastructure.report_content_stores.filesystem import ReportContentRootError
 
@@ -87,6 +118,8 @@ EXIT_REFUSED = 1
 EXIT_INCONSISTENT = 2
 #: `preservation-verify --fail-on-orphans` only: orphans and no integrity finding.
 EXIT_ORPHANS = 3
+#: `transfer-gc` only: a bound left more to do, or orphans/unreadable entries remain.
+EXIT_MORE_REMAINING = 3
 
 
 def _engine() -> Engine:
@@ -165,6 +198,39 @@ def _preservation_verify(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+@dataclass(frozen=True, slots=True)
+class _TransferTransaction:
+    report_transfers: SqlReportTransferRepository
+
+
+def _transfer_gc(args: argparse.Namespace) -> int:
+    engine = _engine()
+
+    @contextmanager
+    def transaction() -> Iterator[_TransferTransaction]:
+        with engine.begin() as connection:
+            yield _TransferTransaction(SqlReportTransferRepository(connection))
+
+    try:
+        staging = report_transfer_staging(load_settings(), engine)
+        if staging is None:
+            raise ReportContentRootError(
+                "MY_PA_REPORT_CONTENT_ROOT is unset; there is no transfer staging "
+                "in this process to operate on"
+            )
+        collection = collect_report_transfers(
+            transaction,
+            staging,
+            now=datetime.now(UTC),
+            limit=args.limit,
+            discard_orphans=args.discard_orphans,
+        )
+    finally:
+        engine.dispose()
+    print(json.dumps(collection.summary(), sort_keys=True))
+    return EXIT_OK if collection.clean else EXIT_MORE_REMAINING
+
+
 def _backup(args: argparse.Namespace) -> int:
     engine = _engine()
     try:
@@ -230,6 +296,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="exit 3 when orphans exist and there is no integrity finding (which exits 2)",
     )
     preservation.set_defaults(handler=_preservation_verify)
+    transfer = subcommands.add_parser(
+        "transfer-gc",
+        help=(
+            "expire due transfer sessions and discard terminal (and with "
+            "--discard-orphans orphaned) transfer staging; prints JSON counts; "
+            "exit 0 clean, 3 if more remains, 1 on refusal"
+        ),
+    )
+    transfer.add_argument(
+        "--limit",
+        type=int,
+        default=DEFAULT_TRANSFER_GC_LIMIT,
+        help="at most this many sessions expired and directories discarded per step (1..1000)",
+    )
+    transfer.add_argument(
+        "--discard-orphans",
+        action="store_true",
+        help="also discard staging directories that have no session row",
+    )
+    transfer.set_defaults(handler=_transfer_gc)
     backup = subcommands.add_parser("backup", help="copy verified objects to a backup root")
     backup.add_argument("--principal", required=True, help="the prn_... whose objects are copied")
     backup.add_argument("--destination", required=True, help="an existing directory to copy into")
@@ -249,12 +335,17 @@ def main(argv: list[str] | None = None) -> int:
         # argparse exits 2 on a usage error; for `preservation-verify` 2 means an
         # integrity finding, so its usage errors are refusals (1). The other
         # subcommands keep argparse's behaviour.
-        if stop.code == 2 and "preservation-verify" in arguments:
+        if stop.code == 2 and ("preservation-verify" in arguments or "transfer-gc" in arguments):
             return EXIT_REFUSED
         raise
     try:
         return int(args.handler(args))
-    except (ReportContentRootError, ReportContentStoreError, ValueError) as error:
+    except (
+        ReportContentRootError,
+        ReportContentStoreError,
+        ReportTransferStagingError,
+        ValueError,
+    ) as error:
         # The rule, never the value: the store's refusals name no path.
         print(str(error), file=sys.stderr)
         return EXIT_REFUSED

@@ -12,11 +12,14 @@ Every title, body and identifier is synthetic.
 from __future__ import annotations
 
 import base64
+import gc
 import gzip
 import hashlib
 import json
+import tracemalloc
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Final
 
 import pytest
@@ -28,6 +31,7 @@ from my_pa.contracts.ports import (
     ReportContentIntegrityError,
     ReportContentNamespace,
     ReportContentPart,
+    ReportContentStore,
     ReportContentStoreError,
     ReportHeldError,
     ReportHoldStateError,
@@ -55,6 +59,7 @@ from my_pa.domain.reports.publication import PublicationRequest
 from my_pa.domain.reports.revision import LifecycleRequest, ReportPatch, UpdateRequest
 from my_pa.domain.reports.vocabulary import LifecycleOperation, LifecycleState
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.report_content_stores.filesystem import FilesystemReportContentStore
 from tests.conftest import (
     InMemoryReportContentStore,
     Scene,
@@ -94,7 +99,7 @@ def _publish(
     content: dict[str, Any] | None = None,
     *,
     key: str = "pub",
-    content_store: InMemoryReportContentStore | None = None,
+    content_store: ReportContentStore | None = None,
     inline_max_bytes: int = 262_144,
 ) -> str:
     return reports.publish(
@@ -121,8 +126,8 @@ def _hold(
     key: str,
     revision: int,
     *,
-    store: InMemoryReportContentStore | None = None,
-    content_store: InMemoryReportContentStore | None = None,
+    store: ReportContentStore | None = None,
+    content_store: ReportContentStore | None = None,
     reason: str = REASON,
 ) -> HoldResult:
     request = HoldRequest(operation, report_id, revision, reason)
@@ -167,7 +172,7 @@ def _update(
     patch: ReportPatch,
     key: str,
     *,
-    content_store: InMemoryReportContentStore | None = None,
+    content_store: ReportContentStore | None = None,
     inline_max_bytes: int = 262_144,
 ) -> None:
     reports.update(
@@ -669,3 +674,201 @@ def test_a_corrupted_preserved_part_fails_reverification(scene: Scene) -> None:
     assert release_event.event_id == released.event_id
     with pytest.raises(ReportPreservationError):
         verify_preservation_copy(store, release_event)
+
+
+# ---- one content object at a time (finding 1) ----------------------------------------------
+
+
+Event = tuple[object, ...]
+
+
+class RecordingPreservationStore(InMemoryReportContentStore):
+    """Records `put`, `verify` and `read` in order; a read also records `hold_rows()` then."""
+
+    def __init__(self, log: list[Event], hold_rows: Callable[[], int]) -> None:
+        super().__init__(ReportContentNamespace.PRESERVATION)
+        self.log = log
+        self.hold_rows = hold_rows
+
+    def put(self, object_id: str, *, decoded: bytes, original: bytes | None) -> None:
+        self.log.append(("put", object_id))
+        super().put(object_id, decoded=decoded, original=original)
+
+    def read(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> bytes:
+        self.log.append(("read", object_id, part.value, self.hold_rows()))
+        return super().read(
+            object_id,
+            part,
+            expected_sha256=expected_sha256,
+            expected_byte_count=expected_byte_count,
+        )
+
+    def verify(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> None:
+        self.log.append(("verify", object_id, part.value))
+        # The parent's `verify` reads through `self.read`; check without recording a read.
+        InMemoryReportContentStore.read(
+            self,
+            object_id,
+            part,
+            expected_sha256=expected_sha256,
+            expected_byte_count=expected_byte_count,
+        )
+
+
+def recording_loads(module: Any, log: list[Event]) -> Callable[..., Any]:  # noqa: ANN401
+    """`module.preservation_source`, recording ("load", content_id) before each call."""
+    original = module.preservation_source
+
+    def recorded(content_id: str, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        log.append(("load", content_id))
+        return original(content_id, *args, **kwargs)
+
+    return recorded
+
+
+def assert_one_object_at_a_time(log: list[Event], seal: dict[str, Any], seal_id: str) -> None:
+    """load(i) -> put(i) -> verify(i, every part) before load(i+1); then the seal, no hold row.
+
+    The objects come in the order the versions first name their content; the
+    seal is put after the last object's verification and read back while no
+    hold row exists yet.
+    """
+    order = list(dict.fromkeys(version["content_id"] for version in seal["versions"]))
+    objects = {item["content_id"]: item for item in seal["objects"]}
+    assert [item["content_id"] for item in seal["objects"]] == order
+    expected: list[Event] = []
+    for content_id in order:
+        item = objects[content_id]
+        prv = item["preservation_object_id"]
+        expected += [("load", content_id), ("put", prv), ("verify", prv, "decoded")]
+        if item["original"] is not None:
+            expected.append(("verify", prv, "original"))
+    expected += [("put", seal_id), ("read", seal_id, "decoded", 0)]
+    assert log == expected
+
+
+def test_each_content_object_is_loaded_put_and_verified_before_the_next(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tests.conftest as fakes
+
+    reports, p = _GeneralReports(scene.world), scene.principal.principal_id
+    content = InMemoryReportContentStore()
+    small = 64
+    report = _publish(
+        reports,
+        p,
+        _gzip(b"Synthetic blob gzip line.\n" * 16),
+        content_store=content,
+        inline_max_bytes=small,
+    )
+    _update(reports, p, report, 1, ReportPatch(title="Metadata only"), "u1")
+    revisions: tuple[tuple[dict[str, Any], int], ...] = (
+        ({"format": "markdown", "body": "# Inline\n"}, 262_144),
+        ({"format": "text", "body": "identity blob body " * 10}, small),
+        (_gzip(b"Inline gzip.\n"), 262_144),
+    )
+    for expected, (body, inline_max) in enumerate(revisions, start=2):
+        _update(
+            reports,
+            p,
+            report,
+            expected,
+            ReportPatch(content=validate_content(body)),
+            f"u{expected}",
+            content_store=content,
+            inline_max_bytes=inline_max,
+        )
+    log: list[Event] = []
+    store = RecordingPreservationStore(
+        log, lambda: len(reports.hold_events(report, principal_id=p) or ())
+    )
+    monkeypatch.setattr(fakes, "preservation_source", recording_loads(fakes, log))
+    placed = _hold(
+        reports, p, HoldOperation.PLACE, report, "h", 0, store=store, content_store=content
+    )
+    assert placed.preservation is not None
+    seal = _seal(store, placed)
+    kinds = {(o["storage_kind"], o["encoding"]) for o in seal["objects"]}
+    assert kinds == {
+        ("managed_blob", "gzip+base64"),
+        ("inline", "identity"),
+        ("managed_blob", "identity"),
+        ("inline", "gzip+base64"),
+    }
+    assert (placed.preservation.object_count, placed.preservation.version_count) == (4, 5)
+    assert_one_object_at_a_time(log, seal, placed.preservation.seal_object_id)
+    assert len(reports.hold_events(report, principal_id=p) or ()) == 1  # only after the seal
+
+
+def test_a_placement_holds_one_content_objects_bytes_at_a_time(
+    scene: Scene, tmp_path: Path
+) -> None:
+    """Peak traced memory of a placement over N ~1 MiB blobs stays near ONE object's size.
+
+    tracemalloc (not a weakref counter) because it measures what the finding is
+    about -- the bytes a placement allocates -- whichever frame or container would
+    keep them; it is deterministic here (single thread, allocations inside the
+    traced window only). The sources' bytes are allocated by the blob reads
+    inside the window; the fake world's own copies predate it and are not traced.
+    """
+    reports, p = _GeneralReports(scene.world), scene.principal.principal_id
+    root = tmp_path / "report-content"
+    root.mkdir()
+    content = FilesystemReportContentStore(root, ReportContentNamespace.CONTENT)
+    preservation = FilesystemReportContentStore(root, ReportContentNamespace.PRESERVATION)
+    size, count = 1 << 20, 4
+
+    def body(i: int) -> dict[str, Any]:
+        # gzip, because identity content is bounded at 512 KiB: 1 MiB decoded each,
+        # a repeated 16 KiB block of hex digests so the expansion ratio stays ~59 (< 256).
+        block = b"".join(
+            hashlib.sha256(f"{i}:{n}".encode()).hexdigest().encode() for n in range(256)
+        )
+        return _gzip((block * (size // len(block) + 1))[:size])
+
+    report = _publish(reports, p, body(0), content_store=content, inline_max_bytes=64)
+    for i in range(1, count):
+        _update(
+            reports,
+            p,
+            report,
+            i,
+            ReportPatch(content=validate_content(body(i))),
+            f"u{i}",
+            content_store=content,
+            inline_max_bytes=64,
+        )
+    gc.collect()
+    tracemalloc.start()
+    try:
+        placed = _hold(
+            reports,
+            p,
+            HoldOperation.PLACE,
+            report,
+            "h",
+            0,
+            store=preservation,
+            content_store=content,
+        )
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert placed.preservation is not None and placed.preservation.object_count == count
+    slack = 256 * 1024
+    assert peak < 2.5 * size + slack, f"peak {peak} bytes for {count} objects of {size}"

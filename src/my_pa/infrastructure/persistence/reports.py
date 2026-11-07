@@ -84,7 +84,9 @@ association target only ever narrows the caller's own rows.
 state, and only then write one hold event at revision + 1 and move the root's
 hold cache. A placement first seals the report's preservation copy into the
 `preservation` namespace of the report content store and verifies it
-(`report_custody.seal_preservation_copy`); a failure there writes no row,
+(`report_custody.seal_preservation_copy`, one content object at a time: each
+loaded, put and verified before the next, then the seal put and read back);
+a failure there writes no row,
 and the objects already put remain (the store has no delete). A release
 never touches the copy. A `delete` (trash) of a held report is refused with
 `ReportHeldError` after the lock, the key and the revision check; nothing
@@ -147,6 +149,7 @@ from my_pa.contracts.ports import (
     ReportIdempotencyConflictError,
     ReportIntegrityError,
     ReportNotFoundError,
+    ReportPreservationError,
     ReportPreservationUnavailableError,
     ReportStaleHoldRevisionError,
     ReportStaleLifecycleRevisionError,
@@ -1661,6 +1664,10 @@ def _hold_ledger(
     return tuple(_hold_event(row) for row in rows)
 
 
+#: Version columns the preservation read does not select (WP04 C7 search extract).
+_UNPRESERVED_VERSION_COLUMNS: Final = frozenset({"search_text", "search_document"})
+
+
 def _preserve(
     connection: Connection,
     root: ReportRootRecord,
@@ -1672,29 +1679,46 @@ def _preserve(
     preservation_store: ReportContentStore,
     content_store: ReportContentStore | None,
 ) -> HoldPreservation:
-    """Read the whole report under the root lock and seal its preservation copy (B5).
+    """Verify the whole report under the root lock and seal its preservation copy (B5).
 
-    Every version ascending, verified as a read verifies it (content digests
-    recomputed, the manifest rebuilt and compared), each distinct content
-    object's bytes once (inline from the verified row, `managed_blob` read
-    verified from `content_store`), and every lifecycle event; then
-    `seal_preservation_copy` puts and verifies the copy. Writes no row.
+    Every version ascending is verified as a read verifies it (content digests
+    recomputed, the manifest rebuilt and compared) and only its record and
+    manifest are kept; every lifecycle event is read. `seal_preservation_copy`
+    then loads each distinct content object ONE at a time through `load` --
+    its row re-read and recomputed (inline) or its blob read verified from
+    `content_store` (`managed_blob`) -- puts and verifies it, and releases its
+    bytes before the next (finding 1). Writes no row.
     """
     version_rows = connection.execute(
-        select(report_versions)
+        # Not the search extract: nothing here needs it, and it grows with the report.
+        select(*(c for c in report_versions.c if c.name not in _UNPRESERVED_VERSION_COLUMNS))
         .where(_mine(report_versions, context), report_versions.c.report_id == root.report_id)
         .order_by(report_versions.c.version_number)
     ).all()
-    sources: dict[str, PreservationSource] = {}
-    versions: list[tuple[ReportVersionRecord, PreservationSource]] = []
+    versions: list[ReportVersionRecord] = []
     manifests: list[Mapping[str, Any]] = []
     for row in version_rows:
         stored = _stored_version(connection, root, row, context)
-        source = sources.get(stored.content_id)
-        if source is None:
-            source = sources[stored.content_id] = preservation_source(stored, content_store)
-        versions.append((stored.version, source))
+        versions.append(stored.version)
         manifests.append(stored.manifest)
+        del stored  # its (inline) content is not kept across versions
+
+    def load(content_id: str) -> PreservationSource:
+        content_row = connection.execute(
+            select(report_content_objects).where(
+                _mine(report_content_objects, context),
+                report_content_objects.c.content_id == content_id,
+            )
+        ).one_or_none()
+        if content_row is None:
+            raise ReportPreservationError()
+        try:
+            content = _verified_content(content_row)
+            storage_kind = StorageKind(content_row._mapping["storage_kind"])
+        except (ReportIntegrityError, ValueError):
+            raise ReportPreservationError() from None
+        return preservation_source(content_id, storage_kind, content, content_store)
+
     events = connection.execute(
         select(report_lifecycle_events)
         .where(
@@ -1719,6 +1743,7 @@ def _preserve(
         sealed_at=recorded_at,
         versions=versions,
         manifests=manifests,
+        load=load,
         lifecycle_events=[
             PreservedLifecycleEvent(
                 event_id=str(m["event_id"]),

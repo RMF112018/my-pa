@@ -12,7 +12,9 @@ The `database` tier, each test on its own disposable head-migrated clone
   `managed_blob`; one preserved object per DISTINCT content object;
 * a copy that does not verify (seal corrupted on put, a read-back that
   differs, a part that does not verify) raises and commits NO hold row and
-  no root change; a part corrupted on disk after placement fails
+  no root change; each distinct content object is loaded, put and verified
+  before the next is loaded, and the seal is put and read back after the
+  last while no hold row exists (finding 1); a part corrupted on disk after placement fails
   `verify_preservation_copy`;
 * a same-key replay returns the original and puts nothing; another payload
   under the key is an idempotency conflict;
@@ -69,9 +71,11 @@ from my_pa.domain.reports.revision import (
 )
 from my_pa.domain.reports.vocabulary import LifecycleOperation
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence import reports as sql_reports
 from my_pa.infrastructure.persistence.reports import SqlGeneralReportRepository
 from my_pa.infrastructure.report_content_stores.filesystem import FilesystemReportContentStore
 from tests.database.test_reports_general_persistence import PRINCIPAL_A, PRINCIPAL_B, _wait_until
+from tests.unit.test_reports_custody import Event, assert_one_object_at_a_time, recording_loads
 
 pytestmark = pytest.mark.database
 
@@ -555,9 +559,112 @@ def test_a_copy_that_does_not_verify_commits_no_hold(
         _hold(engine, HoldOperation.PLACE, report, "h", 0, store=wrapper(stores.preservation))
     assert _hold_rows(engine) == 0
     assert _root_hold(engine, report) == (0, None, False)
-    # What was put before the failure remains (orphans); nothing deletes it.
-    assert len(stores.preservation.stored_object_ids()) == 2
+    # What was put before the failure remains (orphans); nothing deletes it. Each
+    # object is verified right after its own put (finding 1), so a failing verify
+    # stops before the seal is put: only the object remains.
+    put_before_failure = 1 if wrapper is _VerifyMismatches else 2
+    assert len(stores.preservation.stored_object_ids()) == put_before_failure
     _move(engine, LifecycleOperation.DELETE, report, 0, "d")
+
+
+class _Recording(_Delegating):
+    """Records put/verify/read in order; a read also records the hold rows the session sees."""
+
+    def __init__(self, inner: ReportContentStore, log: list[Event], connection: Connection) -> None:
+        super().__init__(inner)
+        self.log = log
+        self.connection = connection
+
+    def put(self, object_id: str, *, decoded: bytes, original: bytes | None) -> None:
+        self.log.append(("put", object_id))
+        super().put(object_id, decoded=decoded, original=original)
+
+    def read(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> bytes:
+        rows = self.connection.execute(
+            text("SELECT count(*) FROM knowledge.report_hold_events")
+        ).scalar_one()
+        self.log.append(("read", object_id, part.value, int(rows)))
+        return super().read(
+            object_id,
+            part,
+            expected_sha256=expected_sha256,
+            expected_byte_count=expected_byte_count,
+        )
+
+    def verify(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> None:
+        self.log.append(("verify", object_id, part.value))
+        super().verify(
+            object_id,
+            part,
+            expected_sha256=expected_sha256,
+            expected_byte_count=expected_byte_count,
+        )
+
+
+def test_each_content_object_is_loaded_put_and_verified_before_the_next(
+    migrated_engine: Engine, stores: Stores, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 1 on the SQL path: one object at a time, the seal last, the hold row after."""
+    engine = migrated_engine
+    report = _publish(
+        engine, _gzip(b"Synthetic blob gzip line.\n" * 16), content_store=stores.content
+    )
+    _update(engine, report, 1, ReportPatch(title="Metadata only"), "u1")
+    for expected, body in enumerate(
+        (
+            {"format": "markdown", "body": "# Short\n"},  # inline identity
+            {"format": "text", "body": "identity blob body " * 10},  # managed_blob identity
+            _gzip(b"Inline gzip.\n"),  # inline gzip
+        ),
+        start=2,
+    ):
+        _update(
+            engine,
+            report,
+            expected,
+            ReportPatch(content=validate_content(body)),
+            f"u{expected}",
+            stores.content,
+        )
+    log: list[Event] = []
+    monkeypatch.setattr(sql_reports, "preservation_source", recording_loads(sql_reports, log))
+    with engine.begin() as connection:
+        placed = _hold_on(
+            connection,
+            HoldOperation.PLACE,
+            report,
+            "h",
+            0,
+            store=_Recording(stores.preservation, log, connection),
+            content_store=stores.content,
+        )
+    assert placed.preservation is not None
+    seal = _seal(stores, placed)
+    assert {(o["storage_kind"], o["encoding"]) for o in seal["objects"]} == {
+        ("managed_blob", "gzip+base64"),
+        ("inline", "identity"),
+        ("managed_blob", "identity"),
+        ("inline", "gzip+base64"),
+    }
+    assert (placed.preservation.object_count, placed.preservation.version_count) == (4, 5)
+    assert_one_object_at_a_time(log, seal, placed.preservation.seal_object_id)
+    assert _hold_rows(engine) == 1
+    (event,) = _ledger(engine, report)
+    assert verify_preservation_copy(stores.preservation, event) == 6  # 2 + 1 + 1 + 2 parts
 
 
 # ---- idempotency -------------------------------------------------------------------------

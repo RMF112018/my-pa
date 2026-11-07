@@ -153,6 +153,7 @@ from my_pa.contracts.ports import (
     ReportHoldStateError,
     ReportIdempotencyConflictError,
     ReportNotFoundError,
+    ReportPreservationError,
     ReportPreservationUnavailableError,
     ReportStaleHoldRevisionError,
     ReportStaleLifecycleRevisionError,
@@ -10559,16 +10560,23 @@ class _GeneralReports(GeneralReportRepository):
         preservation_store: ReportContentStore,
         content_store: ReportContentStore | None,
     ) -> HoldPreservation:
-        sources: dict[str, PreservationSource] = {}
-        versions = []
-        manifests = []
-        for kept in self._versions(principal_id, root.report_id):
-            stored = _as_read(kept)
-            source = sources.get(stored.content_id)
-            if source is None:
-                source = sources[stored.content_id] = preservation_source(stored, content_store)
-            versions.append((stored.version, source))
-            manifests.append(stored.manifest)
+        # As the SQL `_preserve`: the versions' records and manifests up front,
+        # each distinct content object's bytes only when `load` is called for it
+        # (one at a time, finding 1). The world's own versions are referenced,
+        # never copied; a blob's bytes are read from `content_store` on demand.
+        read = [_as_read(kept) for kept in self._versions(principal_id, root.report_id)]
+        by_content = {stored.content_id: stored for stored in reversed(read)}
+        versions = [stored.version for stored in read]
+        manifests = [stored.manifest for stored in read]
+
+        def load(content_id: str) -> PreservationSource:
+            stored = by_content.get(content_id)
+            if stored is None:
+                raise ReportPreservationError()
+            return preservation_source(
+                content_id, stored.storage_kind, stored.content, content_store
+            )
+
         return seal_preservation_copy(
             preservation_store,
             root=PreservedRoot(
@@ -10585,6 +10593,7 @@ class _GeneralReports(GeneralReportRepository):
             sealed_at=recorded_at,
             versions=versions,
             manifests=manifests,
+            load=load,
             lifecycle_events=[
                 PreservedLifecycleEvent(
                     event_id=item.event_id,

@@ -178,6 +178,7 @@ from my_pa.contracts.ports import (
     SourceRepository,
     TaskManagementRepository,
     TaskManagementUnitOfWork,
+    TransferBegin,
     TransferChunk,
     TransferSession,
     UnitOfWork,
@@ -499,6 +500,7 @@ from my_pa.domain.reports.revision import (
 )
 from my_pa.domain.reports.transfer import CLIENT_REF_PATTERN as TRANSFER_CLIENT_REF_PATTERN
 from my_pa.domain.reports.transfer import (
+    TRANSFER_BEGIN_REAP_LIMIT,
     TRANSFER_DECLARED_BYTES_PER_OWNER,
     TRANSFER_SESSIONS_PER_CLIENT,
     TRANSFER_SESSIONS_PER_OWNER,
@@ -10010,7 +10012,7 @@ class _ReportTransfers(ReportTransferRepository):
         client_ref: str,
         idempotency_key: str,
         now: datetime,
-    ) -> tuple[TransferSession, bool]:
+    ) -> TransferBegin:
         if not isinstance(declaration, TransferDeclaration):
             raise ReportValidationError("declaration", "type")
         validate_identifier(principal_id, IdKind.PRINCIPAL)
@@ -10019,11 +10021,25 @@ class _ReportTransfers(ReportTransferRepository):
             raise ReportValidationError("idempotency_key", "bounds")
         at = self._now(now)
         with self._world.report_transfer_lock:
-            mine = [
-                s
-                for s in self._world.report_transfer_sessions.values()
-                if s.owner_principal_id == principal_id
-            ]
+            sessions = self._world.report_transfer_sessions
+            live_states = (ReportTransferState.OPEN, ReportTransferState.FINALIZED)
+            # Review R1 #1: reap the owner's (every client's) time-expired
+            # live sessions, oldest first and bounded, before the key and quota.
+            # The fake World has no rollback, so the reap is applied only once
+            # nothing can refuse (a refused begin reaps nothing, as on SQL).
+            mine = [s for s in sessions.values() if s.owner_principal_id == principal_id]
+            due = sorted(
+                (s for s in mine if s.state in live_states and s.expires_at <= at),
+                key=lambda s: (s.expires_at, s.session_id),
+            )[:TRANSFER_BEGIN_REAP_LIMIT]
+            reaped = [s.session_id for s in due]
+
+            def settle() -> None:
+                for session_id in reaped:
+                    sessions[session_id] = replace(
+                        sessions[session_id], state=ReportTransferState.EXPIRED
+                    )
+
             # T7': the key binds only a live session; an ended one is ignored.
             keyed = next(
                 (
@@ -10031,7 +10047,8 @@ class _ReportTransfers(ReportTransferRepository):
                     for s in mine
                     if s.client_ref == client
                     and s.idempotency_key == idempotency_key
-                    and s.state in (ReportTransferState.OPEN, ReportTransferState.FINALIZED)
+                    and s.state in live_states
+                    and s.session_id not in reaped
                 ),
                 None,
             )
@@ -10039,10 +10056,9 @@ class _ReportTransfers(ReportTransferRepository):
                 if keyed.expires_at > at:
                     if keyed.intent_digest != declaration.intent_digest:
                         raise ReportIdempotencyConflictError()
-                    return keyed, True
-                self._world.report_transfer_sessions[keyed.session_id] = replace(
-                    keyed, state=ReportTransferState.EXPIRED
-                )
+                    settle()
+                    return TransferBegin(keyed, True, tuple(reaped))
+                reaped.append(keyed.session_id)
             live = [s for s in mine if s.usable_at(at)]
             if (
                 sum(1 for s in live if s.client_ref == client) >= TRANSFER_SESSIONS_PER_CLIENT
@@ -10051,6 +10067,7 @@ class _ReportTransfers(ReportTransferRepository):
                 > TRANSFER_DECLARED_BYTES_PER_OWNER
             ):
                 raise ReportTransferQuotaError()
+            settle()
             session = TransferSession(
                 session_id=issue_identifier(IdKind.REPORT_TRANSFER_SESSION),
                 owner_principal_id=principal_id,
@@ -10072,7 +10089,7 @@ class _ReportTransfers(ReportTransferRepository):
             )
             self._world.report_transfer_sessions[session.session_id] = session
             self._world.report_transfer_chunks[session.session_id] = []
-            return session, False
+            return TransferBegin(session, False, tuple(reaped))
 
     def lock_usable(
         self, session_id: str, *, principal_id: str, client_ref: str, now: datetime

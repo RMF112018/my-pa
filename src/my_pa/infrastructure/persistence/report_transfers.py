@@ -15,7 +15,11 @@ the caller's, never the database clock.
 **Begin is serialized per owner** with `pg_advisory_xact_lock` on a key derived
 from `("report_transfer_quota", principal_id)` (the precedent is
 `entity_reenrichment._lock_principal`, whose key is the bare Principal; the
-prefix keeps the two locks apart). Under that lock the keyed replay is looked
+prefix keeps the two locks apart). Under that lock the owner's sessions (of
+every client) that are live by state but expired by time are first moved to
+`expired`, oldest first and at most `TRANSFER_BEGIN_REAP_LIMIT` (review R1 #1;
+their ids are returned so the service discards their staging after the
+commit); then the keyed replay is looked
 up among the live sessions only (T7': a keyed session expired by time is moved
 to `expired` there, and an ended one frees its key), the T6 quotas counted
 (live = state IN (open, finalized) AND expires_at > now) and the row
@@ -60,6 +64,7 @@ from my_pa.contracts.ports import (
     ReportTransferQuotaError,
     ReportTransferRepository,
     ReportTransferStaging,
+    TransferBegin,
     TransferChunk,
     TransferSession,
 )
@@ -68,6 +73,7 @@ from my_pa.domain.identity.secret_digests import digests_match
 from my_pa.domain.reports.errors import ReportValidationError
 from my_pa.domain.reports.transfer import (
     CLIENT_REF_PATTERN,
+    TRANSFER_BEGIN_REAP_LIMIT,
     TRANSFER_CHUNK_BYTES,
     TRANSFER_DECLARED_BYTES_PER_OWNER,
     TRANSFER_SESSIONS_PER_CLIENT,
@@ -225,7 +231,7 @@ class SqlReportTransferRepository(ReportTransferRepository):
         client_ref: str,
         idempotency_key: str,
         now: datetime,
-    ) -> tuple[TransferSession, bool]:
+    ) -> TransferBegin:
         if not isinstance(declaration, TransferDeclaration):
             raise ReportValidationError("declaration", "type")
         context = capture_context(principal_id)
@@ -239,6 +245,31 @@ class SqlReportTransferRepository(ReportTransferRepository):
                 func.pg_advisory_xact_lock(func.hashtextextended(quota_lock_key(principal_id), 0))
             )
         ).scalar_one()
+        # Review R1 #1: reap this owner's (every client's) sessions that are
+        # live by state but expired by time, oldest first and bounded, BEFORE
+        # the keyed lookup and the quota count. A row another transaction holds
+        # (the GC, a concurrent request) is skipped, not waited for; the keyed
+        # one is still ended below.
+        reaped = [
+            str(value)
+            for value in self._connection.execute(
+                select(table.c.session_id)
+                .where(_mine(table, context), table.c.state.in_(_LIVE), table.c.expires_at <= at)
+                .order_by(table.c.expires_at, table.c.session_id)
+                .limit(TRANSFER_BEGIN_REAP_LIMIT)
+                .with_for_update(skip_locked=True)
+            ).scalars()
+        ]
+        if reaped:
+            self._connection.execute(
+                table.update()
+                .where(
+                    _mine(table, context),
+                    table.c.session_id.in_(reaped),
+                    table.c.state.in_(_LIVE),
+                )
+                .values(state=TransferState.EXPIRED.value)
+            )
         # T7': the key binds only a live session (the partial unique index
         # `a_report_transfer_begin_is_keyed`); a consumed, aborted or expired
         # one is ignored, so the same declaration begins a new session.
@@ -261,9 +292,11 @@ class SqlReportTransferRepository(ReportTransferRepository):
             if original.expires_at > at:
                 if original.intent_digest != declaration.intent_digest:
                     raise ReportIdempotencyConflictError()
-                return original, True
-            # Live by its state column but expired by time: end it (the guard
-            # admits open|finalized -> expired) so the key is free again.
+                return TransferBegin(original, True, tuple(reaped))
+            # Live by its state column but expired by time and not reaped above
+            # (past the limit or skipped): end it (the guard admits
+            # open|finalized -> expired) so the key is free again.
+            reaped.append(original.session_id)
             self._connection.execute(
                 table.update()
                 .where(
@@ -314,7 +347,7 @@ class SqlReportTransferRepository(ReportTransferRepository):
             .mappings()
             .one()
         )
-        return _hydrate(row), False
+        return TransferBegin(_hydrate(row), False, tuple(reaped))
 
     # ---- the caller's session ----------------------------------------------
 

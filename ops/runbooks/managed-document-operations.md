@@ -246,9 +246,15 @@ Content larger than one request is uploaded in chunks through
 its chunks are **transfer staging** under the same root, in its own constant
 directory `<root>/transfer/<shard>/<grxfr_id>/<sequence>-<sha256>`, beside the
 `content` and `preservation` namespaces. A consume or abort discards the
-session's staging after its commit, best effort; an expired session, a failed
-discard, or a staging directory with no session row is left for the
-collector:
+session's staging after its commit, best effort. Every `begin` first moves its
+Principal's (any client's) open or finalized sessions whose `expires_at` has
+passed to `expired` (at most 16 per begin, oldest first) and discards their
+staging after its own commit, best effort; a refused begin rolls back and
+discards nothing. So a Principal's staging on disk is bounded by its live
+quota (8 sessions, 64 MiB declared) plus the sessions that ended with no later
+begin of that Principal. The collector is still needed for those (a Principal
+that stops beginning), for a failed consume, abort or begin discard, and for a
+staging directory with no session row:
 
 ```sh
 MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \

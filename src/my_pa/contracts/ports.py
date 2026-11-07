@@ -596,6 +596,7 @@ __all__ = [
     "TimelineNativeEvent",
     "TraceRepository",
     "TransactionConflictError",
+    "TransferBegin",
     "TransferChunk",
     "TransferSession",
     "UnitOfWork",
@@ -8613,6 +8614,22 @@ class TransferChunk:
     received_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class TransferBegin:
+    """What one `ReportTransferRepository.begin` did (WP06 T6, T7', review R1 #1).
+
+    `session` is the new or replayed session; `replayed` whether it is the
+    keyed original. `reaped_session_ids` are the owner's sessions this begin
+    moved from open/finalized to `expired` because their time had passed (at
+    most `TRANSFER_BEGIN_REAP_LIMIT`, plus the keyed one): their staging is
+    the caller's to discard, and only AFTER the transaction committed.
+    """
+
+    session: TransferSession
+    replayed: bool
+    reaped_session_ids: tuple[str, ...] = ()
+
+
 class ReportTransferRepository(ABC):
     """The transfer sessions and their chunk ledger, inside one transaction (WP06 B3).
 
@@ -8639,16 +8656,26 @@ class ReportTransferRepository(ABC):
         client_ref: str,
         idempotency_key: str,
         now: datetime,
-    ) -> tuple[TransferSession, bool]:
-        """Open a session, or replay the one this key opened: `(session, replayed)`.
+    ) -> TransferBegin:
+        """Open a session, or replay the one this key opened (a `TransferBegin`).
 
-        Serialized per owner (`pg_advisory_xact_lock`). The key (owner,
+        Serialized per owner (`pg_advisory_xact_lock`). Under that lock and
+        BEFORE the keyed lookup and the quota count, the owner's sessions (of
+        every client) that are open or finalized but expired by time
+        (`expires_at <= now`) are moved to `expired`, oldest first, at most
+        `TRANSFER_BEGIN_REAP_LIMIT` of them; their ids are returned as
+        `reaped_session_ids` so the caller discards their staging after the
+        commit (a rolled-back begin reaped nothing). Hence an owner's staging
+        on disk is bounded by its live quota (8 sessions, 64 MiB declared)
+        plus the sessions that ended with no later begin of that owner and no
+        transfer GC since (and any whose post-commit discard failed). The key (owner,
         client_ref, idempotency_key) binds only a live session (T7'): a live,
         unexpired session under the key with the same `intent_digest` replays
         (no new row); with another digest is `ReportIdempotencyConflictError`.
         A session under the key that is open or finalized but expired by time
-        is moved to `expired` first; it, and any consumed, aborted or expired
-        one, leaves the key free, so the begin opens a NEW session. A new
+        is reaped by the same step (and is moved to `expired`, and reported
+        reaped, even past the reap limit); it, and any consumed, aborted or
+        expired one, leaves the key free, so the begin opens a NEW session. A new
         session must fit the T6 quotas, else `ReportTransferQuotaError`.
         """
 

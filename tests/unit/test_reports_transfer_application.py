@@ -691,6 +691,41 @@ def test_no_discard_runs_for_a_refused_abort(scene: Scene, tmp_path: Path) -> No
     assert staging.has_session(session_id)
 
 
+def test_begin_reaps_the_owners_expired_sessions_and_discards_them_after_commit(
+    scene: Scene, tmp_path: Path
+) -> None:
+    """Review R1 #1: a begin ends its owner's time-expired sessions and discards their staging.
+
+    Every client of the owner, open and finalized alike; never a foreign
+    owner's; only after the commit (a refused begin discards nothing).
+    """
+    root = (tmp_path / "report-content").resolve()
+    root.mkdir()
+    staging = _RecordingStaging(root, fail=False)
+    rig = _rig(scene, tmp_path, staging_override=staging)
+    sessions = rig.scene.world.report_transfer_sessions
+    other_client = _uploaded(rig, _text(32), key="reap-1", client=CLIENT_A)
+    finalized = _uploaded(rig, _text(48), key="reap-2")
+    _ok(_finalize(rig, finalized))
+    foreign = _uploaded(rig, _text(16), key="reap-3")
+    sessions[foreign] = replace(sessions[foreign], owner_principal_id="prn_" + "f0" * 12)
+    live = _uploaded(rig, _text(8), key="reap-4")
+    for session_id in (other_client, finalized, foreign):
+        _expire(rig, session_id)
+    # A refused begin (another intent on a live key) rolls back: nothing reaped or discarded.
+    before = _snapshot(rig)
+    assert _details(_begin(rig, _text(9), key="reap-4"), ErrorCode.CONFLICT) == ["idempotency_key"]
+    assert _snapshot(rig) == before
+    assert staging.discarded == []
+    _ok(_begin(rig, _text(20), key="reap-5"))
+    assert sorted(staging.discarded) == sorted([other_client, finalized])
+    for session_id in (other_client, finalized):
+        assert sessions[session_id].state is TransferState.EXPIRED
+        assert not staging.has_session(session_id)
+    assert sessions[foreign].state is TransferState.OPEN and staging.has_session(foreign)
+    assert sessions[live].state is TransferState.OPEN and staging.has_session(live)
+
+
 # ---- T5: one bare not_found ---------------------------------------------------
 
 

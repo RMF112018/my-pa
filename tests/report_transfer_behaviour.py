@@ -29,6 +29,7 @@ from my_pa.contracts.ports import (
     ReportTransferQuotaError,
     ReportTransferRepository,
     ReportTransferStagingError,
+    TransferBegin,
     TransferSession,
 )
 from my_pa.domain.common.identifiers import IdKind
@@ -110,6 +111,19 @@ def begin(
     client_ref: str = CLIENT_1,
     now: datetime = T0,
 ) -> tuple[TransferSession, bool]:
+    begun = begin_outcome(h, decl, key, principal_id=principal_id, client_ref=client_ref, now=now)
+    return begun.session, begun.replayed
+
+
+def begin_outcome(
+    h: Harness,
+    decl: TransferDeclaration,
+    key: str,
+    *,
+    principal_id: str = PRINCIPAL_A,
+    client_ref: str = CLIENT_1,
+    now: datetime = T0,
+) -> TransferBegin:
     return h.tx(
         lambda r: r.begin(
             decl, principal_id=principal_id, client_ref=client_ref, idempotency_key=key, now=now
@@ -310,6 +324,47 @@ def begin_after_the_keyed_session_ended_is_a_new_session(h: Harness) -> None:
     assert stale.session_id not in h.tx(lambda r: r.expire_due(now=EXPIRED, limit=100))
     not_found(lambda: lock(h, stale.session_id, now=EXPIRED))
     assert lock(h, renewed.session_id, now=EXPIRED).state is TransferState.OPEN
+
+
+def begin_reaps_the_owners_expired_sessions(h: Harness) -> None:
+    """Review R1 #1: a begin moves its owner's time-expired live sessions to `expired`.
+
+    Every client of the owner is reaped (open and finalized alike), a foreign
+    owner's never; the ids come back so the caller discards their staging
+    after the commit; a rolled-back begin reaps nothing; the keyed expired
+    session is reaped by the same step.
+    """
+    stale_open = upload(h, payload(40), "s1", client_ref=CLIENT_2)
+    stale_final = upload(h, payload(30), "s2")
+    finalize(h, stale_final.session_id)
+    foreign = upload(h, payload(20), "s3", principal_id=PRINCIPAL_B)
+    keeps, _ = begin(h, declaration(payload(5), ttl=86400), "s4", client_ref=CLIENT_3)
+    keyed, _ = begin(h, declaration(payload(5), ttl=86400), "kx")
+    stale = {stale_open.session_id, stale_final.session_id}
+    for sid in (*stale, foreign.session_id):
+        assert h.staging.has_session(sid)
+    # A refused (rolled-back) begin reaps nothing.
+    with pytest.raises(ReportIdempotencyConflictError):
+        begin(h, declaration(payload(6), ttl=86400), "kx", now=EXPIRED)
+    assert h.tx(lambda r: r.terminal_session_ids(stale)) == frozenset()
+    # The keyed expired session ("s2") is reaped by the same step; a new session opens.
+    begun = begin_outcome(h, declaration(payload(30)), "s2", now=EXPIRED)
+    assert begun.replayed is False and begun.session.session_id not in stale
+    assert len(begun.reaped_session_ids) == 2 and set(begun.reaped_session_ids) == stale
+    assert h.tx(lambda r: r.terminal_session_ids([*stale, foreign.session_id])) == stale
+    for live in (keeps, keyed):
+        assert lock(h, live.session_id, client_ref=live.client_ref, now=EXPIRED) is not None
+    # The repository never touches staging; the caller discards the reaped ids.
+    for sid in begun.reaped_session_ids:
+        h.staging.discard(sid)
+    assert not any(h.staging.has_session(sid) for sid in stale)
+    assert h.staging.has_session(foreign.session_id)
+    # Nothing left to reap for this owner, even on a replay; the foreign owner's
+    # begin reaps its own.
+    again = begin_outcome(h, declaration(payload(5), ttl=86400), "kx", now=EXPIRED)
+    assert again.replayed is True and again.reaped_session_ids == ()
+    theirs = begin_outcome(h, declaration(payload(5)), "b1", principal_id=PRINCIPAL_B, now=EXPIRED)
+    assert theirs.reaped_session_ids == (foreign.session_id,)
 
 
 def quota_per_client(h: Harness) -> None:
@@ -559,6 +614,7 @@ SCENARIOS: Final[dict[str, Callable[[Harness], None]]] = {
         begin_replays_the_same_intent,
         begin_refuses_another_intent_on_the_key,
         begin_after_the_keyed_session_ended_is_a_new_session,
+        begin_reaps_the_owners_expired_sessions,
         quota_per_client,
         quota_per_owner,
         quota_of_declared_bytes,

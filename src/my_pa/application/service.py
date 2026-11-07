@@ -1118,10 +1118,11 @@ class _Result:
     # never enters the response envelope. Absence means this invocation did not
     # create a new authoritative mutation (including replay and no-op success).
     reenrichment_cause_id: str | None = None
-    # WP06 T13/T17: a transfer session whose staged chunks `_run` discards,
-    # best effort, only AFTER the unit of work committed (an aborted session;
-    # W3c reuses it for a consumed one). Never enters the response envelope.
-    discard_transfer_session_id: str | None = None
+    # WP06 T13/T17 (review R1 #1): the transfer sessions whose staged chunks
+    # `_run` discards, best effort, only AFTER the unit of work committed (an
+    # aborted or consumed session; the expired ones a begin reaped). Never
+    # enters the response envelope.
+    discard_transfer_session_ids: tuple[str, ...] = ()
 
 
 class _CommitRejectedConflictError(Exception):
@@ -5500,8 +5501,8 @@ class ApplicationService:
                         if unit_of_work.record_events.pending_count:
                             raise InternalError() from None
         if served is not None:
-            if served.discard_transfer_session_id is not None:
-                self._discard_staged_transfer(served.discard_transfer_session_id)
+            for session_id in served.discard_transfer_session_ids:
+                self._discard_staged_transfer(session_id)
             return served
         # Reached only after the transaction committed, which is what preserves
         # the audit event recording the refusal.
@@ -17071,7 +17072,7 @@ class ApplicationService:
         return _Result(
             payload=payload,
             disclosure=disclosure,
-            discard_transfer_session_id=session.session_id,
+            discard_transfer_session_ids=(session.session_id,),
         )
 
     def _reports_update(
@@ -17452,13 +17453,23 @@ class ApplicationService:
         expired (an expired-by-time one is moved to `expired`) frees the key, so
         the same request opens a new session. A new session past the T6
         quotas is `rate_limited` (`transfer_quota`).
+
+        Review R1 #1: before the key and the quota, the repository reaps the
+        owner's (every client's) time-expired open/finalized sessions (at most
+        `TRANSFER_BEGIN_REAP_LIMIT`, plus the keyed one) to `expired`; their
+        staging is discarded best effort only AFTER the commit (`_run`; a
+        refused begin rolls back and discards nothing). So an owner's staging
+        on disk is bounded by its live quota (8 sessions, 64 MiB declared)
+        plus the sessions that ended with no later begin of that owner and no
+        transfer GC since, and any whose post-commit discard failed; the
+        operator's `transfer-gc` still collects those.
         """
         self._transfer_staging()
         declaration = transfer_declaration(command)
         client_ref = self._transfer_client_ref(authorization)
         refusal: ApplicationError
         try:
-            session, replayed = unit_of_work.report_transfers.begin(
+            begun = unit_of_work.report_transfers.begin(
                 declaration,
                 principal_id=authorization.principal.principal_id,
                 client_ref=client_ref,
@@ -17474,8 +17485,9 @@ class ApplicationService:
             refusal = InternalError()
         else:
             return _Result(
-                payload=_transfer_begin_payload(session, replayed=replayed),
+                payload=_transfer_begin_payload(begun.session, replayed=begun.replayed),
                 disclosure=unenrolled_disclosure(authorization.at),
+                discard_transfer_session_ids=begun.reaped_session_ids,
             )
         raise refusal
 
@@ -17622,7 +17634,7 @@ class ApplicationService:
                 "replayed": replayed,
             },
             disclosure=unenrolled_disclosure(authorization.at),
-            discard_transfer_session_id=session.session_id,
+            discard_transfer_session_ids=(session.session_id,),
         )
 
     def _reports_transfer_read_chunk(

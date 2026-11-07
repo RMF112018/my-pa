@@ -59,6 +59,7 @@ __all__ = [
     "CONTENT_TOKEN_PREFIX",
     "MAX_TRANSFER_BYTE_COUNT",
     "MAX_TRANSFER_CHUNKS",
+    "TRANSFER_BEGIN_REAP_LIMIT",
     "TRANSFER_CHUNK_BYTES",
     "TRANSFER_DECLARED_BYTES_PER_OWNER",
     "TRANSFER_SESSIONS_PER_CLIENT",
@@ -94,6 +95,10 @@ TRANSFER_TTL_MAX_SECONDS: Final = 86400
 TRANSFER_SESSIONS_PER_CLIENT: Final = 4
 TRANSFER_SESSIONS_PER_OWNER: Final = 8
 TRANSFER_DECLARED_BYTES_PER_OWNER: Final = 67_108_864
+#: Review R1 #1: the most time-expired sessions of one owner a begin moves to
+#: `expired` (and whose staging it discards after the commit): the per-owner
+#: live cap plus a margin, so one begin's work stays bounded.
+TRANSFER_BEGIN_REAP_LIMIT: Final = 2 * TRANSFER_SESSIONS_PER_OWNER
 
 #: T4: the frozen client binding pattern; the schema restates it as a literal
 #: (with the colon escaped for SQLAlchemy's bind parsing).

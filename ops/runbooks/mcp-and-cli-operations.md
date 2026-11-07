@@ -659,8 +659,13 @@ composition and in every MCP publication that composition produces.
   `reports.read`. Staging lives under `MY_PA_REPORT_CONTENT_ROOT/transfer`;
   without a report content root the four uploads are not composed (absent from
   `capabilities.get` and `tools/list`, refused `unsupported`), and
-  `read_chunk` of a `managed_blob` version is `internal_error`. Expired and
-  leftover staging is collected by `apps/cli/report_content.py transfer-gc` on
+  `read_chunk` of a `managed_blob` version is `internal_error`. Consume and
+  abort discard their session's staging after the commit, and every `begin`
+  first moves the Principal's expired sessions (any client) to `expired` and
+  discards their staging after its commit, so a Principal's staging stays
+  bounded by its live quota plus the sessions that ended with no later
+  `begin`. Those, and any staging whose discard failed, are collected by
+  `apps/cli/report_content.py transfer-gc` on
   the operator's own schedule
   ([`managed-document-operations.md`](managed-document-operations.md)
   section 7.1). The ChatLLM data profile string stays `chatllm-data-v13`, so a

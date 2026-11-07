@@ -11321,7 +11321,8 @@ report_receipts = Table(
 #: One upload transfer session: a declared byte count and digest, received in
 #: fixed 256 KiB chunks, whose state only moves forward. WP06 A1: bound to the
 #: client that began it (`client_ref`) and keyed at begin (`idempotency_key`
-#: with the declaration's `intent_digest`), all immutable.
+#: with the declaration's `intent_digest`, unique among the client's live
+#: sessions only, T7'), all immutable.
 report_transfer_sessions = Table(
     "report_transfer_sessions",
     METADATA,
@@ -11392,12 +11393,6 @@ report_transfer_sessions = Table(
         "char_length(idempotency_key) BETWEEN 1 AND 128", name="a_report_transfer_key_is_bounded"
     ),
     _report_sha("intent_digest", name="a_report_transfer_intent_is_a_digest"),
-    UniqueConstraint(
-        "owner_principal_id",
-        "client_ref",
-        "idempotency_key",
-        name="a_report_transfer_begin_is_keyed",
-    ),
     UniqueConstraint("session_id", "owner_principal_id", name="report_transfer_sessions_owner_key"),
     _report_fk(
         ["consumed_content_id", "owner_principal_id"],
@@ -11411,6 +11406,16 @@ report_transfer_sessions = Table(
         "owner_principal_id",
         "state",
         "expires_at",
+    ),
+    # WP06 T7': the begin key binds only a live (open or finalized) session; a
+    # consumed, aborted or expired one leaves the key free for a new intent.
+    Index(
+        "a_report_transfer_begin_is_keyed",
+        "owner_principal_id",
+        "client_ref",
+        "idempotency_key",
+        unique=True,
+        postgresql_where=text("state IN ('open', 'finalized')"),
     ),
 )
 

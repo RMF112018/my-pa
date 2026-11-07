@@ -17443,13 +17443,15 @@ class ApplicationService:
         authorization: Authorization,
         command: BeginReportTransfer,
     ) -> _Result:
-        """`reports.transfer.begin` (T3, T6, T7, T18): open a session, or replay its key.
+        """`reports.transfer.begin` (T3, T6, T7', T18): open a session, or replay its key.
 
-        The same key bound to the same declaration replays the original answer
-        (`replayed: true`, no new row), or is `not_found` if that session is no
-        longer usable; bound to another declaration it is `conflict`
-        (`idempotency_key`). A new session past the T6 quotas is
-        `rate_limited` (`transfer_quota`).
+        The key binds only a live session (T7'): one live and unexpired under
+        the same declaration replays the original answer (`replayed: true`, no
+        new row); under another declaration it is `conflict`
+        (`idempotency_key`). A keyed session that was consumed, aborted or has
+        expired (an expired-by-time one is moved to `expired`) frees the key, so
+        the same request opens a new session. A new session past the T6
+        quotas is `rate_limited` (`transfer_quota`).
         """
         self._transfer_staging()
         declaration = transfer_declaration(command)
@@ -17465,8 +17467,6 @@ class ApplicationService:
             )
         except ReportIdempotencyConflictError:
             refusal = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
-        except ReportTransferNotFoundError:
-            refusal = NotFoundError()
         except ReportTransferQuotaError:
             refusal = RateLimitedError(SafeDetail.TRANSFER_QUOTA)
         except ReportValidationError:

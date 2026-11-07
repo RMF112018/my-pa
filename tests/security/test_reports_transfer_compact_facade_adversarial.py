@@ -488,8 +488,6 @@ def test_an_expired_session_is_not_found_on_every_operation(
                     {**MINIMAL, "content": reference(done.session_id, done.content_token)},
                 ),
             ),
-            # Begin's keyed replay of the expired session is not_found too (T7).
-            (token, wrapped(WRITE_TOOL, BEGIN, begin_payload(_STAGED, ttl_seconds=300))),
         ]
     )
     bare_not_found([*baseline, *answers])

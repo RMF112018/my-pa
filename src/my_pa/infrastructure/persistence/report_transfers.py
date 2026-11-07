@@ -16,10 +16,12 @@ the caller's, never the database clock.
 from `("report_transfer_quota", principal_id)` (the precedent is
 `entity_reenrichment._lock_principal`, whose key is the bare Principal; the
 prefix keeps the two locks apart). Under that lock the keyed replay is looked
-up, the T6 quotas counted (live = state IN (open, finalized) AND expires_at >
-now) and the row inserted, so two concurrent begins of one owner cannot both
-pass the count: the second reads the first's committed row (READ COMMITTED,
-a new statement after the lock was granted).
+up among the live sessions only (T7': a keyed session expired by time is moved
+to `expired` there, and an ended one frees its key), the T6 quotas counted
+(live = state IN (open, finalized) AND expires_at > now) and the row
+inserted, so two concurrent begins of one owner cannot both pass the count:
+the second reads the first's committed row (READ COMMITTED, a new statement
+after the lock was granted).
 
 **Append order (T8, T5), after the caller locked the session:** a finalized
 session is `transfer_state`; the size rules (T2); the chunk digest
@@ -237,24 +239,40 @@ class SqlReportTransferRepository(ReportTransferRepository):
                 func.pg_advisory_xact_lock(func.hashtextextended(quota_lock_key(principal_id), 0))
             )
         ).scalar_one()
+        # T7': the key binds only a live session (the partial unique index
+        # `a_report_transfer_begin_is_keyed`); a consumed, aborted or expired
+        # one is ignored, so the same declaration begins a new session.
         keyed = (
             self._connection.execute(
-                select(table).where(
+                select(table)
+                .where(
                     _mine(table, context),
                     table.c.client_ref == client,
                     table.c.idempotency_key == idempotency_key,
+                    table.c.state.in_(_LIVE),
                 )
+                .with_for_update()
             )
             .mappings()
             .one_or_none()
         )
         if keyed is not None:
             original = _hydrate(keyed)
-            if original.intent_digest != declaration.intent_digest:
-                raise ReportIdempotencyConflictError()
-            if not original.usable_at(at):
-                raise ReportTransferNotFoundError()
-            return original, True
+            if original.expires_at > at:
+                if original.intent_digest != declaration.intent_digest:
+                    raise ReportIdempotencyConflictError()
+                return original, True
+            # Live by its state column but expired by time: end it (the guard
+            # admits open|finalized -> expired) so the key is free again.
+            self._connection.execute(
+                table.update()
+                .where(
+                    _mine(table, context),
+                    table.c.session_id == original.session_id,
+                    table.c.state.in_(_LIVE),
+                )
+                .values(state=TransferState.EXPIRED.value)
+            )
         live = self._connection.execute(
             select(
                 func.count().label("sessions"),

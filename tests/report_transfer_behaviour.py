@@ -273,12 +273,43 @@ def begin_refuses_another_intent_on_the_key(h: Harness) -> None:
         begin(h, declaration(payload(5)), "k1")
 
 
-def begin_replay_of_an_unusable_session_is_not_found(h: Harness) -> None:
+def begin_after_the_keyed_session_ended_is_a_new_session(h: Harness) -> None:
+    """T7': the key binds only a live session; once it ended the same begin is a new intent."""
+    # Aborted -> the identical declaration begins a NEW session.
     aborted, _ = begin(h, declaration(THREE), "k-aborted")
     abort(h, aborted.session_id)
-    not_found(lambda: begin(h, declaration(THREE), "k-aborted", now=LATER))
-    begin(h, declaration(THREE), "k-expiring")
-    not_found(lambda: begin(h, declaration(THREE), "k-expiring", now=EXPIRED))
+    again, replayed = begin(h, declaration(THREE), "k-aborted", now=LATER)
+    assert replayed is False and again.session_id != aborted.session_id
+    assert again.state is TransferState.OPEN and again.created_at == LATER
+    # ... and that new live session binds the key again (replay, then conflict).
+    assert begin(h, declaration(THREE), "k-aborted", now=LATER) == (again, True)
+    with pytest.raises(ReportIdempotencyConflictError):
+        begin(h, declaration(payload(5)), "k-aborted", now=LATER)
+    # Consumed -> NEW session.
+    used = upload(h, payload(30), "k-consumed")
+    _, token = finalize(h, used.session_id)
+    consume(h, used.session_id, token)
+    fresh, replayed = begin(h, declaration(payload(30)), "k-consumed", now=LATER)
+    assert replayed is False and fresh.session_id != used.session_id
+    # A live finalized session under the key replays as it is (finalized).
+    done = upload(h, payload(20), "k-finalized")
+    finalized, _ = finalize(h, done.session_id)
+    replay, replayed = begin(h, declaration(payload(20)), "k-finalized", now=LATER)
+    assert replayed is True and replay == finalized
+    assert replay.state is TransferState.FINALIZED
+    # Open but expired by time -> moved to `expired`, then a NEW session.
+    stale, _ = begin(h, declaration(THREE), "k-expiring")
+    renewed, replayed = begin(h, declaration(THREE), "k-expiring", now=EXPIRED)
+    assert replayed is False and renewed.session_id != stale.session_id
+    assert renewed.expires_at == EXPIRED + timedelta(seconds=3600)
+    # Finalized but expired by time -> likewise; another digest is a new intent too.
+    other, replayed = begin(h, declaration(payload(7)), "k-finalized", now=EXPIRED)
+    assert replayed is False and other.session_id not in (done.session_id, fresh.session_id)
+    ended = h.tx(lambda r: r.terminal_session_ids([stale.session_id, done.session_id]))
+    assert ended == frozenset({stale.session_id, done.session_id})
+    assert stale.session_id not in h.tx(lambda r: r.expire_due(now=EXPIRED, limit=100))
+    not_found(lambda: lock(h, stale.session_id, now=EXPIRED))
+    assert lock(h, renewed.session_id, now=EXPIRED).state is TransferState.OPEN
 
 
 def quota_per_client(h: Harness) -> None:
@@ -527,7 +558,7 @@ SCENARIOS: Final[dict[str, Callable[[Harness], None]]] = {
     for function in (
         begin_replays_the_same_intent,
         begin_refuses_another_intent_on_the_key,
-        begin_replay_of_an_unusable_session_is_not_found,
+        begin_after_the_keyed_session_ended_is_a_new_session,
         quota_per_client,
         quota_per_owner,
         quota_of_declared_bytes,

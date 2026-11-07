@@ -8643,10 +8643,13 @@ class ReportTransferRepository(ABC):
         """Open a session, or replay the one this key opened: `(session, replayed)`.
 
         Serialized per owner (`pg_advisory_xact_lock`). The key (owner,
-        client_ref, idempotency_key) bound to the same `intent_digest` replays
-        the original session (`ReportTransferNotFoundError` if it is no longer
-        usable); bound to another digest is `ReportIdempotencyConflictError`.
-        A new session must fit the T6 quotas, else `ReportTransferQuotaError`.
+        client_ref, idempotency_key) binds only a live session (T7'): a live,
+        unexpired session under the key with the same `intent_digest` replays
+        (no new row); with another digest is `ReportIdempotencyConflictError`.
+        A session under the key that is open or finalized but expired by time
+        is moved to `expired` first; it, and any consumed, aborted or expired
+        one, leaves the key free, so the begin opens a NEW session. A new
+        session must fit the T6 quotas, else `ReportTransferQuotaError`.
         """
 
     @abstractmethod

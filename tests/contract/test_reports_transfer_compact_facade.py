@@ -26,7 +26,9 @@ proves:
   searchable by a word of its decoded text only;
 * `reports.update` consuming a transfer token;
 * begin's server-stamped key: an identical retry replays the same session, a
-  second client's identical declaration is its own session;
+  second client's identical declaration is its own session, and once a session
+  ended (aborted, consumed, or open but expired by time -- then moved to
+  `expired`) the identical declaration begins a NEW session (T7');
 * no store: the four uploads are absent from describe and `unsupported`
   through `my_pa.write` even when granted; `read_chunk` is still described.
 
@@ -882,6 +884,58 @@ def test_an_identical_begin_replays_and_another_client_opens_its_own(harness: Ha
     # A different ttl is a different declaration, so a different key and session.
     (later,) = harness.run([(first, wrapped(WRITE_TOOL, BEGIN, {**payload, "ttl_seconds": 600}))])
     assert ok(later)["session_id"] not in keys
+
+
+def test_an_identical_begin_after_its_session_ended_opens_a_new_session(
+    harness: Harness, clock: Clock
+) -> None:
+    """T7': abort / consume / expiry free the server-stamped key for the same declaration."""
+    token = harness.client(CLIENT, transfer_grants(harness.service))
+    # abort -> begin again with the identical declaration -> a NEW session (T9's recovery).
+    staged = markdown_text(4096, seed=42)
+    payload = begin_payload(staged)
+    aborted = ok(single(harness, token, WRITE_TOOL, BEGIN, payload))
+    ok(single(harness, token, WRITE_TOOL, ABORT, {"session_id": aborted["session_id"]}))
+    renewed = ok(single(harness, token, WRITE_TOOL, BEGIN, payload))
+    assert renewed["replayed"] is False and renewed["state"] == "open"
+    assert renewed["session_id"] != aborted["session_id"]
+    # The new session binds the key: a retry replays it.
+    assert ok(single(harness, token, WRITE_TOOL, BEGIN, payload)) == {**renewed, "replayed": True}
+    # consume -> identical begin -> a NEW session.
+    consumed_text = markdown_text(3000, seed=43)
+    done = upload(harness, token, consumed_text)
+    ok(
+        single(
+            harness,
+            token,
+            WRITE_TOOL,
+            PUBLISH,
+            {**MINIMAL, "content": reference(done.session_id, done.content_token)},
+        )
+    )
+    again = ok(single(harness, token, WRITE_TOOL, BEGIN, begin_payload(consumed_text)))
+    assert again["replayed"] is False and again["session_id"] != done.session_id
+    # An open keyed session expired by time -> identical begin -> a NEW session,
+    # and the old row is now `expired`.
+    expiring_text = markdown_text(2000, seed=44)
+    expiring = begin_payload(expiring_text, ttl_seconds=300)
+    stale = ok(single(harness, token, WRITE_TOOL, BEGIN, expiring))
+    assert session_row(harness.engine, stale["session_id"]).state == "open"
+    clock.advance(300)  # expires_at <= now
+    fresh = ok(single(harness, token, WRITE_TOOL, BEGIN, expiring))
+    assert fresh["replayed"] is False and fresh["session_id"] != stale["session_id"]
+    assert session_row(harness.engine, stale["session_id"]).state == "expired"
+    states = {
+        row.session_id: (row.state, row.idempotency_key)
+        for row in rows(harness.engine, "SELECT * FROM knowledge.report_transfer_sessions")
+    }
+    assert states[aborted["session_id"]] == ("aborted", expected_key(payload, CLIENT, BEGIN))
+    assert states[renewed["session_id"]] == ("open", expected_key(payload, CLIENT, BEGIN))
+    assert states[done.session_id][0] == "consumed"
+    assert states[again["session_id"]][0] == "open"
+    assert states[done.session_id][1] == states[again["session_id"]][1]
+    assert states[stale["session_id"]] == ("expired", expected_key(expiring, CLIENT, BEGIN))
+    assert states[fresh["session_id"]] == ("open", expected_key(expiring, CLIENT, BEGIN))
 
 
 # ---- 7. availability: no store ---------------------------------------------------------------

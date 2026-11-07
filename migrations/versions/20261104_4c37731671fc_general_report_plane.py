@@ -183,9 +183,11 @@ declared content of at most 16 MiB in fixed 256 KiB chunks
 (`chunk_byte_limit` is always 262144, so at most 64 chunks). A session is
 bound to the client that began it (`client_ref`, a creator kind and its
 `gcrt_` pseudonym, NOT NULL with a frozen pattern) and its begin is keyed
-(`a_report_transfer_begin_is_keyed`: `UNIQUE (owner_principal_id,
-client_ref, idempotency_key)`, with the declaration's `intent_digest`); both
-are part of the immutable declaration. `report_transfer_chunks` is the
+among the live sessions of its client only (`a_report_transfer_begin_is_keyed`: a partial
+unique index on `(owner_principal_id, client_ref, idempotency_key)` WHERE
+`state IN ('open', 'finalized')`, with the declaration's `intent_digest`, so
+a consumed, aborted or expired session never binds its key again); both are
+part of the immutable declaration. `report_transfer_chunks` is the
 append-only ledger of received chunks, one row per `(session_id, sequence)`
 at `byte_offset = sequence * 262144`, referencing its session and owner
 (`ON DELETE RESTRICT NOT DEFERRABLE`, no cascade); its `BEFORE INSERT` guard
@@ -1126,8 +1128,6 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
           CONSTRAINT a_report_transfer_key_is_bounded CHECK (char_length(idempotency_key)
               BETWEEN 1 AND 128),
           {_sha("intent_digest", "a_report_transfer_intent_is_a_digest")},
-          CONSTRAINT a_report_transfer_begin_is_keyed UNIQUE (owner_principal_id, client_ref,
-              idempotency_key),
           CONSTRAINT report_transfer_sessions_owner_key UNIQUE (session_id,
               owner_principal_id),
           {
@@ -1145,6 +1145,11 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
             # ones (GC), by state and expiry.
             "CREATE INDEX report_transfer_sessions_by_owner_state_and_expiry ON "
             "knowledge.report_transfer_sessions (owner_principal_id, state, expires_at)",
+            # WP06 T7': the begin key binds only a live (open or finalized)
+            # session; a terminal one leaves the key free for a new intent.
+            "CREATE UNIQUE INDEX a_report_transfer_begin_is_keyed ON "
+            "knowledge.report_transfer_sessions (owner_principal_id, client_ref, "
+            "idempotency_key) WHERE state IN ('open', 'finalized')",
         ),
     ),
     (

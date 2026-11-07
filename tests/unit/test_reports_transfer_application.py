@@ -330,13 +330,34 @@ def test_begin_answers_the_declaration_and_replays_its_key(rig: Rig) -> None:
     assert _snapshot(rig) == before
 
 
-def test_a_replayed_begin_of_a_session_no_longer_usable_is_not_found(rig: Rig) -> None:
+def test_the_begin_key_of_an_ended_session_begins_a_new_one(rig: Rig) -> None:
+    """T7': aborted, consumed or expired, the identical begin is a NEW session."""
     staged = _text(10)
-    session_id = _ok(_begin(rig, staged))["session_id"]
-    _ok(_abort(rig, session_id))
-    before = _snapshot(rig)
-    assert _error(_begin(rig, staged)) == NOT_FOUND
-    assert _snapshot(rig) == before
+    sessions = rig.scene.world.report_transfer_sessions
+    ended: list[str] = []
+    for ending in ("aborted", "consumed", "expired"):
+        key = f"begin-{ending}"
+        session_id = _ok(_begin(rig, staged, key=key))["session_id"]
+        if ending == "aborted":
+            _ok(_abort(rig, session_id))
+        elif ending == "consumed":
+            for sequence, piece in enumerate(_pieces(staged)):
+                _ok(_append(rig, session_id, sequence, piece))
+            _ok(_finalize(rig, session_id))
+            _consume(rig, session_id)
+        else:
+            _expire(rig, session_id)
+        again = _ok(_begin(rig, staged, key=key))
+        assert again["replayed"] is False and again["state"] == "open"
+        assert again["session_id"] != session_id
+        # The new session binds the key again.
+        assert _ok(_begin(rig, staged, key=key)) == {**again, "replayed": True}
+        ended.append(session_id)
+    assert [sessions[sid].state for sid in ended] == [
+        TransferState.ABORTED,
+        TransferState.CONSUMED,
+        TransferState.EXPIRED,
+    ]
 
 
 def test_begin_quotas_are_rate_limited_with_zero_mutation(rig: Rig) -> None:

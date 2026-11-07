@@ -7020,7 +7020,8 @@ class BeginReportTransfer:
     life. The answer names the session, the fixed chunk size and the chunk
     count. At most 4 live sessions per client, 8 per owner, and 64 MiB of
     declared bytes per owner, else `rate_limited`. A retry of the same request
-    replays the original session.
+    replays the original session while it is live; once it was consumed,
+    aborted or expired, the same request begins a new session.
     """
 
     capability: ClassVar[Capability] = Capability.REPORTS_TRANSFER_BEGIN

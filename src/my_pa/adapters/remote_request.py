@@ -247,12 +247,15 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_ARCHIVE,
         Capability.REPORTS_DELETE,
         Capability.REPORTS_RESTORE,
-        # Reports Modernization WP06 (contract T7): `reports.transfer.begin`
+        # Reports Modernization WP06 (contract T7'): `reports.transfer.begin`
         # requires the key `report_transfer_sessions (owner_principal_id,
-        # client_ref, idempotency_key)` arbitrates. The stamped payload hash
-        # covers the whole declaration (format, encoding, byte_count, sha256,
-        # ttl_seconds), so a lost-response retry replays the original session
-        # answer (`replayed: true`) and never opens a second one. Client-bound
+        # client_ref, idempotency_key)` arbitrates among the client's LIVE
+        # sessions. The stamped payload hash covers the whole declaration
+        # (format, encoding, byte_count, sha256, ttl_seconds), so a
+        # lost-response retry replays the original session answer
+        # (`replayed: true`) and never opens a second one; once that session
+        # ended (consumed, aborted, expired) the identical declaration is a new
+        # intent and opens a new session. Client-bound
         # too: the session is the client's own (T4), so B's identical
         # declaration opens B's session rather than naming A's.
         #

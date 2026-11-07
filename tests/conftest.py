@@ -9967,9 +9967,9 @@ class _ReportTransfers(ReportTransferRepository):
 
     The same order and outcomes as `SqlReportTransferRepository`: the per-owner
     begin serialization (a `threading.Lock` stands in for the advisory lock),
-    the keyed replay, the T6 quotas, the T5 uniform refusal, the append order
-    and the GC queries; the T2 size and digest rules are the SQL module's own
-    pure functions. The two are run against one behaviour table in
+    the keyed replay among live sessions (T7'), the T6 quotas, the T5 uniform
+    refusal, the append order and the GC queries; the T2 size and digest rules
+    are the SQL module's own pure functions. The two are run against one behaviour table in
     `tests/database/test_reports_transfer_repository.py` and
     `tests/unit/test_reports_transfer_repository_fake.py`. It cannot prove
     row locks, triggers or rollback: those are the `database` tier's.
@@ -10024,20 +10024,25 @@ class _ReportTransfers(ReportTransferRepository):
                 for s in self._world.report_transfer_sessions.values()
                 if s.owner_principal_id == principal_id
             ]
+            # T7': the key binds only a live session; an ended one is ignored.
             keyed = next(
                 (
                     s
                     for s in mine
-                    if s.client_ref == client and s.idempotency_key == idempotency_key
+                    if s.client_ref == client
+                    and s.idempotency_key == idempotency_key
+                    and s.state in (ReportTransferState.OPEN, ReportTransferState.FINALIZED)
                 ),
                 None,
             )
             if keyed is not None:
-                if keyed.intent_digest != declaration.intent_digest:
-                    raise ReportIdempotencyConflictError()
-                if not keyed.usable_at(at):
-                    raise ReportTransferNotFoundError()
-                return keyed, True
+                if keyed.expires_at > at:
+                    if keyed.intent_digest != declaration.intent_digest:
+                        raise ReportIdempotencyConflictError()
+                    return keyed, True
+                self._world.report_transfer_sessions[keyed.session_id] = replace(
+                    keyed, state=ReportTransferState.EXPIRED
+                )
             live = [s for s in mine if s.usable_at(at)]
             if (
                 sum(1 for s in live if s.client_ref == client) >= TRANSFER_SESSIONS_PER_CLIENT

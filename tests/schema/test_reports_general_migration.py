@@ -2969,11 +2969,19 @@ def _transfer_cases() -> list[Case]:
             "key_bounded_above", {"idempotency_key": "k" * 129}, "a_report_transfer_key_is_bounded"
         ),
         case("intent_digest", {"intent_digest": _UPPER}, "a_report_transfer_intent_is_a_digest"),
+        # T7': two live sessions of one client never share a begin key, whether
+        # the first is still open or already finalized.
         Case(
             "begin_keyed",
             "transfer",
             _unique(_T, "a_report_transfer_begin_is_keyed"),
             then=_reinsert("transfer", "session", "session_id", "session2"),
+        ),
+        Case(
+            "begin_keyed_finalized",
+            "finalize",
+            _unique(_T, "a_report_transfer_begin_is_keyed"),
+            then=_reinsert("finalize", "session", "session_id", "session2"),
         ),
         guard(
             "guard_idempotency_key",
@@ -4075,6 +4083,48 @@ def test_an_open_or_aborted_transfer_session_may_be_deleted(plane_engine: Engine
         )
 
 
+#: T7': `(chain, the move that ends its session)`: a session that ended
+#: (consumed, aborted or expired) no longer binds its begin key.
+_ENDED_TRANSFERS: Final = (
+    ("consume", None),
+    ("finalize", "aborted"),
+    ("transfer", "aborted"),
+    ("transfer", "expired"),
+    ("finalize", "expired"),
+)
+
+
+@pytest.mark.database
+@pytest.mark.parametrize(("chain", "ending"), _ENDED_TRANSFERS)
+def test_an_ended_transfer_session_frees_its_begin_key(
+    plane_engine: Engine, chain: str, ending: str | None
+) -> None:
+    """A live session may reuse the begin key of an ended one, and a second ended one may too."""
+    ids = _ids(uuid.uuid4().hex[:16], P)
+    for step in CHAINS[chain]:
+        _execute(plane_engine, _TRANSACTIONS[step](ids))
+    if ending is not None:
+        _execute(plane_engine, [_session_move(ids, state=ending)])
+    _execute(plane_engine, _reinsert(chain, "session", "session_id", "session2")(ids))
+    with plane_engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT session_id, state FROM knowledge.report_transfer_sessions "
+                "WHERE owner_principal_id = :o AND idempotency_key = :k ORDER BY session_id"
+            ),
+            {"o": ids["owner"], "k": f"begin-{ids['session']}"},
+        ).all()
+    assert [tuple(row) for row in rows] == [
+        (ids["session"], ending or "consumed"),
+        (ids["session2"], "open"),
+    ]
+    # The new live session binds the key again: a third live one is refused.
+    third = {**_session(ids).values, "session_id": f"{ids['session']}c"}
+    with pytest.raises(DBAPIError) as refused:
+        _execute(plane_engine, [Op("session", _T, third)])
+    _assert_refused(refused.value, _unique(_T, "a_report_transfer_begin_is_keyed"))
+
+
 #: The deferred cache FKs prove only that the root cache names *a* version or
 #: event of the report; the newest-cache triggers refuse, at commit, a version
 #: or event written without moving the root cache to it.
@@ -4386,9 +4436,13 @@ LOAD_BEARING: Final = (
     ),
     (
         "transfer_begin_key_unique",
-        "ALTER TABLE knowledge.report_transfer_sessions DROP CONSTRAINT "
-        "a_report_transfer_begin_is_keyed",
+        "DROP INDEX knowledge.a_report_transfer_begin_is_keyed",
         "transfer_begin_keyed",
+    ),
+    (
+        "transfer_begin_key_unique_finalized",
+        "DROP INDEX knowledge.a_report_transfer_begin_is_keyed",
+        "transfer_begin_keyed_finalized",
     ),
     (
         "chunk_fixed_offset_check",

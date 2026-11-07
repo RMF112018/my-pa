@@ -286,7 +286,14 @@ from my_pa.domain.reports.revision import (
     UpdateRequest,
     UpdateResult,
 )
-from my_pa.domain.reports.vocabulary import AssociationTargetKind
+from my_pa.domain.reports.transfer import TransferDeclaration
+from my_pa.domain.reports.transfer import chunk_count as transfer_chunk_count
+from my_pa.domain.reports.vocabulary import (
+    AssociationTargetKind,
+    ContentEncoding,
+    ContentFormat,
+    TransferState,
+)
 from my_pa.domain.schedule import (
     ParsedScheduleRow,
     ScheduleActivityObservation,
@@ -564,6 +571,11 @@ __all__ = [
     "ReportNotFoundError",
     "ReportStaleLifecycleRevisionError",
     "ReportStaleVersionError",
+    "ReportTransferConflictError",
+    "ReportTransferDigestError",
+    "ReportTransferNotFoundError",
+    "ReportTransferQuotaError",
+    "ReportTransferRepository",
     "ReportWithdrawnError",
     "RepositoryFailureError",
     "ReviewDecisionRequest",
@@ -584,6 +596,8 @@ __all__ = [
     "TimelineNativeEvent",
     "TraceRepository",
     "TransactionConflictError",
+    "TransferChunk",
+    "TransferSession",
     "UnitOfWork",
     "UnknownScopeError",
     "WorkerHealthRepository",
@@ -6340,6 +6354,15 @@ class UnitOfWork(ABC):
         raise NotImplementedError
 
     @property
+    def report_transfers(self) -> ReportTransferRepository:
+        """The transfer sessions and their chunk ledger, inside this transaction (WP06 B3).
+
+        Not abstract, for the reason `general_reports` is not: the SQL unit of
+        work serves it, and every other implementation refuses.
+        """
+        raise NotImplementedError
+
+    @property
     @abstractmethod
     def tasks(self) -> TaskManagementRepository:
         """The task-management rows, inside this transaction (WP-TM-02/03).
@@ -8448,6 +8471,275 @@ class ReportTransferStaging(ABC):
         chunk files (and their temporaries) of that session; anything else is
         left in place and reported by `unreadable_entries`.
         """
+
+
+# --- Reports Modernization WP06 (B3/B5): the transfer session repository -----
+
+
+class ReportTransferNotFoundError(UnknownScopeError):
+    """The named transfer session is not usable by this caller (WP06 T5).
+
+    ONE answer for every reason: absent, another Principal's, another
+    client's, expired (`expires_at <= now`, whatever its state says), aborted,
+    consumed, a malformed identifier, or a wrong/consumed content token. It
+    carries no attribute that says which, and its message names nothing. A
+    subclass of `UnknownScopeError`, so it answers the bare `not_found`.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("the transfer session was not found")
+
+
+class ReportTransferConflictError(PortError):
+    """An operation on the caller's OWN live session conflicts with its state (WP06 T5/T8/T9).
+
+    `detail` is one of `transfer_chunk_conflict`, `transfer_sequence`,
+    `transfer_state` or `transfer_incomplete`: a stable code, never a value.
+    Nothing was written.
+    """
+
+    DETAILS: ClassVar[frozenset[str]] = frozenset(
+        {"transfer_chunk_conflict", "transfer_sequence", "transfer_state", "transfer_incomplete"}
+    )
+
+    def __init__(self, detail: str) -> None:
+        if detail not in self.DETAILS:  # pragma: no cover - a programming error
+            raise ValueError("unknown transfer conflict detail")
+        super().__init__(f"transfer conflict: {detail}")
+        self.detail: Final = detail
+
+
+class ReportTransferQuotaError(PortError):
+    """A begin would exceed the owner's live-session quotas (WP06 T6). Nothing was written.
+
+    Answered as `rate_limited` (`transfer_quota`). Names no count or session.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("the transfer session quota is exhausted")
+
+
+class ReportTransferDigestError(PortError):
+    """The staged bytes are not the declaration: whole size or SHA-256 differs (WP06 T9).
+
+    Answered as invalid_request `transfer` `digest_mismatch`. Nothing was written.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("the staged transfer bytes are not the declared ones")
+
+
+@dataclass(frozen=True, slots=True)
+class TransferSession:
+    """One transfer session row, as the repository read it (WP06 B3).
+
+    Every declaration fact, the state and its timestamps. The content token's
+    stored digest is kept for the consumption comparison but never in `repr`;
+    the raw token is never stored anywhere.
+    """
+
+    session_id: str
+    owner_principal_id: str
+    client_ref: str
+    state: TransferState
+    format: ContentFormat
+    encoding: ContentEncoding
+    declared_byte_count: int
+    declared_sha256: str
+    chunk_byte_limit: int
+    received_byte_count: int
+    idempotency_key: str
+    intent_digest: str
+    created_at: datetime
+    expires_at: datetime
+    finalized_at: datetime | None
+    consumed_content_id: str | None
+    consumed_at: datetime | None
+    content_token_digest: str | None = field(default=None, repr=False)
+
+    @property
+    def ttl_seconds(self) -> int:
+        """The declared lifetime (`expires_at - created_at`, whole seconds)."""
+        return int((self.expires_at - self.created_at).total_seconds())
+
+    @property
+    def declaration(self) -> TransferDeclaration:
+        """What begin declared, rebuilt (validated) from the row."""
+        return TransferDeclaration(
+            format=self.format,
+            encoding=self.encoding,
+            byte_count=self.declared_byte_count,
+            sha256=self.declared_sha256,
+            ttl_seconds=self.ttl_seconds,
+        )
+
+    @property
+    def chunk_count(self) -> int:
+        """How many chunks complete the declaration (T2)."""
+        return transfer_chunk_count(self.declared_byte_count)
+
+    @property
+    def complete(self) -> bool:
+        """Whether every declared byte has been received."""
+        return self.received_byte_count == self.declared_byte_count
+
+    def usable_at(self, now: datetime) -> bool:
+        """T5: open or finalized and not yet expired at `now`."""
+        return self.state in (TransferState.OPEN, TransferState.FINALIZED) and (
+            self.expires_at > now
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TransferChunk:
+    """One ledger row of a transfer session: a received chunk's facts, never its bytes."""
+
+    session_id: str
+    sequence: int
+    byte_offset: int
+    byte_count: int
+    chunk_sha256: str
+    received_at: datetime
+
+
+class ReportTransferRepository(ABC):
+    """The transfer sessions and their chunk ledger, inside one transaction (WP06 B3).
+
+    **Every method but the three GC queries is scoped by BOTH the
+    authenticated `principal_id` and the caller's `client_ref`** (T4): a
+    session of another Principal or another client answers exactly what an
+    absent one answers, `ReportTransferNotFoundError` (T5). `now` is always
+    passed in, never read from the database clock, so expiry is one decision
+    the caller made. No method deletes a row; nothing here writes
+    `knowledge.intelligence_*`.
+
+    Order of a request (the caller's): `begin`; or `lock_usable` (the row
+    `FOR UPDATE`) and then `append_chunk` / `staged_bytes` + `finalize`; or
+    `claim_for_consumption` (lock + token) and, once the content row exists in
+    the same transaction, `mark_consumed`; or `abort`.
+    """
+
+    @abstractmethod
+    def begin(
+        self,
+        declaration: TransferDeclaration,
+        *,
+        principal_id: str,
+        client_ref: str,
+        idempotency_key: str,
+        now: datetime,
+    ) -> tuple[TransferSession, bool]:
+        """Open a session, or replay the one this key opened: `(session, replayed)`.
+
+        Serialized per owner (`pg_advisory_xact_lock`). The key (owner,
+        client_ref, idempotency_key) bound to the same `intent_digest` replays
+        the original session (`ReportTransferNotFoundError` if it is no longer
+        usable); bound to another digest is `ReportIdempotencyConflictError`.
+        A new session must fit the T6 quotas, else `ReportTransferQuotaError`.
+        """
+
+    @abstractmethod
+    def lock_usable(
+        self, session_id: str, *, principal_id: str, client_ref: str, now: datetime
+    ) -> TransferSession:
+        """Lock the caller's open or finalized, unexpired session `FOR UPDATE`.
+
+        Every other case (absent, foreign owner, other client, expired,
+        aborted, consumed, malformed id) is `ReportTransferNotFoundError`.
+        """
+
+    @abstractmethod
+    def chunks(self, session_id: str, *, principal_id: str) -> tuple[TransferChunk, ...]:
+        """The session's ledger rows, ordered by sequence (Principal-scoped)."""
+
+    @abstractmethod
+    def append_chunk(
+        self,
+        session: TransferSession,
+        *,
+        sequence: int,
+        chunk_sha256: str,
+        data: bytes,
+        staging: ReportTransferStaging,
+        now: datetime,
+    ) -> tuple[TransferChunk, bool]:
+        """Admit chunk `sequence` of a session the caller locked: `(chunk, replayed)`.
+
+        `transfer_state` on a finalized session; the T2 size rules
+        (`ReportValidationError("chunk", "too_large" | "size")`); the digest
+        (`("chunk_sha256", "digest_mismatch")`); a ledger row for the sequence
+        replays when identical, else `transfer_chunk_conflict`; a sequence
+        other than the ledger length is `transfer_sequence`. Then the chunk is
+        staged BEFORE the ledger INSERT, and the session's received count moves.
+        """
+
+    @abstractmethod
+    def staged_bytes(self, session: TransferSession, *, staging: ReportTransferStaging) -> bytes:
+        """Every ledger chunk from staging (each verified), concatenated.
+
+        The whole size and SHA-256 must be the declaration's, else
+        `ReportTransferDigestError`; a staging failure is
+        `ReportTransferStagingError`.
+        """
+
+    @abstractmethod
+    def finalize(
+        self, session: TransferSession, *, token_digest: str, now: datetime
+    ) -> TransferSession:
+        """Move the caller's locked open, complete session to `finalized` with the token digest.
+
+        `transfer_state` if already finalized; `transfer_incomplete` if bytes
+        are missing. The caller validated the content first.
+        """
+
+    @abstractmethod
+    def claim_for_consumption(
+        self,
+        session_id: str,
+        content_token: str,
+        *,
+        principal_id: str,
+        client_ref: str,
+        now: datetime,
+    ) -> TransferSession:
+        """Lock the caller's finalized session whose token digest matches `content_token`.
+
+        Every failure (`lock_usable`'s, not finalized, a malformed or wrong
+        token) is the one `ReportTransferNotFoundError`.
+        """
+
+    @abstractmethod
+    def mark_consumed(
+        self, session: TransferSession, *, content_id: str, now: datetime
+    ) -> TransferSession:
+        """Move a claimed session to `consumed`, naming the content row (already written)."""
+
+    @abstractmethod
+    def abort(
+        self, session_id: str, *, principal_id: str, client_ref: str, now: datetime
+    ) -> tuple[TransferSession, bool]:
+        """Abort the caller's open or finalized session; its own aborted one replays.
+
+        Expired, consumed, foreign or absent is `ReportTransferNotFoundError`.
+        """
+
+    @abstractmethod
+    def expire_due(self, *, now: datetime, limit: int) -> tuple[str, ...]:
+        """GC (T19): move up to `limit` open/finalized sessions due at `now` to `expired`.
+
+        **Not Principal-scoped, on purpose**, as `known_managed_content_ids`:
+        an operator sweep over every owner (`FOR UPDATE SKIP LOCKED`, so a
+        session a request holds is left for the next run), ordered by
+        `expires_at`. Returns the opaque ids moved; operator use only.
+        """
+
+    @abstractmethod
+    def terminal_session_ids(self, session_ids: Iterable[str]) -> frozenset[str]:
+        """GC: which of `session_ids` are consumed, aborted or expired. Not Principal-scoped."""
+
+    @abstractmethod
+    def known_session_ids(self, session_ids: Iterable[str]) -> frozenset[str]:
+        """GC: which of `session_ids` have a row at all (orphan detection). Not Principal-scoped."""
 
 
 # --- WP-TM-02: canonical Task mutation, receipts, idempotency, concurrency --

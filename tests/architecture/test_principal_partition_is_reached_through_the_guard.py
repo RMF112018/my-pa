@@ -179,6 +179,12 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # `matching_partition_criterion`. No raw SQL and no hand-written
         # partition comparison.
         "infrastructure/persistence/reports.py",
+        # Reports Modernization WP06's transfer sessions and chunk ledger. Every
+        # request SELECT, lock and UPDATE composes `_mine` over
+        # `partition_criterion` (and the caller's `client_ref`), both INSERTs
+        # `_bound` over `principal_bound_values`. The three operator GC queries
+        # are unpartitioned on purpose (see `PER_MODULE_ONLY`).
+        "infrastructure/persistence/report_transfers.py",
         # Record lineage S2's handoff ledger. Every SELECT composes `_mine`
         # over `partition_criterion`, the one INSERT `_bound` over
         # `principal_bound_values`, and the anchor join
@@ -490,6 +496,16 @@ PER_MODULE_ONLY: Final = {
         "content store's orphan scan (the shape of managed documents' "
         "`known_version_identifiers`); its row direction, `managed_content`, is "
         "`_mine`-scoped. It has not joined a dedicated statement-level scanner."
+    ),
+    "infrastructure/persistence/report_transfers.py": (
+        "Reports Modernization WP06: every request statement composes `_mine` over "
+        "`partition_criterion` and the caller's `client_ref`, every INSERT `_bound` "
+        "over `principal_bound_values`. Three deliberately unpartitioned operator GC "
+        "queries, `expire_due` (`FOR UPDATE SKIP LOCKED` over every owner's due "
+        "sessions), `terminal_session_ids` and `known_session_ids`: opaque `grxfr_` "
+        "identifiers only, for the transfer GC's expiry, staging reclamation and "
+        "orphan detection (the shape of `known_managed_content_ids`). It has not "
+        "joined a dedicated statement-level scanner."
     ),
     "infrastructure/persistence/record_lineage.py": (
         "record lineage S1: the read-only head rebuild scopes `record_links` through "

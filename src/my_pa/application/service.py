@@ -108,6 +108,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import logging
 import sys
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -128,6 +129,7 @@ from my_pa.application.commands import (
     DEFAULT_ISSUE_PAGE_SIZE,
     MAX_ISSUE_PAGE_SIZE,
     MAX_KNOWLEDGE_PAGE_SIZE,
+    AbortReportTransfer,
     AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
@@ -135,6 +137,7 @@ from my_pa.application.commands import (
     AddEntityName,
     AddIssueMembership,
     AddIssueProjectLink,
+    AppendReportTransfer,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
@@ -144,6 +147,7 @@ from my_pa.application.commands import (
     ArchiveRelationshipMemory,
     AssertRecordAssociation,
     BeginIntelligenceCycle,
+    BeginReportTransfer,
     BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
@@ -201,6 +205,7 @@ from my_pa.application.commands import (
     EndRecordAssociation,
     EnrollSource,
     FetchSource,
+    FinalizeReportTransfer,
     GetCanvasWorkspace,
     GetCapabilities,
     GetCommitmentHistory,
@@ -308,6 +313,7 @@ from my_pa.application.commands import (
     ReadRecordLineage,
     ReadRelatedRecords,
     ReadReportManifest,
+    ReadReportTransferChunk,
     ReadScheduleActivityHistory,
     ReadSchedulePublication,
     ReadTask,
@@ -394,6 +400,7 @@ from my_pa.application.commands import (
     report_refusal,
     report_revision_refusal,
     retention_set_request,
+    transfer_declaration,
     update_request,
 )
 from my_pa.application.commitments import CommitmentManagementService, CommitmentMutationReceipt
@@ -483,6 +490,7 @@ from my_pa.application.errors import (
     InvalidRequestError,
     NotFoundError,
     QuarantinedError,
+    RateLimitedError,
     SafeDetail,
     UnavailableError,
     UnsupportedError,
@@ -715,13 +723,20 @@ from my_pa.contracts.ports import (
     ReportStaleLifecycleRevisionError,
     ReportStalePolicyRevisionError,
     ReportStaleVersionError,
+    ReportTransferConflictError,
+    ReportTransferDigestError,
+    ReportTransferNotFoundError,
+    ReportTransferQuotaError,
     ReportTransferStaging,
+    ReportTransferStagingError,
     ReportTrashPreflightError,
     ReportWithdrawnError,
     ReviewDecisionRequest,
     ScheduleUnitOfWork,
     SearchOutcome,
     TransactionConflictError,
+    TransferChunk,
+    TransferSession,
     UnitOfWork,
     UnknownScopeError,
     WorkCursorError,
@@ -986,7 +1001,9 @@ from my_pa.domain.reports.catalog import (
 )
 from my_pa.domain.reports.content import (
     INLINE_CONTENT_MAX_BYTES,
+    ReportContent,
     content_from_decoded,
+    content_from_staged,
     is_gzip_content,
 )
 from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
@@ -1011,6 +1028,12 @@ from my_pa.domain.reports.records import (
     StoredReportVersion,
 )
 from my_pa.domain.reports.revision import LifecycleResult, UpdateResult
+from my_pa.domain.reports.transfer import (
+    TRANSFER_CHUNK_BYTES,
+    client_ref_of,
+    mint_content_token,
+    parse_transfer_reference,
+)
 from my_pa.domain.reports.vocabulary import (
     MAX_DECODED_CONTENT_BYTES,
     READ_INLINE_CONTENT_MAX_BYTES,
@@ -1019,6 +1042,7 @@ from my_pa.domain.reports.vocabulary import (
     LifecycleState,
     ReceiptOperation,
     StorageKind,
+    TransferState,
 )
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
@@ -1094,6 +1118,10 @@ class _Result:
     # never enters the response envelope. Absence means this invocation did not
     # create a new authoritative mutation (including replay and no-op success).
     reenrichment_cause_id: str | None = None
+    # WP06 T13/T17: a transfer session whose staged chunks `_run` discards,
+    # best effort, only AFTER the unit of work committed (an aborted session;
+    # W3c reuses it for a consumed one). Never enters the response envelope.
+    discard_transfer_session_id: str | None = None
 
 
 class _CommitRejectedConflictError(Exception):
@@ -4680,16 +4708,151 @@ REPORT_CONTENT_DECODE_PERMITS: Final = 1
 _REPORT_CONTENT_DECODE_PERMIT: Final = threading.BoundedSemaphore(REPORT_CONTENT_DECODE_PERMITS)
 
 
+def _names_a_transfer(content: object) -> bool:
+    """Whether a publish/update `content` is a transfer reference (WP06 T12); never raises.
+
+    A malformed reference (which command construction already refuses) still
+    counts: when in doubt the permit is taken, never skipped.
+    """
+    try:
+        return parse_transfer_reference(content) is not None
+    except ReportValidationError:
+        return True
+
+
 def _report_content_decode_permit(command: object) -> AbstractContextManager[object]:
-    """The decode permit for a `gzip+base64` publish or update, else nothing to hold."""
-    if isinstance(command, PublishGeneralReport):
-        gzip = is_gzip_content(command.content)
+    """The decode permit, or nothing to hold.
+
+    WP05 corrective B-4: a `gzip+base64` publish or update. WP06 T12: also a
+    `reports.transfer.finalize` (an identity transfer's staged bytes can be
+    16 MiB) and a publish or update whose content is a transfer reference
+    (it reads and decodes the staged bytes again). Inline identity content,
+    and the transfer begin, append, abort and read_chunk (each bounded to one
+    256 KiB chunk), never take it.
+    """
+    if isinstance(command, FinalizeReportTransfer):
+        decodes = True
+    elif isinstance(command, PublishGeneralReport):
+        decodes = is_gzip_content(command.content) or _names_a_transfer(command.content)
     elif isinstance(command, UpdateGeneralReport):
         patch: object = command.patch
-        gzip = isinstance(patch, dict) and is_gzip_content(patch.get("content"))
+        content = patch.get("content") if isinstance(patch, dict) else None
+        decodes = is_gzip_content(content) or _names_a_transfer(content)
     else:
-        gzip = False
-    return _REPORT_CONTENT_DECODE_PERMIT if gzip else nullcontext()
+        decodes = False
+    return _REPORT_CONTENT_DECODE_PERMIT if decodes else nullcontext()
+
+
+# ---- Reports Modernization WP06: the bounded chunked transfer -------------
+
+#: The post-commit staging discard is best effort; a failure is logged with no
+#: identifier, path or value and left to the transfer GC (T13/T19).
+_TRANSFER_LOGGER: Final = logging.getLogger("my_pa.application.report_transfer")
+
+#: The domain rules a transfer refusal also answers `max_bytes` for, exactly as
+#: `report_refusal` does for `content`.
+_TRANSFER_SIZE_RULES: Final = frozenset({"too_large", "expansion_ratio", "too_many_values"})
+
+#: Which public token a transfer domain refusal names, by its field.
+_TRANSFER_REFUSAL_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "transfer": SafeDetail.TRANSFER,
+        "chunk": SafeDetail.CHUNK,
+        "chunk_sha256": SafeDetail.CHUNK_SHA256,
+        "sequence": SafeDetail.SEQUENCE,
+    }
+)
+
+
+def _transfer_refusal(error: ReportValidationError) -> InvalidRequestError:
+    """The `invalid_request` a transfer domain refusal is; never the value."""
+    detail = _TRANSFER_REFUSAL_DETAILS.get(error.field.split(".", 1)[0])
+    if detail is None:
+        return InvalidRequestError()
+    if detail in (SafeDetail.TRANSFER, SafeDetail.CHUNK) and error.code in _TRANSFER_SIZE_RULES:
+        return InvalidRequestError(detail, SafeDetail.MAX_BYTES)
+    return InvalidRequestError(detail)
+
+
+def _transfer_conflict(error: ReportTransferConflictError) -> ConflictError:
+    """The `conflict` on the caller's own session: the error's stable code is the detail."""
+    return ConflictError(SafeDetail(error.detail))
+
+
+def _transfer_chunk_bytes(chunk: str) -> bytes:
+    """T8: the raw bytes of a chunk's canonical standard Base64, else `invalid_request` `chunk`.
+
+    Strict (no whitespace, no other alphabet, correct padding) and canonical
+    (non-zero pad bits refused), the WP05 `_base64_bytes` discipline. The
+    command already bounded the length (at most 349,528 characters).
+    """
+    try:
+        ascii_text = chunk.encode("ascii")
+        raw = binascii.a2b_base64(ascii_text, strict_mode=True)
+    except (binascii.Error, UnicodeEncodeError, AttributeError):
+        raise InvalidRequestError(SafeDetail.CHUNK) from None
+    if not raw or binascii.b2a_base64(raw, newline=False) != ascii_text:
+        raise InvalidRequestError(SafeDetail.CHUNK)
+    return raw
+
+
+def _transfer_begin_payload(session: TransferSession, *, replayed: bool) -> dict[str, Any]:
+    """T18: what `reports.transfer.begin` answers, the first time and on every replay.
+
+    `state` is the begin's own answer, `open`, on a replay too: a replay
+    returns the original answer, never the session's later state.
+    """
+    return {
+        "session_id": session.session_id,
+        "state": TransferState.OPEN.value,
+        "format": session.format.value,
+        "encoding": session.encoding.value,
+        "declared_byte_count": session.declared_byte_count,
+        "declared_sha256": session.declared_sha256,
+        "chunk_byte_limit": session.chunk_byte_limit,
+        "chunk_count": session.chunk_count,
+        "expires_at": format_rfc3339(session.expires_at),
+        "replayed": replayed,
+    }
+
+
+def _transfer_append_payload(
+    session: TransferSession, chunk: TransferChunk, *, replayed: bool
+) -> dict[str, Any]:
+    """T8: what `reports.transfer.append` answers (`session` is re-read after the append)."""
+    complete = session.received_byte_count == session.declared_byte_count
+    return {
+        "session_id": session.session_id,
+        "sequence": chunk.sequence,
+        "byte_offset": chunk.byte_offset,
+        "byte_count": chunk.byte_count,
+        "chunk_sha256": chunk.chunk_sha256,
+        "received_byte_count": session.received_byte_count,
+        "declared_byte_count": session.declared_byte_count,
+        "complete": complete,
+        # Every chunk but the last is full, so the received count names the next one.
+        "next_sequence": None if complete else session.received_byte_count // TRANSFER_CHUNK_BYTES,
+        "expires_at": format_rfc3339(session.expires_at),
+        "replayed": replayed,
+    }
+
+
+def _transfer_finalize_payload(
+    session: TransferSession, content: ReportContent, *, content_token: str
+) -> dict[str, Any]:
+    """T9: what `reports.transfer.finalize` answers, once; the token is never stored raw."""
+    return {
+        "session_id": session.session_id,
+        "state": TransferState.FINALIZED.value,
+        "content_token": content_token,
+        "expires_at": format_rfc3339(session.expires_at),
+        "byte_count": session.declared_byte_count,
+        "sha256": session.declared_sha256,
+        "format": session.format.value,
+        "encoding": session.encoding.value,
+        "decoded_byte_count": content.decoded_byte_count,
+        "decoded_sha256": content.decoded_sha256,
+    }
 
 
 class ApplicationService:
@@ -5244,6 +5407,7 @@ class ApplicationService:
         """
         mismatch = metadata.capability is not command.capability
         committed_conflict: ConflictError | None = None
+        served: _Result | None = None
         # WP05 corrective B-4: a gzip report content is decoded under the
         # process-wide permit, taken before the unit of work opens.
         with _report_content_decode_permit(command), self._unit_of_work() as unit_of_work:
@@ -5302,7 +5466,9 @@ class ApplicationService:
                                 policy_version=POLICY_VERSION,
                                 at=authorization.at,
                             )
-                        return result
+                        # Leaving the block normally commits; the result is
+                        # returned only after that (WP06: the post-commit hook).
+                        served = result
                     except _CommitRejectedConflictError as conflict:
                         # The handler raises this marker only after verifying a
                         # REJECTED receipt whose before/after/current versions
@@ -5314,6 +5480,10 @@ class ApplicationService:
                         # raising rolls the whole transaction back.
                         if unit_of_work.record_events.pending_count:
                             raise InternalError() from None
+        if served is not None:
+            if served.discard_transfer_session_id is not None:
+                self._discard_staged_transfer(served.discard_transfer_session_id)
+            return served
         # Reached only after the transaction committed, which is what preserves
         # the audit event recording the refusal.
         if mismatch:
@@ -16996,22 +17166,332 @@ class ApplicationService:
             )
         raise refusal
 
-    def _reports_transfer_pending(
+    # ---- Reports Modernization WP06: the bounded chunked transfer -----------
+    # Every session operation is scoped by the authenticated Principal AND the
+    # caller's client (T4): a session that is unknown, another Principal's,
+    # another client's, expired, aborted or consumed is the ONE bare
+    # `not_found` (no detail), on every operation (T5). Only the caller's own
+    # live session answers a `conflict`. `now` is the request clock.
+
+    def _transfer_staging(self) -> ReportTransferStaging:
+        """The staging, or `unsupported` unless BOTH it and the content store are composed (T14).
+
+        The four uploads are withheld from `available_capabilities` then, but a
+        transport that dispatches straight through `_HANDLERS` must meet the
+        same refusal here, before anything is read or written.
+        """
+        staging = self._report_transfer_staging
+        if staging is None or self._report_content_store is None:
+            raise UnsupportedError()
+        return staging
+
+    @staticmethod
+    def _transfer_client_ref(authorization: Authorization) -> str:
+        """T4: the caller's client binding, from the authorization only."""
+        return client_ref_of(_report_creator(authorization))
+
+    def _discard_staged_transfer(self, session_id: str) -> None:
+        """T13: best-effort discard of a terminal session's staged chunks, after the commit.
+
+        Never raises: a failure is logged without the identifier and the
+        staging is left to the transfer GC, which discards or reports it.
+        """
+        staging = self._report_transfer_staging
+        if staging is None:
+            return
+        try:
+            staging.discard(session_id)
+        except Exception:
+            _TRANSFER_LOGGER.warning(
+                "a terminal transfer session's staging was not discarded; left to the transfer GC"
+            )
+
+    def _reports_transfer_begin(
         self,
         unit_of_work: UnitOfWork,
         authorization: Authorization,
-        command: object,
+        command: BeginReportTransfer,
     ) -> _Result:
-        """WP06 W3a interim placeholder for the five `reports.transfer.*` names.
+        """`reports.transfer.begin` (T3, T6, T7, T18): open a session, or replay its key.
 
-        Registered only so `_HANDLERS` stays closed over the enum while the
-        vocabulary, commands and schemas land; it refuses `unsupported`. No
-        composition serves the four uploads yet (nothing composes the transfer
-        staging until W3b, so T14 withholds them); `read_chunk` is served, as T14
-        says, and refuses until W3b replaces this placeholder.
+        The same key bound to the same declaration replays the original answer
+        (`replayed: true`, no new row), or is `not_found` if that session is no
+        longer usable; bound to another declaration it is `conflict`
+        (`idempotency_key`). A new session past the T6 quotas is
+        `rate_limited` (`transfer_quota`).
         """
-        del unit_of_work, authorization, command
-        raise UnsupportedError()
+        self._transfer_staging()
+        declaration = transfer_declaration(command)
+        client_ref = self._transfer_client_ref(authorization)
+        refusal: ApplicationError
+        try:
+            session, replayed = unit_of_work.report_transfers.begin(
+                declaration,
+                principal_id=authorization.principal.principal_id,
+                client_ref=client_ref,
+                idempotency_key=command.idempotency_key,
+                now=authorization.at,
+            )
+        except ReportIdempotencyConflictError:
+            refusal = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        except ReportTransferNotFoundError:
+            refusal = NotFoundError()
+        except ReportTransferQuotaError:
+            refusal = RateLimitedError(SafeDetail.TRANSFER_QUOTA)
+        except ReportValidationError:
+            # Every caller field was validated by the command: a server fault.
+            refusal = InternalError()
+        else:
+            return _Result(
+                payload=_transfer_begin_payload(session, replayed=replayed),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        raise refusal
+
+    def _reports_transfer_append(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: AppendReportTransfer,
+    ) -> _Result:
+        """`reports.transfer.append` (T8): stage chunk `sequence` of the caller's open session.
+
+        Lock (T5) -> strict Base64 decode (`chunk`) -> the repository's order
+        (finalized `transfer_state`, size `chunk` [`max_bytes` past 262,144
+        bytes], digest `chunk_sha256`, ledger replay or
+        `transfer_chunk_conflict`, `transfer_sequence`, stage, INSERT, count)
+        -> the session re-read in the same transaction for its received count.
+        A refusal writes nothing.
+        """
+        staging = self._transfer_staging()
+        principal_id = authorization.principal.principal_id
+        client_ref = self._transfer_client_ref(authorization)
+        transfers = unit_of_work.report_transfers
+        refusal: ApplicationError
+        try:
+            session = transfers.lock_usable(
+                command.session_id,
+                principal_id=principal_id,
+                client_ref=client_ref,
+                now=authorization.at,
+            )
+            data = _transfer_chunk_bytes(command.chunk)
+            chunk, replayed = transfers.append_chunk(
+                session,
+                sequence=command.sequence,
+                chunk_sha256=command.chunk_sha256,
+                data=data,
+                staging=staging,
+                now=authorization.at,
+            )
+            after = transfers.lock_usable(
+                command.session_id,
+                principal_id=principal_id,
+                client_ref=client_ref,
+                now=authorization.at,
+            )
+        except ReportTransferNotFoundError:
+            refusal = NotFoundError()
+        except ReportTransferConflictError as error:
+            refusal = _transfer_conflict(error)
+        except ReportValidationError as error:
+            refusal = _transfer_refusal(error)
+        except ReportTransferStagingError:
+            refusal = InternalError()
+        else:
+            return _Result(
+                payload=_transfer_append_payload(after, chunk, replayed=replayed),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        raise refusal
+
+    def _reports_transfer_finalize(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: FinalizeReportTransfer,
+    ) -> _Result:
+        """`reports.transfer.finalize` (T9, T11): verify a complete session, mint its token.
+
+        Under the decode permit `_run` holds (T12). Lock (T5) -> finalized
+        `transfer_state` -> incomplete `transfer_incomplete` -> every staged
+        chunk read and verified, the whole size and digest the declaration's
+        (else `transfer`) -> the one content pipeline (a refusal is `transfer`,
+        `max_bytes` for a size rule) -> a fresh one-use token whose digest
+        alone is stored. A refusal writes nothing; a staging failure is
+        `internal_error`. The token is in this answer only, never again.
+        """
+        staging = self._transfer_staging()
+        transfers = unit_of_work.report_transfers
+        refusal: ApplicationError
+        try:
+            session = transfers.lock_usable(
+                command.session_id,
+                principal_id=authorization.principal.principal_id,
+                client_ref=self._transfer_client_ref(authorization),
+                now=authorization.at,
+            )
+            if session.state is TransferState.FINALIZED:
+                raise ReportTransferConflictError("transfer_state")
+            if not session.complete:
+                raise ReportTransferConflictError("transfer_incomplete")
+            staged = transfers.staged_bytes(session, staging=staging)
+            content = content_from_staged(
+                session.format,
+                session.encoding,
+                staged,
+                max_decoded=self._report_content_decode_limit,
+            )
+            del staged
+            content_token, token_digest = mint_content_token()
+            finalized = transfers.finalize(session, token_digest=token_digest, now=authorization.at)
+        except ReportTransferNotFoundError:
+            refusal = NotFoundError()
+        except ReportTransferConflictError as error:
+            refusal = _transfer_conflict(error)
+        except ReportTransferDigestError:
+            refusal = InvalidRequestError(SafeDetail.TRANSFER)
+        except ReportValidationError as error:
+            refusal = _transfer_refusal(error)
+        except ReportTransferStagingError:
+            refusal = InternalError()
+        else:
+            return _Result(
+                payload=_transfer_finalize_payload(finalized, content, content_token=content_token),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        raise refusal
+
+    def _reports_transfer_abort(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: AbortReportTransfer,
+    ) -> _Result:
+        """`reports.transfer.abort` (T17): end the caller's open or finalized session.
+
+        The caller's own aborted session replays (`replayed: true`); expired,
+        consumed, foreign or unknown is `not_found`. After the commit its
+        staged chunks are discarded, best effort (`_run`).
+        """
+        self._transfer_staging()
+        try:
+            session, replayed = unit_of_work.report_transfers.abort(
+                command.session_id,
+                principal_id=authorization.principal.principal_id,
+                client_ref=self._transfer_client_ref(authorization),
+                now=authorization.at,
+            )
+        except ReportTransferNotFoundError:
+            raise NotFoundError() from None
+        return _Result(
+            payload={
+                "session_id": session.session_id,
+                "state": TransferState.ABORTED.value,
+                "replayed": replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at),
+            discard_transfer_session_id=session.session_id,
+        )
+
+    def _reports_transfer_read_chunk(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadReportTransferChunk,
+    ) -> _Result:
+        """`reports.transfer.read_chunk` (T15): a verified byte range of one standalone version.
+
+        Visibility exactly as `reports.read` (`_reports_read_standalone`):
+        foreign, nonexistent and (without `include_withdrawn`) withdrawn are the
+        one `not_found` on `artifact_id`. `decoded` is the bytes
+        `decoded_sha256` names; `original` the gzip bytes of a `gzip+base64`
+        version, else the decoded bytes. Inline bytes are re-digested whole on
+        every call; a `managed_blob` part is streamed whole through its checks
+        by the store, keeping only the range. A part that does not verify (or a
+        blob without a store) is `internal_error`, no bytes; an `offset` at or
+        past the part's end is `invalid_request` (`offset`).
+        """
+        refusal: ApplicationError
+        try:
+            stored = unit_of_work.general_reports.read_version(
+                command.report_id,
+                principal_id=authorization.principal.principal_id,
+                version_id=command.version_id,
+                version_number=command.version_number,
+            )
+        except ReportIntegrityError:
+            refusal = InternalError()
+        else:
+            if stored is not None and (
+                command.include_withdrawn or stored.root.lifecycle_state is LifecycleState.ACTIVE
+            ):
+                return _Result(
+                    payload=self._transfer_read_range(stored, command),
+                    disclosure=unenrolled_disclosure(authorization.at),
+                )
+            refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
+        raise refusal
+
+    def _transfer_read_range(
+        self, stored: StoredReportVersion, command: ReadReportTransferChunk
+    ) -> dict[str, Any]:
+        facts = stored.content
+        original = command.part == ReportContentPart.ORIGINAL.value and (
+            facts.encoding is ContentEncoding.GZIP_BASE64
+        )
+        if original:
+            part, total, digest = (
+                ReportContentPart.ORIGINAL,
+                facts.original_byte_count,
+                facts.original_sha256,
+            )
+        else:
+            # Identity: the original IS the decoded bytes (one stored part).
+            part, total, digest = (
+                ReportContentPart.DECODED,
+                facts.decoded_byte_count,
+                facts.decoded_sha256,
+            )
+        if command.offset >= total:
+            raise InvalidRequestError(SafeDetail.OFFSET)
+        if stored.storage_kind is StorageKind.MANAGED_BLOB:
+            store = self._report_content_store
+            if store is None:
+                raise InternalError()
+            try:
+                chunk = store.read_range(
+                    stored.content_id,
+                    part,
+                    offset=command.offset,
+                    length=command.length,
+                    expected_sha256=digest,
+                    expected_byte_count=total,
+                )
+            except (ReportContentStoreError, ReportIntegrityError):
+                raise InternalError() from None
+        else:
+            whole = facts.original if original else facts.decoded
+            if whole is None or len(whole) != total or hashlib.sha256(whole).hexdigest() != digest:
+                raise InternalError()
+            chunk = whole[command.offset : command.offset + command.length]
+        end = command.offset + len(chunk)
+        eof = end == total
+        return {
+            "plane": "standalone",
+            "report_id": stored.root.report_id,
+            "version_id": stored.version.version_id,
+            "version_number": stored.version.version_number,
+            "part": command.part,
+            "offset": command.offset,
+            "byte_count": len(chunk),
+            "chunk": base64.b64encode(chunk).decode("ascii"),
+            "chunk_sha256": hashlib.sha256(chunk).hexdigest(),
+            "total_byte_count": total,
+            "part_sha256": digest,
+            "eof": eof,
+            "next_offset": None if eof else end,
+        }
 
     def _reports_retention_get(
         self,
@@ -18426,11 +18906,11 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.REPORTS_RETENTION_SET: ApplicationService._reports_retention_set,
         Capability.REPORTS_RETENTION_GET: ApplicationService._reports_retention_get,
         # WP06 W3a interim placeholders (W3b replaces each with its handler).
-        Capability.REPORTS_TRANSFER_BEGIN: ApplicationService._reports_transfer_pending,
-        Capability.REPORTS_TRANSFER_APPEND: ApplicationService._reports_transfer_pending,
-        Capability.REPORTS_TRANSFER_FINALIZE: ApplicationService._reports_transfer_pending,
-        Capability.REPORTS_TRANSFER_ABORT: ApplicationService._reports_transfer_pending,
-        Capability.REPORTS_TRANSFER_READ_CHUNK: ApplicationService._reports_transfer_pending,
+        Capability.REPORTS_TRANSFER_BEGIN: ApplicationService._reports_transfer_begin,
+        Capability.REPORTS_TRANSFER_APPEND: ApplicationService._reports_transfer_append,
+        Capability.REPORTS_TRANSFER_FINALIZE: ApplicationService._reports_transfer_finalize,
+        Capability.REPORTS_TRANSFER_ABORT: ApplicationService._reports_transfer_abort,
+        Capability.REPORTS_TRANSFER_READ_CHUNK: ApplicationService._reports_transfer_read_chunk,
         Capability.ENTITIES_SEARCH: ApplicationService._entities_search,
         Capability.ENTITIES_GET: ApplicationService._entities_get,
         Capability.ENTITIES_RESOLVE: ApplicationService._entities_resolve,

@@ -269,9 +269,6 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.REPORTS_TRANSFER_APPEND,
         Capability.REPORTS_TRANSFER_FINALIZE,
         Capability.REPORTS_TRANSFER_ABORT,
-        # W3a interim ONLY: `read_chunk`'s handler is still the refusing
-        # placeholder; W3b moves it back to the answering rows.
-        Capability.REPORTS_TRANSFER_READ_CHUNK,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT_PREVIEW,
@@ -830,8 +827,8 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "period": {"count": 5, "unit": "years"},
         },
         Capability.REPORTS_RETENTION_GET: {},
-        # Reports Modernization WP06: the bounded chunked transfer (W3a: the
-        # placeholder handlers; the uploads are uncomposed without a content store).
+        # Reports Modernization WP06: the bounded chunked transfer (the uploads
+        # are uncomposed without a content store and staging; read_chunk answers).
         Capability.REPORTS_TRANSFER_BEGIN: {
             "format": "markdown",
             "encoding": "identity",

@@ -735,6 +735,17 @@ class SafeDetail(StrEnum):
     PART = "part"
     OFFSET = "offset"
     LENGTH = "length"
+    #: WP06 T5/T8/T9: the `conflict` subjects of an operation on the caller's
+    #: OWN live session (a chunk re-sent with other bytes, a chunk out of
+    #: order, an append/finalize on a finalized session, a finalize before
+    #: every declared byte arrived); never answered for a session that is not
+    #: the caller's (that is the bare `not_found`). T6: `TRANSFER_QUOTA`, the
+    #: `rate_limited` subject of a begin past the live-session quotas.
+    TRANSFER_CHUNK_CONFLICT = "transfer_chunk_conflict"
+    TRANSFER_SEQUENCE = "transfer_sequence"
+    TRANSFER_STATE = "transfer_state"
+    TRANSFER_INCOMPLETE = "transfer_incomplete"
+    TRANSFER_QUOTA = "transfer_quota"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

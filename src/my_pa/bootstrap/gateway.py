@@ -1384,6 +1384,9 @@ def build_gateway_runtime(
             # WP05b H4: the same root's `preservation` namespace, where a hold
             # placement seals its copy (`None` when no root: placement refused).
             report_preservation_store=report_preservation_store(settings, work_engine),
+            # WP06 T13/T14: the same root's `transfer` staging (`None` when no
+            # root: the four transfer uploads are withheld).
+            report_transfer_staging=report_transfer_staging(settings, work_engine),
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, control_engine) if entra else None,

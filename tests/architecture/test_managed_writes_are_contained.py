@@ -76,8 +76,16 @@ MANAGED_STORE: Final = "src/my_pa/infrastructure/managed_document_stores/filesys
 #: reaches only the composition root (`test_the_report_content_root_setting_...`).
 REPORT_CONTENT_STORE: Final = "src/my_pa/infrastructure/report_content_stores/filesystem.py"
 
+#: Reports Modernization WP06 T13: the transfer staging, the third contained
+#: store, under the report content root's constant `transfer` directory. Held
+#: to the same discipline (no path parameter, only `grxfr_` ids, the content
+#: store's root refusals, anchored `O_NOFOLLOW` syscalls, exclusive create);
+#: its one removal, `discard`, is confined to pattern-named single-link chunk
+#: files of one session -- proved in `tests/unit/test_report_transfer_staging.py`.
+REPORT_TRANSFER_STAGING: Final = "src/my_pa/infrastructure/report_content_stores/staging.py"
+
 #: Every module allowed to write user-owned bytes, each behind its own containment.
-CONTAINED_STORES: Final = frozenset({MANAGED_STORE, REPORT_CONTENT_STORE})
+CONTAINED_STORES: Final = frozenset({MANAGED_STORE, REPORT_CONTENT_STORE, REPORT_TRANSFER_STAGING})
 
 #: Modules other than the managed byte store that call a filesystem-write API,
 #: with what each writes and why it is not the managed plane.
@@ -497,6 +505,7 @@ def test_the_walk_reaches_every_tree_it_claims_to() -> None:
     assert len(python) > 140, f"the Python walk found {len(python)} files"
     assert MANAGED_STORE in python
     assert REPORT_CONTENT_STORE in python
+    assert REPORT_TRANSFER_STAGING in python
     assert "migrations/versions/20260811_4c7b2e91d8a5_create_the_managed_document_tables.py" in (
         python
     ), "the revision that installs the managed plane is not in the walk"
@@ -530,6 +539,9 @@ def test_every_filesystem_write_is_the_managed_store_or_is_registered() -> None:
 
     assert REPORT_CONTENT_STORE in measured, (
         "the report content store performs no filesystem write the detector can see"
+    )
+    assert REPORT_TRANSFER_STAGING in measured, (
+        "the transfer staging performs no filesystem write the detector can see"
     )
 
     unaccounted = sorted(set(measured) - CONTAINED_STORES - set(REGISTERED_WRITERS))

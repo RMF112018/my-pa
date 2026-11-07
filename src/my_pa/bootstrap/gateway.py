@@ -208,6 +208,7 @@ from my_pa.contracts.ports import (
     ProgramReadUnitOfWork,
     ReportContentNamespace,
     ReportContentStore,
+    ReportTransferStaging,
     ScheduleUnitOfWork,
     UnitOfWork,
 )
@@ -265,6 +266,7 @@ from my_pa.infrastructure.report_content_stores.filesystem import (
     FilesystemReportContentStore,
     ReportContentRootError,
 )
+from my_pa.infrastructure.report_content_stores.staging import FilesystemReportTransferStaging
 from my_pa.infrastructure.security.entra_token import EntraTokenVerifier, jwks_signing_key_source
 from my_pa.infrastructure.security.principal_identity import PrincipalIdentityService
 from my_pa.infrastructure.security.webauthn_ceremony import (
@@ -282,6 +284,7 @@ __all__ = [
     "remote_client_authenticator",
     "report_content_backup_store",
     "report_content_store",
+    "report_transfer_staging",
 ]
 
 #: How a transport asks the composition root who is calling. The first argument
@@ -628,6 +631,29 @@ def report_preservation_store(settings: Settings, work_engine: Engine) -> Report
     return FilesystemReportContentStore(
         Path(configured),
         ReportContentNamespace.PRESERVATION,
+        source_roots=[Path(root) for root in source_roots],
+        managed_documents_root=Path(managed) if managed else None,
+    )
+
+
+def report_transfer_staging(
+    settings: Settings, work_engine: Engine
+) -> ReportTransferStaging | None:
+    """The transfer staging under the report content root, or `None` (WP06 T13).
+
+    The same root and the same refusals as `report_content_store` (source
+    roots, the managed document root, a link or missing root), its chunks
+    under the root's constant `transfer` directory. `None` when
+    `MY_PA_REPORT_CONTENT_ROOT` is unset: no transfer can be staged.
+    """
+    configured = settings.report_content_root.strip()
+    if not configured:
+        return None
+    with work_engine.begin() as connection:
+        source_roots = configured_source_roots(connection)
+    managed = settings.managed_document_root.strip()
+    return FilesystemReportTransferStaging(
+        Path(configured),
         source_roots=[Path(root) for root in source_roots],
         managed_documents_root=Path(managed) if managed else None,
     )

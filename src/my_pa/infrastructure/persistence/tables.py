@@ -10465,9 +10465,9 @@ intelligence_artifact_manifests = Table(
 
 # --- Reports Modernization WP01: the general report plane --------------------
 #
-# Ten tables, created by revision `4c37731671fc` with the triggers a `Table`
-# cannot declare: append-only on the eight immutable tables, TRUNCATE refusal on
-# all ten, the guarded updates of `report_roots` (only its head, lifecycle and
+# Eleven tables, created by revision `4c37731671fc` with the triggers a `Table`
+# cannot declare: append-only on the nine immutable tables, TRUNCATE refusal on
+# all eleven, the guarded updates of `report_roots` (only its head, lifecycle and
 # hold caches move, each by exactly one) and `report_transfer_sessions` (forward-only
 # state; a token and `finalized_at` are set only by `open -> finalized`), the
 # insert guards `a_report_manifest_is_written_with_its_version` and
@@ -10487,7 +10487,12 @@ intelligence_artifact_manifests = Table(
 # retention insert guard `a_report_retention_event_continues_its_predecessor`
 # (WP05b: a retention event's previous period is its predecessor's period; a
 # composite reference over the nullable periods would be `MATCH SIMPLE` and
-# skip every unset period, so the reference below covers the non-null key only).
+# skip every unset period, so the reference below covers the non-null key only),
+# and the transfer chunk insert guard
+# `a_report_transfer_chunk_continues_its_session` (WP06 A2: a chunk is admitted
+# only while its session is `open`, in order at the session's received byte
+# count, and within its declaration; the chunk ledger is append-only and the
+# application never deletes a session or chunk row).
 #
 # Distinct from the Intelligence Artifact plane above: these are reports a
 # caller authors and versions, keyed by the `grpt`/`grver`/... kinds, not
@@ -10508,6 +10513,15 @@ _REPORT_HOLD_OPERATIONS: Final = frozenset({"place", "release"})
 _REPORT_RETENTION_UNITS: Final = frozenset({"days", "years"})
 _REPORT_RETENTION_MAX_DAYS: Final = 36525
 _REPORT_RETENTION_MAX_YEARS: Final = 100
+#: WP06 T2/T4: a transfer's client binding (a creator kind, `:`, its
+#: pseudonym) and its chunk count bound (16 MiB in fixed 256 KiB chunks). The
+#: colon is written `\:` so the CHECK text does not read it as a bind
+#: parameter; the server receives a bare `:`.
+_REPORT_TRANSFER_CLIENT_REF_PATTERN: Final = (
+    f"^({'|'.join(sorted(kind.value for kind in ReportCreatorKind))})\\:"
+    f"{REPORT_CREATOR_ID_PATTERN.removeprefix('^')}"
+)
+_REPORT_TRANSFER_MAX_CHUNKS: Final = MAX_ORIGINAL_CONTENT_BYTES // TRANSFER_CHUNK_MAX_BYTES
 _REPORT_ATTESTED_AUTHORITY: Final = (
     f"authority_class IN ({_literals(ATTESTED_AUTHORITY_CLASSES)})",
     f"decision_channel IN ({_literals(ATTESTED_DECISION_CHANNELS)})",
@@ -11304,14 +11318,16 @@ report_receipts = Table(
     ),
 )
 
-#: One upload transfer session (schema only in WP01): a declared byte count and
-#: digest, received in bounded chunks, whose state only moves forward.
+#: One upload transfer session: a declared byte count and digest, received in
+#: fixed 256 KiB chunks, whose state only moves forward. WP06 A1: bound to the
+#: client that began it (`client_ref`) and keyed at begin (`idempotency_key`
+#: with the declaration's `intent_digest`), all immutable.
 report_transfer_sessions = Table(
     "report_transfer_sessions",
     METADATA,
     Column("session_id", Text, nullable=False),
     Column("owner_principal_id", Text, nullable=False),
-    Column("client_ref", Text),
+    Column("client_ref", Text, nullable=False),
     Column("state", Text, nullable=False),
     Column("format", Text, nullable=False),
     Column("original_encoding", Text, nullable=False),
@@ -11325,13 +11341,15 @@ report_transfer_sessions = Table(
     Column("content_token_digest", Text),
     Column("consumed_content_id", Text),
     Column("consumed_at", DateTime(timezone=True)),
+    Column("idempotency_key", Text, nullable=False),
+    Column("intent_digest", Text, nullable=False),
     PrimaryKeyConstraint("session_id", name="report_transfer_sessions_pkey"),
     _is_identifier("session_id", IdKind.REPORT_TRANSFER_SESSION),
     _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
     _is_identifier("consumed_content_id", IdKind.REPORT_CONTENT),
     CheckConstraint(
-        "client_ref IS NULL OR char_length(client_ref) BETWEEN 1 AND 256",
-        name="a_report_transfer_client_ref_is_bounded",
+        f"client_ref ~ '{_REPORT_TRANSFER_CLIENT_REF_PATTERN}'",
+        name="a_report_transfer_is_bound_to_a_client",
     ),
     _one_of("state", ReportTransferState, name="a_report_transfer_state_is_known"),
     _one_of("format", ReportContentFormat, name="a_report_transfer_format_is_known"),
@@ -11342,8 +11360,8 @@ report_transfer_sessions = Table(
     ),
     _report_sha("declared_sha256", name="a_report_transfer_declared_digest_is_sha256"),
     CheckConstraint(
-        f"chunk_byte_limit BETWEEN 1 AND {TRANSFER_CHUNK_MAX_BYTES}",
-        name="a_report_transfer_chunk_limit_is_bounded",
+        f"chunk_byte_limit = {TRANSFER_CHUNK_MAX_BYTES}",
+        name="a_report_transfer_chunk_limit_is_fixed",
     ),
     CheckConstraint(
         "received_byte_count BETWEEN 0 AND declared_byte_count",
@@ -11370,11 +11388,67 @@ report_transfer_sessions = Table(
         "NULL) = (consumed_at IS NULL)",
         name="a_report_transfer_consumption_follows_its_state",
     ),
+    CheckConstraint(
+        "char_length(idempotency_key) BETWEEN 1 AND 128", name="a_report_transfer_key_is_bounded"
+    ),
+    _report_sha("intent_digest", name="a_report_transfer_intent_is_a_digest"),
+    UniqueConstraint(
+        "owner_principal_id",
+        "client_ref",
+        "idempotency_key",
+        name="a_report_transfer_begin_is_keyed",
+    ),
+    UniqueConstraint("session_id", "owner_principal_id", name="report_transfer_sessions_owner_key"),
     _report_fk(
         ["consumed_content_id", "owner_principal_id"],
         "report_content_objects",
         ["content_id", "owner_principal_id"],
         name="a_report_transfer_is_consumed_into_content_of_its_owner",
+    ),
+    # WP06 A1: the live sessions of an owner (quota) and the expired ones (GC).
+    Index(
+        "report_transfer_sessions_by_owner_state_and_expiry",
+        "owner_principal_id",
+        "state",
+        "expires_at",
+    ),
+)
+
+#: WP06 A2: the append-only ledger of a transfer session's received chunks, one
+#: row per sequence at its fixed offset. Its insert guard (revision
+#: `4c37731671fc`) admits a chunk only while the session is `open`, at the
+#: session's received byte count and within its declaration.
+report_transfer_chunks = Table(
+    "report_transfer_chunks",
+    METADATA,
+    Column("session_id", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("byte_offset", Integer, nullable=False),
+    Column("byte_count", Integer, nullable=False),
+    Column("chunk_sha256", Text, nullable=False),
+    Column("received_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("session_id", "sequence", name="report_transfer_chunks_pkey"),
+    _is_identifier("session_id", IdKind.REPORT_TRANSFER_SESSION),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        f"sequence BETWEEN 0 AND {_REPORT_TRANSFER_MAX_CHUNKS - 1}",
+        name="a_report_transfer_chunk_sequence_is_bounded",
+    ),
+    CheckConstraint(
+        f"byte_offset = sequence * {TRANSFER_CHUNK_MAX_BYTES}",
+        name="a_report_transfer_chunk_is_at_its_fixed_offset",
+    ),
+    CheckConstraint(
+        f"byte_count BETWEEN 1 AND {TRANSFER_CHUNK_MAX_BYTES}",
+        name="a_report_transfer_chunk_size_is_bounded",
+    ),
+    _report_sha("chunk_sha256", name="a_report_transfer_chunk_digest_is_sha256"),
+    _report_fk(
+        ["session_id", "owner_principal_id"],
+        "report_transfer_sessions",
+        ["session_id", "owner_principal_id"],
+        name="a_report_transfer_chunk_belongs_to_a_session_of_its_owner",
     ),
 )
 

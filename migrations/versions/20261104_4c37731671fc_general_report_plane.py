@@ -13,12 +13,13 @@ order it:
 1. sets `lock_timeout` to 10 s for this revision's transaction only
    (`SET LOCAL`), so a lock that cannot be taken aborts the whole revision with
    `55P03` and leaves the database at `2a90f91dd786`;
-2. creates the 10 plane tables in foreign-key order, as frozen DDL text (never
+2. creates the 11 plane tables in foreign-key order, as frozen DDL text (never
    the live `Table` objects, never an enum): `report_content_objects`,
    `report_roots`, `report_versions`, `report_version_manifests`,
    `report_associations`, `report_lifecycle_events`, `report_receipts`,
-   `report_transfer_sessions`, `report_hold_events` and
-   `report_retention_policy_events` (WP05b), each with its foreign keys among
+   `report_transfer_sessions`, `report_transfer_chunks` (WP06),
+   `report_hold_events` and `report_retention_policy_events` (WP05b), each
+   with its foreign keys among
    the new tables
    only (`ON DELETE RESTRICT NOT DEFERRABLE`) and its indexes; no statement
    of steps 1 to 5 names an existing table;
@@ -28,16 +29,17 @@ order it:
    lifecycle cache names an event of the report with its revision and
    resulting state, and the hold cache (WP05b) names a hold event of the
    report with its revision and resulting `held`;
-4. creates the 10 plane functions;
-5. creates the 27 triggers on the new tables: append-only on the 8 immutable
-   tables, TRUNCATE refusal on all 10 (only while the table holds a row), the
+4. creates the 11 plane functions;
+5. creates the 30 triggers on the new tables: append-only on the 9 immutable
+   tables, TRUNCATE refusal on all 11 (only while the table holds a row), the
    guarded updates of `report_roots` and `report_transfer_sessions` (a
    transfer token and `finalized_at` are set only by the `open -> finalized`
    move, so a session aborted or expired from `open` carries no token), the
    2 insert guards `a_report_manifest_is_written_with_its_version` and
    `a_report_association_is_written_with_its_version`, the retention insert
-   guard `a_report_retention_event_continues_its_predecessor` (WP05b), and the
-   4 deferred constraint triggers: `a_report_version_has_its_manifest`, and
+   guard `a_report_retention_event_continues_its_predecessor` (WP05b), the
+   transfer chunk insert guard `a_report_transfer_chunk_continues_its_session`
+   (WP06), and the 4 deferred constraint triggers: `a_report_version_has_its_manifest`, and
    `a_report_head_is_its_newest_version`,
    `a_report_lifecycle_cache_is_its_newest_event` and
    `a_report_hold_cache_is_its_newest_event`, which, at the commit of a new
@@ -172,6 +174,24 @@ covers only the non-null predecessor key `(predecessor_event_id,
 owner_principal_id, predecessor_revision)`. No retention row is ever enforced
 here: retention gates only purge eligibility, and purge does not exist.
 
+Transfer sessions and their chunk ledger (WP06 A1-A3, amended into this
+unmerged revision in place): a `report_transfer_sessions` row stages one
+declared content of at most 16 MiB in fixed 256 KiB chunks
+(`chunk_byte_limit` is always 262144, so at most 64 chunks). A session is
+bound to the client that began it (`client_ref`, a creator kind and its
+`gcrt_` pseudonym, NOT NULL with a frozen pattern) and its begin is keyed
+(`a_report_transfer_begin_is_keyed`: `UNIQUE (owner_principal_id,
+client_ref, idempotency_key)`, with the declaration's `intent_digest`); both
+are part of the immutable declaration. `report_transfer_chunks` is the
+append-only ledger of received chunks, one row per `(session_id, sequence)`
+at `byte_offset = sequence * 262144`, referencing its session and owner
+(`ON DELETE RESTRICT NOT DEFERRABLE`, no cascade); its `BEFORE INSERT` guard
+admits a chunk only while the session is `open`, in order (at the session's
+received byte count) and within the declaration. The application never
+deletes a session or a chunk row; staged bytes live outside the database.
+`report_transfer_sessions_by_owner_state_and_expiry` serves the per-owner
+quota and the expiry sweep.
+
 Every closed set and bound is a frozen literal equal to the general report
 domain vocabulary module, which this revision does not import.
 
@@ -181,7 +201,7 @@ step 6; each BEFORE text is a byte copy of the AT text `621ef6786c64` left,
 the latest prior restatement of `capability_is_known` and of
 `purpose_is_known`.
 
-No backfill: this revision writes no row. `downgrade` first locks the 10 plane
+No backfill: this revision writes no row. `downgrade` first locks the 11 plane
 tables `ACCESS EXCLUSIVE`, then refuses with `restrict_violation`, deleting
 nothing, while any plane row exists or any audit event names one of the 10
 general report capabilities or one of the purposes `report_lifecycle`,
@@ -236,6 +256,14 @@ _TARGET_KINDS: Final = (
 _VERIFICATIONS: Final = "'asserted', 'verified'"
 #: The 5 transfer states.
 _TRANSFER_STATES: Final = "'aborted', 'consumed', 'expired', 'finalized', 'open'"
+#: A transfer's client binding (WP06 T4): a creator kind, `:`, and its pseudonym.
+#: The colon is written `\:` so the statement text does not read it as a bind
+#: parameter; the server receives and stores a bare `:`.
+_CLIENT_REF_PATTERN: Final = "'^(local_principal|remote_client)\\:gcrt_[0-9a-f]{40}$'"
+#: The fixed transfer chunk size, 256 KiB (WP06 T2), and so at most 64 chunks
+#: for the 16 MiB declaration bound.
+_TRANSFER_CHUNK_BYTES: Final = 262144
+_TRANSFER_MAX_CHUNKS: Final = 64
 #: The one manifest schema.
 _MANIFEST_SCHEMAS: Final = "'report_version_manifest_v1'"
 #: The 2 creator kinds (WP05 A1/A2).
@@ -512,7 +540,7 @@ _SEARCH_DOCUMENT: Final = (
     "setweight(to_tsvector('english', search_text), 'B')"
 )
 
-# ---- the 10 tables (contract section 3; WP05b A1, A3) ----------------------------
+# ---- the 11 tables (contract section 3; WP05b A1, A3; WP06 A2) -------------------
 
 #: `(table, CREATE TABLE, its indexes)` in creation order. No statement here
 #: names a table that existed before this revision.
@@ -1042,7 +1070,7 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
         CREATE TABLE knowledge.report_transfer_sessions (
           session_id TEXT NOT NULL,
           owner_principal_id TEXT NOT NULL,
-          client_ref TEXT,
+          client_ref TEXT NOT NULL,
           state TEXT NOT NULL,
           format TEXT NOT NULL,
           original_encoding TEXT NOT NULL,
@@ -1056,12 +1084,14 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
           content_token_digest TEXT,
           consumed_content_id TEXT,
           consumed_at TIMESTAMP WITH TIME ZONE,
+          idempotency_key TEXT NOT NULL,
+          intent_digest TEXT NOT NULL,
           CONSTRAINT report_transfer_sessions_pkey PRIMARY KEY (session_id),
           {_id("session_id", "grxfr")},
           {_id("owner_principal_id", "prn")},
           {_id("consumed_content_id", "grcnt")},
-          CONSTRAINT a_report_transfer_client_ref_is_bounded CHECK (client_ref IS NULL OR
-              char_length(client_ref) BETWEEN 1 AND 256),
+          CONSTRAINT a_report_transfer_is_bound_to_a_client CHECK (client_ref ~
+              {_CLIENT_REF_PATTERN}),
           CONSTRAINT a_report_transfer_state_is_known CHECK (state IN ({_TRANSFER_STATES})),
           CONSTRAINT a_report_transfer_format_is_known CHECK (format IN ({_FORMATS})),
           CONSTRAINT a_report_transfer_encoding_is_known CHECK (original_encoding IN
@@ -1069,8 +1099,8 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
           CONSTRAINT a_report_transfer_declared_size_is_bounded CHECK (declared_byte_count
               BETWEEN 1 AND 16777216),
           {_sha("declared_sha256", "a_report_transfer_declared_digest_is_sha256")},
-          CONSTRAINT a_report_transfer_chunk_limit_is_bounded CHECK (chunk_byte_limit BETWEEN
-              1 AND 262144),
+          CONSTRAINT a_report_transfer_chunk_limit_is_fixed CHECK (chunk_byte_limit =
+              {_TRANSFER_CHUNK_BYTES}),
           CONSTRAINT a_report_transfer_receives_at_most_its_declaration CHECK
               (received_byte_count BETWEEN 0 AND declared_byte_count),
           CONSTRAINT a_settled_report_transfer_received_its_declaration CHECK (state NOT IN
@@ -1085,12 +1115,57 @@ _TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
           CONSTRAINT a_report_transfer_consumption_follows_its_state CHECK ((state =
               'consumed') = (consumed_content_id IS NOT NULL) AND (consumed_content_id IS
               NULL) = (consumed_at IS NULL)),
+          CONSTRAINT a_report_transfer_key_is_bounded CHECK (char_length(idempotency_key)
+              BETWEEN 1 AND 128),
+          {_sha("intent_digest", "a_report_transfer_intent_is_a_digest")},
+          CONSTRAINT a_report_transfer_begin_is_keyed UNIQUE (owner_principal_id, client_ref,
+              idempotency_key),
+          CONSTRAINT report_transfer_sessions_owner_key UNIQUE (session_id,
+              owner_principal_id),
           {
             _restrict(
                 "a_report_transfer_is_consumed_into_content_of_its_owner",
                 "consumed_content_id, owner_principal_id",
                 "report_content_objects",
                 "content_id, owner_principal_id",
+            )
+        }
+        )
+        """,
+        (
+            # WP06 A1: the live sessions of an owner (quota) and the expired
+            # ones (GC), by state and expiry.
+            "CREATE INDEX report_transfer_sessions_by_owner_state_and_expiry ON "
+            "knowledge.report_transfer_sessions (owner_principal_id, state, expires_at)",
+        ),
+    ),
+    (
+        "report_transfer_chunks",
+        f"""
+        CREATE TABLE knowledge.report_transfer_chunks (
+          session_id TEXT NOT NULL,
+          owner_principal_id TEXT NOT NULL,
+          sequence INTEGER NOT NULL,
+          byte_offset INTEGER NOT NULL,
+          byte_count INTEGER NOT NULL,
+          chunk_sha256 TEXT NOT NULL,
+          received_at TIMESTAMP WITH TIME ZONE NOT NULL,
+          CONSTRAINT report_transfer_chunks_pkey PRIMARY KEY (session_id, sequence),
+          {_id("session_id", "grxfr")},
+          {_id("owner_principal_id", "prn")},
+          CONSTRAINT a_report_transfer_chunk_sequence_is_bounded CHECK (sequence BETWEEN 0 AND
+              {_TRANSFER_MAX_CHUNKS - 1}),
+          CONSTRAINT a_report_transfer_chunk_is_at_its_fixed_offset CHECK (byte_offset =
+              sequence * {_TRANSFER_CHUNK_BYTES}),
+          CONSTRAINT a_report_transfer_chunk_size_is_bounded CHECK (byte_count BETWEEN 1 AND
+              {_TRANSFER_CHUNK_BYTES}),
+          {_sha("chunk_sha256", "a_report_transfer_chunk_digest_is_sha256")},
+          {
+            _restrict(
+                "a_report_transfer_chunk_belongs_to_a_session_of_its_owner",
+                "session_id, owner_principal_id",
+                "report_transfer_sessions",
+                "session_id, owner_principal_id",
             )
         }
         )
@@ -1412,7 +1487,9 @@ _FUNCTIONS: Final[tuple[tuple[str, str], ...]] = (
              OR NEW.declared_sha256 IS DISTINCT FROM OLD.declared_sha256
              OR NEW.chunk_byte_limit IS DISTINCT FROM OLD.chunk_byte_limit
              OR NEW.created_at IS DISTINCT FROM OLD.created_at
-             OR NEW.expires_at IS DISTINCT FROM OLD.expires_at THEN
+             OR NEW.expires_at IS DISTINCT FROM OLD.expires_at
+             OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key
+             OR NEW.intent_digest IS DISTINCT FROM OLD.intent_digest THEN
             RAISE EXCEPTION 'a report transfer session declaration is immutable'
               USING ERRCODE = 'restrict_violation';
           END IF;
@@ -1614,11 +1691,46 @@ _FUNCTIONS: Final[tuple[tuple[str, str], ...]] = (
         END; $$
         """,
     ),
+    (
+        "a_report_transfer_chunk_continues_its_session",
+        """
+        CREATE FUNCTION knowledge.a_report_transfer_chunk_continues_its_session()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        DECLARE
+          session_state text;
+          received integer;
+          declared integer;
+        BEGIN
+          SELECT s.state, s.received_byte_count, s.declared_byte_count
+            INTO session_state, received, declared
+            FROM knowledge.report_transfer_sessions s
+           WHERE s.session_id = NEW.session_id
+             AND s.owner_principal_id = NEW.owner_principal_id;
+          IF NOT FOUND THEN
+            RAISE EXCEPTION 'a report transfer chunk belongs to a visible session'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          IF session_state <> 'open' THEN
+            RAISE EXCEPTION 'a report transfer chunk is received only while its session is open'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          IF NEW.byte_offset <> received THEN
+            RAISE EXCEPTION 'a report transfer chunk continues its session''s received bytes'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          IF NEW.byte_offset + NEW.byte_count > declared THEN
+            RAISE EXCEPTION 'a report transfer chunk stays within its session''s declaration'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          RETURN NEW;
+        END; $$
+        """,
+    ),
 )
 
 # ---- triggers ----------------------------------------------------------------------
 
-#: The 8 append-only tables (every plane table but the root and the transfer
+#: The 9 append-only tables (every plane table but the root and the transfer
 #: session, whose updates are guarded instead).
 _APPEND_ONLY: Final = (
     "report_content_objects",
@@ -1629,9 +1741,10 @@ _APPEND_ONLY: Final = (
     "report_receipts",
     "report_hold_events",
     "report_retention_policy_events",
+    "report_transfer_chunks",
 )
 
-#: All 10 tables. A TRUNCATE is refused only while the table holds a row, so a
+#: All 11 tables. A TRUNCATE is refused only while the table holds a row, so a
 #: fixture's `TRUNCATE ... CASCADE` through an empty plane table still passes.
 _TRUNCATE_REFUSALS: Final = tuple(name for name, _ddl, _indexes in _TABLES)
 
@@ -1641,7 +1754,11 @@ _TRUNCATE_REFUSALS: Final = tuple(name for name, _ddl, _indexes in _TABLES)
 #: every row whose old or new period is unset, so the equality is this
 #: `BEFORE INSERT` guard, beside the reference on the non-null predecessor key.
 #: The guard finds the predecessor by id and owner only (its revision is the
-#: reference's and the CHECKs'), and refuses one it cannot see.
+#: reference's and the CHECKs'), and refuses one it cannot see. A transfer
+#: chunk (WP06 A2) continues its session: the session (by id and owner) is
+#: visible and `open`, the chunk starts at the session's received byte count
+#: and ends within its declaration; the repository inserts the chunk, then
+#: advances `received_byte_count`.
 _ROW_GUARDS: Final = (
     ("a_report_root_moves_only_its_caches", "report_roots", "BEFORE UPDATE OR DELETE"),
     (
@@ -1652,6 +1769,11 @@ _ROW_GUARDS: Final = (
     (
         "a_report_retention_event_continues_its_predecessor",
         "report_retention_policy_events",
+        "BEFORE INSERT",
+    ),
+    (
+        "a_report_transfer_chunk_continues_its_session",
+        "report_transfer_chunks",
         "BEFORE INSERT",
     ),
 )
@@ -1734,15 +1856,15 @@ def _triggers() -> tuple[tuple[str, str, str], ...]:
 
 # ---- downgrade -----------------------------------------------------------------------
 
-#: `downgrade` locks the 10 plane tables before it checks them, so no plane row
+#: `downgrade` locks the 11 plane tables before it checks them, so no plane row
 #: can commit between the refusal check and the drops.
 _LOCK_PLANE: Final = (
     "LOCK TABLE knowledge.report_content_objects, knowledge.report_roots, "
     "knowledge.report_versions, knowledge.report_version_manifests, "
     "knowledge.report_associations, knowledge.report_lifecycle_events, "
     "knowledge.report_receipts, knowledge.report_transfer_sessions, "
-    "knowledge.report_hold_events, knowledge.report_retention_policy_events "
-    "IN ACCESS EXCLUSIVE MODE"
+    "knowledge.report_transfer_chunks, knowledge.report_hold_events, "
+    "knowledge.report_retention_policy_events IN ACCESS EXCLUSIVE MODE"
 )
 
 #: `downgrade` refuses while any plane row exists, or any audit event names a
@@ -1759,6 +1881,7 @@ _REFUSE_DOWNGRADE: Final = """
          OR EXISTS (SELECT 1 FROM knowledge.report_lifecycle_events)
          OR EXISTS (SELECT 1 FROM knowledge.report_receipts)
          OR EXISTS (SELECT 1 FROM knowledge.report_transfer_sessions)
+         OR EXISTS (SELECT 1 FROM knowledge.report_transfer_chunks)
          OR EXISTS (SELECT 1 FROM knowledge.report_hold_events)
          OR EXISTS (SELECT 1 FROM knowledge.report_retention_policy_events) THEN
         RAISE EXCEPTION 'general report plane state exists; refusing to downgrade 4c37731671fc'

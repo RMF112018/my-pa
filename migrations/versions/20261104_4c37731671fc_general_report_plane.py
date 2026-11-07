@@ -208,7 +208,7 @@ the latest prior restatement of `capability_is_known` and of
 
 No backfill: this revision writes no row. `downgrade` first locks the 11 plane
 tables `ACCESS EXCLUSIVE`, then refuses with `restrict_violation`, deleting
-nothing, while any plane row exists or any audit event names one of the 10
+nothing, while any plane row exists or any audit event names one of the 15
 general report capabilities or one of the purposes `report_lifecycle`,
 `report_hold` and `report_retention`; otherwise it
 restores the BEFORE texts of `capability_is_known` and `purpose_is_known` and

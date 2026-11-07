@@ -517,7 +517,8 @@ def test_describe_returns_the_exact_publish_and_read_remote_schemas(
         "naming your finalized session and its one-use token; format and encoding come "
         "from the session (restating them is refused), the token is consumed by the "
         "first successful publish or update, and a retry of that same request replays "
-        "its receipt."
+        "its receipt. This form is usable only where the reports.transfer.* "
+        "capabilities are offered; elsewhere it is refused unsupported."
     )
     # WP06 T10: exactly one of the closed inline object and the closed reference.
     inline, reference = content_schema["oneOf"]

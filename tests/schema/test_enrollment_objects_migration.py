@@ -389,8 +389,9 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "schedule_scenario_outputs",
         "schedule_scenario_write_requests",
         "schedule_scenario_write_refusals",
-        # Reports Modernization WP01 stacks the ten general report tables
-        # (WP05b: the hold ledger and the retention policy history).
+        # Reports Modernization WP01 stacks the eleven general report tables
+        # (WP05b: the hold ledger and the retention policy history; WP06: the
+        # transfer chunk ledger).
         "report_content_objects",
         "report_roots",
         "report_versions",
@@ -399,6 +400,7 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "report_lifecycle_events",
         "report_receipts",
         "report_transfer_sessions",
+        "report_transfer_chunks",
         "report_hold_events",
         "report_retention_policy_events",
     }

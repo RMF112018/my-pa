@@ -201,6 +201,8 @@ _GENERAL_REPORT_APPEND_ONLY: Final = (
     "report_receipts",
     "report_hold_events",
     "report_retention_policy_events",
+    # WP06: the transfer chunk ledger.
+    "report_transfer_chunks",
 )
 
 #: Exact delta between the frozen capture revision and the current head. This is
@@ -346,6 +348,8 @@ LINEAGE_TRIGGERS: Final[frozenset[str]] = frozenset(
         # WP05b.
         "a_report_hold_cache_is_its_newest_event",
         "a_report_retention_event_continues_its_predecessor",
+        # WP06.
+        "a_report_transfer_chunk_continues_its_session",
     }
 )
 

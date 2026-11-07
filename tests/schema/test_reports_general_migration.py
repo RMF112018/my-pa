@@ -10,7 +10,7 @@ module proves:
   (`my_pa`) even in prose, spells every closed set as a sorted literal equal
   to the domain vocabulary symbol it freezes and every bound as the domain
   constant, and names every column, constraint and index `tables.py` declares
-  for the 10 plane tables;
+  for the 11 plane tables;
 * **offline SQL** -- the upgrade writes no row and names no table that existed
   before it but `audit_events`, whose `capability_is_known` and
   `purpose_is_known` it restates exactly once each, last; the downgrade locks
@@ -22,17 +22,22 @@ module proves:
   `.hold.release`, `.retention.get`, `.retention.set`) and the purpose AT text
   is it plus exactly `report_lifecycle` (WP03), `report_hold` and
   `report_retention` (WP05b A5); the downgrade refusal names every one;
-* on disposable databases: empty to head creates exactly the 10 tables, the 10
-  functions and their 27 triggers (4 of them deferred); the declared metadata
+* on disposable databases: empty to head creates exactly the 11 tables, the 11
+  functions and their 30 triggers (4 of them deferred); the declared metadata
   equals the migrated schema, definition for definition; the predecessor head with Intelligence,
   Capture and managed-document rows upgrades with every pre-existing table's
   rows and catalog unchanged but the `capability_is_known` and
   `purpose_is_known` definitions; the upgrade admits a `reports.publish` and a
   `reports.archive`/`report_lifecycle` audit event and each WP05b hold and
   retention capability and purpose; the downgrade refuses
-  while a publish, a hold, a lone transfer session, a lone retention policy
-  event or such an audit event exists, and an empty plane downgrades cleanly
-  and upgrades again;
+  while a publish, a hold, a lone transfer session, a session with a chunk, a
+  lone chunk, a lone retention policy event or such an audit event exists, and
+  an empty plane downgrades cleanly and upgrades again;
+* **transfer sessions and chunks (WP06 A1-A3)** -- a session is bound to a
+  client (frozen pattern) and keyed at begin, its chunk limit is the fixed
+  262144, and its chunk ledger is append-only, at fixed offsets, admitted only
+  in order while the session is open and within its declaration, and holds its
+  session against deletion;
 * **holds and retention (WP05b)** -- the hold ledger and the retention policy
   history are append-only, a hold alternates from a first `place`, a `place`
   alone carries its preservation copy, the root hold cache moves only by one
@@ -143,6 +148,7 @@ PLANE_TABLES: Final = (
     "report_lifecycle_events",
     "report_receipts",
     "report_transfer_sessions",
+    "report_transfer_chunks",
     "report_hold_events",
     "report_retention_policy_events",
 )
@@ -160,6 +166,7 @@ PLANE_FUNCTIONS: Final = (
     "report_rows_are_written_with_their_version",
     "a_report_hold_cache_is_its_newest_event",
     "a_report_retention_event_continues_its_predecessor",
+    "a_report_transfer_chunk_continues_its_session",
 )
 #: The insert guards, each on the table whose INSERT it checks.
 INSERT_GUARDS: Final = {
@@ -175,6 +182,8 @@ DEFERRED_TRIGGERS: Final = {
 }
 #: WP05b A3: the retention insert guard (previous period = predecessor's period).
 RETENTION_GUARD: Final = "a_report_retention_event_continues_its_predecessor"
+#: WP06 A2: the chunk insert guard (open session, in order, within the declaration).
+CHUNK_GUARD: Final = "a_report_transfer_chunk_continues_its_session"
 APPEND_ONLY: Final = (
     "report_content_objects",
     "report_versions",
@@ -184,6 +193,7 @@ APPEND_ONLY: Final = (
     "report_receipts",
     "report_hold_events",
     "report_retention_policy_events",
+    "report_transfer_chunks",
 )
 DEFERRED_FOREIGN_KEYS: Final = (
     "a_report_head_is_a_version_of_the_report",
@@ -196,6 +206,7 @@ Q: Final = "prn_rptmigforeign01"
 RESTRICT_VIOLATION: Final = "23001"
 FOREIGN_KEY_VIOLATION: Final = "23503"
 UNIQUE_VIOLATION: Final = "23505"
+NOT_NULL_VIOLATION: Final = "23502"
 CHECK_VIOLATION: Final = "23514"
 GENERATED_ALWAYS: Final = "428C9"
 REFUSAL: Final = f"general report plane state exists; refusing to downgrade {REVISION}"
@@ -388,6 +399,12 @@ def test_frozen_literals_equal_the_domain_symbols() -> None:
     assert module["_TYPE_PATTERN"] == f"'{pattern}'"
     # WP05 A1/A2: the creator pseudonym pattern, frozen in both CHECKs.
     assert module["_CREATOR_PATTERN"] == f"'{CREATOR_ID_PATTERN}'"
+    # WP06 T4: the client binding, a creator kind and its pseudonym; the colon
+    # is escaped (`\:`) for the statement text, which sends a bare `:`.
+    kinds = "|".join(_values(CreatorKind))
+    client_ref = f"^({kinds})\\:{CREATOR_ID_PATTERN.removeprefix('^')}"
+    assert module["_CLIENT_REF_PATTERN"] == f"'{client_ref}'"
+    assert f"client_ref ~ '{client_ref}'" in _checks()["a_report_transfer_is_bound_to_a_client"]
     checks = _checks()
     for name, column in (
         ("a_report_creator_is_a_pseudonym", "created_by_id"),
@@ -422,7 +439,16 @@ def test_frozen_bounds_equal_the_domain_constants() -> None:
         "a_report_association_target_version_is_bounded": (
             f"BETWEEN 1 AND {MAX_ASSOCIATION_REF_CHARACTERS}"
         ),
-        "a_report_transfer_chunk_limit_is_bounded": f"BETWEEN 1 AND {TRANSFER_CHUNK_MAX_BYTES}",
+        # WP06 T2/A1/A2: the fixed chunk size, offsets and sequence bound.
+        "a_report_transfer_chunk_limit_is_fixed": f"chunk_byte_limit = {TRANSFER_CHUNK_MAX_BYTES}",
+        "a_report_transfer_chunk_size_is_bounded": f"BETWEEN 1 AND {TRANSFER_CHUNK_MAX_BYTES}",
+        "a_report_transfer_chunk_is_at_its_fixed_offset": (
+            f"byte_offset = sequence * {TRANSFER_CHUNK_MAX_BYTES}"
+        ),
+        "a_report_transfer_chunk_sequence_is_bounded": (
+            f"BETWEEN 0 AND {MAX_ORIGINAL_CONTENT_BYTES // TRANSFER_CHUNK_MAX_BYTES - 1}"
+        ),
+        "a_report_transfer_key_is_bounded": "BETWEEN 1 AND 128",
         "a_report_search_text_is_bounded": (
             f"char_length(search_text) <= {MAX_SEARCH_TEXT_CHARACTERS}"
         ),
@@ -758,6 +784,7 @@ _EXPECTED_TRIGGERS: Final = frozenset(
         "report_roots.a_report_root_moves_only_its_caches",
         "report_transfer_sessions.a_report_transfer_session_moves_forward",
         f"report_retention_policy_events.{RETENTION_GUARD}",
+        f"report_transfer_chunks.{CHUNK_GUARD}",
     }
     | {f"{table}.{trigger}" for trigger, table in DEFERRED_TRIGGERS.items()}
     | {f"{table}.{trigger}" for trigger, table in INSERT_GUARDS.items()}
@@ -766,7 +793,7 @@ _EXPECTED_TRIGGERS: Final = frozenset(
 
 @pytest.mark.database
 @pytest.mark.migration_empty_to_head
-def test_empty_to_head_creates_exactly_the_ten_tables(
+def test_empty_to_head_creates_exactly_the_eleven_tables(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
@@ -783,8 +810,9 @@ def test_empty_to_head_creates_exactly_the_ten_tables(
     assert before <= _relations(engine)
     assert _functions(engine) - functions_before == set(PLANE_FUNCTIONS)
     assert _triggers(engine) - triggers_before == _EXPECTED_TRIGGERS
-    assert len(_EXPECTED_TRIGGERS) == 27
-    assert len(PLANE_FUNCTIONS) == 10
+    assert len(_EXPECTED_TRIGGERS) == 30
+    assert len(PLANE_FUNCTIONS) == 11
+    assert len(PLANE_TABLES) == 11
     with engine.connect() as connection:
         deferred = {
             str(name): bool(flag)
@@ -1112,6 +1140,8 @@ def test_predecessor_with_legacy_evidence_upgrades_unchanged(
 
 NOW: Final = datetime(2026, 11, 4, 9, 0, tzinfo=UTC)
 _JSON_COLUMNS: Final = frozenset({"inline_data", "topics", "tags", "metadata", "manifest"})
+#: WP06 T4: a synthetic client binding (a creator kind and a pseudonym).
+_CLIENT_REF: Final = "remote_client:gcrt_" + "0123456789" * 4
 
 
 def _sha(value: str | bytes) -> str:
@@ -1160,6 +1190,8 @@ def _ids(tag: str, owner: str) -> dict[str, str]:
         "r_3": f"grrc_{tag}f",
         "r_4": f"grrc_{tag}g",
         "session": f"grxfr_{tag}",
+        # WP06: a second session of the same owner and client (the begin key).
+        "session2": f"grxfr_{tag}b",
         "corr": f"corr_{tag}",
         "audit": f"audit_{tag}",
         "spare": f"grver_{tag}z",
@@ -1481,13 +1513,13 @@ def _session(ids: dict[str, str]) -> Op:
         {
             "session_id": ids["session"],
             "owner_principal_id": ids["owner"],
-            "client_ref": "synthetic-client",
+            "client_ref": _CLIENT_REF,
             "state": "open",
             "format": "markdown",
             "original_encoding": "identity",
             "declared_byte_count": 100,
             "declared_sha256": _sha(ids["session"]),
-            "chunk_byte_limit": 65536,
+            "chunk_byte_limit": TRANSFER_CHUNK_MAX_BYTES,
             "received_byte_count": 0,
             "created_at": NOW,
             "expires_at": NOW + timedelta(hours=1),
@@ -1495,6 +1527,25 @@ def _session(ids: dict[str, str]) -> Op:
             "content_token_digest": None,
             "consumed_content_id": None,
             "consumed_at": None,
+            "idempotency_key": f"begin-{ids['session']}",
+            "intent_digest": _sha(f"intent-{ids['session']}"),
+        },
+    )
+
+
+def _chunk(ids: dict[str, str], sequence: int = 0, byte_count: int = 100) -> Op:
+    """Chunk `sequence` of the session, at its fixed offset."""
+    return Op(
+        "chunk",
+        "report_transfer_chunks",
+        {
+            "session_id": ids["session"],
+            "owner_principal_id": ids["owner"],
+            "sequence": sequence,
+            "byte_offset": sequence * TRANSFER_CHUNK_MAX_BYTES,
+            "byte_count": byte_count,
+            "chunk_sha256": _sha(f"chunk-{ids['session']}-{sequence}"),
+            "received_at": NOW + timedelta(seconds=30),
         },
     )
 
@@ -1680,6 +1731,8 @@ _TRANSACTIONS: Final[dict[str, Callable[[dict[str, str]], list[Op]]]] = {
         predecessor=("e2", 2, "archived"),
     ),
     "transfer": lambda ids: [_session(ids)],
+    # WP06: the whole 100-byte declaration in one chunk, then the received count.
+    "chunk": lambda ids: [_chunk(ids), _session_move(ids, received_byte_count=100)],
     "finalize": lambda ids: [
         _session_move(
             ids,
@@ -1726,6 +1779,7 @@ CHAINS: Final[dict[str, tuple[str, ...]]] = {
     "delete": ("publish", "archive", "delete"),
     "restore": ("publish", "archive", "delete", "restore"),
     "transfer": ("transfer",),
+    "chunk": ("transfer", "chunk"),
     "finalize": ("transfer", "finalize"),
     "consume": ("transfer", "finalize", "consume"),
     "hold": ("publish", "hold"),
@@ -1963,6 +2017,9 @@ _IDENTIFIER_COLUMNS: Final = (
     ("transfer", "session", "report_transfer_sessions", "session_id"),
     ("transfer", "session", "report_transfer_sessions", "owner_principal_id"),
     ("consume", "session_update", "report_transfer_sessions", "consumed_content_id"),
+    # WP06 A2.
+    ("chunk", "chunk", "report_transfer_chunks", "session_id"),
+    ("chunk", "chunk", "report_transfer_chunks", "owner_principal_id"),
     # WP05b.
     ("hold", "root_update", "report_roots", "hold_event_id"),
     ("hold", "hold_event", "report_hold_events", "event_id"),
@@ -1992,6 +2049,12 @@ _A: Final = "report_associations"
 _E: Final = "report_lifecycle_events"
 _RC: Final = "report_receipts"
 _T: Final = "report_transfer_sessions"
+_TC: Final = "report_transfer_chunks"
+#: The chunk insert guard's four refusals (WP06 A2).
+_CHUNK_SESSION: Final = "a report transfer chunk belongs to a visible session"
+_CHUNK_OPEN: Final = "a report transfer chunk is received only while its session is open"
+_CHUNK_IN_ORDER: Final = "a report transfer chunk continues its session's received bytes"
+_CHUNK_WITHIN: Final = "a report transfer chunk stays within its session's declaration"
 _H: Final = "report_hold_events"
 _RT: Final = "report_retention_policy_events"
 _NO_SUCH_HOLD: Final = "grhld_nosuchevent0001"
@@ -2860,7 +2923,57 @@ def _transfer_cases() -> list[Case]:
         return Case(id_, chain, _refused(message), then=lambda ids: [_session_move(ids, **fields)])
 
     return [
-        case("client_ref", {"client_ref": ""}, "a_report_transfer_client_ref_is_bounded"),
+        # WP06 A1: the client binding, the fixed chunk limit and the begin key.
+        case(
+            "client_ref",
+            {"client_ref": "synthetic-client"},
+            "a_report_transfer_is_bound_to_a_client",
+        ),
+        case(
+            "client_ref_kind",
+            {"client_ref": "operator:gcrt_" + "0" * 40},
+            "a_report_transfer_is_bound_to_a_client",
+        ),
+        case(
+            "client_ref_pseudonym",
+            {"client_ref": "remote_client:gcrt_" + "A" * 40},
+            "a_report_transfer_is_bound_to_a_client",
+        ),
+        Case(
+            "client_ref_required",
+            "transfer",
+            Expect(NOT_NULL_VIOLATION),
+            {"session": {"client_ref": None}},
+        ),
+        case("key_bounded", {"idempotency_key": ""}, "a_report_transfer_key_is_bounded"),
+        case(
+            "key_bounded_above", {"idempotency_key": "k" * 129}, "a_report_transfer_key_is_bounded"
+        ),
+        case("intent_digest", {"intent_digest": _UPPER}, "a_report_transfer_intent_is_a_digest"),
+        Case(
+            "begin_keyed",
+            "transfer",
+            _unique(_T, "a_report_transfer_begin_is_keyed"),
+            then=_reinsert("transfer", "session", "session_id", "session2"),
+        ),
+        guard(
+            "guard_idempotency_key",
+            "transfer",
+            "a report transfer session declaration is immutable",
+            idempotency_key="another-begin-key",
+        ),
+        guard(
+            "guard_intent_digest",
+            "transfer",
+            "a report transfer session declaration is immutable",
+            intent_digest=_DIGEST,
+        ),
+        guard(
+            "guard_client_ref",
+            "transfer",
+            "a report transfer session declaration is immutable",
+            client_ref="local_principal:gcrt_" + "0" * 40,
+        ),
         case("state_known", {"state": "paused"}, "a_report_transfer_state_is_known"),
         case("format_known", {"format": "html"}, "a_report_transfer_format_is_known"),
         case("encoding_known", {"original_encoding": "br"}, "a_report_transfer_encoding_is_known"),
@@ -2877,7 +2990,12 @@ def _transfer_cases() -> list[Case]:
         case(
             "chunk_limit",
             {"chunk_byte_limit": TRANSFER_CHUNK_MAX_BYTES + 1},
-            "a_report_transfer_chunk_limit_is_bounded",
+            "a_report_transfer_chunk_limit_is_fixed",
+        ),
+        case(
+            "chunk_limit_smaller",
+            {"chunk_byte_limit": 65536},
+            "a_report_transfer_chunk_limit_is_fixed",
         ),
         case(
             "received_bounded",
@@ -2963,6 +3081,88 @@ def _transfer_cases() -> list[Case]:
             "guard_delete_after_consume",
             "consume",
             _refused("a consumed report transfer session is kept"),
+            then=lambda ids: [
+                _raw(
+                    "delete",
+                    _T,
+                    "DELETE FROM knowledge.report_transfer_sessions WHERE session_id = :s",
+                    s=ids["session"],
+                )
+            ],
+        ),
+    ]
+
+
+def _later_chunk(sequence: int, byte_count: int = 1) -> Callable[[dict[str, str]], list[Op]]:
+    def build(ids: dict[str, str]) -> list[Op]:
+        return [_chunk(ids, sequence, byte_count)]
+
+    return build
+
+
+def _chunk_cases() -> list[Case]:
+    """WP06 A2: the chunk ledger's CHECKs, its reference and its insert guard."""
+
+    def case(id_: str, fields: dict[str, object], expect: Expect) -> Case:
+        return Case(id_, "chunk", expect, {"chunk": fields})
+
+    return [
+        # The guard admits the row (offset 0 = received 0, within 100): only
+        # the fixed-offset CHECK can refuse a chunk not at sequence * 262144.
+        case(
+            "offset_fixed",
+            {"sequence": 1},
+            _check(_TC, "a_report_transfer_chunk_is_at_its_fixed_offset"),
+        ),
+        # Sequence 64 at offset 0: the fixed offset refuses first; the sequence
+        # bound is its backstop in `MASKED`.
+        case(
+            "sequence_beyond_the_ledger",
+            {"sequence": 64},
+            _check(_TC, "a_report_transfer_chunk_is_at_its_fixed_offset"),
+        ),
+        case(
+            "size_bounded",
+            {"byte_count": 0},
+            _check(_TC, "a_report_transfer_chunk_size_is_bounded"),
+        ),
+        case(
+            "digest",
+            {"chunk_sha256": _UPPER},
+            _check(_TC, "a_report_transfer_chunk_digest_is_sha256"),
+        ),
+        # The guard finds no session first; the reference is its backstop.
+        case("session_visible", {"session_id": "grxfr_nosuchsession01"}, _refused(_CHUNK_SESSION)),
+        case("foreign_session", {"owner_principal_id": Foreign("owner")}, _refused(_CHUNK_SESSION)),
+        # Ahead of the received bytes (a gap): sequence 1 on an empty session.
+        case(
+            "guard_ahead",
+            {"sequence": 1, "byte_offset": TRANSFER_CHUNK_MAX_BYTES},
+            _refused(_CHUNK_IN_ORDER),
+        ),
+        case("guard_overrun", {"byte_count": 101}, _refused(_CHUNK_WITHIN)),
+        # After the first chunk: the same sequence again, and the next one,
+        # each at an offset other than the received count.
+        Case("guard_duplicate", "chunk", _refused(_CHUNK_IN_ORDER), then=_later_chunk(0)),
+        Case("guard_gap_after_first", "chunk", _refused(_CHUNK_IN_ORDER), then=_later_chunk(1)),
+        Case("guard_finalized", "finalize", _refused(_CHUNK_OPEN), then=_later_chunk(0)),
+        Case(
+            "guard_aborted",
+            "transfer",
+            _refused(_CHUNK_OPEN),
+            then=lambda ids: [_session_move(ids, state="aborted"), _chunk(ids)],
+        ),
+        Case(
+            "guard_consumed",
+            "consume",
+            _refused(_CHUNK_OPEN),
+            then=_later_chunk(0),
+        ),
+        # A session holding a chunk cannot be deleted (no cascade).
+        Case(
+            "session_delete",
+            "chunk",
+            _fk(_TC, "a_report_transfer_chunk_belongs_to_a_session_of_its_owner"),
             then=lambda ids: [
                 _raw(
                     "delete",
@@ -3346,6 +3546,13 @@ _APPEND_ONLY_LEDGERS: Final = {
         "t1",
         "reason = 'Rewritten synthetic reason'",
     ),
+    # WP06 A2: the transfer chunk ledger.
+    "report_transfer_chunks": (
+        "chunk",
+        "session_id",
+        "session",
+        "received_at = received_at + interval '1 second'",
+    ),
 }
 
 
@@ -3520,6 +3727,10 @@ def _identifier_expect(table: str, column: str) -> Expect:
     # malformed id first; it falls to its identifier CHECK in `MASKED`.
     if (table, column) == (_RT, "predecessor_event_id"):
         return _refused(_RETENTION_PREDECESSOR, FOREIGN_KEY_VIOLATION)
+    # WP06: the chunk guard finds no session by a malformed id first; each
+    # falls to its identifier CHECK in `MASKED`.
+    if table == _TC:
+        return _refused(_CHUNK_SESSION)
     guarded = _GUARDED_IDENTIFIERS.get((table, column))
     if guarded is not None:
         return _refused(guarded)
@@ -3548,6 +3759,7 @@ CASES: Final[tuple[Case, ...]] = (
     *(Case(f"lifecycle_{c.id}", c.chain, c.expect, c.change, c.then) for c in _lifecycle_cases()),
     *(Case(f"receipt_{c.id}", c.chain, c.expect, c.change, c.then) for c in _receipt_cases()),
     *(Case(f"transfer_{c.id}", c.chain, c.expect, c.change, c.then) for c in _transfer_cases()),
+    *(Case(f"chunk_{c.id}", c.chain, c.expect, c.change, c.then) for c in _chunk_cases()),
     *(Case(f"hold_{c.id}", c.chain, c.expect, c.change, c.then) for c in _hold_cases()),
     *(Case(f"retention_{c.id}", c.chain, c.expect, c.change, c.then) for c in _retention_cases()),
     *(
@@ -3560,7 +3772,7 @@ _BY_ID: Final = {case.id: case for case in CASES}
 
 
 def test_the_guard_cases_name_every_plane_check_and_reference() -> None:
-    """Every CHECK and foreign key of the 10 tables has a case, but the masked ones.
+    """Every CHECK and foreign key of the 11 tables has a case, but the masked ones.
 
     `a_report_lifecycle_{operation,prior_state,resulting_state}_is_known` are
     implied by `a_report_lifecycle_transition_is_valid`, which enumerates every
@@ -3874,7 +4086,7 @@ def _plane_rows(engine: Engine) -> dict[str, tuple[int, str]]:
 def _truncate_seed(table: str, ids: dict[str, str]) -> Op:
     ops = [
         op
-        for name in (*CHAINS["restore"], "transfer", "hold", "retention")
+        for name in (*CHAINS["restore"], "transfer", "chunk", "hold", "retention")
         for op in _TRANSACTIONS[name](ids)
         if op.key is None and op.sql is None
     ]
@@ -4140,6 +4352,57 @@ LOAD_BEARING: Final = (
         "a_report_retention_key_admits_one_request",
         "retention_key_once",
     ),
+    # WP06 A1/A2.
+    (
+        "transfer_client_binding_check",
+        "ALTER TABLE knowledge.report_transfer_sessions DROP CONSTRAINT "
+        "a_report_transfer_is_bound_to_a_client",
+        "transfer_client_ref",
+    ),
+    (
+        "transfer_fixed_chunk_limit_check",
+        "ALTER TABLE knowledge.report_transfer_sessions DROP CONSTRAINT "
+        "a_report_transfer_chunk_limit_is_fixed",
+        "transfer_chunk_limit_smaller",
+    ),
+    (
+        "transfer_begin_key_unique",
+        "ALTER TABLE knowledge.report_transfer_sessions DROP CONSTRAINT "
+        "a_report_transfer_begin_is_keyed",
+        "transfer_begin_keyed",
+    ),
+    (
+        "chunk_fixed_offset_check",
+        "ALTER TABLE knowledge.report_transfer_chunks DROP CONSTRAINT "
+        "a_report_transfer_chunk_is_at_its_fixed_offset",
+        "chunk_offset_fixed",
+    ),
+    (
+        "chunk_guard_in_order",
+        f"DROP TRIGGER {CHUNK_GUARD} ON knowledge.report_transfer_chunks",
+        "chunk_guard_ahead",
+    ),
+    (
+        "chunk_guard_within_declaration",
+        f"DROP TRIGGER {CHUNK_GUARD} ON knowledge.report_transfer_chunks",
+        "chunk_guard_overrun",
+    ),
+    (
+        "chunk_guard_open_session",
+        f"DROP TRIGGER {CHUNK_GUARD} ON knowledge.report_transfer_chunks",
+        "chunk_guard_finalized",
+    ),
+    (
+        "chunks_append_only_trigger",
+        "DROP TRIGGER report_transfer_chunks_are_append_only ON knowledge.report_transfer_chunks",
+        "append_only_report_transfer_chunks_delete",
+    ),
+    (
+        "chunk_session_fk",
+        "ALTER TABLE knowledge.report_transfer_chunks DROP CONSTRAINT "
+        "a_report_transfer_chunk_belongs_to_a_session_of_its_owner",
+        "chunk_session_delete",
+    ),
 )
 
 
@@ -4261,6 +4524,35 @@ MASKED: Final = (
         "DROP TRIGGER a_report_root_moves_only_its_caches ON knowledge.report_roots",
         "root_root_guard_hold_without_revision",
         _fk(_R, "a_report_hold_cache_is_an_event_of_the_report"),
+    ),
+    # WP06 A2: the chunk guard finds no session first; without it, a malformed
+    # id falls to its CHECK and an unknown or foreign session to the reference.
+    *(
+        (
+            f"chunk_{column}_identifier_behind_its_guard",
+            f"DROP TRIGGER {CHUNK_GUARD} ON knowledge.report_transfer_chunks",
+            f"identifier_report_transfer_chunks_{column}_chunk",
+            _check(_TC, f"{column}_is_an_opaque_identifier"),
+        )
+        for column in ("session_id", "owner_principal_id")
+    ),
+    *(
+        (
+            f"chunk_{case_id}_behind_its_guard",
+            f"DROP TRIGGER {CHUNK_GUARD} ON knowledge.report_transfer_chunks",
+            f"chunk_{case_id}",
+            _fk(_TC, "a_report_transfer_chunk_belongs_to_a_session_of_its_owner"),
+        )
+        for case_id in ("session_visible", "foreign_session")
+    ),
+    # A sequence beyond the ledger is off its fixed offset first (CHECKs run
+    # in name order, and the guard admits offset 0 on an empty session).
+    (
+        "chunk_sequence_behind_its_fixed_offset",
+        "ALTER TABLE knowledge.report_transfer_chunks DROP CONSTRAINT "
+        "a_report_transfer_chunk_is_at_its_fixed_offset",
+        "chunk_sequence_beyond_the_ledger",
+        _check(_TC, "a_report_transfer_chunk_sequence_is_bounded"),
     ),
 )
 
@@ -4732,6 +5024,13 @@ def test_without_the_audit_refusal_the_before_text_fails_on_the_audit_row(
 _DOWNGRADE_STATES: Final[dict[str, Callable[[dict[str, str]], list[Op]]]] = {
     "publish": lambda ids: [op for op in _publish(ids) if not op.label.startswith("association")],
     "transfer_session_only": lambda ids: [_session(ids)],
+    # WP06: a session holding a chunk, and a lone chunk (written with the
+    # triggers and references off, so only the chunk clause can hold it).
+    "transfer_chunk": lambda ids: [_session(ids), *_TRANSACTIONS["chunk"](ids)],
+    "transfer_chunk_only": lambda ids: [
+        _raw("replica", _TC, "SET LOCAL session_replication_role = replica"),
+        _chunk(ids),
+    ],
     # WP05b: a held report, and a lone retention policy event.
     "hold": lambda ids: [
         *(op for op in _publish(ids) if not op.label.startswith("association")),
@@ -4749,6 +5048,8 @@ _PUBLISH_ROWS: Final = (
 _DOWNGRADE_HOLDING: Final = {
     "publish": _PUBLISH_ROWS,
     "transfer_session_only": ("report_transfer_sessions",),
+    "transfer_chunk": ("report_transfer_sessions", "report_transfer_chunks"),
+    "transfer_chunk_only": ("report_transfer_chunks",),
     "hold": (*_PUBLISH_ROWS, "report_hold_events"),
     "retention_only": ("report_retention_policy_events",),
 }
@@ -4912,7 +5213,7 @@ def test_a_retention_period_at_its_bounds_or_unset_is_admitted(
 
 #: Every test in this module that touches a server, for the tier guard below.
 _DATABASE_TESTS: Final[tuple[Callable[..., None], ...]] = (
-    test_empty_to_head_creates_exactly_the_ten_tables,
+    test_empty_to_head_creates_exactly_the_eleven_tables,
     test_runtime_metadata_matches_the_revision,
     test_predecessor_with_legacy_evidence_upgrades_unchanged,
     test_each_guard_refuses_exactly_its_mutation,

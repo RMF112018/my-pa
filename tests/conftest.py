@@ -38,9 +38,10 @@ import os
 import re
 import stat
 import sys
+import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import TracebackType
@@ -159,6 +160,12 @@ from my_pa.contracts.ports import (
     ReportStaleLifecycleRevisionError,
     ReportStalePolicyRevisionError,
     ReportStaleVersionError,
+    ReportTransferConflictError,
+    ReportTransferDigestError,
+    ReportTransferNotFoundError,
+    ReportTransferQuotaError,
+    ReportTransferRepository,
+    ReportTransferStaging,
     ReportTrashPreflightError,
     ReportWithdrawnError,
     RepositoryFailureError,
@@ -171,6 +178,8 @@ from my_pa.contracts.ports import (
     SourceRepository,
     TaskManagementRepository,
     TaskManagementUnitOfWork,
+    TransferChunk,
+    TransferSession,
     UnitOfWork,
     UnknownScopeError,
     WorkCursorError,
@@ -283,6 +292,7 @@ from my_pa.domain.goodnotes.models import (
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.identity.secret_digests import digests_match
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
 from my_pa.domain.lineage.vocabulary import SituationKind
 from my_pa.domain.meeting.model import (
@@ -487,8 +497,17 @@ from my_pa.domain.reports.revision import (
     apply_patch,
     snapshot_of_version,
 )
+from my_pa.domain.reports.transfer import CLIENT_REF_PATTERN as TRANSFER_CLIENT_REF_PATTERN
+from my_pa.domain.reports.transfer import (
+    TRANSFER_DECLARED_BYTES_PER_OWNER,
+    TRANSFER_SESSIONS_PER_CLIENT,
+    TRANSFER_SESSIONS_PER_OWNER,
+    TransferDeclaration,
+)
+from my_pa.domain.reports.transfer import content_token_digest as transfer_content_token_digest
 from my_pa.domain.reports.values import ReportAssociation
 from my_pa.domain.reports.vocabulary import (
+    TRANSFER_CHUNK_MAX_BYTES,
     AssociationTargetKind,
     AssociationVerification,
     ChangeKind,
@@ -498,6 +517,7 @@ from my_pa.domain.reports.vocabulary import (
     ReceiptOutcome,
     StorageKind,
 )
+from my_pa.domain.reports.vocabulary import TransferState as ReportTransferState
 from my_pa.domain.search.query import RankCategory, SearchMatch, SearchQuery, SearchRequest
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
@@ -561,6 +581,12 @@ from my_pa.infrastructure.persistence.report_custody import (
     PreservationSource,
     preservation_source,
     seal_preservation_copy,
+)
+from my_pa.infrastructure.persistence.report_transfers import (
+    check_chunk_digest as check_transfer_chunk_digest,
+)
+from my_pa.infrastructure.persistence.report_transfers import (
+    check_chunk_size as check_transfer_chunk_size,
 )
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
 
@@ -1030,6 +1056,13 @@ class World:
     #: WP05b W3: each owner's retention policy history, oldest first, by principal.
     general_report_retention_events: dict[str, list[RetentionPolicyEventRecord]] = field(
         default_factory=dict
+    )
+    #: WP06: transfer sessions by id, their chunk ledgers, and the lock that
+    #: stands in for the per-owner begin advisory lock.
+    report_transfer_sessions: dict[str, TransferSession] = field(default_factory=dict)
+    report_transfer_chunks: dict[str, list[TransferChunk]] = field(default_factory=dict)
+    report_transfer_lock: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
     )
     #: The relationship-intelligence entity plane. Flat lists for the reason
     #: every other plane on `World` is one: the fake's whole job is the
@@ -9903,6 +9936,313 @@ def _as_read(stored: StoredReportVersion) -> StoredReportVersion:
     )
 
 
+class _ReportTransfers(ReportTransferRepository):
+    """`ReportTransferRepository` over a `World` (Reports Modernization WP06 B3).
+
+    The same order and outcomes as `SqlReportTransferRepository`: the per-owner
+    begin serialization (a `threading.Lock` stands in for the advisory lock),
+    the keyed replay, the T6 quotas, the T5 uniform refusal, the append order
+    and the GC queries; the T2 size and digest rules are the SQL module's own
+    pure functions. The two are run against one behaviour table in
+    `tests/database/test_reports_transfer_repository.py` and
+    `tests/unit/test_reports_transfer_repository_fake.py`. It cannot prove
+    row locks, triggers or rollback: those are the `database` tier's.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    @staticmethod
+    def _client(client_ref: str) -> str:
+        if type(client_ref) is not str or not re.fullmatch(
+            TRANSFER_CLIENT_REF_PATTERN.strip("^$"), client_ref
+        ):
+            raise ReportValidationError("client_ref", "pattern")
+        return client_ref
+
+    @staticmethod
+    def _now(now: object) -> datetime:
+        if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
+            raise ReportValidationError("now", "naive")
+        return now.astimezone(UTC)
+
+    def _own(
+        self, session_id: object, principal_id: str, client_ref: str
+    ) -> TransferSession | None:
+        if type(session_id) is not str:
+            return None
+        found = self._world.report_transfer_sessions.get(session_id)
+        if found is None or found.owner_principal_id != principal_id:
+            return None
+        return found if found.client_ref == client_ref else None
+
+    def begin(
+        self,
+        declaration: TransferDeclaration,
+        *,
+        principal_id: str,
+        client_ref: str,
+        idempotency_key: str,
+        now: datetime,
+    ) -> tuple[TransferSession, bool]:
+        if not isinstance(declaration, TransferDeclaration):
+            raise ReportValidationError("declaration", "type")
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        client = self._client(client_ref)
+        if type(idempotency_key) is not str or not 1 <= len(idempotency_key) <= 128:
+            raise ReportValidationError("idempotency_key", "bounds")
+        at = self._now(now)
+        with self._world.report_transfer_lock:
+            mine = [
+                s
+                for s in self._world.report_transfer_sessions.values()
+                if s.owner_principal_id == principal_id
+            ]
+            keyed = next(
+                (
+                    s
+                    for s in mine
+                    if s.client_ref == client and s.idempotency_key == idempotency_key
+                ),
+                None,
+            )
+            if keyed is not None:
+                if keyed.intent_digest != declaration.intent_digest:
+                    raise ReportIdempotencyConflictError()
+                if not keyed.usable_at(at):
+                    raise ReportTransferNotFoundError()
+                return keyed, True
+            live = [s for s in mine if s.usable_at(at)]
+            if (
+                sum(1 for s in live if s.client_ref == client) >= TRANSFER_SESSIONS_PER_CLIENT
+                or len(live) >= TRANSFER_SESSIONS_PER_OWNER
+                or sum(s.declared_byte_count for s in live) + declaration.byte_count
+                > TRANSFER_DECLARED_BYTES_PER_OWNER
+            ):
+                raise ReportTransferQuotaError()
+            session = TransferSession(
+                session_id=issue_identifier(IdKind.REPORT_TRANSFER_SESSION),
+                owner_principal_id=principal_id,
+                client_ref=client,
+                state=ReportTransferState.OPEN,
+                format=declaration.format,
+                encoding=declaration.encoding,
+                declared_byte_count=declaration.byte_count,
+                declared_sha256=declaration.sha256,
+                chunk_byte_limit=TRANSFER_CHUNK_MAX_BYTES,
+                received_byte_count=0,
+                idempotency_key=idempotency_key,
+                intent_digest=declaration.intent_digest,
+                created_at=at,
+                expires_at=at + timedelta(seconds=declaration.ttl_seconds),
+                finalized_at=None,
+                consumed_content_id=None,
+                consumed_at=None,
+            )
+            self._world.report_transfer_sessions[session.session_id] = session
+            self._world.report_transfer_chunks[session.session_id] = []
+            return session, False
+
+    def lock_usable(
+        self, session_id: str, *, principal_id: str, client_ref: str, now: datetime
+    ) -> TransferSession:
+        client = self._client(client_ref)
+        at = self._now(now)
+        session = self._own(session_id, principal_id, client)
+        if session is None or not session.usable_at(at):
+            raise ReportTransferNotFoundError()
+        return session
+
+    def chunks(self, session_id: str, *, principal_id: str) -> tuple[TransferChunk, ...]:
+        session = self._world.report_transfer_sessions.get(session_id)
+        if session is None or session.owner_principal_id != principal_id:
+            return ()
+        return tuple(self._world.report_transfer_chunks.get(session_id, ()))
+
+    def append_chunk(
+        self,
+        session: TransferSession,
+        *,
+        sequence: int,
+        chunk_sha256: str,
+        data: bytes,
+        staging: ReportTransferStaging,
+        now: datetime,
+    ) -> tuple[TransferChunk, bool]:
+        at = self._now(now)
+        if type(sequence) is not int:
+            raise ReportValidationError("sequence", "type")
+        if type(data) is not bytes:
+            raise ReportValidationError("chunk", "type")
+        current = self._world.report_transfer_sessions[session.session_id]
+        if current.state is ReportTransferState.FINALIZED:
+            raise ReportTransferConflictError("transfer_state")
+        if current.state is not ReportTransferState.OPEN:
+            raise ReportTransferNotFoundError()
+        check_transfer_chunk_size(current, sequence, data)
+        check_transfer_chunk_digest(chunk_sha256, data)
+        ledger = self._world.report_transfer_chunks[session.session_id]
+        existing = next((c for c in ledger if c.sequence == sequence), None)
+        if existing is not None:
+            if existing.byte_count == len(data) and existing.chunk_sha256 == chunk_sha256:
+                return existing, True
+            raise ReportTransferConflictError("transfer_chunk_conflict")
+        if sequence != len(ledger):
+            raise ReportTransferConflictError("transfer_sequence")
+        staging.put_chunk(session.session_id, sequence, chunk_sha256=chunk_sha256, data=data)
+        chunk = TransferChunk(
+            session_id=session.session_id,
+            sequence=sequence,
+            byte_offset=sequence * TRANSFER_CHUNK_MAX_BYTES,
+            byte_count=len(data),
+            chunk_sha256=chunk_sha256,
+            received_at=at,
+        )
+        ledger.append(chunk)
+        self._world.report_transfer_sessions[session.session_id] = replace(
+            current, received_byte_count=current.received_byte_count + len(data)
+        )
+        return chunk, False
+
+    def staged_bytes(self, session: TransferSession, *, staging: ReportTransferStaging) -> bytes:
+        staged = b"".join(
+            staging.read_chunk(
+                session.session_id,
+                c.sequence,
+                chunk_sha256=c.chunk_sha256,
+                expected_byte_count=c.byte_count,
+            )
+            for c in self.chunks(session.session_id, principal_id=session.owner_principal_id)
+        )
+        if (
+            len(staged) != session.declared_byte_count
+            or hashlib.sha256(staged).hexdigest() != session.declared_sha256
+        ):
+            raise ReportTransferDigestError()
+        return staged
+
+    def _move(
+        self, session: TransferSession, states: tuple[ReportTransferState, ...], **values: object
+    ) -> TransferSession:
+        current = self._world.report_transfer_sessions.get(session.session_id)
+        if (
+            current is None
+            or current.owner_principal_id != session.owner_principal_id
+            or current.client_ref != session.client_ref
+            or current.state not in states
+        ):
+            raise ReportTransferNotFoundError()
+        moved = replace(current, **values)  # type: ignore[arg-type]
+        self._world.report_transfer_sessions[session.session_id] = moved
+        return moved
+
+    def finalize(
+        self, session: TransferSession, *, token_digest: str, now: datetime
+    ) -> TransferSession:
+        at = self._now(now)
+        if type(token_digest) is not str or not re.fullmatch(r"[0-9a-f]{64}", token_digest):
+            raise ReportValidationError("content_token_digest", "pattern")
+        if session.state is ReportTransferState.FINALIZED:
+            raise ReportTransferConflictError("transfer_state")
+        if session.state is not ReportTransferState.OPEN:
+            raise ReportTransferNotFoundError()
+        if session.received_byte_count != session.declared_byte_count:
+            raise ReportTransferConflictError("transfer_incomplete")
+        return self._move(
+            session,
+            (ReportTransferState.OPEN,),
+            state=ReportTransferState.FINALIZED,
+            content_token_digest=token_digest,
+            finalized_at=at,
+        )
+
+    def claim_for_consumption(
+        self,
+        session_id: str,
+        content_token: str,
+        *,
+        principal_id: str,
+        client_ref: str,
+        now: datetime,
+    ) -> TransferSession:
+        session = self.lock_usable(
+            session_id, principal_id=principal_id, client_ref=client_ref, now=now
+        )
+        presented = transfer_content_token_digest(content_token)
+        if (
+            session.state is not ReportTransferState.FINALIZED
+            or presented is None
+            or not digests_match(presented, session.content_token_digest)
+        ):
+            raise ReportTransferNotFoundError()
+        return session
+
+    def mark_consumed(
+        self, session: TransferSession, *, content_id: str, now: datetime
+    ) -> TransferSession:
+        at = self._now(now)
+        validate_identifier(content_id, IdKind.REPORT_CONTENT)
+        if session.state is not ReportTransferState.FINALIZED:
+            raise ReportTransferNotFoundError()
+        return self._move(
+            session,
+            (ReportTransferState.FINALIZED,),
+            state=ReportTransferState.CONSUMED,
+            consumed_content_id=content_id,
+            consumed_at=at,
+        )
+
+    def abort(
+        self, session_id: str, *, principal_id: str, client_ref: str, now: datetime
+    ) -> tuple[TransferSession, bool]:
+        client = self._client(client_ref)
+        at = self._now(now)
+        session = self._own(session_id, principal_id, client)
+        if session is None or session.expires_at <= at:
+            raise ReportTransferNotFoundError()
+        if session.state is ReportTransferState.ABORTED:
+            return session, True
+        live = (ReportTransferState.OPEN, ReportTransferState.FINALIZED)
+        if session.state not in live:
+            raise ReportTransferNotFoundError()
+        return self._move(session, live, state=ReportTransferState.ABORTED), False
+
+    def expire_due(self, *, now: datetime, limit: int) -> tuple[str, ...]:
+        at = self._now(now)
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ReportValidationError("limit", "bounds")
+        due = sorted(
+            (
+                s
+                for s in self._world.report_transfer_sessions.values()
+                if s.state in (ReportTransferState.OPEN, ReportTransferState.FINALIZED)
+                and s.expires_at <= at
+            ),
+            key=lambda s: (s.expires_at, s.session_id),
+        )[:limit]
+        for s in due:
+            self._world.report_transfer_sessions[s.session_id] = replace(
+                s, state=ReportTransferState.EXPIRED
+            )
+        return tuple(s.session_id for s in due)
+
+    def terminal_session_ids(self, session_ids: Iterable[str]) -> frozenset[str]:
+        terminal = (
+            ReportTransferState.CONSUMED,
+            ReportTransferState.ABORTED,
+            ReportTransferState.EXPIRED,
+        )
+        return frozenset(
+            i
+            for i in session_ids
+            if (s := self._world.report_transfer_sessions.get(i)) is not None
+            and s.state in terminal
+        )
+
+    def known_session_ids(self, session_ids: Iterable[str]) -> frozenset[str]:
+        return frozenset(i for i in session_ids if i in self._world.report_transfer_sessions)
+
+
 class _GeneralReports(GeneralReportRepository):
     """`GeneralReportRepository` over a `World`: the partition rule and the replay rule.
 
@@ -11036,6 +11376,11 @@ class FakeUnitOfWork(UnitOfWork):
     def general_reports(self) -> GeneralReportRepository:
         """The general report plane over this `World` (Reports Modernization WP02)."""
         return _GeneralReports(self._world)
+
+    @property
+    def report_transfers(self) -> ReportTransferRepository:
+        """The transfer sessions and chunk ledger over this `World` (Reports Modernization WP06)."""
+        return _ReportTransfers(self._world)
 
     @property
     def entities(self) -> EntitiesRepository:

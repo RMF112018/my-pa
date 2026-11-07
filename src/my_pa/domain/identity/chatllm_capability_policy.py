@@ -137,6 +137,15 @@ _DATA_REQUIRED: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_ARCHIVE,
         Capability.REPORTS_DELETE,
         Capability.REPORTS_RESTORE,
+        # Reports Modernization WP06: bounded chunked transfer, classified as
+        # `reports.publish` / `reports.read` are (client-usable, under the
+        # purposes the profile already grants). Classified here so the policy
+        # stays exhaustive; the profile version string is unchanged.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
+        Capability.REPORTS_TRANSFER_READ_CHUNK,
         Capability.REVIEW_DECIDE,
         Capability.REVIEW_LIST,
         Capability.SOURCES_FETCH,

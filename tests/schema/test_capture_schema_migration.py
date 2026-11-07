@@ -28,7 +28,7 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with two hundred and fifty capabilities and
+emits what it emitted on the day it merged, with two hundred and fifty-five capabilities and
 sixty-five purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
@@ -708,6 +708,12 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "reports.hold.release",
         "reports.retention.set",
         "reports.retention.get",
+        # Reports Modernization WP06: bounded chunked transfer.
+        "reports.transfer.begin",
+        "reports.transfer.append",
+        "reports.transfer.finalize",
+        "reports.transfer.abort",
+        "reports.transfer.read_chunk",
     }
 )
 

@@ -187,8 +187,14 @@ def test_at_sets_equal_the_live_enums() -> None:
         "reports.hold.release",
         "reports.retention.set",
         "reports.retention.get",
+        # Reports Modernization WP06: bounded chunked transfer.
+        "reports.transfer.begin",
+        "reports.transfer.append",
+        "reports.transfer.finalize",
+        "reports.transfer.abort",
+        "reports.transfer.read_chunk",
     }
-    assert len(head_capabilities) == len(declared) == 261
+    assert len(head_capabilities) == len(declared) == 266
     assert head["_PURPOSES_BEFORE_THIS_REVISION"] == mine["_PURPOSES_AT_THIS_REVISION"]
     head_purposes = _literals(head["_PURPOSES_AT_THIS_REVISION"])
     assert head_purposes == sorted(head_purposes)

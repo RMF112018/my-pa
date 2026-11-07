@@ -715,6 +715,7 @@ from my_pa.contracts.ports import (
     ReportStaleLifecycleRevisionError,
     ReportStalePolicyRevisionError,
     ReportStaleVersionError,
+    ReportTransferStaging,
     ReportTrashPreflightError,
     ReportWithdrawnError,
     ReviewDecisionRequest,
@@ -4733,6 +4734,7 @@ class ApplicationService:
         report_content_store: ReportContentStore | None = None,
         report_content_inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
         report_preservation_store: ReportContentStore | None = None,
+        report_transfer_staging: ReportTransferStaging | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
         #: WP05 C3: the report content store and the inline threshold. `None`
@@ -4754,6 +4756,10 @@ class ApplicationService:
         #: `MY_PA_REPORT_CONTENT_ROOT`) refuses every placement (`unavailable`,
         #: `preservation_store`); nothing else reads it.
         self._report_preservation_store = report_preservation_store
+        #: WP06 T13/T14: the transfer staging over the `transfer` namespace.
+        #: `None` (no `MY_PA_REPORT_CONTENT_ROOT`) withholds the four upload
+        #: capabilities; `reports.transfer.read_chunk` needs no staging.
+        self._report_transfer_staging = report_transfer_staging
         self._report_content_inline_max_bytes = report_content_inline_max_bytes
         #: WP05 corrective B-4: how far a gzip upload is inflated. Without a
         #: store nothing above the inline threshold can be placed, so nothing
@@ -4994,6 +5000,11 @@ class ApplicationService:
         served = frozenset(_HANDLERS)
         if self._managed_store_or_none is None:
             served -= _MANAGED_CAPABILITIES
+        # WP06 T14: an upload is served only where it can complete -- with a
+        # report content store (a transfer may exceed the inline threshold) AND
+        # the transfer staging it stages chunks in.
+        if self._report_content_store is None or self._report_transfer_staging is None:
+            served -= _REPORT_TRANSFER_UPLOAD_CAPABILITIES
         if not self._relationship_intelligence_enabled:
             served -= _ENTITY_CAPABILITIES
         # The write half, narrowed separately. Subtracted after the line above
@@ -16985,6 +16996,23 @@ class ApplicationService:
             )
         raise refusal
 
+    def _reports_transfer_pending(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: object,
+    ) -> _Result:
+        """WP06 W3a interim placeholder for the five `reports.transfer.*` names.
+
+        Registered only so `_HANDLERS` stays closed over the enum while the
+        vocabulary, commands and schemas land; it refuses `unsupported`. No
+        composition serves the four uploads yet (nothing composes the transfer
+        staging until W3b, so T14 withholds them); `read_chunk` is served, as T14
+        says, and refuses until W3b replaces this placeholder.
+        """
+        del unit_of_work, authorization, command
+        raise UnsupportedError()
+
     def _reports_retention_get(
         self,
         unit_of_work: UnitOfWork,
@@ -18397,6 +18425,12 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.REPORTS_HOLD_RELEASE: ApplicationService._reports_hold_release,
         Capability.REPORTS_RETENTION_SET: ApplicationService._reports_retention_set,
         Capability.REPORTS_RETENTION_GET: ApplicationService._reports_retention_get,
+        # WP06 W3a interim placeholders (W3b replaces each with its handler).
+        Capability.REPORTS_TRANSFER_BEGIN: ApplicationService._reports_transfer_pending,
+        Capability.REPORTS_TRANSFER_APPEND: ApplicationService._reports_transfer_pending,
+        Capability.REPORTS_TRANSFER_FINALIZE: ApplicationService._reports_transfer_pending,
+        Capability.REPORTS_TRANSFER_ABORT: ApplicationService._reports_transfer_pending,
+        Capability.REPORTS_TRANSFER_READ_CHUNK: ApplicationService._reports_transfer_pending,
         Capability.ENTITIES_SEARCH: ApplicationService._entities_search,
         Capability.ENTITIES_GET: ApplicationService._entities_get,
         Capability.ENTITIES_RESOLVE: ApplicationService._entities_resolve,
@@ -19255,6 +19289,18 @@ _CONSTRAINT_SYNC_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
+
+#: WP06 T14: the four upload writes, served only with both a report content
+#: store and the transfer staging composed. `reports.transfer.read_chunk` is not
+#: here: it reads inline content without a store, as `reports.read` does.
+_REPORT_TRANSFER_UPLOAD_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
+    }
+)
 
 _MANAGED_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {

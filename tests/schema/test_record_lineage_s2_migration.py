@@ -341,6 +341,12 @@ def test_at_vocabulary_adds_exactly_the_s2_names() -> None:
             "reports.hold.release",
             "reports.retention.set",
             "reports.retention.get",
+            # Reports Modernization WP06: bounded chunked transfer.
+            "reports.transfer.begin",
+            "reports.transfer.append",
+            "reports.transfer.finalize",
+            "reports.transfer.abort",
+            "reports.transfer.read_chunk",
         }
     )
     native = {capability.value for capability in NativeSourceCapability}

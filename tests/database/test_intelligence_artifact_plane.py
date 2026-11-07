@@ -342,6 +342,12 @@ def test_sql_forty_nine_cycle_kind_counts_and_digest_readback(migrated_engine: E
         "reports.hold.release",
         "reports.retention.set",
         "reports.retention.get",
+        # Reports Modernization WP06: bounded chunked transfer.
+        "reports.transfer.begin",
+        "reports.transfer.append",
+        "reports.transfer.finalize",
+        "reports.transfer.abort",
+        "reports.transfer.read_chunk",
     }
 
 

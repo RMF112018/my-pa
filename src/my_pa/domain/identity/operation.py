@@ -419,7 +419,7 @@ class Capability(StrEnum):
     # Principal's own partition. Real handwriting remains fail-closed.
     GSQS_START = "gsqs.start"
     GSQS_STATUS = "gsqs.status"
-    # Intelligence Artifact / Report plane. Twenty-one `reports.*` names rather than a
+    # Intelligence Artifact / Report plane. Twenty-six `reports.*` names rather than a
     # widening of `capture.*`, `documents.*`, `knowledge.*`, or `context.*`
     # (`D-91`). Capture is user-authored notes. Documents are managed bytes.
     # Knowledge is enrollment-scoped extraction. Context assembles a retrieval
@@ -485,6 +485,23 @@ class Capability(StrEnum):
     REPORTS_HOLD_RELEASE = "reports.hold.release"
     REPORTS_RETENTION_SET = "reports.retention.set"
     REPORTS_RETENTION_GET = "reports.retention.get"
+    #: Bounded chunked transfer of standalone report content (Reports
+    #: Modernization WP06). `transfer.begin` opens a keyed, client-bound upload
+    #: session declaring the format, encoding, staged byte count and sha256;
+    #: `transfer.append` stages one fixed-size chunk (262,144 raw bytes, every
+    #: chunk but the last full, at most 64); `transfer.finalize` verifies the
+    #: whole staged content through the one content pipeline and returns a
+    #: one-use content token that `reports.publish` / `reports.update` consume;
+    #: `transfer.abort` ends an uncommitted upload. None creates a report or
+    #: destroys a content object, so the four writes are additive.
+    #: `transfer.read_chunk` reads a verified byte range of one version's decoded
+    #: or original content, with `reports.read`'s visibility. Client-usable,
+    #: under the existing `report_authoring` / `report_read` purposes.
+    REPORTS_TRANSFER_BEGIN = "reports.transfer.begin"
+    REPORTS_TRANSFER_APPEND = "reports.transfer.append"
+    REPORTS_TRANSFER_FINALIZE = "reports.transfer.finalize"
+    REPORTS_TRANSFER_ABORT = "reports.transfer.abort"
+    REPORTS_TRANSFER_READ_CHUNK = "reports.transfer.read_chunk"
     # The relationship-intelligence entity plane. Fifty-five `entities.` names
     # over `knowledge.entities` and the tables around it, declared in four
     # blocks by the package that added each: WP-RI-05's six reads here, then
@@ -1454,6 +1471,13 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.REPORTS_HOLD_RELEASE: frozenset({Purpose.REPORT_HOLD}),
         Capability.REPORTS_RETENTION_SET: frozenset({Purpose.REPORT_RETENTION}),
         Capability.REPORTS_RETENTION_GET: frozenset({Purpose.REPORT_RETENTION}),
+        # WP06 transfer: uploading content is authoring it; reading a range of a
+        # version is reading the report. No new purpose.
+        Capability.REPORTS_TRANSFER_BEGIN: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_TRANSFER_APPEND: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_TRANSFER_FINALIZE: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_TRANSFER_ABORT: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_TRANSFER_READ_CHUNK: frozenset({Purpose.REPORT_READ}),
         Capability.ENTITIES_SEARCH: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_GET: frozenset({Purpose.ENTITY_READ}),
@@ -1834,6 +1858,11 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_HOLD_PLACE,
         Capability.REPORTS_HOLD_RELEASE,
         Capability.REPORTS_RETENTION_SET,
+        # WP06: the four upload writes (additive below); `read_chunk` is a read.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
         Capability.RELATIONSHIP_MEMORY_CREATE,
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
@@ -2003,6 +2032,14 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # Insert-only: a publish mints a new report root, version 1 and its
         # receipt, and reaches no existing report; a replay writes nothing.
         Capability.REPORTS_PUBLISH,
+        # WP06: an upload session creates no report and destroys nothing.
+        # `begin` inserts a session, `append` a ledger row and a staged chunk,
+        # `finalize` seals the upload with a token digest, and `abort` ends only
+        # an uncommitted upload; no report, version or content object is reached.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
         Capability.RELATIONSHIP_MEMORY_CREATE,
         Capability.ENTITIES_CREATE,
         Capability.ENTITIES_IDENTIFIERS_BIND,

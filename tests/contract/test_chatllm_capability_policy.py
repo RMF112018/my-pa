@@ -76,7 +76,7 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
-    assert len(CHATLLM_CAPABILITY_POLICY) == 250
+    assert len(CHATLLM_CAPABILITY_POLICY) == 255
     assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
 
 
@@ -87,8 +87,9 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # chatllm-data-v9: `reports.types.create` and `reports.types.list`, 72 -> 74.
     # Reports Modernization WP02 (chatllm-data-v12): `reports.publish`, 74 -> 75.
     # Reports Modernization WP03 (chatllm-data-v13): `reports.update`, `.history`,
-    # `.archive`, `.delete`, `.restore`, 75 -> 80.
-    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 80
+    # `.archive`, `.delete`, `.restore`, 75 -> 80. Reports Modernization WP06:
+    # the 5 `reports.transfer.*` names, 80 -> 85 (profile version unchanged).
+    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 85
     # KLP-WP-03 (chatllm-data-v6): the six Knowledge Assertion names, 90 -> 96.
     # KLP-WP-05 (chatllm-data-v8): `record_events.provenance`, 96 -> 97.
     # Record lineage P1 (chatllm-data-v10, operator directive 2026-10-26): the

@@ -293,7 +293,7 @@ def test_s31_capabilities_are_operator_decision_required() -> None:
     # WP02's `reports.publish` is `DATA_REQUIRED` since chatllm-data-v12, and
     # WP03's five since chatllm-data-v13).
     assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
-    assert len(Capability) == 250
+    assert len(Capability) == 255
     # P1 moved data-class members, so the ChatLLM data profile moved too.
     assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
 

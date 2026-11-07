@@ -228,8 +228,8 @@ def _capability_enum(scene: Scene) -> None:
         (name, value) for name, value, _, _ in _TABLE
     ]
     # Reports Modernization WP03 declares its five beside `reports.publish`, and
-    # WP05b its four custody names after them.
-    assert len(members) == 250
+    # WP05b its four custody names after them, and WP06 its five transfer names.
+    assert len(members) == 255
 
 
 def _purpose_enum(scene: Scene) -> None:
@@ -508,7 +508,7 @@ def test_import_is_control_plane_excluded() -> None:
 
 def test_v11_targets() -> None:
     assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
-    assert len(CHATLLM_CAPABILITY_POLICY) == 250
+    assert len(CHATLLM_CAPABILITY_POLICY) == 255
     # chatllm-data-v12: `reports.publish` (`DATA_REQUIRED`) adds 1 everywhere;
     # chatllm-data-v13: the 5 report management names add 5 everywhere.
     full = _desired(_planes(**_FULL))

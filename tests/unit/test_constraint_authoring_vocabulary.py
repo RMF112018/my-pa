@@ -108,8 +108,8 @@ def test_the_two_vocabularies_are_the_sizes_this_package_states() -> None:
     # CPM Workbench S5b-2: the 7 Schedule names and their 2 purposes.
     # Reports Modernization WP02: `reports.publish`, and no purpose. WP03: its 5
     # names and `report_lifecycle`. WP05b: its 4 custody names, `report_hold` and
-    # `report_retention`.
-    assert len(Capability) == 250
+    # `report_retention`. WP06: its 5 transfer names, and no purpose.
+    assert len(Capability) == 255
     assert len(Purpose) == 65
 
 

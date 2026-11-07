@@ -16,10 +16,12 @@ module proves:
   `purpose_is_known` it restates exactly once each, last; the downgrade locks
   the plane and refuses before it restores or drops anything;
 * **the audit vocabulary** -- each BEFORE text is a byte copy of the AT text
-  `621ef6786c64` left; the capability AT text is it plus exactly the 10 general
+  `621ef6786c64` left; the capability AT text is it plus exactly the 15 general
   report capabilities (WP02 `reports.publish`, WP03 `reports.update`,
   `.history`, `.archive`, `.delete`, `.restore`, WP05b A5 `reports.hold.place`,
-  `.hold.release`, `.retention.get`, `.retention.set`) and the purpose AT text
+  `.hold.release`, `.retention.get`, `.retention.set`, WP06 A5
+  `reports.transfer.abort`, `.append`, `.begin`, `.finalize`, `.read_chunk`)
+  and the purpose AT text
   is it plus exactly `report_lifecycle` (WP03), `report_hold` and
   `report_retention` (WP05b A5); the downgrade refusal names every one;
 * on disposable databases: empty to head creates exactly the 11 tables, the 11
@@ -28,8 +30,9 @@ module proves:
   Capture and managed-document rows upgrades with every pre-existing table's
   rows and catalog unchanged but the `capability_is_known` and
   `purpose_is_known` definitions; the upgrade admits a `reports.publish` and a
-  `reports.archive`/`report_lifecycle` audit event and each WP05b hold and
-  retention capability and purpose; the downgrade refuses
+  `reports.archive`/`report_lifecycle` audit event, each WP05b hold and
+  retention capability and purpose, and each WP06 transfer capability under
+  its purpose; the downgrade refuses
   while a publish, a hold, a lone transfer session, a session with a chunk, a
   lone chunk, a lone retention policy event or such an audit event exists, and
   an empty plane downgrades cleanly and upgrades again;
@@ -223,8 +226,17 @@ HOLD_AND_RETENTION_CAPABILITIES: Final = (
     "reports.retention.get",
     "reports.retention.set",
 )
-#: Every capability this revision admits: WP02's, WP03's five (WP03 D14) and
-#: WP05b's four (A5, declared by the domain with their registration).
+#: The 5 client-usable transfer capabilities (WP06 A5).
+TRANSFER_CAPABILITIES: Final = (
+    "reports.transfer.abort",
+    "reports.transfer.append",
+    "reports.transfer.begin",
+    "reports.transfer.finalize",
+    "reports.transfer.read_chunk",
+)
+#: Every capability this revision admits: WP02's, WP03's five (WP03 D14),
+#: WP05b's four and WP06's five (A5, each declared by the domain with its
+#: registration).
 ADMITTED_CAPABILITIES: Final = frozenset(
     {
         "reports.publish",
@@ -234,6 +246,7 @@ ADMITTED_CAPABILITIES: Final = frozenset(
         "reports.delete",
         "reports.restore",
         *HOLD_AND_RETENTION_CAPABILITIES,
+        *TRANSFER_CAPABILITIES,
     }
 )
 #: The lifecycle purpose this revision admits (WP03 D1, D14).
@@ -530,7 +543,7 @@ def test_the_audit_before_texts_are_byte_copies_and_at_adds_exactly_the_report_v
     assert mine["_PURPOSES_BEFORE_THIS_REVISION"] == source["_PURPOSES_AT_THIS_REVISION"]
     before = _literals(mine["_CAPABILITIES_BEFORE_THIS_REVISION"])
     at = _literals(mine["_CAPABILITIES_AT_THIS_REVISION"])
-    assert at == sorted(at) and len(set(at)) == len(at) == 261
+    assert at == sorted(at) and len(set(at)) == len(at) == 266
     assert len(before) == 251 and not ADMITTED_CAPABILITIES & set(before)
     assert sorted([*before, *ADMITTED_CAPABILITIES]) == at
     purposes_before = _literals(mine["_PURPOSES_BEFORE_THIS_REVISION"])
@@ -564,6 +577,12 @@ def test_the_audit_before_texts_are_byte_copies_and_at_adds_exactly_the_report_v
         assert f"'{name}'" in refusal, name
         assert f"'{name}'" in str(mine["_PURPOSES_AT_THIS_REVISION"]), name
         assert f"'{name}'" not in str(mine["_PURPOSES_BEFORE_THIS_REVISION"]), name
+    # WP06 A3/A5: the refusal names the 5 transfer capabilities, which the AT
+    # text admits and the BEFORE text does not; they need no new purpose.
+    for name in TRANSFER_CAPABILITIES:
+        assert f"'{name}'" in refusal, name
+        assert f"'{name}'" in str(mine["_CAPABILITIES_AT_THIS_REVISION"]), name
+        assert f"'{name}'" not in str(mine["_CAPABILITIES_BEFORE_THIS_REVISION"]), name
 
 
 def _ddl_columns(ddl: str) -> list[tuple[str, bool]]:
@@ -1109,7 +1128,7 @@ def test_predecessor_with_legacy_evidence_upgrades_unchanged(
         if kind != "constraints":
             assert kept[kind] == catalog_before[kind], kind
     # Exactly two pre-existing definitions changed: `capability_is_known`,
-    # widened by exactly the 10 report capabilities, and `purpose_is_known`,
+    # widened by exactly the 15 report capabilities, and `purpose_is_known`,
     # widened by exactly `report_lifecycle`, `report_hold` and `report_retention`.
     removed = sorted(set(catalog_before["constraints"]) - set(kept["constraints"]))
     added = sorted(set(kept["constraints"]) - set(catalog_before["constraints"]))
@@ -4959,6 +4978,41 @@ def test_a_custody_audit_event_is_admitted_and_alone_holds_the_downgrade(
     assert getattr(refused_before.value.orig, "sqlstate", None) == CHECK_VIOLATION
     command.upgrade(_config(), "head")
     _publish_audit(engine, "rptmigaudit0007", capability=capability, purpose=purpose)
+    assert _audit_rows(engine, capability) == 1
+    assert all(count == 0 for count, _ in _plane_rows(engine).values())
+    catalog = _full_catalog(engine)
+    with pytest.raises(DBAPIError) as refused:
+        command.downgrade(_config(), PREVIOUS)
+    assert getattr(refused.value.orig, "sqlstate", None) == RESTRICT_VIOLATION
+    assert AUDIT_REFUSAL in str(refused.value)
+    assert _version(engine) == REVISION
+    assert _full_catalog(engine) == catalog
+
+
+#: WP06 A5: each transfer capability with its (pre-existing) purpose.
+_TRANSFER_AUDIT: Final = (
+    ("reports.transfer.begin", "report_authoring"),
+    ("reports.transfer.append", "report_authoring"),
+    ("reports.transfer.finalize", "report_authoring"),
+    ("reports.transfer.abort", "report_authoring"),
+    ("reports.transfer.read_chunk", "report_read"),
+)
+
+
+@pytest.mark.database
+@pytest.mark.parametrize(("capability", "purpose"), _TRANSFER_AUDIT)
+def test_a_transfer_audit_event_is_admitted_and_alone_holds_the_downgrade(
+    disposable_database: str, engine: Engine, capability: str, purpose: str
+) -> None:
+    """WP06 A5: each transfer capability under its purpose is refused at the
+    predecessor, admitted at head, and its row alone holds the downgrade."""
+    del disposable_database
+    command.upgrade(_config(), PREVIOUS)
+    with pytest.raises(DBAPIError) as refused_before:
+        _publish_audit(engine, "rptmigaudit0009", capability=capability, purpose=purpose)
+    assert getattr(refused_before.value.orig, "sqlstate", None) == CHECK_VIOLATION
+    command.upgrade(_config(), "head")
+    _publish_audit(engine, "rptmigaudit0010", capability=capability, purpose=purpose)
     assert _audit_rows(engine, capability) == 1
     assert all(count == 0 for count, _ in _plane_rows(engine).values())
     catalog = _full_catalog(engine)

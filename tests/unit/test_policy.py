@@ -516,6 +516,13 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.REPORTS_HOLD_RELEASE, Purpose.REPORT_HOLD),
         (Capability.REPORTS_RETENTION_SET, Purpose.REPORT_RETENTION),
         (Capability.REPORTS_RETENTION_GET, Purpose.REPORT_RETENTION),
+        # Reports Modernization WP06: the four upload writes author content, the
+        # chunk read reads a report; no new purpose.
+        (Capability.REPORTS_TRANSFER_BEGIN, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_TRANSFER_APPEND, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_TRANSFER_FINALIZE, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_TRANSFER_ABORT, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_TRANSFER_READ_CHUNK, Purpose.REPORT_READ),
     }
 )
 
@@ -615,8 +622,10 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # `report_lifecycle` purpose: 246 capabilities, 63 purposes, 248 pairs.
     # Reports Modernization WP05b adds 4 names and 2 purposes, each name under
     # exactly one of the pair: 250 capabilities, 65 purposes, 252 pairs.
-    assert len(PERMITTED_PAIRS) == 252
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 252 == 15998
+    # Reports Modernization WP06 adds 5 names, each under one existing purpose,
+    # and no purpose: 255 capabilities, 65 purposes, 257 pairs.
+    assert len(PERMITTED_PAIRS) == 257
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 257 == 16318
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

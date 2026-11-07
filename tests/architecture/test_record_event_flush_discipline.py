@@ -448,6 +448,8 @@ UNRELATED_CALLS: Final = frozenset(
         ("apps/cli/migration.py", "observe", "binding"),
         ("src/my_pa/infrastructure/managed_document_stores/filesystem/store.py", "link", "os"),
         ("src/my_pa/infrastructure/report_content_stores/filesystem.py", "link", "os"),
+        # Reports Modernization WP06: the transfer staging's link-publish.
+        ("src/my_pa/infrastructure/report_content_stores/staging.py", "link", "os"),
         ("ops/nas/write-postgres-backup-runtime-attestation.py", "link", "os"),
         ("ops/nas/generate-runtime-admission.py", "link", "os"),
     }

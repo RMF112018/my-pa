@@ -204,7 +204,7 @@ def test_s4_capabilities_are_operator_decision_required_reads() -> None:
     # since S3.1 adds its 4) never holds an S4 name.
     assert not declared & _LINEAGE_CAPABILITIES
     assert len(_LINEAGE_CAPABILITIES) == 34
-    assert len(list(Capability)) == 250
+    assert len(list(Capability)) == 255
     for capability in declared:
         name = capability.value
         assert capability in _SCOPELESS

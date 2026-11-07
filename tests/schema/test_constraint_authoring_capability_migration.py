@@ -288,6 +288,9 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_webauthn_auth_persistence_migration.py",
     "tests/schema/test_work_task_commitment_migration.py",
     "tests/unit/test_cli_auth.py",
+    # Reports Modernization WP06: names the head's migration file to read its
+    # chunk bound, never as a head constant.
+    "tests/unit/test_reports_transfer_domain.py",
 )
 
 #: The constant names those files use for the chain's head.

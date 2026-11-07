@@ -51,12 +51,15 @@ order it:
    `knowledge.audit_events` in place (the `0641c354ca85` precedent: `DROP
    CONSTRAINT` then `ADD CONSTRAINT ... CHECK`, `ACCESS EXCLUSIVE` on
    `audit_events` and a validating scan, held to commit): capabilities with the
-   frozen sorted set of 261 names, the 251 `621ef6786c64` left plus exactly the
-   10 general report capabilities (`reports.publish`, WP02; `reports.update`,
+   frozen sorted set of 266 names, the 251 `621ef6786c64` left plus exactly the
+   15 general report capabilities (`reports.publish`, WP02; `reports.update`,
    `reports.history`, `reports.archive`, `reports.delete` and
    `reports.restore`, WP03; the operator-only custody capabilities
    `reports.hold.place`, `reports.hold.release`, `reports.retention.get` and
-   `reports.retention.set`, WP05b); purposes with the frozen sorted set of 65,
+   `reports.retention.set`, WP05b; the client-usable transfer capabilities
+   `reports.transfer.abort`, `reports.transfer.append`,
+   `reports.transfer.begin`, `reports.transfer.finalize` and
+   `reports.transfer.read_chunk`, WP06); purposes with the frozen sorted set of 65,
    the 62 `621ef6786c64` left plus exactly `report_lifecycle` (WP03 RD-14) and
    `report_hold` and `report_retention` (WP05b; the other two report purposes,
    `report_authoring` and `report_read`, were already admitted). The head audit
@@ -371,7 +374,10 @@ _CAPABILITIES_BEFORE_THIS_REVISION: Final = (
 #: (WP02) and `reports.update`, `reports.history`, `reports.archive`,
 #: `reports.delete`, `reports.restore` (WP03), plus the 4 operator-only custody
 #: capabilities `reports.hold.place`, `reports.hold.release`, `reports.retention.get`
-#: and `reports.retention.set` (WP05b) -- 261 names, sorted.
+#: and `reports.retention.set` (WP05b), plus the 5 client-usable transfer
+#: capabilities `reports.transfer.abort`, `reports.transfer.append`,
+#: `reports.transfer.begin`, `reports.transfer.finalize` and
+#: `reports.transfer.read_chunk` (WP06) -- 266 names, sorted.
 _CAPABILITIES_AT_THIS_REVISION: Final = (
     "capability IN ('canvas.workspace.get', 'canvas.workspace.put', 'capabilities.get', "
     "'capture.archive', 'capture.create', 'capture.list', 'capture.read', 'capture.restore', "
@@ -446,6 +452,8 @@ _CAPABILITIES_AT_THIS_REVISION: Final = (
     "'reports.list', 'reports.manifest', 'reports.publish', 'reports.read', "
     "'reports.record_run_state', 'reports.resolve_set', 'reports.restore', "
     "'reports.retention.get', 'reports.retention.set', 'reports.search', "
+    "'reports.transfer.abort', 'reports.transfer.append', 'reports.transfer.begin', "
+    "'reports.transfer.finalize', 'reports.transfer.read_chunk', "
     "'reports.types.create', 'reports.types.list', 'reports.update', "
     "'review.decide', 'review.list', 'schedule_activities.history', 'schedule_activities.list', "
     "'schedule_changes.list', 'schedule_publications.import', 'schedule_publications.list', "
@@ -1893,7 +1901,9 @@ _REFUSE_DOWNGRADE: Final = """
                                  'reports.hold.place', 'reports.hold.release',
                                  'reports.publish', 'reports.restore',
                                  'reports.retention.get', 'reports.retention.set',
-                                 'reports.update')
+                                 'reports.transfer.abort', 'reports.transfer.append',
+                                 'reports.transfer.begin', 'reports.transfer.finalize',
+                                 'reports.transfer.read_chunk', 'reports.update')
                OR purpose IN ('report_hold', 'report_lifecycle', 'report_retention')) THEN
         RAISE EXCEPTION 'general report audit history exists; refusing to downgrade 4c37731671fc'
           USING ERRCODE = 'restrict_violation';

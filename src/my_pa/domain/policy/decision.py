@@ -486,6 +486,13 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.REPORTS_HOLD_RELEASE,
         Capability.REPORTS_RETENTION_SET,
         Capability.REPORTS_RETENTION_GET,
+        # WP06: an upload session is the acting Principal's own (and its
+        # client's), and a chunk read reads that same root's version.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
+        Capability.REPORTS_TRANSFER_READ_CHUNK,
         # The entity plane's partition, not a source. An entity carries no
         # `enrollment_id` and no grant a requested scope could be compared
         # against -- it is the Principal's own record of a person, not an

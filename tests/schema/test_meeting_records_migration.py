@@ -330,6 +330,12 @@ ADMITTED_LATER_CAPABILITIES: Final = (
             "reports.hold.release",
             "reports.retention.set",
             "reports.retention.get",
+            # Reports Modernization WP06: bounded chunked transfer.
+            "reports.transfer.begin",
+            "reports.transfer.append",
+            "reports.transfer.finalize",
+            "reports.transfer.abort",
+            "reports.transfer.read_chunk",
         }
     )
 )

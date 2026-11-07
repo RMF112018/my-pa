@@ -636,8 +636,8 @@ composition and in every MCP publication that composition produces.
   published through the facade in a 194,866-byte request (145,935 gzip bytes,
   ratio 115). A client reading large bodies should allow for responses of that
   size.
-- **Chunked report transfer (Reports Modernization WP06).** Five capabilities,
-  no new purpose, none operator-only: `reports.transfer.begin`, `append`,
+- **Chunked report transfer (Reports Modernization WP06).** The transfer adds `reports.transfer.*`
+  operations under no new purpose, none operator-only: `reports.transfer.begin`, `append`,
   `finalize` and `abort` (write, `report_authoring`) and
   `reports.transfer.read_chunk` (read, `report_read`). `begin` declares the
   content (`format`, `encoding`, `byte_count`, `sha256`, optional `ttl_seconds`

@@ -623,8 +623,8 @@ composition and in every MCP publication that composition produces.
   bytes are at most 524,288, else `encoded_omitted: "exceeds_response_bound"`,
   and the body or data are returned only up to 524,288 decoded bytes, else
   `body_omitted: "exceeds_response_bound"` with every digest still present.
-  Search indexes the decoded text, never Base64. Chunked transfer and a
-  chunked read of an omitted body are not available.
+  Search indexes the decoded text, never Base64. Content above one request,
+  and a body the read omits, move through the chunked transfer below.
 - **Response bound, measured (Reports Modernization WP05).** The 524,288 read
   bound counts decoded bytes, not the bytes on the wire. Measured once through
   the compact facade (`my_pa.read`) on synthetic content: a 524,288-byte
@@ -636,6 +636,37 @@ composition and in every MCP publication that composition produces.
   published through the facade in a 194,866-byte request (145,935 gzip bytes,
   ratio 115). A client reading large bodies should allow for responses of that
   size.
+- **Chunked report transfer (Reports Modernization WP06).** Five capabilities,
+  no new purpose, none operator-only: `reports.transfer.begin`, `append`,
+  `finalize` and `abort` (write, `report_authoring`) and
+  `reports.transfer.read_chunk` (read, `report_read`). `begin` declares the
+  content (`format`, `encoding`, `byte_count`, `sha256`, optional `ttl_seconds`
+  300..86,400, default 3,600) and opens a `grxfr_` session bound to the calling
+  client; a retry of the same keyed declaration while the session is live
+  answers the original session. The content is sent as fixed 262,144-byte
+  (256 KiB) chunks (the last may be shorter), at most 64 per session (16 MiB),
+  each `append` carrying its `sequence`, Base64 `chunk` and `chunk_sha256`; an
+  identical re-append is a replay, other bytes for a staged sequence a
+  conflict. Quotas over live (open or finalized, unexpired) sessions: 4 per
+  client, and 8 holding at most 64 MiB declared per Principal. `finalize` checks the whole digest and returns a one-use
+  `content_token` exactly once; `reports.publish` or `reports.update` then
+  takes `content: {"transfer": {"session_id", "content_token"}}` and consumes
+  the session. `finalize` is not replayable: if its response is lost, `abort`
+  and begin again (the same declaration opens a new session once the old one
+  has ended). `read_chunk` returns a verified range (`offset`, `length`
+  1..262,144) of a standalone version's `decoded` or `original` part with
+  `chunk_sha256`, `eof` and `next_offset`, under the visibility of
+  `reports.read`. Staging lives under `MY_PA_REPORT_CONTENT_ROOT/transfer`;
+  without a report content root the four uploads are not composed (absent from
+  `capabilities.get` and `tools/list`, refused `unsupported`), and
+  `read_chunk` of a `managed_blob` version is `internal_error`. Expired and
+  leftover staging is collected by `apps/cli/report_content.py transfer-gc` on
+  the operator's own schedule
+  ([`managed-document-operations.md`](managed-document-operations.md)
+  section 7.1). The ChatLLM data profile string stays `chatllm-data-v13`, so a
+  client converged on it plans exactly these 5 adds until the single Reports
+  profile bump; whether any deployed client holds the grants is a runtime fact
+  this document does not state.
 
 Evidence: `src/my_pa/application/meetings.py`,
 `src/my_pa/contracts/v1/meetings.py`, `tests/contract/test_meeting_mcp.py`,

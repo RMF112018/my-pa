@@ -199,6 +199,12 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
         "reports.hold.release",
         "reports.retention.set",
         "reports.retention.get",
+        # WP06's five transfer names, new too.
+        "reports.transfer.begin",
+        "reports.transfer.append",
+        "reports.transfer.finalize",
+        "reports.transfer.abort",
+        "reports.transfer.read_chunk",
     }
     # Reports Modernization WP04: the extended `reports.list` and `reports.search`.
     excluded |= {"reports.list", "reports.search"}

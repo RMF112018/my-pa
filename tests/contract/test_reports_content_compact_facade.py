@@ -278,17 +278,22 @@ def test_publish_and_update_describe_the_one_extended_content_schema(harness: Ha
         "head's content, including its original gzip bytes (the new upload's bytes are "
         "not stored)."
     )
-    assert publish_content["properties"]["encoding"]["enum"] == ["identity", GZIP]
-    assert publish_content["properties"]["encoded"]["type"] == "string"
+    # WP06 T10: the inline object is the first of exactly two closed variants; the
+    # second is the transfer reference `{transfer: {session_id, content_token}}`.
+    inline, reference = publish_content["oneOf"]
+    assert reference["required"] == ["transfer"]
+    assert reference["additionalProperties"] is False
+    assert inline["properties"]["encoding"]["enum"] == ["identity", GZIP]
+    assert inline["properties"]["encoded"]["type"] == "string"
     for name in ("original_byte_count", "uncompressed_byte_count"):
-        field = publish_content["properties"][name]
+        field = inline["properties"][name]
         assert (field["type"], field["minimum"], field["maximum"]) == (
             "integer",
             0,
             MAX_DECODED_CONTENT_BYTES,
         )
     for name in ("original_sha256", "uncompressed_sha256"):
-        assert publish_content["properties"][name]["pattern"] == "^[0-9a-f]{64}$"
+        assert inline["properties"][name]["pattern"] == "^[0-9a-f]{64}$"
     described = publish_content["description"]
     for limit in (
         "524,288",
@@ -304,7 +309,10 @@ def test_publish_and_update_describe_the_one_extended_content_schema(harness: Ha
         "both the gunzipped bytes of a gzip+base64 upload and the decoded content",
     ):
         assert limit in described, limit
-    assert "chunk" not in described
+    # WP05 promised no chunked path; WP06 adds it, and the text names it (T10, T16).
+    assert "reports.transfer.read_chunk" in described
+    assert "body_chunked_read" in described
+    assert "{transfer: {session_id, content_token}} naming" in described
     read_payload = outcome(served)[1]["input_schema"]["properties"]["payload"]
     # `reports.read` gains no input field for WP05.
     assert set(read_payload["properties"]) == {

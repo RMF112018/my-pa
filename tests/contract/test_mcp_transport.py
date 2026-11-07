@@ -146,10 +146,13 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         capability.value
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
+        and capability not in _TRANSFER_UPLOADS
     ]
     # WP05b: the 4 custody names are listed over stdio as the attested confirms
-    # are; the handler denies them there (no operator surface).
-    assert len(listed.tools) == 245
+    # are; the handler denies them there (no operator surface). WP06: the 4
+    # transfer uploads need a content store and staging this world lacks;
+    # `reports.transfer.read_chunk` is listed.
+    assert len(listed.tools) == 246
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 
@@ -158,7 +161,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 250
+    assert len(TOOLS) == 255
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }
@@ -613,6 +616,26 @@ _COMPOSED_CAPABILITIES: Final = (
     )
     # CPM Workbench S5b-2: the 7 Schedule names, on their own default-off switch.
     | frozenset(capability for capability in Capability if capability.value.startswith("schedule_"))
+    # Reports Modernization WP06 T14: the 4 transfer uploads, composed only with
+    # the report content store and the transfer staging (`MY_PA_REPORT_CONTENT_ROOT`).
+    | frozenset(
+        {
+            Capability.REPORTS_TRANSFER_BEGIN,
+            Capability.REPORTS_TRANSFER_APPEND,
+            Capability.REPORTS_TRANSFER_FINALIZE,
+            Capability.REPORTS_TRANSFER_ABORT,
+        }
+    )
+)
+
+#: WP06 T14: the transfer uploads this module's in-memory world never composes.
+_TRANSFER_UPLOADS: Final = frozenset(
+    {
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
+    }
 )
 
 _AUTHENTICATED_CLIENT_CAPABILITIES: Final = frozenset(
@@ -690,6 +713,8 @@ def test_a_child_with_a_managed_root_publishes_every_locally_available_capabilit
     """
     root = tmp_path / "managed"
     root.mkdir()
+    report_content = tmp_path / "report-content"
+    report_content.mkdir()
     composed, _errors = _child_tool_list(
         MY_PA_DATABASE_URL=cloned_database_url,
         MY_PA_MANAGED_DOCUMENT_ROOT=str(root),
@@ -725,6 +750,9 @@ def test_a_child_with_a_managed_root_publishes_every_locally_available_capabilit
         MY_PA_PROGRAM_REPORTING_ENABLED="true",
         # CPM Workbench S5b-2: the Schedule switch, no dependency.
         MY_PA_SCHEDULE_ENABLED="true",
+        # Reports Modernization WP06 T14: the report content root, which composes
+        # the content store and the transfer staging the 4 uploads need.
+        MY_PA_REPORT_CONTENT_ROOT=str(report_content),
     )
     expected = [
         capability.value
@@ -905,9 +933,15 @@ def test_reports_publish_and_the_extended_read_publish_their_exact_schemas() -> 
         "client_intent_id",
     }
     content = payload["properties"]["content"]
-    assert content["properties"]["format"]["enum"] == ["markdown", "text", "json", "mixed"]
-    assert content["properties"]["encoding"]["enum"] == ["identity", "gzip+base64"]
-    assert content["additionalProperties"] is False
+    # WP06 T10: exactly one of the closed inline object and the closed transfer
+    # reference `{transfer: {session_id, content_token}}`.
+    inline, reference = content["oneOf"]
+    assert inline["properties"]["format"]["enum"] == ["markdown", "text", "json", "mixed"]
+    assert inline["properties"]["encoding"]["enum"] == ["identity", "gzip+base64"]
+    assert inline["additionalProperties"] is False
+    assert reference["required"] == ["transfer"]
+    assert reference["additionalProperties"] is False
+    assert reference["properties"]["transfer"]["additionalProperties"] is False
     read = tools[Capability.REPORTS_READ.value]
     assert read.annotations is not None
     assert read.annotations.read_only_hint is True

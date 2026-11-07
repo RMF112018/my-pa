@@ -53,6 +53,7 @@ from tests.conftest import (
 )
 
 from my_pa.application.commands import (
+    AbortReportTransfer,
     AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
@@ -60,6 +61,7 @@ from my_pa.application.commands import (
     AddEntityName,
     AddIssueMembership,
     AddIssueProjectLink,
+    AppendReportTransfer,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
@@ -68,6 +70,7 @@ from my_pa.application.commands import (
     ArchiveRelationshipMemory,
     AssertRecordAssociation,
     BeginIntelligenceCycle,
+    BeginReportTransfer,
     BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
@@ -124,6 +127,7 @@ from my_pa.application.commands import (
     EndRecordAssociation,
     EnrollSource,
     FetchSource,
+    FinalizeReportTransfer,
     GetCanvasWorkspace,
     GetCapabilities,
     GetCommitmentHistory,
@@ -229,6 +233,7 @@ from my_pa.application.commands import (
     ReadRecordLineage,
     ReadRelatedRecords,
     ReadReportManifest,
+    ReadReportTransferChunk,
     ReadScheduleActivityHistory,
     ReadSchedulePublication,
     ReadTask,
@@ -738,6 +743,27 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             period={"count": 5, "unit": "years"},
         ),
         Capability.REPORTS_RETENTION_GET: GetReportRetention(),
+        # Reports Modernization WP06: the bounded chunked transfer.
+        Capability.REPORTS_TRANSFER_BEGIN: BeginReportTransfer(
+            format="markdown",
+            encoding="identity",
+            byte_count=16,
+            sha256="0000000000000000000000000000000000000000000000000000000000000000",
+            idempotency_key="policy-transfer-begin",
+        ),
+        Capability.REPORTS_TRANSFER_APPEND: AppendReportTransfer(
+            session_id="grxfr_policysession01",
+            sequence=0,
+            chunk="c3ludGhldGlj",
+            chunk_sha256="b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+        ),
+        Capability.REPORTS_TRANSFER_FINALIZE: FinalizeReportTransfer(
+            session_id="grxfr_policysession01"
+        ),
+        Capability.REPORTS_TRANSFER_ABORT: AbortReportTransfer(session_id="grxfr_policysession01"),
+        Capability.REPORTS_TRANSFER_READ_CHUNK: ReadReportTransferChunk(
+            report_id=staged_general_report(scene), version_number=1
+        ),
         # The entity plane. Every identifier is minted rather than staged, for
         # the reason this table exists: a denial test must fail on the authority
         # and on nothing else, and an entity that existed would let a
@@ -1903,6 +1929,12 @@ SCOPED_CAPABILITIES = [
         Capability.REPORTS_HOLD_RELEASE,
         Capability.REPORTS_RETENTION_SET,
         Capability.REPORTS_RETENTION_GET,
+        # Reports Modernization WP06: the owner's (and its client's) transfer sessions.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
+        Capability.REPORTS_TRANSFER_READ_CHUNK,
         # The entity plane is a read plane over the acting Principal's own
         # entities. An entity carries no enrollment a requested scope could be
         # compared against — it is the Principal's own record of a person, not
@@ -2258,6 +2290,12 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.REPORTS_HOLD_RELEASE,
         Capability.REPORTS_RETENTION_SET,
         Capability.REPORTS_RETENTION_GET,
+        # Reports Modernization WP06: the owner's (and its client's) transfer sessions.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
+        Capability.REPORTS_TRANSFER_READ_CHUNK,
         Capability.ENTITIES_SEARCH,
         Capability.ENTITIES_GET,
         Capability.ENTITIES_RESOLVE,

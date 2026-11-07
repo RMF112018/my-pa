@@ -483,7 +483,7 @@ def test_describe_returns_the_exact_publish_and_read_remote_schemas(
     assert payload["required"] == ["title", "content"]
     # The advertised limit is decoded bytes; the wire bound is stated beside it,
     # with the transport's own ceiling, so an escape-heavy body is not a surprise.
-    # WP05 B7: both encodings, the real executable limits, never chunked transfer.
+    # WP05 B7: both encodings and the real executable limits; WP06 adds the transfer reference.
     content_schema = payload["properties"]["content"]
     assert content_schema["description"] == (
         "markdown|text: {format, body}; json: {format, data}; mixed: {format, body, "
@@ -504,14 +504,27 @@ def test_describe_returns_the_exact_publish_and_read_remote_schemas(
         "must be within the inline threshold, else invalid_request content, max_bytes. "
         "Reads return the body only up to 524,288 decoded bytes, larger bodies are "
         "marked body_omitted, and a gzip+base64 upload's encoded only up to 524,288 "
-        "gzip bytes, else encoded_omitted. The whole JSON request must also fit the "
+        "gzip bytes, else encoded_omitted; each omission is paired with "
+        "body_chunked_read / encoded_chunked_read, naming the part, byte count and "
+        "sha256 to fetch with reports.transfer.read_chunk. The whole JSON request "
+        "must also fit the "
         f"{MAX_REQUEST_BYTES:,}-byte request ceiling, so heavily escaped content (quotes, "
         "backslashes, control characters, \\u-escaped non-ASCII) may need to be smaller, "
-        "and an encoded string is at most about 760 KB (about 570 KB of gzip)."
+        "and an encoded string is at most about 760 KB (about 570 KB of gzip). "
+        # WP06 T10: the transfer reference variant, stated once.
+        "Or, for content uploaded with reports.transfer.begin/append/finalize (up to "
+        "16,777,216 staged bytes), exactly {transfer: {session_id, content_token}} "
+        "naming your finalized session and its one-use token; format and encoding come "
+        "from the session (restating them is refused), the token is consumed by the "
+        "first successful publish or update, and a retry of that same request replays "
+        "its receipt."
     )
-    assert "chunk" not in content_schema["description"]
-    assert content_schema["properties"]["encoding"]["enum"] == ["identity", "gzip+base64"]
-    assert list(content_schema["properties"]) == [
+    # WP06 T10: exactly one of the closed inline object and the closed reference.
+    inline, reference = content_schema["oneOf"]
+    assert reference["required"] == ["transfer"]
+    assert reference["additionalProperties"] is False
+    assert inline["properties"]["encoding"]["enum"] == ["identity", "gzip+base64"]
+    assert list(inline["properties"]) == [
         "format",
         "encoding",
         "body",
@@ -526,15 +539,15 @@ def test_describe_returns_the_exact_publish_and_read_remote_schemas(
         ("original_byte_count", 16_777_216),
         ("uncompressed_byte_count", 16_777_216),
     ):
-        assert content_schema["properties"][name] == {
+        assert inline["properties"][name] == {
             "type": "integer",
             "minimum": 0,
             "maximum": bound,
-            "description": content_schema["properties"][name]["description"],
+            "description": inline["properties"][name]["description"],
         }
     for name in ("original_sha256", "uncompressed_sha256"):
-        assert content_schema["properties"][name]["pattern"] == "^[0-9a-f]{64}$"
-    assert content_schema["additionalProperties"] is False
+        assert inline["properties"][name]["pattern"] == "^[0-9a-f]{64}$"
+    assert inline["additionalProperties"] is False
     assert "client_intent_id" in payload["properties"]
     for server_owned in (
         "idempotency_key",

@@ -51,6 +51,7 @@ from my_pa.application.errors import (
     ApplicationError,
     InvalidRequestError,
     SafeDetail,
+    UnsupportedError,
     invalid_choice,
 )
 from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
@@ -370,6 +371,20 @@ from my_pa.domain.reports.revision import (
     ReportPatch,
     UpdateRequest,
     validate_clear_fields,
+)
+from my_pa.domain.reports.transfer import (
+    CONTENT_TOKEN_PATTERN,
+    MAX_TRANSFER_BYTE_COUNT,
+    MAX_TRANSFER_CHUNKS,
+    TRANSFER_CHUNK_BYTES,
+    TRANSFER_DECLARED_BYTES_PER_OWNER,
+    TRANSFER_SESSIONS_PER_CLIENT,
+    TRANSFER_SESSIONS_PER_OWNER,
+    TRANSFER_TTL_DEFAULT_SECONDS,
+    TRANSFER_TTL_MAX_SECONDS,
+    TRANSFER_TTL_MIN_SECONDS,
+    TransferDeclaration,
+    parse_transfer_reference,
 )
 from my_pa.domain.reports.vocabulary import (
     MAX_ASSOCIATIONS_PER_VERSION,
@@ -5800,6 +5815,8 @@ _REPORT_REFUSAL_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
         "metadata": SafeDetail.METADATA,
         "client_intent_id": SafeDetail.CLIENT_INTENT_ID,
         "idempotency_key": SafeDetail.IDEMPOTENCY_KEY,
+        # WP06 T10: a malformed transfer reference (`content` or `patch.content`).
+        "transfer": SafeDetail.TRANSFER,
     }
 )
 
@@ -5928,7 +5945,17 @@ def _requested_content(value: object, *, max_decoded: int | None) -> ReportConte
     structure (`validate_content_structure`) and identity content in full.
     The handler passes its decode limit and decodes under the process-wide
     decode permit. Every refusal either raises is one `validate_content` raises.
+
+    WP06 T10: a transfer reference (`{"transfer": {session_id,
+    content_token}}`) is validated for its shape only (a malformed one is
+    refused on `transfer`); its content is the finalized session's, read by
+    the handler. Until the W3b consumption lands a handler cannot consume one:
+    the decode path answers `unsupported`.
     """
+    if parse_transfer_reference(value) is not None:
+        if max_decoded is None:
+            return _DECODE_DEFERRED
+        raise UnsupportedError()
     if max_decoded is None:
         structured = validate_content_structure(value)
         return _DECODE_DEFERRED if structured is None else structured
@@ -6001,7 +6028,9 @@ _CONTENT_PLACEMENT_SENTENCE: Final = (
     f"max_bytes. Reads return the body only up to {READ_INLINE_CONTENT_MAX_BYTES:,} "
     "decoded bytes, larger bodies are marked body_omitted, and a gzip+base64 "
     f"upload's encoded only up to {READ_INLINE_CONTENT_MAX_BYTES:,} gzip bytes, else "
-    "encoded_omitted."
+    "encoded_omitted; each omission is paired with body_chunked_read / "
+    "encoded_chunked_read, naming the part, byte count and sha256 to fetch with "
+    "reports.transfer.read_chunk."
 )
 
 #: WP05 (corrective N4): what `patch.content` equal to the head's decoded content does.
@@ -6011,30 +6040,70 @@ _SAME_CONTENT_SENTENCE: Final = (
     "gzip bytes (the new upload's bytes are not stored)."
 )
 
-_CONTENT_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
+#: WP06 T10: the one sentence stating the transfer reference variant.
+_TRANSFER_REFERENCE_SENTENCE: Final = (
+    "Or, for content uploaded with reports.transfer.begin/append/finalize (up to "
+    f"{MAX_TRANSFER_BYTE_COUNT:,} staged bytes), exactly {{transfer: {{session_id, "
+    "content_token}} naming your finalized session and its one-use token; format "
+    "and encoding come from the session (restating them is refused), the token is "
+    "consumed by the first successful publish or update, and a retry of that same "
+    "request replays its receipt."
+)
+
+#: WP06 T10: the closed transfer reference a publish/update content may be.
+_TRANSFER_REFERENCE_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
     {
         "type": "object",
-        "description": (
-            "markdown|text: {format, body}; json: {format, data}; mixed: {format, body, "
-            f"data}}. encoding: omit or identity, or gzip+base64 with {{format, encoding, "
-            "encoded} instead of body/data. identity: at most "
-            f"{INLINE_CONTENT_MAX_BYTES:,} decoded UTF-8 bytes. gzip+base64: encoded is the "
-            "standard padded Base64 (no whitespace) of exactly one gzip member whose "
-            "gunzipped bytes are the UTF-8 body (markdown|text), a JSON text of the data "
-            "(json) or a JSON object of exactly {body, data} (mixed). The gunzipped bytes "
-            f"are at most {MAX_DECODED_CONTENT_BYTES:,} and at most {MAX_EXPANSION_RATIO} "
-            "times the gzip bytes, and the decoded (canonical) content is at most "
-            f"{MAX_DECODED_CONTENT_BYTES:,} bytes; json|mixed are measured as uploaded, so "
-            "pretty-printed JSON counts its whitespace. json|mixed data holds at most "
-            f"{MAX_CONTENT_DATA_VALUES:,} JSON values (counted in the uploaded text as 1 plus "
-            f"its [, {{ and , outside strings) and nests at most {MAX_CONTENT_DATA_DEPTH} "
-            f"deep. {_CONTENT_PLACEMENT_SENTENCE} "
-            "The whole JSON request "
-            f"must also fit the {_WIRE_CEILING_BYTES:,}-byte request ceiling, so heavily "
-            "escaped content (quotes, backslashes, control characters, \\u-escaped "
-            "non-ASCII) may need to be smaller, and an encoded string is at most about "
-            "760 KB (about 570 KB of gzip)."
-        ),
+        "properties": {
+            "transfer": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "pattern": "^grxfr_[A-Za-z0-9]{8,64}$",
+                        "description": "Your finalized transfer session.",
+                    },
+                    "content_token": {
+                        "type": "string",
+                        "pattern": CONTENT_TOKEN_PATTERN,
+                        "description": "The content_token reports.transfer.finalize returned.",
+                    },
+                },
+                "required": ["session_id", "content_token"],
+                "additionalProperties": False,
+            },
+        },
+        "required": ["transfer"],
+        "additionalProperties": False,
+    }
+)
+
+_INLINE_CONTENT_DESCRIPTION: Final = (
+    "markdown|text: {format, body}; json: {format, data}; mixed: {format, body, "
+    f"data}}. encoding: omit or identity, or gzip+base64 with {{format, encoding, "
+    "encoded} instead of body/data. identity: at most "
+    f"{INLINE_CONTENT_MAX_BYTES:,} decoded UTF-8 bytes. gzip+base64: encoded is the "
+    "standard padded Base64 (no whitespace) of exactly one gzip member whose "
+    "gunzipped bytes are the UTF-8 body (markdown|text), a JSON text of the data "
+    "(json) or a JSON object of exactly {body, data} (mixed). The gunzipped bytes "
+    f"are at most {MAX_DECODED_CONTENT_BYTES:,} and at most {MAX_EXPANSION_RATIO} "
+    "times the gzip bytes, and the decoded (canonical) content is at most "
+    f"{MAX_DECODED_CONTENT_BYTES:,} bytes; json|mixed are measured as uploaded, so "
+    "pretty-printed JSON counts its whitespace. json|mixed data holds at most "
+    f"{MAX_CONTENT_DATA_VALUES:,} JSON values (counted in the uploaded text as 1 plus "
+    f"its [, {{ and , outside strings) and nests at most {MAX_CONTENT_DATA_DEPTH} "
+    f"deep. {_CONTENT_PLACEMENT_SENTENCE} "
+    "The whole JSON request "
+    f"must also fit the {_WIRE_CEILING_BYTES:,}-byte request ceiling, so heavily "
+    "escaped content (quotes, backslashes, control characters, \\u-escaped "
+    "non-ASCII) may need to be smaller, and an encoded string is at most about "
+    "760 KB (about 570 KB of gzip)."
+)
+
+#: The inline content object (WP02/WP05), closed.
+_INLINE_CONTENT_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
+    {
+        "type": "object",
         "properties": {
             "format": {"type": "string", "enum": [member.value for member in ContentFormat]},
             "encoding": {"type": "string", "enum": [member.value for member in ContentEncoding]},
@@ -6074,6 +6143,16 @@ _CONTENT_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
         },
         "required": ["format"],
         "additionalProperties": False,
+    }
+)
+
+#: A publish `content` / update `patch.content`: exactly one of the inline
+#: object and the transfer reference, each closed.
+_CONTENT_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
+    {
+        "type": "object",
+        "description": f"{_INLINE_CONTENT_DESCRIPTION} {_TRANSFER_REFERENCE_SENTENCE}",
+        "oneOf": [dict(_INLINE_CONTENT_SCHEMA), dict(_TRANSFER_REFERENCE_SCHEMA)],
     }
 )
 
@@ -6846,6 +6925,362 @@ GetReportRetention.mcp_payload_properties = MappingProxyType(  # type: ignore[at
             "minimum": 1,
             "maximum": MAX_RETENTION_HISTORY,
             "description": f"Default {DEFAULT_RETENTION_HISTORY}.",
+        },
+    }
+)
+
+
+# ---- Reports Modernization WP06: bounded chunked transfer ----
+
+#: The Base64 length of one full chunk: 262,144 raw bytes are 349,528
+#: characters of canonical padded Base64 (T2).
+TRANSFER_CHUNK_MAX_BASE64_CHARACTERS: Final = 4 * -(-TRANSFER_CHUNK_BYTES // 3)
+
+#: The canonical standard-alphabet padded Base64 shape of a chunk. The shape is
+#: all a command checks; decoding (strict, canonical) is the handler's (T8).
+_BASE64_SHAPE: Final = re.compile(
+    r"\A(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?\Z"
+)
+
+#: A chunk digest: SHA-256, lowercase hex.
+_TRANSFER_SHA256: Final = re.compile(r"\A[0-9a-f]{64}\Z")
+
+#: The two parts `reports.transfer.read_chunk` reads (T15), as the store names them.
+TRANSFER_READ_PARTS: Final = ("decoded", "original")
+
+#: Which public token a begin declaration refusal names.
+_TRANSFER_DECLARATION_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "format": SafeDetail.FORMAT,
+        "encoding": SafeDetail.ENCODING,
+        "byte_count": SafeDetail.BYTE_COUNT,
+        "sha256": SafeDetail.SHA256,
+        "ttl_seconds": SafeDetail.TTL_SECONDS,
+    }
+)
+
+#: The protocol, stated once and repeated in each transfer description.
+_TRANSFER_PROTOCOL: Final = (
+    "Upload: reports.transfer.begin declares the staged bytes (identity: the UTF-8 "
+    "body for markdown|text, the JSON text for json, the JSON text of {body, data} for "
+    "mixed; gzip+base64: the raw gzip member), then reports.transfer.append sends them "
+    f"in order as chunks of exactly {TRANSFER_CHUNK_BYTES:,} raw bytes (every chunk "
+    f"but the last full; at most {MAX_TRANSFER_CHUNKS}, sequence 0.."
+    f"{MAX_TRANSFER_CHUNKS - 1}, byte_offset = sequence x {TRANSFER_CHUNK_BYTES:,}), "
+    "each Base64-encoded with its sha256; reports.transfer.finalize verifies the whole "
+    "content and returns a one-use content_token for reports.publish content or "
+    "reports.update patch.content: {transfer: {session_id, content_token}}. A finalize "
+    "response cannot be replayed: if it is lost, abort and begin again."
+)
+
+
+def _transfer_session(value: object) -> str:
+    """A transfer session identifier (`grxfr_`), or `invalid_request` (`session_id`)."""
+    if type(value) is not str:
+        raise InvalidRequestError(SafeDetail.SESSION_ID)
+    return _identifier(value, IdKind.REPORT_TRANSFER_SESSION, SafeDetail.SESSION_ID)
+
+
+def _transfer_integer(value: object, detail: SafeDetail, lower: int, upper: int) -> int:
+    """An integer (never a bool) within `[lower, upper]`, or `invalid_request` (`detail`)."""
+    if type(value) is not int or not lower <= value <= upper:
+        raise InvalidRequestError(detail)
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class BeginReportTransfer:
+    """`reports.transfer.begin`: open a chunked upload of report content too large for one request.
+
+    Declares the content's `format`, its `encoding` (`identity` or
+    `gzip+base64`) and the staged bytes' `byte_count` (1..16,777,216) and
+    `sha256`; `ttl_seconds` (300..86400, default 3600) bounds the session's
+    life. The answer names the session, the fixed chunk size and the chunk
+    count. At most 4 live sessions per client, 8 per owner, and 64 MiB of
+    declared bytes per owner, else `rate_limited`. A retry of the same request
+    replays the original session.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_TRANSFER_BEGIN
+
+    format: str
+    encoding: str
+    byte_count: int
+    sha256: str
+    idempotency_key: str
+    ttl_seconds: int | None = None
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        transfer_declaration(self)
+
+
+def transfer_declaration(command: BeginReportTransfer) -> TransferDeclaration:
+    """The domain declaration `command` states, or the field-naming refusal of it."""
+    for value, detail in (
+        (command.format, SafeDetail.FORMAT),
+        (command.encoding, SafeDetail.ENCODING),
+        (command.sha256, SafeDetail.SHA256),
+    ):
+        if type(value) is not str:
+            raise InvalidRequestError(detail)
+    if command.ttl_seconds is not None and type(command.ttl_seconds) is not int:
+        raise InvalidRequestError(SafeDetail.TTL_SECONDS)
+    refusal: ApplicationError
+    try:
+        return TransferDeclaration(
+            format=command.format,  # type: ignore[arg-type]  # validated by the declaration
+            encoding=command.encoding,  # type: ignore[arg-type]
+            byte_count=command.byte_count,
+            sha256=command.sha256,
+            ttl_seconds=TRANSFER_TTL_DEFAULT_SECONDS
+            if command.ttl_seconds is None
+            else command.ttl_seconds,
+        )
+    except ReportValidationError as error:
+        named = _TRANSFER_DECLARATION_DETAILS.get(error.field)
+        refusal = InvalidRequestError() if named is None else InvalidRequestError(named)
+    raise refusal
+
+
+@dataclass(frozen=True, slots=True)
+class AppendReportTransfer:
+    """`reports.transfer.append`: stage the next chunk of one of your open transfer sessions.
+
+    `sequence` is the chunk's index (0..63); `chunk` is the canonical padded
+    standard Base64 of its raw bytes (exactly 262,144 bytes, 349,528
+    characters, for every chunk but the last) and `chunk_sha256` the SHA-256
+    of those raw bytes. Chunks are accepted in order only. Re-sending a chunk
+    already staged with the same bytes replays (`replayed: true`); different
+    bytes for it are `conflict`.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_TRANSFER_APPEND
+
+    session_id: str
+    sequence: int
+    chunk: str = field(repr=False)
+    chunk_sha256: str
+
+    def __post_init__(self) -> None:
+        _transfer_session(self.session_id)
+        _transfer_integer(self.sequence, SafeDetail.SEQUENCE, 0, MAX_TRANSFER_CHUNKS - 1)
+        chunk: object = self.chunk
+        if (
+            type(chunk) is not str
+            or not chunk
+            or len(chunk) > TRANSFER_CHUNK_MAX_BASE64_CHARACTERS
+            or _BASE64_SHAPE.match(chunk) is None
+        ):
+            # Shape only: the handler decodes strictly and measures the raw bytes.
+            raise InvalidRequestError(SafeDetail.CHUNK)
+        digest: object = self.chunk_sha256
+        if type(digest) is not str or _TRANSFER_SHA256.match(digest) is None:
+            raise InvalidRequestError(SafeDetail.CHUNK_SHA256)
+
+
+@dataclass(frozen=True, slots=True)
+class FinalizeReportTransfer:
+    """`reports.transfer.finalize`: verify one of your complete transfers and get its content token.
+
+    Every staged chunk and the whole content are verified against the
+    declaration, then the content is validated exactly as an inline publish
+    would be (a refusal is `invalid_request` on `transfer`; abort and begin
+    again). The answer carries a one-use `content_token`, returned once and
+    never again: a lost finalize response cannot be replayed (abort and begin
+    again).
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_TRANSFER_FINALIZE
+
+    session_id: str
+
+    def __post_init__(self) -> None:
+        _transfer_session(self.session_id)
+
+
+@dataclass(frozen=True, slots=True)
+class AbortReportTransfer:
+    """`reports.transfer.abort`: end one of your uncommitted transfer sessions.
+
+    An open or finalized (not yet consumed) session is aborted and its staged
+    chunks discarded; its token can no longer be consumed. Aborting it again
+    replays (`replayed: true`). No report or content object is touched.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_TRANSFER_ABORT
+
+    session_id: str
+
+    def __post_init__(self) -> None:
+        _transfer_session(self.session_id)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadReportTransferChunk:
+    """`reports.transfer.read_chunk`: read a verified byte range of one standalone report version.
+
+    Names one version of one of your standalone reports by exactly one of
+    `version_id` and `version_number`, with `reports.read`'s visibility (an
+    archived or trashed report needs `include_withdrawn`). `part` is
+    `decoded` (default: the bytes `decoded_sha256` names) or `original` (the
+    uploaded gzip bytes of a gzip+base64 version, else the decoded bytes);
+    `offset` (default 0) and `length` (1..262,144, default 262,144) select the
+    range. The answer carries the chunk as Base64 with its sha256, the part's
+    total size and sha256, `eof` and `next_offset`.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_TRANSFER_READ_CHUNK
+
+    report_id: str
+    version_id: str | None = None
+    version_number: int | None = None
+    part: str = "decoded"
+    offset: int = 0
+    length: int = TRANSFER_CHUNK_BYTES
+    include_withdrawn: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.report_id, str):
+            raise InvalidRequestError(SafeDetail.ARTIFACT_ID)
+        _identifier(self.report_id, IdKind.REPORT, SafeDetail.ARTIFACT_ID)
+        if (self.version_id is None) == (self.version_number is None):
+            # Exactly one: a range is of one pinned version, never of a moving head.
+            raise InvalidRequestError(SafeDetail.VERSION_ID, SafeDetail.VERSION_NUMBER)
+        if self.version_id is not None:
+            if not isinstance(self.version_id, str):
+                raise InvalidRequestError(SafeDetail.VERSION_ID)
+            _identifier(self.version_id, IdKind.REPORT_VERSION, SafeDetail.VERSION_ID)
+        if self.version_number is not None and (
+            type(self.version_number) is not int or self.version_number < 1
+        ):
+            raise InvalidRequestError(SafeDetail.VERSION_NUMBER)
+        part: object = self.part
+        if not isinstance(part, str) or part not in TRANSFER_READ_PARTS:
+            raise InvalidRequestError(SafeDetail.PART)
+        _transfer_integer(self.offset, SafeDetail.OFFSET, 0, MAX_TRANSFER_BYTE_COUNT)
+        _transfer_integer(self.length, SafeDetail.LENGTH, 1, TRANSFER_CHUNK_BYTES)
+        if not isinstance(self.include_withdrawn, bool):
+            raise InvalidRequestError(SafeDetail.INCLUDE_WITHDRAWN)
+
+
+_TRANSFER_SESSION_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
+    {
+        "pattern": "^grxfr_[A-Za-z0-9]{8,64}$",
+        "description": "Your transfer session (grxfr_), from reports.transfer.begin.",
+    }
+)
+
+BeginReportTransfer.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "format": {
+            "enum": [member.value for member in ContentFormat],
+            "description": f"The content's format. {_TRANSFER_PROTOCOL}",
+        },
+        "encoding": {
+            "enum": [member.value for member in ContentEncoding],
+            "description": (
+                "identity: the staged bytes are the content's text; gzip+base64: they "
+                "are one raw gzip member (Base64 is only the per-chunk transport)."
+            ),
+        },
+        "byte_count": {
+            "minimum": 1,
+            "maximum": MAX_TRANSFER_BYTE_COUNT,
+            "description": "The staged (raw) bytes' count.",
+        },
+        "sha256": {
+            "pattern": _SHA256_SCHEMA_PATTERN,
+            "description": "SHA-256 of all the staged bytes, lowercase hex.",
+        },
+        "ttl_seconds": {
+            "minimum": TRANSFER_TTL_MIN_SECONDS,
+            "maximum": TRANSFER_TTL_MAX_SECONDS,
+            "description": (
+                f"Session life, default {TRANSFER_TTL_DEFAULT_SECONDS}. Quotas: at most "
+                f"{TRANSFER_SESSIONS_PER_CLIENT} live sessions per client, "
+                f"{TRANSFER_SESSIONS_PER_OWNER} per owner and "
+                f"{TRANSFER_DECLARED_BYTES_PER_OWNER:,} declared bytes per owner, "
+                "else rate_limited."
+            ),
+        },
+    }
+)
+AppendReportTransfer.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "session_id": dict(_TRANSFER_SESSION_SCHEMA),
+        "sequence": {
+            "minimum": 0,
+            "maximum": MAX_TRANSFER_CHUNKS - 1,
+            "description": (
+                "The chunk's index: 0 first, then each next in order (a gap or a "
+                "chunk ahead is a conflict)."
+            ),
+        },
+        "chunk": {
+            "minLength": 4,
+            "maxLength": TRANSFER_CHUNK_MAX_BASE64_CHARACTERS,
+            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+            "contentEncoding": "base64",
+            "description": (
+                f"Canonical padded standard Base64 of the chunk's raw bytes: exactly "
+                f"{TRANSFER_CHUNK_BYTES:,} bytes ({TRANSFER_CHUNK_MAX_BASE64_CHARACTERS:,} "
+                "characters) for every chunk but the last, which completes the declaration."
+            ),
+        },
+        "chunk_sha256": {
+            "pattern": _SHA256_SCHEMA_PATTERN,
+            "description": "SHA-256 of the chunk's raw (decoded) bytes, lowercase hex.",
+        },
+    }
+)
+FinalizeReportTransfer.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "session_id": {
+            **_TRANSFER_SESSION_SCHEMA,
+            "description": (
+                "Your complete transfer session. The content_token answered is one-use "
+                "and returned only once; finalize is not replayable (abort and begin again)."
+            ),
+        },
+    }
+)
+AbortReportTransfer.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {"session_id": dict(_TRANSFER_SESSION_SCHEMA)}
+)
+ReadReportTransferChunk.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "report_id": dict(_REPORT_ID_SCHEMA),
+        "version_id": {
+            "pattern": "^grver_[A-Za-z0-9]{8,64}$",
+            "description": "One exact version. Exactly one of version_id and version_number.",
+        },
+        "version_number": {
+            "minimum": 1,
+            "description": "One version by number. Exactly one of version_id and version_number.",
+        },
+        "part": {
+            "enum": list(TRANSFER_READ_PARTS),
+            "description": (
+                "decoded (default): the bytes decoded_sha256 names; original: the "
+                "uploaded gzip bytes of a gzip+base64 version, else the decoded bytes."
+            ),
+        },
+        "offset": {
+            "minimum": 0,
+            "maximum": MAX_TRANSFER_BYTE_COUNT,
+            "description": (
+                "Default 0. Continue from next_offset until eof; an offset past the "
+                "part's end is invalid_request."
+            ),
+        },
+        "length": {
+            "minimum": 1,
+            "maximum": TRANSFER_CHUNK_BYTES,
+            "description": f"Default {TRANSFER_CHUNK_BYTES:,}; the chunk may be shorter at eof.",
+        },
+        "include_withdrawn": {
+            "description": "Also read an archived or trashed report, which is otherwise not found.",
         },
     }
 )
@@ -16758,6 +17193,11 @@ type Command = (
     | ReleaseReportHold
     | SetReportRetention
     | GetReportRetention
+    | BeginReportTransfer
+    | AppendReportTransfer
+    | FinalizeReportTransfer
+    | AbortReportTransfer
+    | ReadReportTransferChunk
     | SearchEntities
     | GetEntity
     | ResolveEntity

@@ -1307,6 +1307,27 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "period": {"count": 5, "unit": "years"},
         },
         Capability.REPORTS_RETENTION_GET: {},
+        # Reports Modernization WP06: the bounded chunked transfer (W3a: the
+        # placeholder handlers; the uploads are uncomposed without a content store).
+        Capability.REPORTS_TRANSFER_BEGIN: {
+            "format": "markdown",
+            "encoding": "identity",
+            "byte_count": 16,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "idempotency_key": "parity-transfer-begin",
+        },
+        Capability.REPORTS_TRANSFER_APPEND: {
+            "session_id": "grxfr_paritysession01",
+            "sequence": 0,
+            "chunk": "c3ludGhldGlj",
+            "chunk_sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+        },
+        Capability.REPORTS_TRANSFER_FINALIZE: {"session_id": "grxfr_paritysession01"},
+        Capability.REPORTS_TRANSFER_ABORT: {"session_id": "grxfr_paritysession01"},
+        Capability.REPORTS_TRANSFER_READ_CHUNK: {
+            "report_id": staged_general_report(scene),
+            "version_number": 1,
+        },
         # The relationship-intelligence entity plane (WP-RI-05). `person` and
         # `organization` are staged before the world is copied per transport, so
         # all three read the same rows and a read is the same read everywhere.
@@ -2421,7 +2442,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 251, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 256, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2743,6 +2764,15 @@ def assert_same_answer(
 #: comparison below still covers them and the reason is legible.
 UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
     {
+        # Reports Modernization WP06 T14: the four transfer uploads need a report
+        # content store and the transfer staging; this harness composes neither.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
+        # W3a interim ONLY: `read_chunk` is served (T14) but its handler is still
+        # the refusing placeholder; W3b moves it back to the answering rows.
+        Capability.REPORTS_TRANSFER_READ_CHUNK,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT_PREVIEW,
@@ -3455,7 +3485,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 250
+    assert len(IMPLEMENTED_CAPABILITIES) == 255
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

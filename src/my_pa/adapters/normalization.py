@@ -63,6 +63,7 @@ from my_pa.application.commands import (
     REPORT_CATALOG_FILTER_FIELDS,
     REPORT_CATALOG_LEGACY_FIELDS,
     REPORT_PUBLISH_PIPELINE_FIELDS,
+    AbortReportTransfer,
     AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
@@ -70,6 +71,7 @@ from my_pa.application.commands import (
     AddEntityName,
     AddIssueMembership,
     AddIssueProjectLink,
+    AppendReportTransfer,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
@@ -78,6 +80,7 @@ from my_pa.application.commands import (
     ArchiveRelationshipMemory,
     AssertRecordAssociation,
     BeginIntelligenceCycle,
+    BeginReportTransfer,
     BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
@@ -135,6 +138,7 @@ from my_pa.application.commands import (
     EndRecordAssociation,
     EnrollSource,
     FetchSource,
+    FinalizeReportTransfer,
     GetCanvasWorkspace,
     GetCapabilities,
     GetCommitmentHistory,
@@ -240,6 +244,7 @@ from my_pa.application.commands import (
     ReadRecordLineage,
     ReadRelatedRecords,
     ReadReportManifest,
+    ReadReportTransferChunk,
     ReadScheduleActivityHistory,
     ReadSchedulePublication,
     ReadTask,
@@ -1960,6 +1965,32 @@ def _get_report_retention(payload: Mapping[str, Any]) -> Command:
     return GetReportRetention(**_general_report_fields(payload, GetReportRetention))
 
 
+def _begin_report_transfer(payload: Mapping[str, Any]) -> Command:
+    """`reports.transfer.begin` (WP06): every server-owned session field -- `session_id`,
+    `principal_id`, `client_ref`, `state`, `chunk_byte_limit`, `expires_at`,
+    `intent_digest`, a token or its digest -- is undeclared and so refused, as
+    every general-report write refuses them."""
+    return BeginReportTransfer(**_general_report_fields(payload, BeginReportTransfer))
+
+
+def _append_report_transfer(payload: Mapping[str, Any]) -> Command:
+    """`reports.transfer.append`: `byte_offset`, `received_byte_count` and the
+    like are server-derived and refused as undeclared."""
+    return AppendReportTransfer(**_general_report_fields(payload, AppendReportTransfer))
+
+
+def _finalize_report_transfer(payload: Mapping[str, Any]) -> Command:
+    return FinalizeReportTransfer(**_general_report_fields(payload, FinalizeReportTransfer))
+
+
+def _abort_report_transfer(payload: Mapping[str, Any]) -> Command:
+    return AbortReportTransfer(**_general_report_fields(payload, AbortReportTransfer))
+
+
+def _read_report_transfer_chunk(payload: Mapping[str, Any]) -> Command:
+    return ReadReportTransferChunk(**_general_report_fields(payload, ReadReportTransferChunk))
+
+
 def _general_report_history(payload: Mapping[str, Any]) -> Command:
     """`reports.history`: `entries` arrives as its wire string."""
     converted = _general_report_fields(payload, GetGeneralReportHistory)
@@ -2970,6 +3001,12 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.REPORTS_HOLD_RELEASE: _release_report_hold,
         Capability.REPORTS_RETENTION_SET: _set_report_retention,
         Capability.REPORTS_RETENTION_GET: _get_report_retention,
+        # Reports Modernization WP06: the bounded chunked transfer.
+        Capability.REPORTS_TRANSFER_BEGIN: _begin_report_transfer,
+        Capability.REPORTS_TRANSFER_APPEND: _append_report_transfer,
+        Capability.REPORTS_TRANSFER_FINALIZE: _finalize_report_transfer,
+        Capability.REPORTS_TRANSFER_ABORT: _abort_report_transfer,
+        Capability.REPORTS_TRANSFER_READ_CHUNK: _read_report_transfer_chunk,
         Capability.ENTITIES_SEARCH: _search_entities,
         Capability.ENTITIES_GET: _get_entity,
         Capability.ENTITIES_RESOLVE: _resolve_entity,

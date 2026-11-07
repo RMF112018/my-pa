@@ -49,6 +49,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from my_pa.application.commands import (
+    AbortReportTransfer,
     AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
@@ -56,6 +57,7 @@ from my_pa.application.commands import (
     AddEntityName,
     AddIssueMembership,
     AddIssueProjectLink,
+    AppendReportTransfer,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
@@ -64,6 +66,7 @@ from my_pa.application.commands import (
     ArchiveRelationshipMemory,
     AssertRecordAssociation,
     BeginIntelligenceCycle,
+    BeginReportTransfer,
     BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
@@ -120,6 +123,7 @@ from my_pa.application.commands import (
     EndRecordAssociation,
     EnrollSource,
     FetchSource,
+    FinalizeReportTransfer,
     GetCanvasWorkspace,
     GetCapabilities,
     GetCommitmentHistory,
@@ -225,6 +229,7 @@ from my_pa.application.commands import (
     ReadRecordLineage,
     ReadRelatedRecords,
     ReadReportManifest,
+    ReadReportTransferChunk,
     ReadScheduleActivityHistory,
     ReadSchedulePublication,
     ReadTask,
@@ -602,6 +607,13 @@ def _requested_scope(
             | ReleaseReportHold()
             | SetReportRetention()
             | GetReportRetention()
+            # WP06: the caller's own (and its client's) upload sessions, and a
+            # chunk of one of its own reports' versions.
+            | BeginReportTransfer()
+            | AppendReportTransfer()
+            | FinalizeReportTransfer()
+            | AbortReportTransfer()
+            | ReadReportTransferChunk()
             # The entity plane names a person, not a source, for the reason
             # `domain.policy.decision._SCOPELESS` states beside the same five.
             | SearchEntities()

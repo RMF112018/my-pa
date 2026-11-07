@@ -714,6 +714,27 @@ class SafeDetail(StrEnum):
     UNSET = "unset"
     HISTORY_LIMIT = "history_limit"
     PRESERVATION_STORE = "preservation_store"
+    #: Reports Modernization WP06 (Part C): the bounded chunked transfer.
+    #: `TRANSFER` is a publish/update transfer reference (`content` or
+    #: `patch.content`) or the staged content a finalize verifies;
+    #: `SESSION_ID` a transfer session (`grxfr_`); `SEQUENCE`, `CHUNK` and
+    #: `CHUNK_SHA256` an append; `FORMAT`, `ENCODING`, `BYTE_COUNT`, `SHA256`
+    #: and `TTL_SECONDS` a begin's declaration; `PART`, `OFFSET` and `LENGTH`
+    #: a `reports.transfer.read_chunk` range. `ARTIFACT_ID`, `VERSION_ID`,
+    #: `VERSION_NUMBER`, `INCLUDE_WITHDRAWN` and `IDEMPOTENCY_KEY` are reused.
+    TRANSFER = "transfer"
+    SESSION_ID = "session_id"
+    SEQUENCE = "sequence"
+    CHUNK = "chunk"
+    CHUNK_SHA256 = "chunk_sha256"
+    FORMAT = "format"
+    ENCODING = "encoding"
+    BYTE_COUNT = "byte_count"
+    SHA256 = "sha256"
+    TTL_SECONDS = "ttl_seconds"
+    PART = "part"
+    OFFSET = "offset"
+    LENGTH = "length"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

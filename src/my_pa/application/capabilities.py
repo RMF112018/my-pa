@@ -206,7 +206,11 @@ def _limitations(
 #: `tests/contract/test_capabilities_and_readiness.py` asserts that no command
 #: carries a continuation-shaped field outside this set, so a third spelling
 #: fails rather than going quietly unread.
-CONTINUATION_FIELD_NAMES: Final[frozenset[str]] = frozenset({"after", "cursor"})
+#:
+#: Reports Modernization WP06 adds the third: `reports.transfer.read_chunk`
+#: takes `offset` and answers `next_offset` until `eof`, so it is a read a
+#: caller continues, and the readiness limitation names it with the others.
+CONTINUATION_FIELD_NAMES: Final[frozenset[str]] = frozenset({"after", "cursor", "offset"})
 
 
 def _accepts_a_continuation(member: object) -> Capability | None:

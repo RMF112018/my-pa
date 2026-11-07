@@ -88,6 +88,7 @@ from my_pa.adapters.http import create_http_app
 from my_pa.adapters.http.app import _STATUS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
+    AbortReportTransfer,
     AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
@@ -95,6 +96,7 @@ from my_pa.application.commands import (
     AddEntityName,
     AddIssueMembership,
     AddIssueProjectLink,
+    AppendReportTransfer,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
@@ -103,6 +105,7 @@ from my_pa.application.commands import (
     ArchiveRelationshipMemory,
     AssertRecordAssociation,
     BeginIntelligenceCycle,
+    BeginReportTransfer,
     BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
@@ -159,6 +162,7 @@ from my_pa.application.commands import (
     EndRecordAssociation,
     EnrollSource,
     FetchSource,
+    FinalizeReportTransfer,
     GetCanvasWorkspace,
     GetCapabilities,
     GetCommitmentHistory,
@@ -264,6 +268,7 @@ from my_pa.application.commands import (
     ReadRecordLineage,
     ReadRelatedRecords,
     ReadReportManifest,
+    ReadReportTransferChunk,
     ReadScheduleActivityHistory,
     ReadSchedulePublication,
     ReadTask,
@@ -544,6 +549,15 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.SCHEDULE_ACTIVITIES_LIST,
         Capability.SCHEDULE_ACTIVITIES_HISTORY,
         Capability.SCHEDULE_CHANGES_LIST,
+        # Reports Modernization WP06 T14: the 4 transfer uploads need a report
+        # content store and the transfer staging; this harness composes neither.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
+        # W3a interim ONLY: `read_chunk` is served but its handler is still the
+        # refusing placeholder; W3b moves it back to the answering rows.
+        Capability.REPORTS_TRANSFER_READ_CHUNK,
     }
 )
 
@@ -1038,6 +1052,27 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "period": {"count": 5, "unit": "years"},
         },
         Capability.REPORTS_RETENTION_GET: {},
+        # Reports Modernization WP06: the bounded chunked transfer (W3a: the
+        # placeholder handlers; the uploads are uncomposed without a content store).
+        Capability.REPORTS_TRANSFER_BEGIN: {
+            "format": "markdown",
+            "encoding": "identity",
+            "byte_count": 16,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "idempotency_key": "http-transfer-begin",
+        },
+        Capability.REPORTS_TRANSFER_APPEND: {
+            "session_id": "grxfr_httpsession01",
+            "sequence": 0,
+            "chunk": "c3ludGhldGlj",
+            "chunk_sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+        },
+        Capability.REPORTS_TRANSFER_FINALIZE: {"session_id": "grxfr_httpsession01"},
+        Capability.REPORTS_TRANSFER_ABORT: {"session_id": "grxfr_httpsession01"},
+        Capability.REPORTS_TRANSFER_READ_CHUNK: {
+            "report_id": staged_general_report(scene),
+            "version_number": 1,
+        },
         # The relationship-intelligence entity plane (WP-RI-05). `person` and
         # `organization` are staged once per scene, so the payload table and the
         # command table below name the same two entities rather than each
@@ -2413,6 +2448,27 @@ def commands_for(
             period={"count": 5, "unit": "years"},
         ),
         Capability.REPORTS_RETENTION_GET: GetReportRetention(),
+        # Reports Modernization WP06: the bounded chunked transfer.
+        Capability.REPORTS_TRANSFER_BEGIN: BeginReportTransfer(
+            format="markdown",
+            encoding="identity",
+            byte_count=16,
+            sha256="0000000000000000000000000000000000000000000000000000000000000000",
+            idempotency_key="http-transfer-begin",
+        ),
+        Capability.REPORTS_TRANSFER_APPEND: AppendReportTransfer(
+            session_id="grxfr_httpsession01",
+            sequence=0,
+            chunk="c3ludGhldGlj",
+            chunk_sha256="b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+        ),
+        Capability.REPORTS_TRANSFER_FINALIZE: FinalizeReportTransfer(
+            session_id="grxfr_httpsession01"
+        ),
+        Capability.REPORTS_TRANSFER_ABORT: AbortReportTransfer(session_id="grxfr_httpsession01"),
+        Capability.REPORTS_TRANSFER_READ_CHUNK: ReadReportTransferChunk(
+            report_id=staged_general_report(scene), version_number=1
+        ),
         # The entity plane. `person` is the same staged entity the payload table
         # names, because `staged_entities` answers with the pair already in the
         # world: two tables each staging their own would be comparing two

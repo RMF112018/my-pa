@@ -269,8 +269,11 @@ implemented, and retention never blocks an update, archive, restore or Trash.
 Eligibility is decided in this order: `no_policy`, `held`, `not_trashed`,
 `retention_running`, `eligible`. **Open operator decisions:** the retention
 clock start (the implemented default is the report's most recent move to the
-Trash, `most_recent_trash_event`) and the period itself (a five-year period is
-a proposal, not a default; nothing in the repository sets or assumes one).
+Trash, `most_recent_trash_event`) and the period itself. The period is an
+operator decision, recorded here as **unset by default**: no period is
+approved, and nothing in the repository sets or assumes one. The period in the
+`reports.retention.set` example below (`{"count": 30, "unit": "days"}`) is a
+neutral placeholder showing the shape, not a proposed or recommended value.
 
 **Commands.** All four run through `apps/cli/invoke.py` as the local operator,
 with `MY_PA_DATABASE_URL` set and, for a placement, `MY_PA_REPORT_CONTENT_ROOT`
@@ -296,7 +299,7 @@ MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \
 .venv/bin/python apps/cli/invoke.py reports.retention.set \
     --request-id req-retention-0001 --purpose report_retention \
     --principal-id prn_... --requested-at 2026-11-06T12:00:00Z \
-    --payload '{"expected_policy_revision": 0, "reason": "Policy adopted.", "idempotency_key": "retention-0001", "period": {"count": 5, "unit": "years"}}'
+    --payload '{"expected_policy_revision": 0, "reason": "Policy adopted.", "idempotency_key": "retention-0001", "period": {"count": 30, "unit": "days"}}'
 
 .venv/bin/python apps/cli/invoke.py reports.retention.set \
     --request-id req-retention-0002 --purpose report_retention \

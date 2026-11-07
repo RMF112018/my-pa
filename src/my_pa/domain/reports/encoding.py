@@ -85,6 +85,7 @@ __all__ = [
     "GZIP_MAGIC",
     "check_encoded_shape",
     "decode_gzip_base64",
+    "decode_gzip_bytes",
     "parse_json_text",
     "utf8_text",
 ]
@@ -197,6 +198,40 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def decode_gzip_bytes(
+    original: bytes,
+    *,
+    original_byte_count: int | None = None,
+    original_sha256: str | None = None,
+    uncompressed_byte_count: int | None = None,
+    uncompressed_sha256: str | None = None,
+    max_decoded: int = MAX_DECODED_CONTENT_BYTES,
+) -> bytes:
+    """Steps 2-6 on raw gzip bytes: the gunzipped bytes of exactly one member.
+
+    The one list of the gzip steps (WP06 T11): `decode_gzip_base64` calls it
+    after step 1, and a staged transfer's gzip bytes (which arrive raw, not
+    Base64) are decoded by it directly. The declared counts and digests are
+    optional and already well-formed; `max_decoded` (at most
+    `MAX_DECODED_CONTENT_BYTES`) bounds the inflation.
+    """
+    max_decoded = min(max_decoded, MAX_DECODED_CONTENT_BYTES)
+    if not original.startswith(GZIP_MAGIC):
+        raise _refuse("malformed_gzip")
+    if original_byte_count is not None and original_byte_count != len(original):
+        raise _refuse("original_size_mismatch")
+    if original_sha256 is not None and original_sha256 != _sha256(original):
+        raise _refuse("original_digest_mismatch")
+    uncompressed = _inflate(original, max_decoded)
+    if uncompressed.startswith(_NESTED_MAGIC):
+        raise _refuse("nested_stream")
+    if uncompressed_byte_count is not None and uncompressed_byte_count != len(uncompressed):
+        raise _refuse("uncompressed_size_mismatch")
+    if uncompressed_sha256 is not None and uncompressed_sha256 != _sha256(uncompressed):
+        raise _refuse("uncompressed_digest_mismatch")
+    return uncompressed
+
+
 def decode_gzip_base64(
     encoded: object,
     *,
@@ -211,22 +246,17 @@ def decode_gzip_base64(
     The declared counts and digests are optional and already well-formed (the
     caller validated their types); a declared value that disagrees is refused.
     `max_decoded` (at most `MAX_DECODED_CONTENT_BYTES`) bounds the inflation.
+    Step 1 here, steps 2-6 in `decode_gzip_bytes`.
     """
-    max_decoded = min(max_decoded, MAX_DECODED_CONTENT_BYTES)
     original = _base64_bytes(encoded)
-    if not original.startswith(GZIP_MAGIC):
-        raise _refuse("malformed_gzip")
-    if original_byte_count is not None and original_byte_count != len(original):
-        raise _refuse("original_size_mismatch")
-    if original_sha256 is not None and original_sha256 != _sha256(original):
-        raise _refuse("original_digest_mismatch")
-    uncompressed = _inflate(original, max_decoded)
-    if uncompressed.startswith(_NESTED_MAGIC):
-        raise _refuse("nested_stream")
-    if uncompressed_byte_count is not None and uncompressed_byte_count != len(uncompressed):
-        raise _refuse("uncompressed_size_mismatch")
-    if uncompressed_sha256 is not None and uncompressed_sha256 != _sha256(uncompressed):
-        raise _refuse("uncompressed_digest_mismatch")
+    uncompressed = decode_gzip_bytes(
+        original,
+        original_byte_count=original_byte_count,
+        original_sha256=original_sha256,
+        uncompressed_byte_count=uncompressed_byte_count,
+        uncompressed_sha256=uncompressed_sha256,
+        max_decoded=max_decoded,
+    )
     return original, uncompressed
 
 

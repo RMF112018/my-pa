@@ -23,6 +23,8 @@ content is bounded by `max_decoded` (at most `MAX_DECODED_CONTENT_BYTES`) twice:
 on the gunzipped bytes as uploaded (with `MAX_EXPANSION_RATIO` times the gzip
 bytes, in `encoding`) and on the decoded (canonical) bytes; its JSON by
 `MAX_CONTENT_DATA_DEPTH` and `MAX_CONTENT_DATA_VALUES` in the uploaded text.
+WP06 T11: `content_from_staged` builds content from a finalized transfer's
+staged bytes through the same post-gunzip stage as inline gzip content.
 Placement (inline, the store, or a refusal) is the repository's decision.
 Every refusal names a field and a rule, never the value.
 """
@@ -40,6 +42,7 @@ from my_pa.domain.reports.encoding import (
     ENCODED_FIELD,
     check_encoded_shape,
     decode_gzip_base64,
+    decode_gzip_bytes,
     parse_json_text,
     utf8_text,
 )
@@ -56,10 +59,12 @@ from my_pa.domain.reports.vocabulary import (
 __all__ = [
     "INLINE_CONTENT_MAX_BYTES",
     "MAX_CONTENT_DATA_DEPTH",
+    "TRANSFER_FIELD",
     "ReportContent",
     "canonical_json",
     "content_facts",
     "content_from_decoded",
+    "content_from_staged",
     "content_of",
     "is_gzip_content",
     "validate_content",
@@ -86,6 +91,8 @@ _GZIP_KEYS: Final = frozenset(
     {"format", "encoding", "encoded", *_DECLARED_COUNTS, *_DECLARED_DIGESTS}
 )
 _SHA256_HEX: Final = re.compile(r"\A[0-9a-f]{64}\Z")
+#: WP06 T11: the field every refusal of staged transfer content names.
+TRANSFER_FIELD: Final = "transfer"
 
 
 def _without_negative_zero(value: object) -> object:
@@ -377,6 +384,24 @@ def _gzip_content(
         uncompressed_sha256=_declared_digest(value, "uncompressed_sha256"),
         max_decoded=max_decoded,
     )
+    return _decoded_stage(uncompressed, content_format, original, max_decoded)
+
+
+def _decoded_stage(
+    uncompressed: bytes,
+    content_format: ContentFormat,
+    original: bytes | None,
+    max_decoded: int,
+) -> ReportContent:
+    """The post-gunzip stage of the content pipeline, one function (WP06 T11).
+
+    Strict UTF-8, the identity rules on the text (`_body`; `parse_json_text`
+    bounded by `MAX_CONTENT_DATA_DEPTH`/`MAX_CONTENT_DATA_VALUES` with the
+    mixed wrapper's adjustments; `_data`), `content_of`, and the decoded
+    bound. Used by inline gzip content and by staged transfer content (gzip
+    and identity alike); every refusal is the one inline gzip raised before
+    this stage was factored out, on `content.encoded` or `content`.
+    """
     text = utf8_text(uncompressed)
     body: str | None = None
     data: object = None
@@ -491,3 +516,48 @@ def validate_content(
     if content.decoded_byte_count > INLINE_CONTENT_MAX_BYTES:
         raise ReportValidationError("content", "too_large")
     return content
+
+
+def content_from_staged(
+    content_format: ContentFormat,
+    encoding: ContentEncoding,
+    staged: bytes,
+    *,
+    max_decoded: int,
+) -> ReportContent:
+    """The content value of a finalized transfer's staged bytes (WP06 T11).
+
+    The same pipeline as inline gzip content, on raw bytes:
+
+    - `gzip+base64`: `staged` is the gzip member itself (Base64 was only the
+      per-chunk transport). `decode_gzip_bytes` -- the gzip magic, `_inflate`
+      bounded by `max_decoded` and `MAX_EXPANSION_RATIO`, the nested-stream
+      check -- then the shared post-gunzip stage, with `original = staged`.
+    - `identity`: `staged` is the content's text (the UTF-8 body, or the JSON
+      text of the data, or of `{"body", "data"}` for `mixed`), at most
+      `min(max_decoded, MAX_DECODED_CONTENT_BYTES)` bytes, else `too_large`;
+      then the shared stage with no separate original, so a json/mixed text is
+      canonicalized exactly as inline data is (the declared digest names the
+      staged text, `decoded_sha256` the canonical bytes).
+
+    Every refusal is `ReportValidationError("transfer", <rule>)`, the rule the
+    inline pipeline's own code (`malformed_gzip`, `expansion_ratio`,
+    `too_large`, `malformed_utf8`, `too_deep`, ...), never the value.
+    """
+    try:
+        encoding = ContentEncoding(encoding)
+        content_format = ContentFormat(content_format)
+    except ValueError:
+        raise ReportValidationError(TRANSFER_FIELD, "unknown") from None
+    if type(staged) is not bytes:
+        raise ReportValidationError(TRANSFER_FIELD, "type")
+    bound = min(max_decoded, MAX_DECODED_CONTENT_BYTES)
+    try:
+        if encoding is ContentEncoding.GZIP_BASE64:
+            uncompressed = decode_gzip_bytes(staged, max_decoded=bound)
+            return _decoded_stage(uncompressed, content_format, staged, bound)
+        if len(staged) > bound:
+            raise ReportValidationError(TRANSFER_FIELD, "too_large")
+        return _decoded_stage(staged, content_format, None, bound)
+    except ReportValidationError as error:
+        raise ReportValidationError(TRANSFER_FIELD, error.code) from None

@@ -590,6 +590,27 @@ def test_discard_never_reaches_content_or_preservation_objects(tmp_path: Path) -
     planted.intact()
 
 
+def test_discard_leaves_a_plain_regular_file_with_a_foreign_name(tmp_path: Path) -> None:
+    # A regular, single-link file passes the regular-file gate: only the chunk-name gate keeps it.
+    root = _root(tmp_path)
+    staging = _staging(root)
+    session_id = _session()
+    data = b"synthetic staged chunk"
+    staging.put_chunk(session_id, 0, chunk_sha256=_sha(data), data=data)
+    session_dir = _session_dir(root, session_id)
+    foreign = session_dir / "operator-note"
+    foreign.write_bytes(b"synthetic note")
+    assert foreign.stat().st_nlink == 1
+
+    assert staging.discard(session_id) is True
+
+    assert foreign.read_bytes() == b"synthetic note"
+    assert sorted(entry.name for entry in session_dir.iterdir()) == ["operator-note"]
+    assert f"{session_dir.relative_to(root)}/operator-note" in staging.unreadable_entries()
+    assert staging.discard(session_id) is False
+    assert foreign.read_bytes() == b"synthetic note"
+
+
 def test_discard_cannot_name_a_content_or_preservation_object(tmp_path: Path) -> None:
     root = _root(tmp_path)
     planted = _plant(root)

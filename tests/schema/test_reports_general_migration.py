@@ -3010,6 +3010,11 @@ def _transfer_cases() -> list[Case]:
             "a_report_transfer_declared_size_is_bounded",
         ),
         case(
+            "declared_size_above",
+            {"declared_byte_count": 16_777_217},
+            "a_report_transfer_declared_size_is_bounded",
+        ),
+        case(
             "declared_digest",
             {"declared_sha256": _UPPER},
             "a_report_transfer_declared_digest_is_sha256",
@@ -3103,6 +3108,15 @@ def _transfer_cases() -> list[Case]:
             "a report transfer receives bytes only while open",
             state="aborted",
             received_byte_count=99,
+        ),
+        # A consumed session's state never moves back (only the trigger's state branch refuses it).
+        guard(
+            "guard_consumed_returns_to_finalized",
+            "consume",
+            "a report transfer session state only moves forward",
+            state="finalized",
+            consumed_content_id=None,
+            consumed_at=None,
         ),
         Case(
             "guard_delete_after_consume",
@@ -4295,6 +4309,18 @@ LOAD_BEARING: Final = (
         "DROP TRIGGER a_report_transfer_session_moves_forward "
         "ON knowledge.report_transfer_sessions",
         "transfer_guard_backward_state",
+    ),
+    (
+        "transfer_guard_trigger_consumed",
+        "DROP TRIGGER a_report_transfer_session_moves_forward "
+        "ON knowledge.report_transfer_sessions",
+        "transfer_guard_consumed_returns_to_finalized",
+    ),
+    (
+        "transfer_declared_size_check",
+        "ALTER TABLE knowledge.report_transfer_sessions DROP CONSTRAINT "
+        "a_report_transfer_declared_size_is_bounded",
+        "transfer_declared_size_above",
     ),
     (
         "receipt_version_whole_check",

@@ -12005,6 +12005,7 @@ def build_service(
     report_content_store: ReportContentStore | None = None,
     report_content_inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
     report_preservation_store: ReportContentStore | None = _COMPOSE_PRESERVATION,
+    report_transfer_staging: ReportTransferStaging | None = None,
 ) -> ApplicationService:
     """The service under test, with a fixed clock and in-memory repositories.
 
@@ -12140,6 +12141,9 @@ def build_service(
             if report_preservation_store is _COMPOSE_PRESERVATION
             else report_preservation_store
         ),
+        # WP06 T14: no transfer staging unless a test composes one (with a
+        # report content store), so the four uploads stay withheld by default.
+        report_transfer_staging=report_transfer_staging,
     )
 
 

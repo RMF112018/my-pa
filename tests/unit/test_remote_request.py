@@ -1211,3 +1211,132 @@ def test_provenance_normalizes_to_its_command_with_only_the_event_id() -> None:
             Capability.RECORD_EVENTS_PROVENANCE.value,
             {**composed, "payload": {"event_id": "kasr_remoterequest0005"}},
         )
+
+
+# ---- Reports Modernization WP06: the transfer names (contract T7) -----------------------
+
+_TRANSFER_BEGIN_ARGUMENTS: dict[str, Any] = {
+    "payload": {
+        "format": "markdown",
+        "encoding": "identity",
+        "byte_count": 4096,
+        "sha256": "a" * 64,
+    }
+}
+
+
+def _compose_transfer(
+    capability: Capability, arguments: dict[str, Any], client: str | None = "client-a"
+) -> dict[str, Any]:
+    return compose_remote_arguments(
+        capability_name=capability.value,
+        arguments=arguments,
+        principal=PRINCIPAL,
+        grants=None,
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+        authenticated_client_id=client,
+    )
+
+
+def test_transfer_begin_is_keyed_and_client_bound_and_the_others_are_not() -> None:
+    from my_pa.adapters.remote_request import _CLIENT_BOUND_KEY_CAPABILITIES
+
+    begin = Capability.REPORTS_TRANSFER_BEGIN
+    unkeyed = {
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
+        Capability.REPORTS_TRANSFER_READ_CHUNK,
+    }
+    assert begin in _IDEMPOTENT_REMOTE_CAPABILITIES
+    assert begin in _CLIENT_BOUND_KEY_CAPABILITIES
+    assert not unkeyed & _IDEMPOTENT_REMOTE_CAPABILITIES
+    assert not ({begin} | unkeyed) & _SERVER_REPLAY_REMOTE_CAPABILITIES
+    first = _compose_transfer(begin, _TRANSFER_BEGIN_ARGUMENTS)
+    key = first["payload"]["idempotency_key"]
+    assert key.startswith("idk_")
+    # A retry derives the same key; another client, or another declaration, another one.
+    assert _compose_transfer(begin, _TRANSFER_BEGIN_ARGUMENTS)["payload"]["idempotency_key"] == key
+    assert (
+        _compose_transfer(begin, _TRANSFER_BEGIN_ARGUMENTS, "client-b")["payload"][
+            "idempotency_key"
+        ]
+        != key
+    )
+    other = {"payload": {**_TRANSFER_BEGIN_ARGUMENTS["payload"], "ttl_seconds": 600}}
+    assert _compose_transfer(begin, other)["payload"]["idempotency_key"] != key
+    _metadata, command = normalize(begin.value, first)
+    assert command.idempotency_key == key  # type: ignore[union-attr]
+    finalize = _compose_transfer(
+        Capability.REPORTS_TRANSFER_FINALIZE, {"payload": {"session_id": "grxfr_aaaaaaaaaaaaaaaa"}}
+    )
+    assert "idempotency_key" not in finalize["payload"]
+
+
+@pytest.mark.parametrize(
+    "capability",
+    [
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
+        Capability.REPORTS_TRANSFER_READ_CHUNK,
+    ],
+    ids=lambda c: c.value,
+)
+def test_a_transfer_name_refuses_a_caller_key_and_publishes_no_server_field(
+    capability: Capability,
+) -> None:
+    with pytest.raises(InvalidRequestError):
+        _compose_transfer(capability, {"payload": {"idempotency_key": "caller-key"}})
+    for field in SERVER_OWNED_REMOTE_FIELDS:
+        with pytest.raises(InvalidRequestError):
+            _compose_transfer(capability, {"payload": {}, field: "forged"})
+    payload = remote_tool_schema(input_schema_for(type(_command_of(capability))))["properties"][
+        "payload"
+    ]
+    for owned in (
+        *REMOTE_OWNED_PAYLOAD_FIELDS,
+        "principal_id",
+        "owner_principal_id",
+        "client_ref",
+        "state",
+        "content_token_digest",
+        "chunk_byte_limit",
+    ):
+        assert owned not in payload["properties"], (capability, owned)
+    assert payload["additionalProperties"] is False
+
+
+def _command_of(capability: Capability) -> Command:
+    payloads: dict[Capability, dict[str, Any]] = {
+        Capability.REPORTS_TRANSFER_BEGIN: {
+            **_TRANSFER_BEGIN_ARGUMENTS["payload"],
+            "idempotency_key": "idk_" + "0" * 32,
+        },
+        Capability.REPORTS_TRANSFER_APPEND: {
+            "session_id": "grxfr_aaaaaaaaaaaaaaaa",
+            "sequence": 0,
+            "chunk": "AAAA",
+            "chunk_sha256": "b" * 64,
+        },
+        Capability.REPORTS_TRANSFER_FINALIZE: {"session_id": "grxfr_aaaaaaaaaaaaaaaa"},
+        Capability.REPORTS_TRANSFER_ABORT: {"session_id": "grxfr_aaaaaaaaaaaaaaaa"},
+        Capability.REPORTS_TRANSFER_READ_CHUNK: {
+            "report_id": "grpt_aaaaaaaaaaaaaaaa",
+            "version_number": 1,
+        },
+    }
+    (purpose,) = permitted_purposes(capability)
+    _metadata, command = normalize(
+        capability.value,
+        {
+            "request_id": "corr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "purpose": purpose.value,
+            "principal_id": PRINCIPAL.principal_id,
+            "requested_at": "2026-08-15T09:30:00Z",
+            "payload": payloads[capability],
+        },
+    )
+    return command

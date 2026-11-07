@@ -136,6 +136,8 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
             "reports.retention.set",
             "reports.retention.get",
         }
+        # Nor WP06's five transfer names.
+        and not c.value.startswith("reports.transfer.")
     }
     assert len(deployed) == 190
     assert deployed <= names

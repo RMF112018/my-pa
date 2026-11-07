@@ -278,16 +278,18 @@ def test_an_active_grant_on_a_withheld_lineage_name_is_an_unexpected_control_pla
 
 def test_v10_full_plane_targets_with_lineage_and_program_reporting() -> None:
     # chatllm-data-v12: `reports.publish` (`DATA_REQUIRED`, every plane) adds 1;
-    # chatllm-data-v13: the 5 report management names (likewise) add 5.
-    assert len(_desired(_planes(**_FULL))) == 170
-    assert len(_desired(_planes(**_FULL, lineage=True))) == 197
+    # chatllm-data-v13: the 5 report management names (likewise) add 5;
+    # Reports Modernization WP06: the 5 `reports.transfer.*` names (likewise, and
+    # still v13) add 5.
+    assert len(_desired(_planes(**_FULL))) == 175
+    assert len(_desired(_planes(**_FULL, lineage=True))) == 202
     both = _desired(_planes(**_FULL, lineage=True, program_reporting=True))
-    assert len(both) == 204
+    assert len(both) == 209
     assert both - _desired(_planes(**_FULL)) == EXPOSED
     # Relationship intelligence off (the default planes): the 2 Program reads
     # need the entity plane.
     default = _desired(_planes(constraints=True, lineage=True, program_reporting=True))
-    assert len(default) == 136
+    assert len(default) == 141
     assert default & EXPOSED == EXPOSED - PROGRAM_READS
 
 

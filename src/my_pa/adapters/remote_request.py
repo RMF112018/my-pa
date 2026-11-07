@@ -247,6 +247,25 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_ARCHIVE,
         Capability.REPORTS_DELETE,
         Capability.REPORTS_RESTORE,
+        # Reports Modernization WP06 (contract T7): `reports.transfer.begin`
+        # requires the key `report_transfer_sessions (owner_principal_id,
+        # client_ref, idempotency_key)` arbitrates. The stamped payload hash
+        # covers the whole declaration (format, encoding, byte_count, sha256,
+        # ttl_seconds), so a lost-response retry replays the original session
+        # answer (`replayed: true`) and never opens a second one. Client-bound
+        # too: the session is the client's own (T4), so B's identical
+        # declaration opens B's session rather than naming A's.
+        #
+        # The other four transfer names are deliberately NOT here: their
+        # commands have no `idempotency_key` field, and none needs one.
+        # `reports.transfer.append` is idempotent by `(session, sequence)` (an
+        # identical chunk replays as a no-op, a different one conflicts);
+        # `reports.transfer.abort` is idempotent by state (an own aborted
+        # session answers `replayed: true`); `reports.transfer.read_chunk` is a
+        # read; and `reports.transfer.finalize` mints a one-use content token
+        # whose raw value is never stored, so it is deliberately not replayable
+        # (a lost finalize response means abort and begin again).
+        Capability.REPORTS_TRANSFER_BEGIN,
         # The entity plane's eighteen keyed writes (Phase A). Every one of them
         # carries an `idempotency_key` its command validates and its repository
         # arbitrates against
@@ -420,6 +439,12 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 #: identical move must reach the concurrency check on its own key (and so
 #: refuse as stale) rather than replay client A's receipt. Every other
 #: capability's derivation is unchanged.
+#:
+#: Reports Modernization WP06 (contract T4/T7): `reports.transfer.begin` too. A
+#: transfer session belongs to one client (`client_ref`), and its keyed replay is
+#: arbitrated per `(owner, client_ref, key)`; binding the derived key to the
+#: client keeps the remote key and the ledger's identity the same, so client B's
+#: identical declaration opens B's own session and never learns of A's.
 _CLIENT_BOUND_REPORT_WRITES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.REPORTS_PUBLISH,
@@ -427,6 +452,7 @@ _CLIENT_BOUND_REPORT_WRITES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_ARCHIVE,
         Capability.REPORTS_DELETE,
         Capability.REPORTS_RESTORE,
+        Capability.REPORTS_TRANSFER_BEGIN,
     }
 )
 _CLIENT_BOUND_KEY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(

@@ -190,6 +190,13 @@ def test_non_lineage_tool_annotations_are_unchanged() -> None:
         Capability.REPORTS_HOLD_RELEASE.value,
         Capability.REPORTS_RETENTION_SET.value,
         Capability.REPORTS_RETENTION_GET.value,
+        # And WP06's five transfer names, new and pinned by
+        # `tests/contract/test_reports_transfer_compact_facade.py`.
+        Capability.REPORTS_TRANSFER_BEGIN.value,
+        Capability.REPORTS_TRANSFER_APPEND.value,
+        Capability.REPORTS_TRANSFER_FINALIZE.value,
+        Capability.REPORTS_TRANSFER_ABORT.value,
+        Capability.REPORTS_TRANSFER_READ_CHUNK.value,
     }
     others = frozenset(_tools()) - plane - schedule - {Capability.REPORTS_PUBLISH.value} - wp03
     assert len(others) == 192
@@ -244,14 +251,17 @@ def _key(capability: Capability, client: str | None, payload: dict[str, object])
 def test_the_remote_key_binds_the_client_for_open_writes_only() -> None:
     # Reports Modernization WP02 binds `reports.publish` too, and WP03 its four
     # management writes (pinned end to end by
-    # `tests/contract/test_reports_compact_facade.py`); the lineage half is
-    # exactly the open writes.
+    # `tests/contract/test_reports_compact_facade.py`), and WP06
+    # `reports.transfer.begin` (pinned by
+    # `tests/security/test_reports_transfer_compact_facade_adversarial.py`); the
+    # lineage half is exactly the open writes.
     assert {c.value for c in _CLIENT_BOUND_KEY_CAPABILITIES} == OPEN_LINEAGE_WRITE_CAPABILITIES | {
         Capability.REPORTS_PUBLISH.value,
         Capability.REPORTS_UPDATE.value,
         Capability.REPORTS_ARCHIVE.value,
         Capability.REPORTS_DELETE.value,
         Capability.REPORTS_RESTORE.value,
+        Capability.REPORTS_TRANSFER_BEGIN.value,
     }
     end = {
         "link_id": "irl_lineages31parta01",

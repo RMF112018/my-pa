@@ -510,18 +510,20 @@ def test_v11_targets() -> None:
     assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
     assert len(CHATLLM_CAPABILITY_POLICY) == 255
     # chatllm-data-v12: `reports.publish` (`DATA_REQUIRED`) adds 1 everywhere;
-    # chatllm-data-v13: the 5 report management names add 5 everywhere.
+    # chatllm-data-v13: the 5 report management names add 5 everywhere;
+    # Reports Modernization WP06: the 5 `reports.transfer.*` names add 5
+    # everywhere (the version stays v13).
     full = _desired(_planes(**_FULL))
-    assert len(full) == 170
-    assert len(_desired(_planes(constraints=True))) == 104
+    assert len(full) == 175
+    assert len(_desired(_planes(constraints=True))) == 109
     with_schedule = _desired(_planes(**_FULL, schedule=True))
-    assert len(with_schedule) == 176
+    assert len(with_schedule) == 181
     assert with_schedule - full == READS
     assert len(_desired(_planes(**_FULL, lineage=True, program_reporting=True, schedule=True))) == (
-        210
+        215
     )
     default_all = _planes(constraints=True, lineage=True, program_reporting=True, schedule=True)
-    assert len(_desired(default_all)) == 142
+    assert len(_desired(default_all)) == 147
     assert len(_every_composition()) == 512
 
 

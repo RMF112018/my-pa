@@ -871,3 +871,113 @@ def test_v13_profile_commands_refuse_v12(capsys: pytest.CaptureFixture[str]) -> 
         assert "profile version must be chatllm-data-v13" in capsys.readouterr().err
         rows = repository.list_capability_grants(remote_client_id=CLIENT_UUID)
         assert not {row.capability for row in rows} & {c.value for c in _WP03_GRANTS}
+
+
+# ---- Reports Modernization WP06 (still chatllm-data-v13) --------------------------
+
+#: WP06's five transfer names, with the purpose and write flag the planner stamps.
+_WP06_GRANTS = {
+    Capability.REPORTS_TRANSFER_ABORT: (Purpose.REPORT_AUTHORING, True),
+    Capability.REPORTS_TRANSFER_APPEND: (Purpose.REPORT_AUTHORING, True),
+    Capability.REPORTS_TRANSFER_BEGIN: (Purpose.REPORT_AUTHORING, True),
+    Capability.REPORTS_TRANSFER_FINALIZE: (Purpose.REPORT_AUTHORING, True),
+    Capability.REPORTS_TRANSFER_READ_CHUNK: (Purpose.REPORT_READ, False),
+}
+
+
+def _grant_pre_wp06_catalog(repository: RemoteIdentityRepository) -> frozenset[Capability]:
+    """Converge the client on everything v13 wants except WP06's five."""
+    desired = desired_effective_capabilities(
+        composed_capabilities(
+            frozenset(_HANDLERS),
+            ChatLLMCompositionPlanes(
+                managed_documents=True,
+                relationship_intelligence=True,
+                relationship_intelligence_writes=True,
+                relationship_memory=True,
+                constraints=True,
+            ),
+        )
+    )
+    assert set(_WP06_GRANTS) <= desired
+    for capability in sorted(desired - set(_WP06_GRANTS), key=lambda c: c.value):
+        repository.grant(
+            remote_client_id=CLIENT_UUID,
+            external_scope=SCOPE,
+            capability=capability,
+            now=WHEN,
+            is_write=is_write_capability(capability),
+            resource=RESOURCE,
+            expires_at=None,
+            purpose=chatllm_grant_purpose(capability),
+        )
+    return desired
+
+
+def test_wp06_profile_diff_plan_and_apply_show_exactly_the_transfer_delta(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A client converged before WP06: diff, plan and apply move exactly the five.
+
+    The profile version string stays `chatllm-data-v13` (design contract Part D).
+    Synthetic in-memory store only; no real client or grant is touched.
+    """
+    names = sorted(capability.value for capability in _WP06_GRANTS)
+    assert names == [capability.value for capability in _WP06_GRANTS]
+    with _repository() as (_, repository):
+        desired = _grant_pre_wp06_catalog(repository)
+        code, diff = _profile(repository, "profile-diff", capsys)
+        assert code == 1
+        assert diff["profile_version"] == "chatllm-data-v13"
+        assert diff["healthy"] is False
+        assert diff["add"] == names
+        assert diff["renew"] == []
+        assert diff["failing"] == names
+        assert diff["unexpected_control_plane"] == []
+        assert diff["policy_required_not_implemented"] == []
+        for name in names:
+            assert diff["outcomes"][name] == "IMPLEMENTED_COMPOSED_GRANT_MISSING"  # type: ignore[index]
+        assert diff["desired_effective_count"] == len(desired)
+
+        code, plan = _profile(repository, "profile-plan", capsys)
+        assert code == 1
+        assert plan["profile_version"] == "chatllm-data-v13"
+        assert plan["actions"] == [
+            {
+                "kind": "add",
+                "capability": capability.value,
+                "purpose": purpose.value,
+                "write": write,
+                "grant_id": None,
+            }
+            for capability, (purpose, write) in _WP06_GRANTS.items()
+        ]
+        assert len(repository.list_capability_grants(remote_client_id=CLIENT_UUID)) == (
+            len(desired) - 5
+        )
+
+        code, applied = _profile(repository, "profile-apply", capsys)
+        assert code == 0
+        assert applied["actions"] == plan["actions"]
+        rows = {
+            row.capability: row
+            for row in repository.list_capability_grants(remote_client_id=CLIENT_UUID)
+            if row.capability in names
+        }
+        assert sorted(rows) == names
+        for capability, (purpose, write) in _WP06_GRANTS.items():
+            row = rows[capability.value]
+            assert (row.purpose, row.is_write, row.capability_version) == (
+                purpose.value,
+                write,
+                "v1",
+            )
+            assert (row.resource, row.external_scope, row.expires_at, row.revoked_at) == (
+                RESOURCE,
+                SCOPE,
+                None,
+                None,
+            )
+        code, converged = _profile(repository, "profile-diff", capsys)
+        assert code == 0
+        assert converged["healthy"] is True

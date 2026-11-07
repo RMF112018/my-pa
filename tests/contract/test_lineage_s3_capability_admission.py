@@ -387,6 +387,13 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     }
     # Reports Modernization WP04: see `_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG`.
     lineage |= {Capability.REPORTS_LIST.value, Capability.REPORTS_SEARCH.value}
+    # Reports Modernization WP06: its five transfer names, new too (pinned by
+    # `tests/contract/test_reports_transfer_compact_facade.py`).
+    lineage |= {
+        capability.value
+        for capability in Capability
+        if capability.value.startswith("reports.transfer.")
+    }
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS

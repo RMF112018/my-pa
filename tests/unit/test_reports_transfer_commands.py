@@ -32,7 +32,6 @@ from my_pa.application.commands import (
     PublishGeneralReport,
     ReadReportTransferChunk,
     UpdateGeneralReport,
-    publication_request,
     transfer_declaration,
 )
 from my_pa.application.errors import ApplicationError, SafeDetail
@@ -543,14 +542,6 @@ def test_publish_and_update_accept_a_well_formed_reference() -> None:
 def test_a_malformed_reference_is_refused_on_transfer(content: dict[str, Any]) -> None:
     assert _refused(Capability.REPORTS_PUBLISH, _publish(content)) == ["transfer"]
     assert _refused(Capability.REPORTS_UPDATE, _update(content)) == ["transfer"]
-
-
-def test_a_reference_is_never_consumed_before_the_handlers_land() -> None:
-    """W3a interim: the handler path cannot consume a reference yet (W3b replaces this)."""
-    command = PublishGeneralReport(**_publish(REFERENCE))
-    with pytest.raises(ApplicationError) as refused:
-        publication_request(command, max_decoded=1024)
-    assert refused.value.code.value == "unsupported"
 
 
 def test_inline_content_is_unchanged_by_the_reference_variant() -> None:

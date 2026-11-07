@@ -44,6 +44,7 @@ from my_pa.domain.reports.publication import (
     content_payload,
     format_timestamp,
 )
+from my_pa.domain.reports.transfer import TransferContentSource
 from my_pa.domain.reports.values import (
     ReportAssociation,
     validate_associations,
@@ -463,6 +464,10 @@ class UpdateRequest:
     patch: ReportPatch
     clear_fields: frozenset[ClearableField] = frozenset()
     change_reason: str | None = None
+    #: WP06 T10: set when `patch.content` is a finalized transfer session's;
+    #: the intent digest binds it in place of the patched content (as
+    #: `PublicationRequest.content_source`).
+    content_source: TransferContentSource | None = None
     #: `intent_digest`, computed once (WP05 N-3: it serializes any patched content).
     _intent_digest: str | None = field(default=None, init=False, repr=False, compare=False)
 
@@ -473,15 +478,27 @@ class UpdateRequest:
         if self.change_reason is None:
             raise ReportValidationError("change_reason", "required")
         validate_change_reason(self.change_reason)
+        # Typed as `object`: a caller hands this field in unchecked.
+        source: object = self.content_source
+        if source is not None and (
+            not isinstance(source, TransferContentSource) or self.patch.content is None
+        ):
+            raise ReportValidationError("content", "type")
 
     @property
     def intent_digest(self) -> str:
         """SHA-256 of the canonical JSON of the normalized caller payload (D8), computed once."""
         if self._intent_digest is None:
+            if self.content_source is None:
+                patched = self.patch.payload()
+            else:
+                # The source in place of the (staged, possibly 16 MiB) content.
+                patched = replace(self.patch, content=None).payload()
+                patched["content"] = self.content_source.payload()
             payload = {
                 "report_id": self.report_id,
                 "expected_version": self.expected_version,
-                "patch": self.patch.payload(),
+                "patch": patched,
                 "clear_fields": sorted(name.value for name in self.clear_fields),
                 "change_reason": self.change_reason,
             }

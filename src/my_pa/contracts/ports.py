@@ -7928,6 +7928,17 @@ class GeneralReportRepository(ABC):
         """
 
     @abstractmethod
+    def find_update_receipt(
+        self, idempotency_key: str, *, principal_id: str
+    ) -> UpdateResult | None:
+        """The stored result this Principal's `update` key is bound to (`replayed=True`), or `None`.
+
+        Compares no digest: the caller compares `intent_digest`. WP06 T10: a
+        transfer-sourced update settles its key with this BEFORE it claims the
+        session, so a retry after the token was consumed replays.
+        """
+
+    @abstractmethod
     def read_version(
         self,
         report_id: str,

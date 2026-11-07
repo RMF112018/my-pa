@@ -15,7 +15,9 @@ file, stdlib and domain only:
 - the one-use content token: `mint_content_token` and `content_token_digest`
   over `domain.identity.secret_digests` (only the digest is ever stored);
 - `parse_transfer_reference`, the closed `{"transfer": {session_id,
-  content_token}}` shape a publish/update content may take.
+  content_token}}` shape a publish/update content may take, and
+  `TransferContentSource`, what a transfer-sourced publish/update's intent
+  digest binds in place of the content (the session and the token's digest).
 
 Every refusal is `ReportValidationError(field, rule)` and never carries the
 value; a token never appears in a refusal, a `repr` or a digest input other
@@ -64,6 +66,7 @@ __all__ = [
     "TRANSFER_TTL_DEFAULT_SECONDS",
     "TRANSFER_TTL_MAX_SECONDS",
     "TRANSFER_TTL_MIN_SECONDS",
+    "TransferContentSource",
     "TransferDeclaration",
     "TransferReference",
     "chunk_count",
@@ -73,6 +76,7 @@ __all__ = [
     "expected_chunk_size",
     "mint_content_token",
     "parse_transfer_reference",
+    "transfer_content_source",
 ]
 
 #: T2: the fixed raw size of every chunk but the last (256 KiB).
@@ -294,3 +298,43 @@ def parse_transfer_reference(value: object) -> TransferReference | None:
     if _CONTENT_TOKEN.match(token) is None:
         raise ReportValidationError("transfer.content_token", "pattern")
     return TransferReference(session_id=session_id, content_token=token)
+
+
+@dataclass(frozen=True, slots=True)
+class TransferContentSource:
+    """T10: where a transfer-sourced publish/update's content comes from.
+
+    What its intent digest binds in place of the content: the session and
+    the digest of the presented token (`content_token_digest`), never the raw
+    token. The content itself is the finalized session's, read by the handler
+    after the receipt replay check, so a retry of a publish whose first
+    attempt consumed the token replays the original receipt.
+    """
+
+    session_id: str
+    content_token_sha256: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _reference_session_id(self.session_id)
+        digest = self.content_token_sha256
+        if type(digest) is not str or _SHA256_HEX.match(digest) is None:
+            raise ReportValidationError("transfer.content_token", "pattern")
+
+    def payload(self) -> dict[str, object]:
+        """What an intent digest serializes for this content source."""
+        return {
+            _REFERENCE_KEY: {
+                "session_id": self.session_id,
+                "content_token_sha256": self.content_token_sha256,
+            }
+        }
+
+
+def transfer_content_source(reference: TransferReference) -> TransferContentSource:
+    """The intent-digest binding of a parsed transfer reference (never the raw token)."""
+    if not isinstance(reference, TransferReference):
+        raise ReportValidationError(_REFERENCE_KEY, "type")
+    digest = content_token_digest(reference.content_token)
+    if digest is None:
+        raise ReportValidationError("transfer.content_token", "pattern")
+    return TransferContentSource(session_id=reference.session_id, content_token_sha256=digest)

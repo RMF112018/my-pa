@@ -11102,6 +11102,12 @@ class _GeneralReports(GeneralReportRepository):
     ) -> PublicationResult | None:
         return self._world.general_report_receipts.get((principal_id, idempotency_key))
 
+    def find_update_receipt(
+        self, idempotency_key: str, *, principal_id: str
+    ) -> UpdateResult | None:
+        stored = self._world.general_report_update_receipts.get((principal_id, idempotency_key))
+        return None if stored is None else replace(stored, replayed=True)
+
     def read_version(
         self,
         report_id: str,

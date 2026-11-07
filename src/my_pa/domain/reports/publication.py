@@ -22,6 +22,7 @@ from typing import Any, Final, cast
 
 from my_pa.domain.reports.content import ReportContent, canonical_json
 from my_pa.domain.reports.errors import ReportValidationError
+from my_pa.domain.reports.transfer import TransferContentSource
 from my_pa.domain.reports.values import (
     ReportAssociation,
     validate_associations,
@@ -139,6 +140,12 @@ class PublicationRequest:
     associations: tuple[RequestedAssociation, ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
     client_intent_id: str | None = None
+    #: WP06 T10: set when the content is a finalized transfer session's. The
+    #: intent digest then binds this source (session and token digest) in
+    #: place of the content, so the receipt replay check runs before the
+    #: staged bytes are read; `content` is the decoded session content by the
+    #: time the request reaches a repository.
+    content_source: TransferContentSource | None = None
     #: `intent_digest`, computed once (WP05 N-3: it serializes the whole content).
     _intent_digest: str | None = field(default=None, init=False, repr=False, compare=False)
 
@@ -176,6 +183,9 @@ class PublicationRequest:
         put("associations", tuple(requested))
         put("metadata", validate_metadata(self.metadata))
         put("client_intent_id", validate_client_intent_id(self.client_intent_id))
+        source: object = self.content_source
+        if source is not None and not isinstance(source, TransferContentSource):
+            raise ReportValidationError("content", "type")
 
     @property
     def intent_digest(self) -> str:
@@ -197,7 +207,9 @@ class PublicationRequest:
         )
         payload = {
             "title": self.title,
-            "content": content_payload(self.content),
+            "content": content_payload(self.content)
+            if self.content_source is None
+            else self.content_source.payload(),
             "report_type": self.report_type,
             "topics": list(self.topics),
             "tags": list(self.tags),

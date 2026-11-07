@@ -1018,7 +1018,7 @@ from my_pa.domain.reports.custody import (
     RetentionResult,
 )
 from my_pa.domain.reports.errors import ReportLifecycleRefusal, ReportValidationError
-from my_pa.domain.reports.publication import PublicationResult
+from my_pa.domain.reports.publication import PublicationRequest, PublicationResult
 from my_pa.domain.reports.records import (
     CatalogEntry,
     HistoryEntries,
@@ -1027,7 +1027,7 @@ from my_pa.domain.reports.records import (
     ReportVersionSummary,
     StoredReportVersion,
 )
-from my_pa.domain.reports.revision import LifecycleResult, UpdateResult
+from my_pa.domain.reports.revision import LifecycleResult, UpdateRequest, UpdateResult
 from my_pa.domain.reports.transfer import (
     TRANSFER_CHUNK_BYTES,
     client_ref_of,
@@ -16898,13 +16898,31 @@ class ApplicationService:
         correlation and audit identifiers are the ones this decision was
         recorded under, so the receipt names the audit event that admitted it.
         The repository mints the identifiers. Nothing of the body is logged.
+        A transfer reference is consumed by `_reports_publish_transfer` (T10).
         """
         # Decoded here, under the permit `_run` holds (WP05 corrective B-4).
         request = publication_request(command, max_decoded=self._report_content_decode_limit)
+        if request.content_source is not None:
+            return self._reports_publish_transfer(unit_of_work, authorization, command, request)
+        return _Result(
+            payload=_general_publish_payload(
+                self._publish_report(unit_of_work, authorization, command, request)
+            ),
+            disclosure=unenrolled_disclosure(authorization.at),
+        )
+
+    def _publish_report(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PublishGeneralReport,
+        request: PublicationRequest,
+    ) -> PublicationResult:
+        """The repository publish of `request`, its refusals mapped (the one publish path)."""
         creator = _report_creator(authorization)
         refusal: ApplicationError
         try:
-            result = unit_of_work.general_reports.publish(
+            return unit_of_work.general_reports.publish(
                 request,
                 principal_id=authorization.principal.principal_id,
                 creator=creator,
@@ -16923,12 +16941,138 @@ class ApplicationService:
             # Names neither the target nor which one: a foreign target and a
             # nonexistent one answer alike.
             refusal = NotFoundError(SafeDetail.ASSOCIATIONS)
-        else:
+        raise refusal
+
+    def _reports_publish_transfer(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PublishGeneralReport,
+        request: PublicationRequest,
+    ) -> _Result:
+        """T10: a publish whose content is a finalized transfer session's, in one transaction.
+
+        Under the decode permit `_run` holds (T12): (1) the key's stored
+        receipt replays (or conflicts) FIRST, so a retry whose first attempt
+        consumed the token answers the original receipt; (2)-(4) the session
+        is claimed and its staged bytes read, verified and decoded
+        (`_claim_transfer_content`); (5) the one publish path with that
+        content; (6) the session is consumed, naming the content row the new
+        version references; the commit is `_run`'s, and the staging is
+        discarded after it, best effort. The token is in no receipt, row or
+        log: the intent digest binds the session and the token's digest.
+        """
+        repository = unit_of_work.general_reports
+        principal_id = authorization.principal.principal_id
+        stored = repository.find_publish_receipt(command.idempotency_key, principal_id=principal_id)
+        claimed: tuple[ReportContent, TransferSession] | None = None
+        if stored is None:
+            try:
+                claimed = self._claim_transfer_content(unit_of_work, authorization, command.content)
+            except NotFoundError:
+                # A concurrent retry of this request may have consumed the
+                # token while this one waited on the session's lock.
+                stored = repository.find_publish_receipt(
+                    command.idempotency_key, principal_id=principal_id
+                )
+                if stored is None:
+                    raise
+        if claimed is None:
+            if stored is None:  # pragma: no cover - one of the two is always set
+                raise InternalError()
+            if stored.receipt.intent_digest != request.intent_digest:
+                raise ConflictError(SafeDetail.IDEMPOTENCY_KEY)
             return _Result(
-                payload=_general_publish_payload(result),
+                payload=_general_publish_payload(replace(stored, replayed=True)),
                 disclosure=unenrolled_disclosure(authorization.at),
             )
+        content, session = claimed
+        result = self._publish_report(
+            unit_of_work, authorization, command, replace(request, content=content)
+        )
+        del content, claimed
+        return self._consumed(
+            unit_of_work,
+            authorization,
+            session,
+            content_id=result.content_id,
+            replayed=result.replayed,
+            payload=_general_publish_payload(result),
+        )
+
+    def _claim_transfer_content(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, value: object
+    ) -> tuple[ReportContent, TransferSession]:
+        """T10 (2)-(4): lock the caller's finalized session for its token and decode its bytes.
+
+        Every T5 case -- unknown, another Principal's or client's, expired,
+        aborted, consumed, not finalized, a wrong token -- is the one bare
+        `not_found`. The staged bytes are read and verified (each chunk and
+        the whole declaration digest) and run through the one content
+        pipeline at the store-aware decode limit; it accepted them at
+        finalize and is deterministic, so a refusal here (as a staging or
+        integrity failure) is `internal_error`, naming nothing. Writes nothing.
+        """
+        reference = parse_transfer_reference(value)
+        if reference is None:  # pragma: no cover - the request said it was one
+            raise InternalError()
+        staging = self._transfer_staging()
+        transfers = unit_of_work.report_transfers
+        refusal: ApplicationError
+        try:
+            session = transfers.claim_for_consumption(
+                reference.session_id,
+                reference.content_token,
+                principal_id=authorization.principal.principal_id,
+                client_ref=self._transfer_client_ref(authorization),
+                now=authorization.at,
+            )
+            staged = transfers.staged_bytes(session, staging=staging)
+            content = content_from_staged(
+                session.format,
+                session.encoding,
+                staged,
+                max_decoded=self._report_content_decode_limit,
+            )
+            del staged
+        except ReportTransferNotFoundError:
+            refusal = NotFoundError()
+        except (ReportTransferDigestError, ReportTransferStagingError, ReportValidationError):
+            refusal = InternalError()
+        else:
+            return content, session
         raise refusal
+
+    @staticmethod
+    def _consumed(
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        session: TransferSession,
+        *,
+        content_id: str,
+        replayed: bool,
+        payload: dict[str, Any],
+    ) -> _Result:
+        """T10 (6): consume the claimed session, naming the content the version references.
+
+        `replayed` (a concurrent writer settled the key at its unique
+        constraint, which the held session lock makes unreachable) consumes
+        nothing. The staging is discarded only after the commit (`_run`).
+        """
+        disclosure = unenrolled_disclosure(authorization.at)
+        if replayed:
+            return _Result(payload=payload, disclosure=disclosure)
+        try:
+            unit_of_work.report_transfers.mark_consumed(
+                session, content_id=content_id, now=authorization.at
+            )
+        except (ReportTransferNotFoundError, ReportValidationError):
+            raise InternalError() from None
+        return _Result(
+            payload=payload,
+            disclosure=disclosure,
+            discard_transfer_session_id=session.session_id,
+        )
 
     def _reports_update(
         self,
@@ -16942,13 +17086,31 @@ class ApplicationService:
         `_reports_publish`. Foreign and missing are one `not_found` on
         `artifact_id`, the standalone read's token; a withdrawn report is the
         caller's own, so it is `denied` (`report_withdrawn`), the
-        `capture_withdrawn` shape. Nothing of the patch is logged.
+        `capture_withdrawn` shape. Nothing of the patch is logged. A transfer
+        reference in `patch.content` is consumed by `_reports_update_transfer`.
         """
         request = update_request(command, max_decoded=self._report_content_decode_limit)
+        if request.content_source is not None:
+            return self._reports_update_transfer(unit_of_work, authorization, command, request)
+        return _Result(
+            payload=_general_update_payload(
+                self._update_report(unit_of_work, authorization, command, request)
+            ),
+            disclosure=unenrolled_disclosure(authorization.at),
+        )
+
+    def _update_report(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: UpdateGeneralReport,
+        request: UpdateRequest,
+    ) -> UpdateResult:
+        """The repository update of `request`, its refusals mapped (the one update path)."""
         creator = _report_creator(authorization)
         refusal: ApplicationError
         try:
-            result = unit_of_work.general_reports.update(
+            return unit_of_work.general_reports.update(
                 request,
                 principal_id=authorization.principal.principal_id,
                 creator=creator,
@@ -16973,12 +17135,62 @@ class ApplicationService:
             refusal = NotFoundError(SafeDetail.ASSOCIATIONS)
         except ReportIntegrityError:
             refusal = InternalError()
-        else:
+        raise refusal
+
+    def _reports_update_transfer(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: UpdateGeneralReport,
+        request: UpdateRequest,
+    ) -> _Result:
+        """T10: an update whose `patch.content` is a finalized transfer session's.
+
+        The order of `_reports_publish_transfer`: the key's stored receipt
+        replays (or conflicts) first; then the claim, the verified decode and
+        the one update path (lock, withdrawn, stale, ... unchanged; content
+        equal to the head's keeps the head's object); then the session is
+        consumed naming the content the new version references -- the new
+        object, or the head's reused one (also for a `no_op`, which names the
+        head). A refusal of the update path writes nothing and leaves the
+        session finalized.
+        """
+        repository = unit_of_work.general_reports
+        principal_id = authorization.principal.principal_id
+        stored = repository.find_update_receipt(command.idempotency_key, principal_id=principal_id)
+        patch: object = command.patch
+        value = patch.get("content") if isinstance(patch, dict) else None
+        claimed: tuple[ReportContent, TransferSession] | None = None
+        if stored is None:
+            try:
+                claimed = self._claim_transfer_content(unit_of_work, authorization, value)
+            except NotFoundError:
+                stored = repository.find_update_receipt(
+                    command.idempotency_key, principal_id=principal_id
+                )
+                if stored is None:
+                    raise
+        if claimed is None:
+            if stored is None:  # pragma: no cover - one of the two is always set
+                raise InternalError()
+            if stored.intent_digest != request.intent_digest:
+                raise ConflictError(SafeDetail.IDEMPOTENCY_KEY)
             return _Result(
-                payload=_general_update_payload(result),
+                payload=_general_update_payload(replace(stored, replayed=True)),
                 disclosure=unenrolled_disclosure(authorization.at),
             )
-        raise refusal
+        content, session = claimed
+        sourced = replace(request, patch=replace(request.patch, content=content))
+        result = self._update_report(unit_of_work, authorization, command, sourced)
+        del content, claimed, sourced
+        return self._consumed(
+            unit_of_work,
+            authorization,
+            session,
+            content_id=result.content_id,
+            replayed=result.replayed,
+            payload=_general_update_payload(result),
+        )
 
     def _reports_transition(
         self,

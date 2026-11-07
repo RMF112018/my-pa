@@ -51,7 +51,6 @@ from my_pa.application.errors import (
     ApplicationError,
     InvalidRequestError,
     SafeDetail,
-    UnsupportedError,
     invalid_choice,
 )
 from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
@@ -383,8 +382,10 @@ from my_pa.domain.reports.transfer import (
     TRANSFER_TTL_DEFAULT_SECONDS,
     TRANSFER_TTL_MAX_SECONDS,
     TRANSFER_TTL_MIN_SECONDS,
+    TransferContentSource,
     TransferDeclaration,
     parse_transfer_reference,
+    transfer_content_source,
 )
 from my_pa.domain.reports.vocabulary import (
     MAX_ASSOCIATIONS_PER_VERSION,
@@ -5936,6 +5937,15 @@ class PublishGeneralReport:
 #: command construction builds a request with it, and that request is discarded.
 _DECODE_DEFERRED: Final = content_of(ContentFormat.TEXT, body="decode deferred", data=None)
 
+#: WP06 T10: stands for a transfer session's content until the handler has
+#: replayed or claimed it. A request carrying it also carries its
+#: `content_source`, which is what its intent digest binds; the handler
+#: replaces it with the decoded session content before any repository sees
+#: the request (`ApplicationService._transfer_sourced`).
+TRANSFER_CONTENT_DEFERRED: Final = content_of(
+    ContentFormat.TEXT, body="transfer content deferred", data=None
+)
+
 
 def _requested_content(value: object, *, max_decoded: int | None) -> ReportContent:
     """`value` validated: in full, or -- `max_decoded` None -- structurally only.
@@ -5948,18 +5958,26 @@ def _requested_content(value: object, *, max_decoded: int | None) -> ReportConte
 
     WP06 T10: a transfer reference (`{"transfer": {session_id,
     content_token}}`) is validated for its shape only (a malformed one is
-    refused on `transfer`); its content is the finalized session's, read by
-    the handler. Until the W3b consumption lands a handler cannot consume one:
-    the decode path answers `unsupported`.
+    refused on `transfer`) and stands as `TRANSFER_CONTENT_DEFERRED`: its
+    content is the finalized session's, read by the handler after the receipt
+    replay check (`_requested_source` is what the intent digest binds).
     """
     if parse_transfer_reference(value) is not None:
-        if max_decoded is None:
-            return _DECODE_DEFERRED
-        raise UnsupportedError()
+        return TRANSFER_CONTENT_DEFERRED
     if max_decoded is None:
         structured = validate_content_structure(value)
         return _DECODE_DEFERRED if structured is None else structured
     return validate_content(value, max_decoded=max_decoded)
+
+
+def _requested_source(value: object) -> TransferContentSource | None:
+    """The content source of a transfer-reference `value` (T10), else `None`.
+
+    Called only after `_requested_content` accepted `value`; the source holds
+    the session and the token's digest, never the token.
+    """
+    reference = parse_transfer_reference(value)
+    return None if reference is None else transfer_content_source(reference)
 
 
 def publication_request(
@@ -6003,6 +6021,7 @@ def publication_request(
             associations=tuple(_requested_association(item) for item in associations),
             metadata={} if command.metadata is None else command.metadata,
             client_intent_id=command.client_intent_id,
+            content_source=_requested_source(command.content),
         )
     except ReportValidationError as error:
         refusal = report_refusal(error)
@@ -6388,12 +6407,15 @@ def update_request(command: UpdateGeneralReport, *, max_decoded: int | None) -> 
         raise InvalidRequestError(SafeDetail.CLEAR_FIELDS)
     refusal: ApplicationError
     try:
+        # `report_patch` accepted the patch, so its content is well formed.
+        patched_content: object = command.patch.get("content")
         return UpdateRequest(
             report_id=command.report_id,
             expected_version=command.expected_version,
             patch=patch,
             clear_fields=validate_clear_fields(clear_fields),
             change_reason=command.change_reason,
+            content_source=_requested_source(patched_content),
         )
     except ReportValidationError as error:
         refusal = report_revision_refusal(error)

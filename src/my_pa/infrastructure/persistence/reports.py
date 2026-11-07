@@ -2422,6 +2422,11 @@ class SqlGeneralReportRepository(GeneralReportRepository):
     ) -> PublicationResult | None:
         return _find_publish(self._connection, idempotency_key, capture_context(principal_id))
 
+    def find_update_receipt(
+        self, idempotency_key: str, *, principal_id: str
+    ) -> UpdateResult | None:
+        return _find_update(self._connection, idempotency_key, capture_context(principal_id))
+
     def read_version(
         self,
         report_id: str,

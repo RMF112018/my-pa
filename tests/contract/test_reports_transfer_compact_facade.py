@@ -450,6 +450,8 @@ def test_describe_returns_the_exact_transfer_schemas(harness: Harness) -> None:
     read_schema = outcome(contracts[4])[1]["input_schema"]["properties"]["payload"]
     assert read_schema["required"] == ["report_id"]
     assert read_schema["properties"]["length"]["maximum"] == CHUNK
+    # Exactly one version selector, published through describe (not only in prose).
+    assert read_schema["oneOf"] == [{"required": ["version_id"]}, {"required": ["version_number"]}]
 
 
 # ---- 2. the walk-through ------------------------------------------------------------------

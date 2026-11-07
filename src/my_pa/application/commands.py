@@ -7305,6 +7305,10 @@ ReadReportTransferChunk.mcp_payload_properties = MappingProxyType(  # type: igno
         "include_withdrawn": {
             "description": "Also read an archived or trashed report, which is otherwise not found.",
         },
+        # Exactly one of the two version selectors (JSON Schema `oneOf`: both
+        # present match both branches, neither matches none), as
+        # `ReadReportTransferChunk.__post_init__` enforces.
+        "oneOf": [{"required": ["version_id"]}, {"required": ["version_number"]}],
     }
 )
 

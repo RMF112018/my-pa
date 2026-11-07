@@ -250,6 +250,23 @@ def test_read_chunk_schema_is_exact_and_closed() -> None:
     assert properties["include_withdrawn"]["type"] == "boolean"
 
 
+def test_read_chunk_schema_requires_exactly_one_version_selector() -> None:
+    """The published schema states what `__post_init__` enforces: one of the two, not both."""
+    schema = payload_schema_for(ReadReportTransferChunk)
+    assert schema["oneOf"] == [{"required": ["version_id"]}, {"required": ["version_number"]}]
+    validator = jsonschema.Draft202012Validator(schema)
+    version = "grver_" + "a" * 24
+    assert validator.is_valid({"report_id": REPORT, "version_number": 1})
+    assert validator.is_valid({"report_id": REPORT, "version_id": version})
+    assert not validator.is_valid({"report_id": REPORT})
+    assert not validator.is_valid({"report_id": REPORT, "version_id": version, "version_number": 1})
+    for description in (
+        schema["properties"]["version_id"]["description"],
+        schema["properties"]["version_number"]["description"],
+    ):
+        assert "Exactly one of version_id and version_number" in description
+
+
 def _content_variants(schema: dict[str, Any]) -> list[dict[str, Any]]:
     variants = schema["oneOf"]
     assert len(variants) == 2

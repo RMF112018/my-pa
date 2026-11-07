@@ -3981,6 +3981,16 @@ def _verified_blob_version(
     return replace(stored, content=content)
 
 
+def _chunked_read_pointer(part: ReportContentPart, byte_count: int, sha256: str) -> dict[str, Any]:
+    """WP06 T16: the `reports.transfer.read_chunk` pointer beside an omitted body or `encoded`."""
+    return {
+        "capability": Capability.REPORTS_TRANSFER_READ_CHUNK.value,
+        "part": part.value,
+        "byte_count": byte_count,
+        "sha256": sha256,
+    }
+
+
 def _general_read_payload(
     stored: StoredReportVersion, *, include_body: bool, include_manifest: bool
 ) -> dict[str, Any]:
@@ -4003,6 +4013,10 @@ def _general_read_payload(
             # WP05 C5: a `managed_blob` body above the response bound. Its
             # facts and digests above are still returned, verified.
             content_payload["body_omitted"] = "exceeds_response_bound"
+            # WP06 T16: where the omitted bytes are read, verified, in ranges.
+            content_payload["body_chunked_read"] = _chunked_read_pointer(
+                ReportContentPart.DECODED, content.decoded_byte_count, content.decoded_sha256
+            )
         else:
             if content.format is not ContentFormat.JSON:
                 content_payload["body"] = content.body
@@ -4018,6 +4032,11 @@ def _general_read_payload(
                 content_payload["encoded"] = base64.b64encode(content.original).decode("ascii")
             else:
                 content_payload["encoded_omitted"] = "exceeds_response_bound"
+                content_payload["encoded_chunked_read"] = _chunked_read_pointer(
+                    ReportContentPart.ORIGINAL,
+                    content.original_byte_count,
+                    content.original_sha256,
+                )
     coverage = (
         None
         if version.coverage_start is None and version.coverage_end is None

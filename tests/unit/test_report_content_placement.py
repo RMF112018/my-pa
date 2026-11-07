@@ -227,14 +227,30 @@ def test_a_blob_above_the_response_bound_is_marked_body_omitted(scene: Scene) ->
     published = _ok(_invoke(service, scene, Capability.REPORTS_PUBLISH, _publish(content, "big")))
     read = _ok(_read(service, scene, published["report_id"]))["content"]
     assert read["body_omitted"] == "exceeds_response_bound"
+    # WP06 T16: beside the omission, the chunked read of the decoded part.
+    assert read["body_chunked_read"] == {
+        "capability": "reports.transfer.read_chunk",
+        "part": "decoded",
+        "byte_count": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
     assert "body" not in read
     assert "data" not in read
     # The gzip bytes fit the bound, so the exact upload is still returned.
     assert read["encoded"] == content["encoded"]
+    assert "encoded_chunked_read" not in read
     assert read["decoded_byte_count"] == len(raw)
     assert read["decoded_sha256"] == hashlib.sha256(raw).hexdigest()
     bare = _ok(_read(service, scene, published["report_id"], include_body=False))["content"]
-    assert {"body", "data", "body_omitted", "encoded", "encoded_omitted"}.isdisjoint(bare)
+    assert {
+        "body",
+        "data",
+        "body_omitted",
+        "encoded",
+        "encoded_omitted",
+        "body_chunked_read",
+        "encoded_chunked_read",
+    }.isdisjoint(bare)
 
 
 @pytest.mark.parametrize("include_body", [True, False])

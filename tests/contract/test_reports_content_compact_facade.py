@@ -634,6 +634,14 @@ def test_the_read_response_at_the_bound_is_pinned(
     )
     _answer, served = read(harness, token, over["report_id"])
     assert served["content"]["encoded_omitted"] == "exceeds_response_bound"
+    # WP06 T16: the omission points at the chunked read of the original part.
+    assert served["content"]["encoded_chunked_read"] == {
+        "capability": "reports.transfer.read_chunk",
+        "part": "original",
+        "byte_count": len(level0),
+        "sha256": hashlib.sha256(level0).hexdigest(),
+    }
+    assert "body_chunked_read" not in served["content"]
     assert served["content"]["body"].encode() == decoded
     # (iii) a blob above the bound: body omitted, the (small) gzip upload returned.
     big = bulk_text(READ_INLINE_CONTENT_MAX_BYTES + 1)
@@ -655,6 +663,18 @@ def test_the_read_response_at_the_bound_is_pinned(
     assert served["content"]["body_omitted"] == "exceeds_response_bound"
     assert served["content"]["encoded_omitted"] == "exceeds_response_bound"
     assert "body" not in served["content"] and "encoded" not in served["content"]
+    assert served["content"]["body_chunked_read"] == {
+        "capability": "reports.transfer.read_chunk",
+        "part": "decoded",
+        "byte_count": served["content"]["decoded_byte_count"],
+        "sha256": served["content"]["decoded_sha256"],
+    }
+    assert served["content"]["encoded_chunked_read"] == {
+        "capability": "reports.transfer.read_chunk",
+        "part": "original",
+        "byte_count": len(stored),
+        "sha256": hashlib.sha256(stored).hexdigest(),
+    }
     # (iv) the escape-heaviest body at the bound: control characters (each
     # `\\u00XX` escaped twice by the nested JSON) sprinkled to stay within 256:1.
     rng = random.Random(3)  # noqa: S311 - deterministic synthetic text, not a secret

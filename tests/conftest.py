@@ -825,6 +825,32 @@ class _MeetingAttachmentRow:
     removed_at: datetime | None = None
 
 
+class _WorldLock:
+    """A `threading.Lock` a `deepcopy` of the `World` copies as a fresh lock.
+
+    Several suites run each case against `deepcopy(scene.world)`; a bare lock
+    cannot be copied (`cannot pickle '_thread.lock'`), and a copied world must
+    never share its lock with the original anyway.
+    """
+
+    __slots__ = ("_lock",)
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    def __enter__(self) -> bool:
+        return self._lock.acquire()
+
+    def __exit__(self, *_exc: object) -> None:
+        self._lock.release()
+
+    def __copy__(self) -> _WorldLock:
+        return _WorldLock()
+
+    def __deepcopy__(self, _memo: dict[int, object]) -> _WorldLock:
+        return _WorldLock()
+
+
 @dataclass
 class World:
     """Everything the fake repositories know, in one mutable place."""
@@ -1061,8 +1087,8 @@ class World:
     #: stands in for the per-owner begin advisory lock.
     report_transfer_sessions: dict[str, TransferSession] = field(default_factory=dict)
     report_transfer_chunks: dict[str, list[TransferChunk]] = field(default_factory=dict)
-    report_transfer_lock: threading.Lock = field(
-        default_factory=threading.Lock, repr=False, compare=False
+    report_transfer_lock: _WorldLock = field(
+        default_factory=lambda: _WorldLock(), repr=False, compare=False
     )
     #: The relationship-intelligence entity plane. Flat lists for the reason
     #: every other plane on `World` is one: the fake's whole job is the

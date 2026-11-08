@@ -272,6 +272,29 @@ def _route_helper_capabilities(text: str) -> list[str]:
     return found
 
 
+#: The Reports route helpers, whose capability argument must be exactly one
+#: string literal (Reports Modernization WP08 C-WP07): a variable, a ternary or
+#: any other expression there is refused, because the literal is what this lock
+#: reads and a computed capability would be invisible to it.
+_LITERAL_ONLY_ROUTE_HELPERS: Final = frozenset({"reportsMutation", "reportsRead"})
+_ONE_CAPABILITY_LITERAL: Final = re.compile(r"\s*\"[a-z_]+(?:\.[a-z_]+)+\"\s*")
+
+
+def _non_literal_reports_helper_arguments(text: str) -> list[str]:
+    """The capability argument of every Reports route-helper call that is not one literal."""
+    offending: list[str] = []
+    for match in _ROUTE_HELPER_CALL.finditer(text):
+        helper = match.group(1)
+        if helper not in _LITERAL_ONLY_ROUTE_HELPERS:
+            continue
+        position = _ROUTE_HELPER_CAPABILITY_ARGUMENT[helper]
+        arguments = _call_arguments(text, match.end())
+        argument = arguments[position] if len(arguments) > position else ""
+        if not _ONE_CAPABILITY_LITERAL.fullmatch(argument):
+            offending.append(f"{helper}: {argument.strip()!r}")
+    return offending
+
+
 def test_no_web_module_addresses_a_capability_the_contract_does_not_declare(
     declared: dict[str, dict[str, Any]],
 ) -> None:
@@ -286,6 +309,7 @@ def test_no_web_module_addresses_a_capability_the_contract_does_not_declare(
     assert WEB_SOURCE.is_dir(), "the web source tree is missing"
     called: set[str] = set()
     helper_called: set[str] = set()
+    non_literal: list[str] = []
     for path in sorted(WEB_SOURCE.rglob("*.ts")):
         called.update(_CALL_SITE.findall(path.read_text(encoding="utf-8")))
     for path in sorted([*WEB_SOURCE.rglob("*.ts"), *WEB_SOURCE.rglob("*.tsx")]):
@@ -293,6 +317,13 @@ def test_no_web_module_addresses_a_capability_the_contract_does_not_declare(
             text = path.read_text(encoding="utf-8")
             called.update(_AUTHORITY_CALL_SITE.findall(text))
             helper_called.update(_route_helper_capabilities(text))
+            non_literal.extend(
+                f"{path.relative_to(WEB_SOURCE)}: {offence}"
+                for offence in _non_literal_reports_helper_arguments(text)
+            )
+    assert not non_literal, (
+        f"a Reports route helper is called with a non-literal capability: {non_literal}"
+    )
     assert called, "no callGateway site was found, so this rule is describing nothing"
     assert helper_called, "no route helper call site was found, so that half describes nothing"
     called |= helper_called
@@ -338,6 +369,29 @@ def test_the_route_helper_lock_reads_each_helper_capability_argument() -> None:
     assert (
         _route_helper_capabilities(
             'export function reportsRead(\n  request: NextRequest,\n  capability: "x.y",\n'
+        )
+        == []
+    )
+    # WP08 C-WP07: a Reports helper's capability is one literal; anything else is refused.
+    assert _non_literal_reports_helper_arguments(sample) == []
+    assert _non_literal_reports_helper_arguments(
+        "reportsRead(request, capability, CATALOG_FIELDS);\n"
+        'reportsRead(request, q ? "reports.search" : "reports.list", F);\n'
+        "reportsMutation(request, `reports.${op}`, F);\n"
+        'reportsMutation(request, "reports.archive" as ReportMutation, F);\n'
+        "reportsMutation(request);\n"
+    ) == [
+        "reportsRead: 'capability'",
+        'reportsRead: \'q ? "reports.search" : "reports.list"\'',
+        "reportsMutation: '`reports.${op}`'",
+        "reportsMutation: '\"reports.archive\" as ReportMutation'",
+        "reportsMutation: ''",
+    ]
+    # workPost/workGet keep their ternaries (not Reports helpers); definitions are not calls.
+    assert (
+        _non_literal_reports_helper_arguments(
+            'workGet(request, "x", q ? "meetings.search" : "meetings.list", F);\n'
+            "export function reportsRead(\n  request: NextRequest,\n  capability: X,\n"
         )
         == []
     )

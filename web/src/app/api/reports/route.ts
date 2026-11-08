@@ -10,10 +10,14 @@ import {
  * `GET /api/reports`: the plane-selected catalog. `reports.search` when a
  * `query` is present, otherwise `reports.list`; `plane` (`standalone` | `all`)
  * is required and is refused before any gateway call when absent or other.
+ * Each branch names its capability as a literal: the BFF contract lock reads
+ * only literal route-helper capabilities and refuses any other expression.
  */
 export async function GET(request: NextRequest) {
-  const capability = request.nextUrl.searchParams.has("query") ? "reports.search" : "reports.list";
-  return reportsRead(request, capability, CATALOG_FIELDS);
+  if (request.nextUrl.searchParams.has("query")) {
+    return reportsRead(request, "reports.search", CATALOG_FIELDS);
+  }
+  return reportsRead(request, "reports.list", CATALOG_FIELDS);
 }
 
 /** `POST /api/reports` -> `reports.publish`. */

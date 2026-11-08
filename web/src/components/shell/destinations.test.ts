@@ -11,13 +11,14 @@ import {
 } from "@/components/shell/destinations";
 
 describe("IA destination registry", () => {
-  it("keeps desktop primary as the five named workspaces", () => {
+  it("keeps desktop primary as the six named workspaces (Reports after Intelligence, WP07)", () => {
     expect(DESKTOP_PRIMARY.map(({ label }) => label)).toEqual([
       "Today",
       "Work",
       "People",
       "Knowledge",
       "Intelligence",
+      "Reports",
     ]);
     expect(UTILITY_DESTINATIONS.map(({ label }) => label)).toEqual(["System"]);
   });
@@ -26,6 +27,7 @@ describe("IA destination registry", () => {
     expect(MOBILE_PRIMARY.map(({ label }) => label)).toEqual(["Today", "Work", "People"]);
     expect(MOBILE_MORE.map(({ label }) => label)).toEqual([
       "Intelligence",
+      "Reports",
       "Knowledge",
       "Map",
       "Review",
@@ -52,6 +54,7 @@ describe("IA destination registry", () => {
       "/people",
       "/knowledge",
       "/intelligence",
+      "/reports",
       "/review",
       "/canvas",
       "/system",
@@ -83,6 +86,11 @@ describe("IA destination registry", () => {
     ["/intelligence", "/intelligence"],
     ["/intelligence/history", "/intelligence"],
     ["/intelligence/reports/rpt_1", "/intelligence"],
+    ["/reports", "/reports"],
+    ["/reports/new", "/reports"],
+    ["/reports/trash", "/reports"],
+    ["/reports/grpt_1", "/reports"],
+    ["/reports/grpt_1/edit", "/reports"],
     ["/review", "/review"],
     ["/search", "/search"],
     ["/canvas", "/canvas"],
@@ -91,5 +99,12 @@ describe("IA destination registry", () => {
   ] as const)("activeFor(%s, %s)", (pathname, href) => {
     const path = pathname.split("?")[0] ?? pathname;
     expect(activeFor(path, href)).toBe(true);
+  });
+
+  it("keeps Reports and Intelligence apart: pipeline report pages stay Intelligence (WP07)", () => {
+    expect(DESTINATIONS.find(({ label }) => label === "Reports")?.href).toBe("/reports");
+    expect(activeFor("/intelligence/reports/rpt_1", "/reports")).toBe(false);
+    expect(activeFor("/reports/grpt_1", "/intelligence")).toBe(false);
+    expect(activeFor("/reportsx", "/reports")).toBe(false);
   });
 });

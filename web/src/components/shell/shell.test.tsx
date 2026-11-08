@@ -69,10 +69,12 @@ describe("app shell", () => {
       "People",
       "Knowledge",
       "Intelligence",
+      "Reports",
     ]);
     expect(MOBILE_PRIMARY.map(({ label }) => label)).toEqual(["Today", "Work", "People"]);
     expect(MOBILE_MORE.map(({ label }) => label)).toEqual([
       "Intelligence",
+      "Reports",
       "Knowledge",
       "Map",
       "Review",
@@ -84,6 +86,7 @@ describe("app shell", () => {
       "People",
       "Knowledge",
       "Intelligence",
+      "Reports",
       "Map",
       "Review",
     ]);
@@ -101,6 +104,7 @@ describe("app shell", () => {
       "People",
       "Knowledge",
       "Intelligence",
+      "Reports",
       "Review",
       "Map",
       "System",

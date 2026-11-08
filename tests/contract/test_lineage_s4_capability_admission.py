@@ -229,7 +229,7 @@ def test_s4_registers_no_report_type_and_issues_no_grant() -> None:
     # P1 client exposure (operator directive 2026-10-26): every S4 name is in
     # `DATA_CONDITIONAL`, so the profile planner -- never a bootstrap source --
     # plans its grant; the data profile moved to v10 with it.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
     assert all(
         CHATLLM_CAPABILITY_POLICY[capability].classification
         is ChatLLMCapabilityClass.DATA_CONDITIONAL

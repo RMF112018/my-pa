@@ -9,7 +9,7 @@ Every refusal below happens before any mutation: each asserts the six
 standalone report tables (and the `knowledge.intelligence_*` tables) hold
 exactly the rows they held before the request. Every identity is synthetic.
 
-WP03 (`chatllm-data-v13`) adds the same refusals for `reports.update`,
+WP03 (`chatllm-data-v12`) adds the same refusals for `reports.update`,
 `reports.history`, `reports.archive`, `reports.delete` and `reports.restore`,
 counting the lifecycle events table too: profile omission, every write gate,
 `report_authoring` never standing in for `report_lifecycle` (and a

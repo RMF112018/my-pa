@@ -289,13 +289,13 @@ def test_s31_capabilities_are_operator_decision_required() -> None:
     counts = dict.fromkeys(ChatLLMCapabilityClass, 0)
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
-    # P1: only the GSQS pair remains an operator decision (Reports Modernization
-    # WP02's `reports.publish` is `DATA_REQUIRED` since chatllm-data-v12, and
-    # WP03's five since chatllm-data-v13).
+    # P1: only the GSQS pair remains an operator decision (Reports
+    # Modernization's `reports.publish` and five management names are
+    # `DATA_REQUIRED` since chatllm-data-v12).
     assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
     assert len(Capability) == 255
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
 
 
 def test_switch_off_withholds_every_s31_capability(scene: Scene) -> None:
@@ -518,7 +518,7 @@ def test_no_s31_capability_is_in_the_chatllm_data_profile() -> None:
             desired_effective_capabilities(composed_off, knowledge_manager=knowledge_manager)
             & lineage_plane
         )
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
 
 
 # ---- client guidance (section 7.12) ----------------------------------------------

@@ -328,7 +328,7 @@ def _remote_write(scene: Scene) -> None:
 
 def _chatllm_policy(scene: Scene) -> None:
     del scene
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
     for capability in READS:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL, capability
@@ -507,12 +507,11 @@ def test_import_is_control_plane_excluded() -> None:
 
 
 def test_v11_targets() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
     assert len(CHATLLM_CAPABILITY_POLICY) == 255
-    # chatllm-data-v12: `reports.publish` (`DATA_REQUIRED`) adds 1 everywhere;
-    # chatllm-data-v13: the 5 report management names add 5 everywhere;
-    # Reports Modernization WP06: the 5 `reports.transfer.*` names add 5
-    # everywhere (the version stays v13).
+    # chatllm-data-v12 (Reports Modernization): `reports.publish`, the 5 report
+    # management names and the 5 `reports.transfer.*` names (`DATA_REQUIRED`)
+    # add 11 everywhere.
     full = _desired(_planes(**_FULL))
     assert len(full) == 175
     assert len(_desired(_planes(constraints=True))) == 109

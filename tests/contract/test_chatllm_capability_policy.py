@@ -77,7 +77,7 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
     assert len(CHATLLM_CAPABILITY_POLICY) == 255
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
@@ -85,10 +85,9 @@ def test_classification_counts_match_the_approved_plan() -> None:
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
     # chatllm-data-v9: `reports.types.create` and `reports.types.list`, 72 -> 74.
-    # Reports Modernization WP02 (chatllm-data-v12): `reports.publish`, 74 -> 75.
-    # Reports Modernization WP03 (chatllm-data-v13): `reports.update`, `.history`,
-    # `.archive`, `.delete`, `.restore`, 75 -> 80. Reports Modernization WP06:
-    # the 5 `reports.transfer.*` names, 80 -> 85 (profile version unchanged).
+    # Reports Modernization (chatllm-data-v12): `reports.publish`, the 5
+    # management names (`reports.update`, `.history`, `.archive`, `.delete`,
+    # `.restore`) and the 5 `reports.transfer.*` names, 74 -> 85.
     assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 85
     # KLP-WP-03 (chatllm-data-v6): the six Knowledge Assertion names, 90 -> 96.
     # KLP-WP-05 (chatllm-data-v8): `record_events.provenance`, 96 -> 97.
@@ -113,12 +112,10 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # profile bump. Record lineage S3.1's 3 confirms and the related read too,
     # 37 -> 41; no profile bump. Record lineage P1 (operator directive
     # 2026-10-26) makes the decision: 34 to data, 5 to excluded, 41 -> 2, and
-    # the profile bumps to v10. Reports Modernization WP02 held `reports.publish`
-    # here until its remote registration, 2 -> 3, then made it `DATA_REQUIRED`
-    # (chatllm-data-v12), 3 -> 2. Reports Modernization WP03 held its five
-    # (`reports.update`, `.history`, `.archive`, `.delete`, `.restore`) here
-    # until their remote registration, 2 -> 7, then made them `DATA_REQUIRED`
-    # (chatllm-data-v13), 7 -> 2.
+    # the profile bumps to v10. Reports Modernization held `reports.publish` and
+    # the five management names (`reports.update`, `.history`, `.archive`,
+    # `.delete`, `.restore`) here only until their remote registration; in the
+    # end state (chatllm-data-v12) all six are `DATA_REQUIRED`, back to 2.
     assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
     assert counts[ChatLLMCapabilityClass.RETIRED] == 0
 

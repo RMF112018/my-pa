@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v13"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v12"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -119,14 +119,14 @@ _DATA_REQUIRED: Final[frozenset[Capability]] = frozenset(
         # to register it and to list the kinds it may use.
         Capability.REPORTS_TYPES_CREATE,
         Capability.REPORTS_TYPES_LIST,
-        # Reports Modernization WP02 (chatllm-data-v12): standalone report
+        # Reports Modernization (chatllm-data-v12): standalone report
         # publication, an additive Principal-scoped write under
         # `report_authoring`, needing no plane switch (the service composes it
         # unconditionally, as it does `reports.read`). The ordinary profile
         # carries it with the rest of `reports.*`; a later `reports.purge` is not
         # data management and stays out.
         Capability.REPORTS_PUBLISH,
-        # Reports Modernization WP03 (chatllm-data-v13): standalone report
+        # Reports Modernization (chatllm-data-v12): standalone report
         # management. `reports.update` (write, `report_authoring`) and
         # `reports.history` (read, `report_read`) ride the purposes the profile
         # already grants; `reports.archive` / `.delete` (recoverable Trash, never
@@ -137,10 +137,9 @@ _DATA_REQUIRED: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_ARCHIVE,
         Capability.REPORTS_DELETE,
         Capability.REPORTS_RESTORE,
-        # Reports Modernization WP06: bounded chunked transfer, classified as
-        # `reports.publish` / `reports.read` are (client-usable, under the
-        # purposes the profile already grants). Classified here so the policy
-        # stays exhaustive; the profile version string is unchanged.
+        # Reports Modernization (chatllm-data-v12): bounded chunked transfer,
+        # classified as `reports.publish` / `reports.read` are (client-usable,
+        # under the purposes the profile already grants).
         Capability.REPORTS_TRANSFER_BEGIN,
         Capability.REPORTS_TRANSFER_APPEND,
         Capability.REPORTS_TRANSFER_FINALIZE,

@@ -11,7 +11,7 @@ resolved by the composition root's own `apps.gateway.remote_access_context`
 with a real `Settings` that selects the compact facade for the synthetic
 clients, and served by a real `ApplicationService` on one SQL unit of work.
 
-The synthetic client holds exactly the grants the `chatllm-data-v13` planner
+The synthetic client holds exactly the grants the `chatllm-data-v12` planner
 provisions for a default composition (`plan_chatllm_grant_actions`), so this is
 what an operator's `profile-apply` would give a ChatLLM client, not a
 hand-picked grant set. What it proves:
@@ -36,7 +36,7 @@ hand-picked grant set. What it proves:
   pinned it before the extension;
 * `reports.types.create` / `reports.types.list` (layer 12) describe, write,
   replay and list through the same compact client under the same profile;
-* WP03 (`chatllm-data-v13`): `reports.update`, `reports.history`,
+* WP03 (`chatllm-data-v12`): `reports.update`, `reports.history`,
   `reports.archive`, `reports.delete` and `reports.restore` describe with their
   exact remote schemas, execute their canonical handlers through `my_pa.write`
   (the four writes) and `my_pa.read` (history), and read back from the
@@ -188,7 +188,7 @@ def grant_row(
 
 
 def profile_grants(service: ApplicationService) -> tuple[GrantRow, ...]:
-    """What `profile-apply` installs for a fresh client under `chatllm-data-v13`."""
+    """What `profile-apply` installs for a fresh client under `chatllm-data-v12`."""
     implemented = frozenset(service.available_capabilities)
     composed = composed_capabilities(implemented, DEFAULT_PLANES)
     diff = diff_chatllm_data_profile(
@@ -199,7 +199,7 @@ def profile_grants(service: ApplicationService) -> tuple[GrantRow, ...]:
         resource=RESOURCE,
         scope=SCOPE,
     )
-    assert diff.profile_version == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    assert diff.profile_version == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
     actions = plan_chatllm_grant_actions(diff, (), now=WHEN, resource=RESOURCE, scope=SCOPE)
     rows = tuple(
         (action.capability, action.purpose, action.is_write, None)
@@ -209,7 +209,7 @@ def profile_grants(service: ApplicationService) -> tuple[GrantRow, ...]:
     planned = {row[0] for row in rows}
     assert {PUBLISH, READ, TYPES_CREATE, TYPES_LIST} <= planned
     assert (PUBLISH, Purpose.REPORT_AUTHORING, True, None) in rows
-    # chatllm-data-v13: the five management grants, `report_lifecycle` its own.
+    # chatllm-data-v12: the five management grants, `report_lifecycle` its own.
     assert {
         (UPDATE, Purpose.REPORT_AUTHORING, True, None),
         (HISTORY, Purpose.REPORT_READ, False, None),
@@ -868,7 +868,7 @@ def test_a_legacy_rpt_read_through_the_facade_is_unchanged(harness: Harness) -> 
 def test_report_types_create_and_list_through_the_same_compact_client(harness: Harness) -> None:
     """Reconciliation regression for `reports.types.create` / `list` on the compact facade.
 
-    The same synthetic, planner-provisioned `chatllm-data-v13` client that reaches
+    The same synthetic, planner-provisioned `chatllm-data-v12` client that reaches
     `reports.publish` describes both registry names with their exact remote
     schemas, registers a kind through `my_pa.write` (an identical retry replays,
     a changed one conflicts) and lists it through `my_pa.read`. It pins repository

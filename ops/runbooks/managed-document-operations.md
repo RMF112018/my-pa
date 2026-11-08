@@ -248,7 +248,8 @@ directory `<root>/transfer/<shard>/<grxfr_id>/<sequence>-<sha256>`, beside the
 `content` and `preservation` namespaces. A consume or abort discards the
 session's staging after its commit, best effort. Every `begin` first moves its
 Principal's (any client's) open or finalized sessions whose `expires_at` has
-passed to `expired` (at most 16 per begin, oldest first) and discards their
+passed to `expired` (at most 16 of them per begin, oldest first, plus the
+begin's own keyed session when it too has expired) and discards their
 staging after its own commit, best effort; a refused begin rolls back and
 discards nothing. So a Principal's staging on disk is bounded by its live
 quota (8 sessions, 64 MiB declared) plus the sessions that ended with no later

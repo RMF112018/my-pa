@@ -331,13 +331,14 @@ overwritten. Retention gates only **purge eligibility**, which
 `reports.retention.get` reports for one report as information: purge is not
 implemented, and retention never blocks an update, archive, restore or Trash.
 Eligibility is decided in this order: `no_policy`, `held`, `not_trashed`,
-`retention_running`, `eligible`. **Open operator decisions:** the retention
-clock start (the implemented default is the report's most recent move to the
-Trash, `most_recent_trash_event`) and the period itself. The period is an
-operator decision, recorded here as **unset by default**: no period is
-approved, and nothing in the repository sets or assumes one. The period in the
-`reports.retention.set` example below (`{"count": 30, "unit": "days"}`) is a
-neutral placeholder showing the shape, not a proposed or recommended value.
+`retention_running`, `eligible`. **Operator decisions (2026-11-06):** the
+retention clock starts at the report's most recent move to the Trash
+(`most_recent_trash_event`, the implemented default), and the operator approved
+a period of **5 years**. The code still sets and assumes no period: the policy
+stays **unset by default** in every deployment until the operator runs the
+`reports.retention.set` example below (`{"count": 5, "unit": "years"}`, the
+operator-approved value) once, as the operator, **after** the Reports code is
+deployed. No agent or migration applies it.
 
 **Commands.** All four run through `apps/cli/invoke.py` as the local operator,
 with `MY_PA_DATABASE_URL` set and, for a placement, `MY_PA_REPORT_CONTENT_ROOT`
@@ -363,7 +364,7 @@ MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \
 .venv/bin/python apps/cli/invoke.py reports.retention.set \
     --request-id req-retention-0001 --purpose report_retention \
     --principal-id prn_... --requested-at 2026-11-06T12:00:00Z \
-    --payload '{"expected_policy_revision": 0, "reason": "Policy adopted.", "idempotency_key": "retention-0001", "period": {"count": 30, "unit": "days"}}'
+    --payload '{"expected_policy_revision": 0, "reason": "Policy adopted.", "idempotency_key": "retention-0001", "period": {"count": 5, "unit": "years"}}'
 
 .venv/bin/python apps/cli/invoke.py reports.retention.set \
     --request-id req-retention-0002 --purpose report_retention \
@@ -411,6 +412,11 @@ takes an optional `report_id` (for that report's eligibility) and an optional
 * `denied` (no detail) — any of the four from a surface that is not the local
   operator surface (stdio MCP, an unattested local caller); nothing is read or
   written.
+* Local stdio MCP: the four are **listed** on local stdio (`tools/list`), as the
+  other operator-only names are (the schedule import, the attested lineage
+  confirms), and **refused unless attested operator authority** — a stdio call
+  carries none, so the handler answers `denied` before any read. This is the
+  operator-only precedent, kept deliberately (WP08).
 * Remote and compact ChatLLM facade: these custody operations are absent from
   `my_pa.describe` and every remote tool list, and naming one is `unsupported`,
   even with a forged grant. The ChatLLM capability policy classifies all four
@@ -425,9 +431,10 @@ MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \
 
 It takes no `--principal` (the orphan direction cannot be partitioned) and
 prints `holds_checked`, `missing_parts`, `mismatched_parts`, `orphaned_objects`,
-`unreadable_entries`, `integrity_findings` and `orphans`, then one `missing` or
-`mismatch` line per integrity finding and, in their own section headed
-`orphans_informational`, one `orphan` line per orphan (identifiers only; no
+`unreadable_entries`, `integrity_findings`, `orphans` and `stale_temporaries`,
+then one `missing` or `mismatch` line per integrity finding and, in their own
+section headed `orphans_informational`, one `orphan` line per orphan, and a
+`stale_temporaries_informational` count line (identifiers and counts only; no
 path, body or digest).
 
 * **Integrity findings** — a missing, mismatched or corrupt part of a copy a
@@ -437,18 +444,48 @@ path, body or digest).
 * **Orphans** — preservation objects no hold seal references. A placement that
   failed after writing some objects leaves them behind by design: they are
   reported, never deleted, and no hold row names them. Informational.
+* **Stale temporaries** — the store's own `.decoded.tmp` / `.original.tmp`
+  files inside an object directory. They come **only** from a process killed
+  mid-`put` (a signal or power loss; an ordinary failure removes everything
+  the `put` created). They are not unreadable entries and not integrity
+  findings, and nothing removes them. Only these exact names count; any other
+  unrecognised entry is still an unreadable entry. A copy a hold references
+  whose final part is absent or unverifiable is still an integrity finding,
+  whatever temporary sits beside it. Informational, like orphans.
 
 Exit codes of `preservation-verify`:
 
 | Exit | Meaning |
 | --- | --- |
-| `0` | no integrity finding (orphans may be present and are reported) |
+| `0` | no integrity finding (orphans and stale temporaries may be present and are reported) |
 | `1` | refused: a usage or operational error (for example, no root configured) |
 | `2` | at least one integrity finding (with or without orphans, with or without `--fail-on-orphans`) |
-| `3` | `--fail-on-orphans` given, no integrity finding, at least one orphan |
+| `3` | `--fail-on-orphans` given, no integrity finding, at least one orphan or stale temporary |
 
 The other subcommands are unchanged: section 7's `verify` exits `0`
-consistent, `1` refused, `2` inconsistent.
+consistent, `1` refused, `2` inconsistent. `verify` counts stale temporaries
+(`stale_temporaries`) apart from `unreadable_entries`, and, like an orphan, a
+stale temporary makes it inconsistent (`2`). A usage error is `1` only when
+`preservation-verify` (or `transfer-gc`) is the subcommand; other subcommands
+keep argparse's `2`.
+
+**Clearing a stale temporary (operator, manual).** Nothing does this
+automatically.
+
+1. Stop every writer of the root: the gateway and remote MCP processes that
+   compose the report content store, and any running `report_content.py`.
+2. Locate them yourself (the commands print counts, never paths):
+   `find "$MY_PA_REPORT_CONTENT_ROOT" -type f \( -name .decoded.tmp -o -name .original.tmp \)`;
+   the directory holding one is named by its object id. Run
+   `preservation-verify` (and section 7's `verify` for the `content`
+   namespace). Decide, for each object directory with a stale temporary,
+   that either every referenced copy's final parts verify (no `missing` or
+   `mismatch` line names the object), or the object is an orphan (an
+   `orphan` line names it: no hold seal or row references it).
+3. Move the `.tmp` file aside, outside the store root (`mv`, not `rm`; keep it
+   until you are satisfied), and rerun the verification. If a referenced
+   object's final part is missing, do not move anything: treat it as damage
+   (restore from backup) instead.
 
 **Backups do not copy the preservation namespace.** Section 7's `backup` and
 `restore` copy only `content` objects (operator decision: backups need not

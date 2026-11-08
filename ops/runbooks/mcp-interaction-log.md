@@ -297,11 +297,16 @@ stored.
   never trips the start breaker. **The cap is enforced on Linux only**: macOS
   cannot lower `RLIMIT_AS`, so on a developer Mac the worker runs uncapped (the
   builder records this as `memory_limited = False`).
-- **The gzip report content inflation permit is a line this budget did not have** (Reports
+- **The report content processing permit is a line this budget did not have** (Reports
   Modernization WP05): one process-wide permit (`REPORT_CONTENT_DECODE_PERMITS`
   = 1) x about 94 MiB measured live peak for a 16 MiB `gzip+base64` publish or
   update (68 MiB for 16 MiB of markdown), whatever the number of concurrent
-  calls, and only when a report content store is composed; without one a gzip
+  calls, and only when a report content store is composed. The permit is held
+  for the whole unit of work of a `gzip+base64` publish or update (and, from
+  WP06, a transfer finalize or a publish/update naming a transfer), so it
+  covers the base64 decode, gzip inflation, parsing, canonical serialization,
+  digests, the manifest, the search-text projection, the store put and the
+  INSERTs, not only the decode; without one a gzip
   upload is never inflated past the inline threshold (512 KiB by default). **It does not
   fit the ~80 MiB margin** (about 786 MiB against 768 MiB). The repo template
   `ops/nas/remote/compose.env.example` therefore carries

@@ -11,6 +11,7 @@ Every title, body and identifier is synthetic.
 
 from __future__ import annotations
 
+import ast
 import base64
 import gc
 import gzip
@@ -872,3 +873,46 @@ def test_a_placement_holds_one_content_objects_bytes_at_a_time(
     assert placed.preservation is not None and placed.preservation.object_count == count
     slack = 256 * 1024
     assert peak < 2.5 * size + slack, f"peak {peak} bytes for {count} objects of {size}"
+
+
+# ---- WP08 (WP05b review #6): the unpartitioned seal read's only path -------------------
+
+_REPO_ROOT: Final = Path(__file__).resolve().parents[2]
+
+
+def _calls_by_function(name: str) -> set[tuple[str, str]]:
+    """`(module path, enclosing top-level function)` of every call to `name` in src and apps."""
+    found: set[tuple[str, str]] = set()
+    for base in ("src", "apps"):
+        for path in sorted((_REPO_ROOT / base).rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for top in tree.body:
+                for node in ast.walk(top):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    func = node.func
+                    called = (
+                        func.attr
+                        if isinstance(func, ast.Attribute)
+                        else func.id
+                        if isinstance(func, ast.Name)
+                        else None
+                    )
+                    if called == name:
+                        owner = getattr(top, "name", "<module>")
+                        found.add((path.relative_to(_REPO_ROOT).as_posix(), owner))
+    return found
+
+
+def test_hold_seal_events_is_reached_only_from_the_operator_cli_scan() -> None:
+    # `hold_seal_events()` is deliberately not Principal-scoped (the orphan
+    # direction of the preservation scan, as `known_managed_content_ids`). Its
+    # one caller is `scan_report_preservation`, whose one caller is the operator
+    # command's `preservation-verify`; no request path (service, adapters)
+    # reaches either.
+    assert _calls_by_function("hold_seal_events") == {
+        ("src/my_pa/application/report_preservation.py", "scan_report_preservation")
+    }
+    assert _calls_by_function("scan_report_preservation") == {
+        ("apps/cli/report_content.py", "_preservation_verify")
+    }

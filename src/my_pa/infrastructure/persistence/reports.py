@@ -1688,6 +1688,21 @@ def _preserve(
     its row re-read and recomputed (inline) or its blob read verified from
     `content_store` (`managed_blob`) -- puts and verifies it, and releases its
     bytes before the next (finding 1). Writes no row.
+
+    **Inline content is decoded twice, on purpose** (Reports Modernization
+    WP08, WP05b corrective n4: documented, not removed). `_stored_version`
+    recomputes it to verify the version's manifest, and `load` recomputes it
+    again because that recomputation *is* how the bytes that are put are
+    produced: `content_of` materializes and digests in one pass, so dropping
+    `load`'s check would save a handful of digest comparisons, not the decode,
+    and would leave the bytes put checked only against digests computed from
+    themselves. Avoiding the second decode needs either keeping each version's
+    content until its object is put (the memory bound finding 1 removed) or a
+    facts-only manifest check in the shared read verifier (a corrupt inline row
+    would then surface as `ReportPreservationError` instead of
+    `ReportIntegrityError`). The cost is CPU under the root lock, bounded by
+    the inline threshold per distinct object; `managed_blob` content is read
+    and verified once, through the store.
     """
     version_rows = connection.execute(
         # Not the search extract: nothing here needs it, and it grows with the report.
@@ -2744,8 +2759,14 @@ class SqlGeneralReportRepository(GeneralReportRepository):
         return _hold_ledger(self._connection, report_id, context)
 
     def hold_seal_events(self) -> tuple[ReportHoldEventRecord, ...]:
-        # WP05b B5 (W3): unpartitioned on purpose (see the port), as
-        # `known_managed_content_ids`: the preservation scan's orphan direction.
+        """Every `place` hold event across Principals: NOT Principal-scoped, deliberately.
+
+        WP05b B5 (see the port), as `known_managed_content_ids`: the
+        preservation scan's orphan direction. Reached only from the operator
+        command (`apps/cli/report_content.py preservation-verify` ->
+        `scan_report_preservation`), never from a request; WP08 pins that call
+        graph in `tests/unit/test_reports_custody.py`. No schema change.
+        """
         table = report_hold_events
         rows = self._connection.execute(
             select(table)

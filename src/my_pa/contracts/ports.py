@@ -8111,7 +8111,9 @@ class GeneralReportRepository(ABC):
         preservation scan's orphan direction subtracts every sealed object of
         every Principal from the `preservation` namespace, and a partitioned
         answer would report every other Principal's copy as an orphan. Operator
-        use from the reconciliation path only, never a request.
+        use from the reconciliation path only, never a request: its one caller
+        is `scan_report_preservation`, reached only from the operator command's
+        `preservation-verify` (pinned by a WP08 unit test).
         """
 
     @abstractmethod

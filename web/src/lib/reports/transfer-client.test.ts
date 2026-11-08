@@ -409,6 +409,67 @@ describe("R1-2: transferBinding keeps a transfer for the same resubmit while the
     await binding.release();
     expect(aborts(calls)).toHaveLength(1);
   });
+
+  /** The signal each fetch of `fetchMock` was given, by URL suffix. */
+  const signals = (fetchMock: ReturnType<typeof fakeTransfers>["fetchMock"]) =>
+    fetchMock.mock.calls.map(([input, init]) => ({ url: String(input), signal: init?.signal }));
+
+  it("WP08 R3 #4: dispose aborts an append in flight; no further append, finalize or submit; the session is aborted", async () => {
+    const fake = withSubmit(() => ok());
+    const routed = fake.fetchMock.getMockImplementation()!;
+    let appends = 0;
+    fake.fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/append") && ++appends === 2) {
+        return new Promise<Response>((_resolve, reject) => {
+          init!.signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        });
+      }
+      return routed(input, init);
+    });
+    const binding = transferBinding();
+    const submit: Submit = (content) => publishReport({ title: "T", content, idempotencyKey: "k" });
+    const pending = binding.submit("d", request("abcdefghij"), submit);
+    await vi.waitFor(() => expect(appends).toBe(2));
+    await binding.dispose();
+    expect(await pending).toMatchObject({ ok: false, code: "request_cancelled" });
+    const sent = signals(fake.fetchMock);
+    expect(sent.map((call) => call.url)).toEqual([
+      "/api/reports/transfers",
+      `/api/reports/transfers/${SESSION}/append`,
+      `/api/reports/transfers/${SESSION}/append`,
+      `/api/reports/transfers/${SESSION}/abort`,
+    ]);
+    // Begin and append carry the binding's signal (aborted now); the session abort does not.
+    for (const call of sent.slice(0, 3)) expect(call.signal?.aborted).toBe(true);
+    expect(sent[3]!.signal).toBeUndefined();
+    expect(appends).toBe(2);
+  });
+
+  it("WP08 R3 #4: dispose before an upload starts sends nothing", async () => {
+    const { fetchMock } = withSubmit(() => ok());
+    const binding = transferBinding();
+    await binding.dispose();
+    const outcome = await binding.submit("d", request("abc"), (content) => publishReport({ title: "T", content, idempotencyKey: "k" }));
+    expect(outcome).toMatchObject({ ok: false, code: "request_cancelled" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("WP08 R3 #4: dispose never aborts a finalize or a publish already in flight", async () => {
+    let answer: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { answer = resolve; });
+    const fake = withSubmit(async () => { await gate; return ok(); });
+    const binding = transferBinding();
+    const submit: Submit = (content) => publishReport({ title: "T", content, idempotencyKey: "k" });
+    const pending = binding.submit("d", request("abc"), submit);
+    await vi.waitFor(() => expect(submitted(fake.fetchMock)).toHaveLength(1));
+    await binding.dispose();
+    answer();
+    expect((await pending).ok).toBe(true);
+    const sent = signals(fake.fetchMock);
+    expect(sent.find((call) => call.url.endsWith("/finalize"))!.signal).toBeUndefined();
+    expect(sent.find((call) => call.url === "/api/reports")!.signal).toBeUndefined();
+    expect(aborts(fake.calls)).toEqual([]);
+  });
 });
 
 describe("readFullContent", () => {

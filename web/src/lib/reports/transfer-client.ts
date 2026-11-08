@@ -32,6 +32,16 @@
  * success consumed it. An unmounted form disposes its binding: an answer still
  * in flight that comes back ambiguous then aborts instead of holding.
  *
+ * Unmount and the upload loop (WP08 C-WP07 R3 #4): dispose also fires the
+ * binding's `AbortController`. Its signal reaches only the upload loop: a begin
+ * or append in flight is aborted (`request_cancelled`), no further step is
+ * taken (no next append, no finalize, no publish/update), and a begun session
+ * is then aborted as on any other failure. A publish, update or finalize
+ * request already in flight is NEVER aborted: aborting a request cannot stop a
+ * commit the server may already be making, it would only turn a definite answer
+ * into an ambiguous one. (A begin aborted in flight may still have opened a
+ * session whose id never arrived; it expires on its own TTL.)
+ *
  * Read: `readFullContent` reads `/content` sequentially from offset 0, checks
  * every chunk's sha256 and the whole part's sha256 (= the pointer's) with
  * WebCrypto, and answers nothing on any mismatch.
@@ -40,6 +50,7 @@ import {
   abortReportTransfer,
   appendReportTransfer,
   beginReportTransfer,
+  cancelled,
   fetchReportContentRange,
   finalizeReportTransfer,
   isAmbiguous,
@@ -127,6 +138,8 @@ export interface UploadRequest {
   /** The begin's own idempotency key, one per upload intent; reused on an ambiguous retry. */
   readonly idempotencyKey: string;
   readonly ttlSeconds?: number;
+  /** Stops the loop: a begin/append in flight is aborted and no further step is taken. */
+  readonly signal?: AbortSignal;
 }
 
 async function abortQuietly(sessionId: string): Promise<void> {
@@ -139,7 +152,7 @@ async function abortQuietly(sessionId: string): Promise<void> {
 
 /** begin -> append* -> finalize; abort on any failure after begin. */
 export async function uploadViaTransfer(request: UploadRequest): Promise<ReportOutcome<StagedTransfer>> {
-  const { staged } = request;
+  const { staged, signal } = request;
   if (staged.byteLength === 0) {
     return refusal(0, "invalid_request", "content_empty", "There is no content to send.");
   }
@@ -147,13 +160,14 @@ export async function uploadViaTransfer(request: UploadRequest): Promise<ReportO
     return refusal(0, "invalid_request", "content_too_large", "The content is larger than 16 MiB.");
   }
   const sha256 = await sha256Hex(staged);
+  if (signal?.aborted) return cancelled();
   const begun = await beginReportTransfer({
     format: request.format,
     byteCount: staged.byteLength,
     sha256,
     idempotencyKey: request.idempotencyKey,
     ...(request.ttlSeconds !== undefined ? { ttlSeconds: request.ttlSeconds } : {}),
-  });
+  }, signal);
   if (!begun.ok) return begun;
   const session = begun.value;
   const fail = async (outcome: ReportRefusal): Promise<ReportRefusal> => {
@@ -171,13 +185,14 @@ export async function uploadViaTransfer(request: UploadRequest): Promise<ReportO
     return fail(mismatch("The transfer session does not match the content."));
   }
   for (let sequence = 0; sequence < expectedChunks; sequence += 1) {
+    if (signal?.aborted) return fail(cancelled());
     const chunk = staged.subarray(sequence * limit, Math.min(staged.byteLength, (sequence + 1) * limit));
     const chunkSha256 = await sha256Hex(chunk);
     const appended = await appendReportTransfer(session.session_id, {
       sequence,
       chunk: toBase64(chunk),
       chunkSha256,
-    });
+    }, signal);
     if (!appended.ok) return fail(appended);
     const last = sequence === expectedChunks - 1;
     if (
@@ -189,11 +204,14 @@ export async function uploadViaTransfer(request: UploadRequest): Promise<ReportO
       return fail(mismatch("The transfer did not record the chunk that was sent."));
     }
   }
+  if (signal?.aborted) return fail(cancelled());
+  // Finalize is never given the signal: an in-flight finalize is not aborted.
   const finalized = await finalizeReportTransfer(session.session_id);
   if (!finalized.ok) return fail(isAmbiguous(finalized) ? uploadStateUnknown() : finalized);
   if (finalized.value.byte_count !== staged.byteLength || finalized.value.sha256 !== sha256) {
     return fail(mismatch("The finalized transfer does not match the content."));
   }
+  if (signal?.aborted) return fail(cancelled());
   return { ok: true, value: { sessionId: session.session_id, contentToken: finalized.value.content_token } };
 }
 
@@ -229,10 +247,11 @@ export interface TransferBinding {
   /** The intent is abandoned or the draft changed: drop the held transfer, abort it best effort. */
   release(): Promise<void>;
   /**
-   * The owner is gone (unmount): release, and from now on hold nothing, so a
-   * submit still in flight that answers ambiguously aborts its transfer (best
-   * effort) instead of keeping a session nobody will release. Final: a
-   * remounted owner uses a new binding.
+   * The owner is gone (unmount): stop an upload in progress (see the module
+   * note; a publish/update in flight is not aborted), release, and from now on
+   * hold nothing, so a submit still in flight that answers ambiguously aborts
+   * its transfer (best effort) instead of keeping a session nobody will
+   * release. Final: a remounted owner uses a new binding.
    */
   dispose(): Promise<void>;
 }
@@ -240,6 +259,7 @@ export interface TransferBinding {
 export function transferBinding(): TransferBinding {
   let held: { readonly signature: string; readonly transfer: StagedTransfer } | undefined;
   let disposed = false;
+  const upload = new AbortController();
   async function release(): Promise<void> {
     const dropped = held;
     held = undefined;
@@ -250,7 +270,7 @@ export function transferBinding(): TransferBinding {
       if (held !== undefined && held.signature !== signature) await release();
       let transfer = held?.transfer;
       if (transfer === undefined) {
-        const uploaded = await uploadViaTransfer(request);
+        const uploaded = await uploadViaTransfer({ ...request, signal: upload.signal });
         if (!uploaded.ok) return uploaded;
         transfer = uploaded.value;
       }
@@ -268,6 +288,7 @@ export function transferBinding(): TransferBinding {
     release,
     async dispose() {
       disposed = true;
+      upload.abort();
       await release();
     },
   };

@@ -17,6 +17,8 @@
  * POST sent exactly once: it mints its content token once, so a retry after a
  * lost answer would only be refused (`transfer-client.ts` answers an ambiguous
  * finalize as "upload state unknown" and the next attempt uploads afresh).
+ * Only a transfer's begin and append take an `AbortSignal` (`request_cancelled`,
+ * never retried); no publish, update, finalize or abort request is ever aborted.
  *
  * Nothing here logs, and no body, chunk or content token is put in a URL: every
  * content-bearing request is a POST body.
@@ -150,22 +152,29 @@ async function decodeAnswer<T>(response: Response, decode: Decoder<T>): Promise<
 /** How many times one POST is sent when its answer is ambiguous (the same body each time). */
 export const POST_ATTEMPTS = 2;
 
+/** The request was stopped by its owner (`signal`) before an answer was had: never retried. */
+export const cancelled = () => refusal(0, "unavailable", "request_cancelled", "The request was stopped.");
+
 async function send<T>(
   path: string,
   decode: Decoder<T>,
   body?: unknown,
-  options: { readonly retry?: boolean } = {},
+  options: { readonly retry?: boolean; readonly signal?: AbortSignal } = {},
 ): Promise<ReportOutcome<T>> {
+  const { signal } = options;
   const init: RequestInit = body === undefined
     ? { method: "GET", cache: "no-store" }
     : { method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+  if (signal !== undefined) init.signal = signal;
   const attempts = body === undefined || options.retry === false ? 1 : POST_ATTEMPTS;
   let outcome: ReportOutcome<T> = refusal(0, "unavailable", "transport_failed", "The request could not be sent.");
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (signal?.aborted) return cancelled();
     let response: Response;
     try {
       response = await fetch(path, init);
     } catch {
+      if (signal?.aborted) return cancelled();
       outcome = refusal(0, "unavailable", "transport_failed", "The request could not be sent.");
       continue;
     }
@@ -432,15 +441,21 @@ export interface TransferBeginRequest {
 
 const transferPath = (sessionId: string) => `/api/reports/transfers/${encodeURIComponent(sessionId)}`;
 
-export function beginReportTransfer(request: TransferBeginRequest): Promise<ReportOutcome<ReportsTransferBeginResult>> {
-  return send("/api/reports/transfers", decodeReportsTransferBegin, request);
+/** `signal` stops the begin (an upload whose owner left); see transfer-client.ts. */
+export function beginReportTransfer(
+  request: TransferBeginRequest,
+  signal?: AbortSignal,
+): Promise<ReportOutcome<ReportsTransferBeginResult>> {
+  return send("/api/reports/transfers", decodeReportsTransferBegin, request, signal ? { signal } : {});
 }
 
+/** `signal` stops the append (an upload whose owner left); see transfer-client.ts. */
 export function appendReportTransfer(
   sessionId: string,
   request: { readonly sequence: number; readonly chunk: string; readonly chunkSha256: string },
+  signal?: AbortSignal,
 ): Promise<ReportOutcome<ReportsTransferAppendResult>> {
-  return send(`${transferPath(sessionId)}/append`, decodeReportsTransferAppend, request);
+  return send(`${transferPath(sessionId)}/append`, decodeReportsTransferAppend, request, signal ? { signal } : {});
 }
 
 export function finalizeReportTransfer(sessionId: string): Promise<ReportOutcome<ReportsTransferFinalizeResult>> {

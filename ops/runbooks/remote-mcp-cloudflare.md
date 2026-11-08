@@ -421,7 +421,7 @@ enabled. Match the authenticated token-derived client ID, never a request field.
 This separate ceiling can publish `sources.enroll` and the four identity correction
 names alongside ordinary capabilities. It creates no grants and changes neither
 principal identity nor domain, client/global write, source, composition or
-Knowledge gates. Existing clients and the ordinary `chatllm-data-v13` profile
+Knowledge gates. Existing clients and the ordinary `chatllm-data-v12` profile
 retain their existing behavior when this new setting is absent.
 
 For a full inventory, reconcile the ordinary profile first. The ordinary profile
@@ -599,10 +599,12 @@ grant, purpose and write gates. A remote client reaches a lineage capability exa
 the process composes it (the switches below), the client holds its own durable grant on it,
 and — for a write — every remote write gate is open. The compact façade
 (`MY_PA_MCP_CHATLLM_GATEWAY_ENABLED` and its allowlist) changes only the tool shape, never
-what is reachable. The ChatLLM data profile is `chatllm-data-v13` (since
+what is reachable. The ChatLLM data profile is `chatllm-data-v12` (since
 `chatllm-data-v10`; `chatllm-data-v11` adds only the 6 CPM Workbench Schedule reads on
-`MY_PA_SCHEDULE_ENABLED`, v12 only `reports.publish` and v13 only the 5 standalone report
-management names, all `DATA_REQUIRED`): it plans the 34
+`MY_PA_SCHEDULE_ENABLED`, and v12 only the 11 standalone Reports names, `reports.publish`,
+the 5 report management names and the 5 `reports.transfer.*` names, all `DATA_REQUIRED`;
+Reports took `chatllm-data-v12`, and the Schedule scenarios bump (S6-3) takes the next free
+version when written, operator decision 2026-11-05): it plans the 34
 client-usable lineage-plane names as `DATA_CONDITIONAL` on the `LINEAGE` or
 `PROGRAM_REPORTING` prerequisite, so `profile-plan` adds them exactly when the planner runs
 with the serving process's switches on. The restricted MCP database profiles are **not**
@@ -717,9 +719,9 @@ Run these only after the recon passes:
 python apps/cli/remote_mcp.py control --remote-enabled --writes-enabled
 python apps/cli/remote_mcp.py set-client-writes --oauth-client-id "$CHATLLM_OAUTH_CLIENT_ID" --writes-enabled
 python apps/cli/remote_mcp.py set-client-writes --oauth-client-id "$CHATGPT_OAUTH_CLIENT_ID" --writes-enabled
-python apps/cli/remote_mcp.py profile-diff --oauth-client-id "$CLIENT" --scope my-pa.read --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v13
-python apps/cli/remote_mcp.py profile-plan --oauth-client-id "$CLIENT" --scope my-pa.read --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v13
-python apps/cli/remote_mcp.py profile-apply --oauth-client-id "$CLIENT" --scope my-pa.read --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v13 --apply
+python apps/cli/remote_mcp.py profile-diff --oauth-client-id "$CLIENT" --scope my-pa.read --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12
+python apps/cli/remote_mcp.py profile-plan --oauth-client-id "$CLIENT" --scope my-pa.read --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12
+python apps/cli/remote_mcp.py profile-apply --oauth-client-id "$CLIENT" --scope my-pa.read --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12 --apply
 ```
 
 **Health.** P2 requires `profile-diff` to report `healthy: true` for each client before and

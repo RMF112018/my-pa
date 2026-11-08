@@ -494,7 +494,7 @@ composition and in every MCP publication that composition produces.
   family, and each Meeting capability appears in it only for an authenticated
   client whose grants, purpose, capability version and write gates admit it.
 - **Desired ChatLLM profile.** The repository's ChatLLM data profile is
-  `chatllm-data-v13`. Since `chatllm-data-v3` it has classified the six
+  `chatllm-data-v12`. Since `chatllm-data-v3` it has classified the six
   `meetings.` names as `DATA_REQUIRED`: reads under `meeting_read`, writes under
   `meeting_authoring`; `chatllm-data-v4` adds `record_events.list` under
   `record_event_read`; `chatllm-data-v5` adds `capture.archive` and
@@ -531,12 +531,16 @@ composition and in every MCP publication that composition produces.
   adds the 6 Schedule reads under `schedule_read` as `DATA_CONDITIONAL` on
   `MY_PA_SCHEDULE_ENABLED` and classifies `schedule_publications.import`
   (`schedule_import`, operator-only) `CONTROL_PLANE_EXCLUDED`; `chatllm-data-v12`
-  (Reports Modernization WP02) adds `reports.publish` (write, `report_authoring`)
-  as `DATA_REQUIRED`; `chatllm-data-v13` (Reports Modernization WP03) adds
-  `reports.update` (write, `report_authoring`), `reports.history` (read,
-  `report_read`) and `reports.archive`, `reports.delete` and `reports.restore`
-  (write, `report_lifecycle`) as `DATA_REQUIRED`, so a client converged on
-  `chatllm-data-v12` plans exactly those 5 adds.
+  (Reports Modernization) adds the 11 standalone Reports names as
+  `DATA_REQUIRED`: `reports.publish` and `reports.update` (write,
+  `report_authoring`), `reports.history` (read, `report_read`),
+  `reports.archive`, `reports.delete` and `reports.restore` (write,
+  `report_lifecycle`), and the 5 `reports.transfer.*` names (`begin`, `append`,
+  `finalize`, `abort`: write, `report_authoring`; `read_chunk`: read,
+  `report_read`), so a client converged on `chatllm-data-v11` plans exactly
+  those 11 adds. Reports took `chatllm-data-v12`; the Schedule scenarios bump
+  (S6-3) takes the next free version when written (operator decision
+  2026-11-05).
   That is repository desire only. Whether any deployed client holds those
   grants is a runtime fact this document does not state.
 - **Reports catalog (Reports Modernization WP04).** `reports.list` and
@@ -556,8 +560,8 @@ composition and in every MCP publication that composition produces.
   and text extracted from the decoded content (a body, and JSON string values),
   truncated to the first 65,536 code points; transport bytes and Base64 are never
   indexed, and text past that bound is not searchable. Results carry no totals
-  or counts. No capability, purpose or profile changes: the profile stays
-  `chatllm-data-v13`.
+  or counts. No capability, purpose or profile changes: the profile is
+  `chatllm-data-v12`.
 - **Report creator attribution (Reports Modernization WP05).** The server
   derives who wrote a standalone report from the authorization alone, never
   from a request field: `kind` is `local_principal` (a local transport, keyed
@@ -668,10 +672,10 @@ composition and in every MCP publication that composition produces.
   `apps/cli/report_content.py transfer-gc` on
   the operator's own schedule
   ([`managed-document-operations.md`](managed-document-operations.md)
-  section 7.1). The ChatLLM data profile string stays `chatllm-data-v13`, so a
-  client converged on it plans exactly these 5 adds until the single Reports
-  profile bump; whether any deployed client holds the grants is a runtime fact
-  this document does not state.
+  section 7.1). The 5 are part of `chatllm-data-v12`'s Reports delta (see
+  "Desired ChatLLM profile" above), so a client converged on
+  `chatllm-data-v11` plans them among its 11 adds; whether any deployed client
+  holds the grants is a runtime fact this document does not state.
 
 Evidence: `src/my_pa/application/meetings.py`,
 `src/my_pa/contracts/v1/meetings.py`, `tests/contract/test_meeting_mcp.py`,
@@ -753,10 +757,10 @@ python -m alembic heads
 python apps/cli/health.py
 python apps/cli/remote_mcp.py profile-diff \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v13
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12
 python apps/cli/remote_mcp.py profile-plan \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v13
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12
 ```
 
 `apps/cli/health.py` answers `not_at_head` for a database below `c8e4a1b70d35`,

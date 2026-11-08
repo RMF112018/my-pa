@@ -58,7 +58,7 @@ V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ: Final = (
     "f4dc83a1e8e4699dc047d58279d97321fd750c1ecdff521b4cd148bb77fafb71"
 )
 #: The same measurement also without `reports.list` and `reports.search`, at
-#: the Reports Modernization WP04 base `f933f9fb3`: WP04 deliberately extends
+#: the Reports Modernization WP04 base `5f395aa36`: WP04 deliberately extends
 #: both, so they are excluded and the other 189 shapes stay pinned.
 V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG: Final = (
     "4a66657c422eb2c538a3cf7725cca2fab7b71325b883d3a0e724f200a7093459"

@@ -17,9 +17,11 @@ item. A token presented with a different request, or one that does not decode
 to exactly the canonical shape, is one refusal (`CatalogCursorError`, field
 `cursor`) that never echoes the token. There is no key: a forged position
 carries no authority, because it is re-applied inside the re-authorized,
-Principal-scoped query and so only skips rows the caller may already see. The
-keyset is stable (`created_at` and the report id never change), so there is no
-TTL.
+Principal-scoped query and so only skips rows the caller may already see. There
+is no TTL. A list page's keyset keys (`created_at` and the report id) never
+change, so a list walk neither skips nor repeats an item. A search page is
+ordered by a rank computed from the report's head version, so an update between
+two pages can move an item across the cursor: it may be skipped or repeated.
 
 **Search text** (`extract_search_text`) is the version's searchable projection
 of its decoded, validated content: never the transport bytes and never Base64.

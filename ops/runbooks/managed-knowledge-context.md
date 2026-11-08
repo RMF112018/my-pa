@@ -63,10 +63,10 @@ administrator. The machine-readable policy is
 `src/my_pa/domain/identity/chatllm_capability_policy.py` at profile version
 `chatllm-data-v12`. Do not grant every `Capability` enum member.
 
-On the current head, the derived **effective** ChatLLM catalog is 170 names
+On the current head, the derived **effective** ChatLLM catalog is 175 names
 when documents, relationship intelligence (with writes), relationship memory,
-and constraints are composed, and 104 in the default composition. The
-policy-data target is the same 170: every data-management name (80
+and constraints are composed, and 109 in the default composition. The
+policy-data target is the same 175: every data-management name (85
 `DATA_REQUIRED` and 90 `DATA_CONDITIONAL`) now has a handler, the Run-01 Project
 Controls names included, so none is `not_implemented`. `gsqs.start` / `gsqs.status` stay omitted pending a separate
 reclassification. Report-cycle writes (`reports.begin_cycle`,

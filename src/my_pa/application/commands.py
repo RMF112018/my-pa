@@ -7439,7 +7439,7 @@ def _catalog_page_size_ok(value: object) -> bool:
 #: RFC 3339 §5.6 `date-time`, exactly: extended `YYYY-MM-DD`, `T`/`t`, `HH:MM:SS`,
 #: at most six fractional digits (a datetime holds microseconds; more digits are
 #: refused, never truncated), then `Z`/`z` or a `±HH:MM` offset. Field ranges
-#: (month 13, day 31 in a 30-day month, hour 24, a `:60` leap second, which a
+#: (month 13, day 31 in a 30-day month, hour 24, a leap second (60), which a
 #: datetime cannot hold) are refused by the parse after this shape check.
 _RFC3339_DATE_TIME: Final[re.Pattern[str]] = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?"

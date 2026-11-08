@@ -17763,7 +17763,9 @@ class ApplicationService:
                 )
             )
         except (ReportValidationError, ReportIntegrityError):
-            # A stored ledger the pure evaluation refuses is a server fault.
+            # A stored ledger the pure evaluation refuses is a server fault, and
+            # so is an `eligible_at` past year 9999 (`ReportRetentionOverflowError`
+            # is a `ReportValidationError`; WP08).
             refusal = InternalError()
         else:
             if command.report_id is not None and eligibility is None:

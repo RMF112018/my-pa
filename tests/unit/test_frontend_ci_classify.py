@@ -305,6 +305,49 @@ class TestWp08CaptureProjectSpecsAreCollected:
         assert "e2e/capture-offline-project.spec.ts" in block
 
 
+class TestReportsManualSpecIsCollected:
+    """Reports Modernization WP08 (Section B) — the manual Reports journey gates.
+
+    `e2e/reports-manual.spec.ts` (WP07, RM-AC-019) publishes, edits, archives,
+    trashes and restores only reports it publishes itself under a per-run title
+    stamp, and touches no seeded record, so it joins the shared desktop
+    `e2e-critical` invocation like the other self-contained mutating specs
+    (`work-mutations`, `capture-project`); only a spec that mutates records a
+    sibling counts (`constraints-mutations`) takes its own invocation. The
+    curated `wp03-main-diagnostic` desktop list mirrors that invocation.
+    """
+
+    SPEC: ClassVar[str] = "e2e/reports-manual.spec.ts"
+
+    def test_the_spec_file_exists(self) -> None:
+        assert (REPO / "web" / self.SPEC).is_file()
+
+    def test_the_required_desktop_lane_executes_it(self) -> None:
+        assert "e2e-critical" in set(_required_needs())
+        block = _without_comments(_job_block("e2e-critical"))
+        run_steps = [line for line in block.splitlines() if "npm run e2e --" in line]
+        executing = [line for line in run_steps if self.SPEC in line]
+        assert len(executing) == 1, f"e2e-critical must execute {self.SPEC} exactly once"
+        assert "e2e/reports-contract.spec.ts" in executing[0], (
+            f"{self.SPEC} runs in the shared desktop invocation, beside reports-contract"
+        )
+        assert executing[0].rstrip().endswith("--project=desktop")
+
+    def test_the_curated_diagnostic_list_mirrors_the_desktop_invocation(self) -> None:
+        block = _job_block("wp03-main-diagnostic")
+        listed = re.search(r'specs = "([^"]+)"\.split\(\)', block)
+        assert listed is not None, "the wp03-main-diagnostic spec list is missing"
+        diagnostic = [f"e2e/{spec}.spec.ts" for spec in listed.group(1).split()]
+        desktop = re.search(
+            r"npm run e2e -- ((?:e2e/\S+\.spec\.ts )+)--project=desktop$",
+            _without_comments(_job_block("e2e-critical")),
+            re.M,
+        )
+        assert desktop is not None, "the shared desktop invocation is missing"
+        assert self.SPEC in diagnostic
+        assert diagnostic == desktop.group(1).split()
+
+
 def _required_needs() -> list[str]:
     """The members `frontend / required` waits on, in published order."""
     text = WORKFLOW.read_text(encoding="utf-8")

@@ -13,7 +13,10 @@
  * whose answer is ambiguous (the network failed, or 502/503/504) is retried
  * once here with the SAME body, so the SAME key; the server's receipt replay
  * makes that safe. A definitive refusal is never retried, and a conflict is
- * never retried or overwritten (U5).
+ * never retried or overwritten (U5). `reports.transfer.finalize` is the one
+ * POST sent exactly once: it mints its content token once, so a retry after a
+ * lost answer would only be refused (`transfer-client.ts` answers an ambiguous
+ * finalize as "upload state unknown" and the next attempt uploads afresh).
  *
  * Nothing here logs, and no body, chunk or content token is put in a URL: every
  * content-bearing request is a POST body.
@@ -148,11 +151,16 @@ async function decodeAnswer<T>(response: Response, decode: Decoder<T>): Promise<
 /** How many times one POST is sent when its answer is ambiguous (the same body each time). */
 export const POST_ATTEMPTS = 2;
 
-async function send<T>(path: string, decode: Decoder<T>, body?: unknown): Promise<ReportOutcome<T>> {
+async function send<T>(
+  path: string,
+  decode: Decoder<T>,
+  body?: unknown,
+  options: { readonly retry?: boolean } = {},
+): Promise<ReportOutcome<T>> {
   const init: RequestInit = body === undefined
     ? { method: "GET", cache: "no-store" }
     : { method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
-  const attempts = body === undefined ? 1 : POST_ATTEMPTS;
+  const attempts = body === undefined || options.retry === false ? 1 : POST_ATTEMPTS;
   let outcome: ReportOutcome<T> = refusal(0, "unavailable", "transport_failed", "The request could not be sent.");
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     let response: Response;
@@ -211,6 +219,10 @@ export type ConflictClassification =
 
 export const STALE_MESSAGE = (headVersionNumber: number) =>
   `This report changed since you opened it (now version ${headVersionNumber}).`;
+/** A stale lifecycle action (A2): the lifecycle moved on, not (necessarily) the version. */
+const LIFECYCLE_STATE_WORDS: Readonly<Record<string, string>> = { active: "active", archived: "archived", trashed: "in Trash" };
+export const LIFECYCLE_STALE_MESSAGE = (lifecycleState: string) =>
+  `This report's state changed since you opened it (now ${Object.hasOwn(LIFECYCLE_STATE_WORDS, lifecycleState) ? LIFECYCLE_STATE_WORDS[lifecycleState] : lifecycleState}).`;
 export const CONFLICT_MESSAGE =
   "This request conflicted with an earlier one; review the latest state and submit again.";
 
@@ -430,7 +442,8 @@ export function appendReportTransfer(
 }
 
 export function finalizeReportTransfer(sessionId: string): Promise<ReportOutcome<ReportsTransferFinalizeResult>> {
-  return send(`${transferPath(sessionId)}/finalize`, decodeReportsTransferFinalize, {});
+  // Never retried automatically: the token is minted once (see the module note).
+  return send(`${transferPath(sessionId)}/finalize`, decodeReportsTransferFinalize, {}, { retry: false });
 }
 
 export function abortReportTransfer(sessionId: string): Promise<ReportOutcome<ReportsTransferAbortResult>> {

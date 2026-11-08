@@ -15,11 +15,13 @@ import {
   contentFromDecoded,
   needsTransfer,
   readFullContent,
+  UPLOAD_STATE_UNKNOWN_MESSAGE,
   stagedBytes,
+  transferBinding,
   uploadViaTransfer,
   withTransferredContent,
 } from "./transfer-client";
-import { publishReport } from "./client";
+import { publishReport, updateReport, type ReportOutcome, type TransferReportContent } from "./client";
 
 const SESSION = "grxfr_aaaaaaaa11111111";
 const REPORT = "grpt_aaaaaaaa11111111";
@@ -38,7 +40,10 @@ const refusedAnswer = (status: number, code: string, errorClass = "invalid_reque
   backend({ state: "refused", error: { errorClass, code, message: "safe_field" }, disclosure: {} }, status);
 
 /** A fake transfer BFF: begin -> append -> finalize, with optional injected failures. */
-function fakeTransfers(limit: number, failures: { append?: number; appendStatus?: number; finalize?: boolean } = {}) {
+function fakeTransfers(
+  limit: number,
+  failures: { append?: number; appendStatus?: number; finalize?: boolean; finalizeLost?: "network" | 503 } = {},
+) {
   const calls: Call[] = [];
   let declared = { byteCount: 0, sha256: "", format: "text" };
   const chunks: Uint8Array[] = [];
@@ -69,6 +74,8 @@ function fakeTransfers(limit: number, failures: { append?: number; appendStatus?
     }
     if (url.endsWith("/finalize")) {
       if (failures.finalize) return refusedAnswer(409, "conflict", "conflict");
+      if (failures.finalizeLost === "network") throw new TypeError("network");
+      if (failures.finalizeLost === 503) return refusedAnswer(503, "unavailable", "unavailable");
       return backend({
         session_id: SESSION, state: "finalized", content_token: TOKEN, expires_at: EXPIRES,
         byte_count: declared.byteCount, sha256: declared.sha256, format: declared.format, encoding: "identity",
@@ -223,6 +230,18 @@ describe("uploadViaTransfer", () => {
     expect(calls.map((call) => call.url.split("/").at(-1))).toEqual(["transfers", "append", "finalize", "abort"]);
   });
 
+  it.each(["network", 503] as const)(
+    "R1-3: sends finalize once; a lost answer (%s) is 'upload state unknown' and the session is aborted",
+    async (lostAs) => {
+      const { calls } = fakeTransfers(4, { finalizeLost: lostAs });
+      const outcome = await upload("abc");
+      expect(outcome).toEqual({
+        ok: false, status: 0, errorClass: "unavailable", code: "transfer_state_unknown", message: UPLOAD_STATE_UNKNOWN_MESSAGE,
+      });
+      expect(calls.map((call) => call.url.split("/").at(-1))).toEqual(["transfers", "append", "finalize", "abort"]);
+    },
+  );
+
   it("retries an ambiguous append once with the identical body, then aborts", async () => {
     const { calls } = fakeTransfers(4, { append: 0, appendStatus: 503 });
     const outcome = await upload("ab");
@@ -290,6 +309,88 @@ describe("withTransferredContent + publishReport", () => {
     expect(calls.at(-1)!.url).toBe(`/api/reports/transfers/${SESSION}/abort`);
     expect(calls.every((call) => !call.url.includes("grxtk_"))).toBe(true);
     expect(tokenLeaks(fetchMock)).toEqual([]);
+  });
+});
+
+describe("R1-2: transferBinding keeps a transfer for the same resubmit while the answer is ambiguous", () => {
+  type Submit = (content: TransferReportContent) => Promise<ReportOutcome<unknown>>;
+  const request = (text: string) => ({ format: "text" as const, staged: enc(text), idempotencyKey: `xfer-${text}` });
+
+  /** The transfer fake, with the publish/update routes answering `answer(n)` on their n-th call. */
+  function withSubmit(answer: (n: number, url: string) => Response | Promise<Response>) {
+    const fake = fakeTransfers(4);
+    const transfers = fake.fetchMock.getMockImplementation()!;
+    let submits = 0;
+    fake.fetchMock.mockImplementation(async (input, init) =>
+      TOKEN_BODY_ROUTE.test(String(input)) ? answer(++submits, String(input)) : transfers(input, init));
+    return fake;
+  }
+  const lost = async (): Promise<Response> => { throw new TypeError("network"); };
+  const ok = async (url = "/api/reports") => {
+    const { default: fixtures } = await import("@/lib/api/decode/fixtures/python/success.json");
+    return backend(fixtures[url.endsWith("/update") ? "reports.update" : "reports.publish"] as Record<string, unknown>);
+  };
+  const begins = (calls: Call[]) => calls.filter((call) => call.url === "/api/reports/transfers");
+  const aborts = (calls: Call[]) => calls.filter((call) => call.url.endsWith("/abort"));
+  /** The submit bodies (the wrapped fake does not record these in `calls`). */
+  const submitted = (fetchMock: ReturnType<typeof fakeTransfers>["fetchMock"]) =>
+    fetchMock.mock.calls
+      .filter(([input]) => TOKEN_BODY_ROUTE.test(String(input)))
+      .map(([, init]) => ({ body: JSON.parse(String(init!.body)) as Record<string, unknown> }));
+
+  it.each([
+    ["publish", ((content) => publishReport({ title: "T", content, idempotencyKey: "intent-key" })) as Submit],
+    ["update", ((content) => updateReport(REPORT, {
+      expectedVersion: 1, patch: { content }, changeReason: "r", idempotencyKey: "intent-key",
+    })) as Submit],
+  ])("%s: an ambiguous answer keeps the transfer; the resubmit reuses session, token and key with no begin", async (_name, submit) => {
+    const { calls, fetchMock } = withSubmit((n, url) => (n <= 2 ? lost() : ok(url)));
+    const binding = transferBinding();
+    const first = await binding.submit("draft-1", request("abcde"), submit);
+    expect(first).toMatchObject({ ok: false, code: "transport_failed" });
+    expect(aborts(calls)).toEqual([]);
+    expect((await binding.submit("draft-1", request("abcde"), submit)).ok).toBe(true);
+    expect(begins(calls)).toHaveLength(1);
+    const bodies = submitted(fetchMock).map((call) => call.body);
+    expect(bodies).toHaveLength(3);
+    for (const body of bodies) expect(body).toEqual(bodies[0]);
+    expect(JSON.stringify(bodies[0])).toContain(`"sessionId":"${SESSION}"`);
+    expect(JSON.stringify(bodies[0])).toContain(`"contentToken":"${TOKEN}"`);
+    expect(bodies[0]!.idempotencyKey).toBe("intent-key");
+    expect(aborts(calls)).toEqual([]);
+  });
+
+  it("a definitive refusal aborts; the next submit uploads afresh", async () => {
+    const { calls } = withSubmit((n) => (n === 1 ? refusedAnswer(400, "invalid_request") : ok()));
+    const binding = transferBinding();
+    const submit: Submit = (content) => publishReport({ title: "T", content, idempotencyKey: "k" });
+    expect(await binding.submit("d", request("abc"), submit)).toMatchObject({ ok: false, status: 400 });
+    expect(aborts(calls).map((call) => call.url)).toEqual([`/api/reports/transfers/${SESSION}/abort`]);
+    expect((await binding.submit("d", request("abc"), submit)).ok).toBe(true);
+    expect(begins(calls)).toHaveLength(2);
+  });
+
+  it("a changed draft drops the held transfer (abort) and uploads afresh", async () => {
+    const { calls } = withSubmit((n) => (n <= 2 ? lost() : ok()));
+    const binding = transferBinding();
+    const submit: Submit = (content) => publishReport({ title: "T", content, idempotencyKey: "k" });
+    await binding.submit("draft-1", request("abc"), submit);
+    expect((await binding.submit("draft-2", request("xyz"), submit)).ok).toBe(true);
+    expect(aborts(calls)).toHaveLength(1);
+    expect(begins(calls)).toHaveLength(2);
+  });
+
+  it("release aborts a held transfer once, and a success holds nothing", async () => {
+    const { calls } = withSubmit((n) => (n <= 2 ? lost() : ok()));
+    const binding = transferBinding();
+    const submit: Submit = (content) => publishReport({ title: "T", content, idempotencyKey: "k" });
+    await binding.submit("d", request("abc"), submit);
+    await binding.release();
+    await binding.release();
+    expect(aborts(calls)).toHaveLength(1);
+    expect((await binding.submit("d", request("abc"), submit)).ok).toBe(true);
+    await binding.release();
+    expect(aborts(calls)).toHaveLength(1);
   });
 });
 

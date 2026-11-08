@@ -12,7 +12,9 @@
  * Submit sends ONLY the changed fields in `patch`, emptied optional fields in
  * `clearFields`, a required change reason, and `expectedVersion` = the head
  * version the form was checked against. A submit that changes nothing is
- * stopped here ("Nothing changed"). Large content goes through a transfer.
+ * stopped here ("Nothing changed"). Large content goes through a transfer; while
+ * the update answer is ambiguous the form's `transferBinding` keeps it in memory
+ * so the unchanged resubmit reuses it with the same key (see transfer-client).
  *
  * Conflict (U5/A2): never retried, never overwritten. A 409 whose `current`
  * head differs from the expected version says "This report changed since you
@@ -48,7 +50,7 @@ import {
   contentFromDecoded,
   needsTransfer,
   readFullContent,
-  withTransferredContent,
+  transferBinding,
 } from "@/lib/reports/transfer-client";
 import {
   HeldBadge,
@@ -154,6 +156,7 @@ function EditForm({
   const feedback = useMutationFeedback();
   const reasonId = useId();
   const intent = useRef(reportIntent("report-update"));
+  const transfer = useRef(transferBinding());
   const inFlight = useRef(false);
   const initialContent = hasInlineContent(report);
   const initial = initialContent
@@ -171,6 +174,11 @@ function EditForm({
   const [phase, setPhase] = useState<Phase>("idle");
   const [notice, setNotice] = useState<Notice | null>(null);
   const [latest, setLatest] = useState<Latest | null>(null);
+
+  useEffect(() => {
+    const binding = transfer.current;
+    return () => { void binding.release(); };
+  }, []);
 
   const latestReport = latest?.kind === "ready" ? latest.report : null;
   const latestEditable = latestReport === null || latestReport.lifecycle_state === "active";
@@ -228,17 +236,20 @@ function EditForm({
       ...(change.clearFields.length > 0 ? { clearFields: change.clearFields } : {}),
       changeReason: trimmedReason,
     };
-    const request: UpdateRequest = { ...payload, idempotencyKey: intent.current.keyFor({ reportId: report.report_id, ...payload }) };
+    const signed = { reportId: report.report_id, ...payload };
+    const request: UpdateRequest = { ...payload, idempotencyKey: intent.current.keyFor(signed) };
     const content = change.patch.content;
     let outcome: ReportOutcome<ReportsUpdateResult>;
     if (content !== undefined && !("transfer" in content) && needsTransfer(request)) {
       setPhase("uploading");
-      outcome = await withTransferredContent(
+      outcome = await transfer.current.submit(
+        JSON.stringify(signed),
         { format: content.format, staged: stagedBytesOf(content), idempotencyKey: mutationKey("report-transfer") },
-        (transfer) => updateReport(report.report_id, { ...request, patch: { ...request.patch, content: transfer } }),
+        (staged) => updateReport(report.report_id, { ...request, patch: { ...request.patch, content: staged } }),
       );
     } else {
       setPhase("sending");
+      await transfer.current.release();
       outcome = await updateReport(report.report_id, request);
     }
     intent.current.settle(outcome);

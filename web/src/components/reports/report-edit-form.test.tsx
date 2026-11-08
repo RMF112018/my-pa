@@ -320,4 +320,105 @@ describe("ReportEditForm", () => {
       idempotencyKey: expect.stringMatching(/^report-update-/),
     });
   });
+
+  describe("R1-2: a large update whose answer was ambiguous", () => {
+    /** Each begin opens a new session with its own token; `update` answers the n-th update call. */
+    function sessionsBff(update: (n: number) => Response) {
+      const limit = 262_144;
+      let opened = 0;
+      let updatesSeen = 0;
+      let declared = { byteCount: 0, sha256: "" };
+      const session = (n: number) => `grxfr_aaaaaaaa1111111${n}`;
+      const token = (n: number) => `grxtk_${String(n).repeat(64)}`;
+      const calls = stub((path, body) => {
+        if (path === "/api/reports/transfers") {
+          opened += 1;
+          declared = { byteCount: body!.byteCount as number, sha256: body!.sha256 as string };
+          return backend({
+            session_id: session(opened), state: "open", format: "markdown", encoding: "identity",
+            declared_byte_count: declared.byteCount, declared_sha256: declared.sha256, chunk_byte_limit: limit,
+            chunk_count: Math.ceil(declared.byteCount / limit), expires_at: EXPIRES, replayed: false,
+          });
+        }
+        if (path.endsWith("/append")) {
+          const sequence = body!.sequence as number;
+          const chunk = Uint8Array.from(Buffer.from(body!.chunk as string, "base64"));
+          const received = Math.min(declared.byteCount, (sequence + 1) * limit);
+          return backend({
+            session_id: session(opened), sequence, byte_offset: sequence * limit, byte_count: chunk.byteLength,
+            chunk_sha256: sha(chunk), received_byte_count: received, declared_byte_count: declared.byteCount,
+            complete: received === declared.byteCount, next_sequence: received === declared.byteCount ? null : sequence + 1,
+            expires_at: EXPIRES, replayed: false,
+          });
+        }
+        if (path.endsWith("/finalize")) {
+          return backend({
+            session_id: session(opened), state: "finalized", content_token: token(opened), expires_at: EXPIRES,
+            byte_count: declared.byteCount, sha256: declared.sha256, format: "markdown", encoding: "identity",
+            decoded_byte_count: declared.byteCount, decoded_sha256: declared.sha256,
+          });
+        }
+        if (path.endsWith("/abort")) return backend({ session_id: path.split("/").at(-2)!, state: "aborted", replayed: false });
+        if (path.endsWith("/update")) return update(++updatesSeen);
+        return backend(readOf("reports.read.markdown"));
+      });
+      return { calls, session, token };
+    }
+    const begins = (calls: readonly Call[]) => calls.filter((call) => call.path === "/api/reports/transfers");
+    const aborts = (calls: readonly Call[]) => calls.filter((call) => call.path.endsWith("/abort")).map((call) => call.path);
+    const lost = () => refusedAnswer(503, "unavailable");
+
+    it("resubmits the same transfer with the same key, without a second upload or an abort", async () => {
+      const { calls, session, token } = sessionsBff((n) => (n <= 2 ? lost() : backend(updated())));
+      renderForm();
+      await ready();
+      fireEvent.change(screen.getByLabelText("Body"), { target: { value: "z".repeat(530_000) } });
+      await userEvent.type(reasonField(), "r");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(await screen.findByTestId("report-edit-notice")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(nav.push).toHaveBeenCalled());
+      expect(begins(calls)).toHaveLength(1);
+      const sent = updates(calls).map((call) => call.body!);
+      expect(sent).toHaveLength(3);
+      for (const body of sent) expect(body).toEqual(sent[0]);
+      expect((sent[0]!.patch as Json).content).toEqual({ transfer: { sessionId: session(1), contentToken: token(1) } });
+      expect(aborts(calls)).toEqual([]);
+    });
+
+    it("aborts on a definitive refusal and uploads afresh next time", async () => {
+      const { calls, session } = sessionsBff((n) => (n === 1 ? refusedAnswer(400, "invalid_request") : backend(updated())));
+      renderForm();
+      await ready();
+      fireEvent.change(screen.getByLabelText("Body"), { target: { value: "z".repeat(530_000) } });
+      await userEvent.type(reasonField(), "r");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(await screen.findByTestId("report-edit-notice")).toBeInTheDocument();
+      expect(aborts(calls)).toEqual([`/api/reports/transfers/${session(1)}/abort`]);
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(nav.push).toHaveBeenCalled());
+      expect(begins(calls)).toHaveLength(2);
+      const [first, second] = updates(calls).map((call) => call.body!);
+      expect(second!.idempotencyKey).not.toBe(first!.idempotencyKey);
+    });
+
+    it("drops the held transfer when the draft changes: abort, fresh upload, new key", async () => {
+      const { calls, session, token } = sessionsBff((n) => (n <= 2 ? lost() : backend(updated())));
+      renderForm();
+      await ready();
+      fireEvent.change(screen.getByLabelText("Body"), { target: { value: "z".repeat(530_000) } });
+      await userEvent.type(reasonField(), "r");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(await screen.findByTestId("report-edit-notice")).toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText("Body"), { target: { value: "y".repeat(530_000) } });
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(nav.push).toHaveBeenCalled());
+      expect(aborts(calls)).toEqual([`/api/reports/transfers/${session(1)}/abort`]);
+      expect(begins(calls)).toHaveLength(2);
+      const sent = updates(calls).map((call) => call.body!);
+      expect(sent).toHaveLength(3);
+      expect((sent[2]!.patch as Json).content).toEqual({ transfer: { sessionId: session(2), contentToken: token(2) } });
+      expect(sent[2]!.idempotencyKey).not.toBe(sent[0]!.idempotencyKey);
+    });
+  });
 });

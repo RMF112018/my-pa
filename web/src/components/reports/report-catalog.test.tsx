@@ -136,7 +136,7 @@ describe("ReportCatalog in Trash", () => {
       : backend(trashedPage())));
     render(<ReportCatalog mode="trash" />);
     await userEvent.click(await screen.findByRole("button", { name: "Restore" }));
-    expect(await screen.findByText("This report changed since you opened it (now version 3).")).toBeInTheDocument();
+    expect(await screen.findByText("This report's state changed since you opened it (now active).")).toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith("/restore"))).toHaveLength(1);
     await userEvent.click(screen.getByRole("button", { name: "Review latest" }));
     await waitFor(() => expect(paths(fetchMock).filter((path) => path.startsWith("/api/reports?"))).toHaveLength(2));

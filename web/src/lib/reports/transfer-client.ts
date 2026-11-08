@@ -18,8 +18,18 @@
  * (identity) -> append chunks of exactly `chunk_byte_limit` (the last shorter),
  * each Base64 with its sha256 -> finalize -> `{sessionId, contentToken}`. Any
  * failure after begin aborts the session (best effort) and answers the refusal.
- * The content token is never stored, logged or put in a URL; prefer
- * `withTransferredContent`, which keeps it inside one call.
+ * Finalize is sent once (it mints the token once); an ambiguous finalize answers
+ * `transfer_state_unknown` ("upload state unknown — try again"), and the next
+ * attempt starts a fresh upload.
+ *
+ * Submit: a form holds one `transferBinding()` per intent. It keeps the
+ * finalized `{sessionId, contentToken}` in its closure (component memory only:
+ * never rendered state, storage, a URL or a log) while the publish/update
+ * answer is ambiguous, so a resubmit of the unchanged draft presents the SAME
+ * transfer with the SAME idempotency key and the server replays the original
+ * receipt (WP06 T10). A definitive refusal aborts the session; a changed draft
+ * or an abandoned intent drops the reference and aborts it, best effort; a
+ * success consumed it.
  *
  * Read: `readFullContent` reads `/content` sequentially from offset 0, checks
  * every chunk's sha256 and the whole part's sha256 (= the pointer's) with
@@ -31,6 +41,7 @@ import {
   beginReportTransfer,
   fetchReportContentRange,
   finalizeReportTransfer,
+  isAmbiguous,
   refusal,
   type InlineReportContent,
   type ReportOutcome,
@@ -99,6 +110,10 @@ export function fromBase64(text: string): Uint8Array {
 }
 
 const mismatch = (message: string) => refusal(0, "unavailable", "transfer_mismatch", message);
+
+/** A finalize whose answer was lost: its token cannot be had again, so the upload is redone. */
+export const UPLOAD_STATE_UNKNOWN_MESSAGE = "Upload state unknown — try again.";
+const uploadStateUnknown = () => refusal(0, "unavailable", "transfer_state_unknown", UPLOAD_STATE_UNKNOWN_MESSAGE);
 
 export interface StagedTransfer {
   readonly sessionId: string;
@@ -174,7 +189,7 @@ export async function uploadViaTransfer(request: UploadRequest): Promise<ReportO
     }
   }
   const finalized = await finalizeReportTransfer(session.session_id);
-  if (!finalized.ok) return fail(finalized);
+  if (!finalized.ok) return fail(isAmbiguous(finalized) ? uploadStateUnknown() : finalized);
   if (finalized.value.byte_count !== staged.byteLength || finalized.value.sha256 !== sha256) {
     return fail(mismatch("The finalized transfer does not match the content."));
   }
@@ -183,7 +198,8 @@ export async function uploadViaTransfer(request: UploadRequest): Promise<ReportO
 
 /**
  * Upload, then hand `{transfer: {sessionId, contentToken}}` to `submit` (a publish
- * or update), so the token never leaves this call. `submit` is retried by the
+ * or update), so the token never leaves this call. One-shot: nothing is kept for
+ * a resubmit, so a form that may resubmit uses `transferBinding()` instead. `submit` is retried by the
  * client itself on an ambiguous answer with the same body (same key, same
  * token); a session whose `submit` did not succeed is aborted, best effort.
  */
@@ -196,6 +212,51 @@ export async function withTransferredContent<T>(
   const outcome = await submit({ transfer: { sessionId: uploaded.value.sessionId, contentToken: uploaded.value.contentToken } });
   if (!outcome.ok) await abortQuietly(uploaded.value.sessionId);
   return outcome;
+}
+
+/** One intent's held transfer (see the module note). */
+export interface TransferBinding {
+  /**
+   * Submit `signature`'s content through a transfer: reuse the transfer held for
+   * the same signature after an ambiguous answer, else upload `request` afresh.
+   */
+  submit<T>(
+    signature: string,
+    request: UploadRequest,
+    submit: (content: TransferReportContent) => Promise<ReportOutcome<T>>,
+  ): Promise<ReportOutcome<T>>;
+  /** The intent is abandoned or the draft changed: drop the held transfer, abort it best effort. */
+  release(): Promise<void>;
+}
+
+export function transferBinding(): TransferBinding {
+  let held: { readonly signature: string; readonly transfer: StagedTransfer } | undefined;
+  async function release(): Promise<void> {
+    const dropped = held;
+    held = undefined;
+    if (dropped) await abortQuietly(dropped.transfer.sessionId);
+  }
+  return {
+    async submit(signature, request, submit) {
+      if (held !== undefined && held.signature !== signature) await release();
+      let transfer = held?.transfer;
+      if (transfer === undefined) {
+        const uploaded = await uploadViaTransfer(request);
+        if (!uploaded.ok) return uploaded;
+        transfer = uploaded.value;
+      }
+      held = undefined;
+      const outcome = await submit({ transfer: { sessionId: transfer.sessionId, contentToken: transfer.contentToken } });
+      if (outcome.ok) return outcome; // consumed by the publish/update
+      if (isAmbiguous(outcome)) {
+        held = { signature, transfer }; // may have been applied: keep it for the same resubmit
+        return outcome;
+      }
+      await abortQuietly(transfer.sessionId); // definitively refused: not consumed
+      return outcome;
+    },
+    release,
+  };
 }
 
 /** A `body_chunked_read` / `encoded_chunked_read` pointer from `reports.read`. */

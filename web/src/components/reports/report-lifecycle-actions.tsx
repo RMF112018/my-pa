@@ -8,8 +8,11 @@
  * lifecycle revision that was loaded. The outcome is shown as a receipt.
  *
  * Conflicts (U5, Amendment A2): never retried or overwritten. A 409 whose
- * `current` revision differs from the one submitted says the report changed
- * (with its version now); any other 409 says the request conflicted. Both
+ * `current` revision differs from the one submitted says the report's state
+ * changed (with its lifecycle state now); any other 409 says the request
+ * conflicted. An ambiguous answer (lost, or 502/503/504) keeps the dialog and
+ * its reason as they were, so confirming again sends the same intent with the
+ * same key. Both conflicts
  * offer "Review latest", which reloads the report so the user decides again;
  * the next submission carries a NEW key (`reportIntent` rotates after a
  * definitive answer).
@@ -22,9 +25,10 @@ import { Input } from "@/components/ui/input";
 import type { StandaloneReportReadResult } from "@/lib/api/decode/capabilities/reports.standalone";
 import {
   CONFLICT_MESSAGE,
-  STALE_MESSAGE,
+  LIFECYCLE_STALE_MESSAGE,
   changeReportLifecycle,
   classifyConflict,
+  isAmbiguous,
   reportIntent,
   type LifecycleOperation,
 } from "@/lib/reports/client";
@@ -93,6 +97,11 @@ export function ReportLifecycleActions({
     });
     intent.settle(outcome);
     setPending(false);
+    if (!outcome.ok && isAmbiguous(outcome)) {
+      // Kept as typed: confirming again is the same intent, so the same key.
+      setFeedback({ kind: "error", text: refusalWords(outcome) });
+      return;
+    }
     setConfirming(null);
     setReason("");
     if (outcome.ok) {
@@ -105,7 +114,7 @@ export function ReportLifecycleActions({
       return;
     }
     const conflict = classifyConflict(outcome, { expectedLifecycleRevision });
-    if (conflict.kind === "stale") setFeedback({ kind: "conflict", text: STALE_MESSAGE(conflict.current.headVersionNumber) });
+    if (conflict.kind === "stale") setFeedback({ kind: "conflict", text: LIFECYCLE_STALE_MESSAGE(conflict.current.lifecycleState) });
     else if (conflict.kind === "conflict") setFeedback({ kind: "conflict", text: CONFLICT_MESSAGE });
     else setFeedback({ kind: "error", text: refusalWords(outcome) });
   }
@@ -134,7 +143,7 @@ export function ReportLifecycleActions({
           </Button>
         ))}
       </div>
-      {feedback ? (
+      {feedback && confirming === null ? (
         <div role={feedback.kind === "receipt" ? "status" : "alert"} data-testid="report-action-feedback" className="grid gap-2 text-sm">
           <p>{feedback.text}</p>
           {feedback.kind === "conflict" ? (
@@ -153,6 +162,9 @@ export function ReportLifecycleActions({
             <p className="text-sm">{CONFIRM_TEXT[confirming]}</p>
             <label htmlFor={reasonId} className="text-sm font-medium">Reason (optional)</label>
             <Input id={reasonId} value={reason} maxLength={500} onChange={(event) => setReason(event.target.value)} />
+            {feedback?.kind === "error" ? (
+              <p role="alert" data-testid="report-action-dialog-error" className="text-sm text-destructive">{feedback.text}</p>
+            ) : null}
             <div className="flex justify-end gap-2">
               <Button size="sm" variant="ghost" disabled={pending} onClick={() => setConfirming(null)}>Cancel</Button>
               <Button size="sm" type="submit" variant={confirming === "delete" ? "danger" : "primary"} pending={pending}>

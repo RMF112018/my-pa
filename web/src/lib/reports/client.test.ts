@@ -5,12 +5,15 @@ import fixtures from "@/lib/api/decode/fixtures/python/success.json";
 import standalone from "@/lib/api/decode/fixtures/python/reports.standalone.json";
 import {
   CONFLICT_MESSAGE,
+  LIFECYCLE_STALE_MESSAGE,
   STALE_MESSAGE,
+  abortReportTransfer,
   catalogPath,
   changeReportLifecycle,
   classifyConflict,
   fetchReport,
   fetchReportCatalog,
+  finalizeReportTransfer,
   refusal,
   reportIntent,
   updateReport,
@@ -93,6 +96,19 @@ describe("mutations", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body))).toEqual({ expectedLifecycleRevision: 0, idempotencyKey: "k", reason: "tidy" });
   });
+  it("R1-3: never retries a finalize (its token is minted once), lost or 503", async () => {
+    for (const lost of [new TypeError("network"), refused(503, "unavailable")]) {
+      const fetchMock = stub(lost, backend(fixtures["reports.transfer.finalize"]));
+      const outcome = await finalizeReportTransfer("grxfr_aaaaaaaa11111111");
+      expect(outcome.ok).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    }
+  });
+  it("still retries the other transfer POSTs (abort) once on a lost answer", async () => {
+    const fetchMock = stub(new TypeError("network"), backend(fixtures["reports.transfer.abort"]));
+    expect((await abortReportTransfer("grxfr_aaaaaaaa11111111")).ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
   it("decodes the lifecycle answer of the capability that was asked", async () => {
     // A contract mismatch is 503: the mutation may have applied, so it is sent once more, same body.
     const fetchMock = stub(backend(fixtures["reports.archive"]), backend(fixtures["reports.archive"]));
@@ -129,8 +145,11 @@ describe("classifyConflict (Amendment A2)", () => {
     expect(classifyConflict(conflict(), { expectedVersion: 3 })).toEqual({ kind: "conflict" });
     expect(CONFLICT_MESSAGE).toMatch(/conflicted with an earlier one/);
   });
-  it("judges lifecycle actions by the lifecycle revision", () => {
+  it("judges lifecycle actions by the lifecycle revision, in lifecycle words", () => {
     expect(classifyConflict(conflict(CURRENT), { expectedLifecycleRevision: 1 }).kind).toBe("stale");
+    expect(LIFECYCLE_STALE_MESSAGE("trashed")).toBe("This report's state changed since you opened it (now in Trash).");
+    expect(LIFECYCLE_STALE_MESSAGE("archived")).toBe("This report's state changed since you opened it (now archived).");
+    expect(LIFECYCLE_STALE_MESSAGE("constructor")).toBe("This report's state changed since you opened it (now constructor).");
     expect(classifyConflict(conflict(CURRENT), { expectedLifecycleRevision: 2 }).kind).toBe("conflict");
   });
   it("is none for anything but a 409", () => {

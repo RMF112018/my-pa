@@ -5,21 +5,25 @@
  *
  * The inline request is built first; when its JSON UTF-8 length is above
  * 512 KiB the content goes through a transfer (begin -> append* -> finalize)
- * and the publish carries `{transfer: {sessionId, contentToken}}` instead, the
- * token kept inside one `withTransferredContent` call. One idempotency key per
+ * and the publish carries `{transfer: {sessionId, contentToken}}` instead. While
+ * the publish answer is ambiguous the form's `transferBinding` keeps that
+ * transfer in memory, so resubmitting the unchanged draft reuses it with the
+ * same key (the server replays the receipt) instead of minting a second
+ * session that would conflict; it is aborted on a definitive refusal, a changed
+ * draft or leaving the page (best effort). One idempotency key per
  * intent (`reportIntent`): kept while answers are ambiguous, new after any
  * definitive answer or a changed draft. A second submit while one is in
  * flight is ignored. On success the shell's feedback says the version and
  * receipt, and the browser goes to the report.
  */
 import { useRouter } from "next/navigation";
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { PageHeader } from "@/components/shell/page-header";
 import { Button } from "@/components/ui/button";
 import { useMutationFeedback } from "@/components/ui/mutation-feedback";
 import { mutationKey } from "@/lib/api/work-client";
 import { publishReport, reportIntent, type PublishRequest, type ReportOutcome } from "@/lib/reports/client";
-import { needsTransfer, withTransferredContent } from "@/lib/reports/transfer-client";
+import { needsTransfer, transferBinding } from "@/lib/reports/transfer-client";
 import type { ReportsPublishResult } from "@/lib/api/decode/capabilities/reports.publish";
 import { refusalWords, reportHref, shortId } from "./presentation";
 import {
@@ -42,11 +46,17 @@ export function ReportNewForm() {
   const router = useRouter();
   const feedback = useMutationFeedback();
   const intent = useRef(reportIntent("report-publish"));
+  const transfer = useRef(transferBinding());
   const inFlight = useRef(false);
   const [draft, setDraft] = useState<ReportDraft>(EMPTY_DRAFT);
   const [errors, setErrors] = useState<DraftErrors>({});
   const [phase, setPhase] = useState<Phase>("idle");
   const [failure, setFailure] = useState<string | null>(null);
+
+  useEffect(() => {
+    const binding = transfer.current;
+    return () => { void binding.release(); };
+  }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -62,13 +72,15 @@ export function ReportNewForm() {
     let outcome: ReportOutcome<ReportsPublishResult>;
     if (needsTransfer(request)) {
       setPhase("uploading");
-      outcome = await withTransferredContent(
-        // Each upload is its own session; the publish key is the intent's.
+      outcome = await transfer.current.submit(
+        JSON.stringify(payload),
+        // Each fresh upload is its own session; the publish key is the intent's.
         { format: content.format, staged: stagedBytesOf(content), idempotencyKey: mutationKey("report-transfer") },
-        (transfer) => publishReport({ ...request, content: transfer }),
+        (staged) => publishReport({ ...request, content: staged }),
       );
     } else {
       setPhase("sending");
+      await transfer.current.release();
       outcome = await publishReport(request);
     }
     intent.current.settle(outcome);

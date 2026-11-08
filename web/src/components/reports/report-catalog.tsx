@@ -26,7 +26,7 @@ import type {
 import { intelligenceReport } from "@/lib/routes/intelligence";
 import {
   CONFLICT_MESSAGE,
-  STALE_MESSAGE,
+  LIFECYCLE_STALE_MESSAGE,
   changeReportLifecycle,
   classifyConflict,
   fetchReportCatalog,
@@ -179,7 +179,7 @@ export function ReportCatalog({ mode = "catalog" }: { readonly mode?: "catalog" 
       return;
     }
     const conflict = classifyConflict(outcome, { expectedLifecycleRevision });
-    if (conflict.kind === "stale") setNotice({ kind: "conflict", text: STALE_MESSAGE(conflict.current.headVersionNumber) });
+    if (conflict.kind === "stale") setNotice({ kind: "conflict", text: LIFECYCLE_STALE_MESSAGE(conflict.current.lifecycleState) });
     else if (conflict.kind === "conflict") setNotice({ kind: "conflict", text: CONFLICT_MESSAGE });
     else setNotice({ kind: "error", text: refusalWords(outcome) });
   }, []);

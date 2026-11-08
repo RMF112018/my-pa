@@ -128,7 +128,8 @@ describe("ReportView", () => {
     render(<ReportView reportId={REPORT} />);
     await userEvent.click(await screen.findByRole("button", { name: "Archive" }));
     await userEvent.click(within(screen.getByRole("dialog", { name: "Archive this report?" })).getByRole("button", { name: "Archive" }));
-    expect(await screen.findByText("This report changed since you opened it (now version 3).")).toBeInTheDocument();
+    expect(await screen.findByText("This report's state changed since you opened it (now archived).")).toBeInTheDocument();
+    expect(screen.queryByText(/now version/)).toBeNull();
     expect(posts(fetchMock)).toHaveLength(1);
     expect(reads(fetchMock)).toHaveLength(1);
     await userEvent.click(screen.getByRole("button", { name: "Review latest" }));
@@ -148,6 +149,29 @@ describe("ReportView", () => {
     const keys = posts(fetchMock).map((post) => post.body.idempotencyKey);
     expect(keys).toHaveLength(2);
     expect(keys[0]).not.toBe(keys[1]);
+  });
+
+  it("keeps the dialog and its reason on an ambiguous answer, so confirming again reuses the key", async () => {
+    let archives = 0;
+    const fetchMock = stub((path) => {
+      if (!path.endsWith("/archive")) return backend(readOf("reports.read.markdown"));
+      archives += 1;
+      // Two lost answers (the client's own retry included), then the receipt.
+      return archives <= 2 ? refusedAnswer(503, "unavailable") : backend(fixtures["reports.archive"]);
+    });
+    render(<ReportView reportId={REPORT} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Archive" }));
+    const dialog = screen.getByRole("dialog", { name: "Archive this report?" });
+    await userEvent.type(within(dialog).getByLabelText("Reason (optional)"), "done");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+    expect(await within(dialog).findByTestId("report-action-dialog-error")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Reason (optional)")).toHaveValue("done");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+    expect(await screen.findByText(/Archive: /)).toBeInTheDocument();
+    const sent = posts(fetchMock).map((post) => post.body);
+    expect(sent).toHaveLength(3);
+    expect(new Set(sent.map((body) => body.idempotencyKey)).size).toBe(1);
+    expect(sent.every((body) => body.reason === "done")).toBe(true);
   });
 
   it("reads an exact version chosen by number", async () => {

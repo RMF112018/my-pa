@@ -55,16 +55,23 @@ function stub(answer: (path: string, body?: Json) => Response | Promise<Response
   return calls;
 }
 
-/** A fake transfer BFF (begin/append/finalize/abort) plus a publish answer. */
+/** The n-th session a fake begin opens (the first is SESSION/TOKEN). */
+const sessionOf = (n: number) => (n === 1 ? SESSION : `grxfr_bbbbbbbb2222222${n}`);
+const tokenOf = (n: number) => (n === 1 ? TOKEN : `grxtk_${String(n).repeat(64)}`);
+
+/** A fake transfer BFF (begin/append/finalize/abort) plus a publish answer; each begin opens a new session. */
 function transferBff(publish: (body: Json) => Response = () => backend(published())) {
   const limit = 262_144;
   let declared = { byteCount: 0, sha256: "", format: "text" };
+  let opened = 0;
   const chunks: Uint8Array[] = [];
   const calls = stub((path, body) => {
     if (path === "/api/reports/transfers") {
       declared = { byteCount: body!.byteCount as number, sha256: body!.sha256 as string, format: body!.format as string };
+      opened += 1;
+      chunks.length = 0;
       return backend({
-        session_id: SESSION, state: "open", format: declared.format, encoding: "identity",
+        session_id: sessionOf(opened), state: "open", format: declared.format, encoding: "identity",
         declared_byte_count: declared.byteCount, declared_sha256: declared.sha256, chunk_byte_limit: limit,
         chunk_count: Math.ceil(declared.byteCount / limit), expires_at: EXPIRES, replayed: false,
       });
@@ -76,19 +83,19 @@ function transferBff(publish: (body: Json) => Response = () => backend(published
       const received = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
       const complete = received === declared.byteCount;
       return backend({
-        session_id: SESSION, sequence, byte_offset: sequence * limit, byte_count: bytes.byteLength,
+        session_id: sessionOf(opened), sequence, byte_offset: sequence * limit, byte_count: bytes.byteLength,
         chunk_sha256: sha(bytes), received_byte_count: received, declared_byte_count: declared.byteCount,
         complete, next_sequence: complete ? null : sequence + 1, expires_at: EXPIRES, replayed: false,
       });
     }
     if (path.endsWith("/finalize")) {
       return backend({
-        session_id: SESSION, state: "finalized", content_token: TOKEN, expires_at: EXPIRES,
+        session_id: sessionOf(opened), state: "finalized", content_token: tokenOf(opened), expires_at: EXPIRES,
         byte_count: declared.byteCount, sha256: declared.sha256, format: declared.format, encoding: "identity",
         decoded_byte_count: declared.byteCount, decoded_sha256: declared.sha256,
       });
     }
-    if (path.endsWith("/abort")) return backend({ session_id: SESSION, state: "aborted", replayed: false });
+    if (path.endsWith("/abort")) return backend({ session_id: path.split("/").at(-2)!, state: "aborted", replayed: false });
     if (path === "/api/reports") return publish(body!);
     throw new Error("unexpected route");
   });
@@ -239,6 +246,80 @@ describe("ReportNewForm", () => {
       idempotencyKey: expect.stringMatching(/^report-publish-/),
     });
     for (const call of calls) expect(call.path).not.toContain("grxtk_");
+  });
+
+  describe("R1-2: a large publish whose answer was ambiguous", () => {
+    const begins = (calls: readonly Call[]) => calls.filter((call) => call.path === "/api/reports/transfers");
+    const publishes = (calls: readonly Call[]) => posts(calls).filter((call) => call.path === "/api/reports");
+    const aborts = (calls: readonly Call[]) => calls.filter((call) => call.path.endsWith("/abort")).map((call) => call.path);
+    async function fillLarge(body = "a".repeat(600_000)) {
+      await userEvent.type(screen.getByLabelText(/^Title/), "Large");
+      fireEvent.change(screen.getByLabelText("Body"), { target: { value: body } });
+    }
+    const publish = () => userEvent.click(screen.getByRole("button", { name: "Publish" }));
+
+    it("resubmits the same transfer with the same key, without a second upload or an abort", async () => {
+      let answered = 0;
+      const { calls } = transferBff(() => (++answered <= 2 ? refusedAnswer(503, "unavailable", "unavailable") : backend(published())));
+      renderForm();
+      await fillLarge();
+      await publish();
+      expect(await screen.findByText("Reports are unavailable right now.")).toBeInTheDocument();
+      expect(aborts(calls)).toEqual([]);
+      await publish();
+      await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/reports/grpt_aaaaaaaa11111111"));
+      expect(begins(calls)).toHaveLength(1);
+      const sent = publishes(calls).map((call) => call.body!);
+      expect(sent).toHaveLength(3);
+      for (const body of sent) expect(body).toEqual(sent[0]);
+      expect(sent[0]!.content).toEqual({ transfer: { sessionId: SESSION, contentToken: TOKEN } });
+      expect(aborts(calls)).toEqual([]);
+      for (const call of calls) expect(call.path).not.toContain("grxtk_");
+    });
+
+    it("aborts on a definitive refusal; the next submit uploads afresh with a new key", async () => {
+      let answered = 0;
+      const { calls } = transferBff(() => (++answered === 1 ? refusedAnswer(400, "invalid_request") : backend(published())));
+      renderForm();
+      await fillLarge();
+      await publish();
+      expect(await screen.findByText("The request was not accepted.")).toBeInTheDocument();
+      expect(aborts(calls)).toEqual([`/api/reports/transfers/${SESSION}/abort`]);
+      await publish();
+      await waitFor(() => expect(nav.push).toHaveBeenCalled());
+      expect(begins(calls)).toHaveLength(2);
+      const [first, second] = publishes(calls).map((call) => call.body!);
+      expect(second!.content).toEqual({ transfer: { sessionId: sessionOf(2), contentToken: tokenOf(2) } });
+      expect(second!.idempotencyKey).not.toBe(first!.idempotencyKey);
+    });
+
+    it("drops the held transfer when the draft changes: abort, fresh upload, new key", async () => {
+      let answered = 0;
+      const { calls } = transferBff(() => (++answered <= 2 ? refusedAnswer(503, "unavailable", "unavailable") : backend(published())));
+      renderForm();
+      await fillLarge();
+      await publish();
+      expect(await screen.findByText("Reports are unavailable right now.")).toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText("Body"), { target: { value: "c".repeat(600_000) } });
+      await publish();
+      await waitFor(() => expect(nav.push).toHaveBeenCalled());
+      expect(aborts(calls)).toEqual([`/api/reports/transfers/${SESSION}/abort`]);
+      expect(begins(calls)).toHaveLength(2);
+      const sent = publishes(calls).map((call) => call.body!);
+      expect(sent).toHaveLength(3);
+      expect(sent[2]!.content).toEqual({ transfer: { sessionId: sessionOf(2), contentToken: tokenOf(2) } });
+      expect(sent[2]!.idempotencyKey).not.toBe(sent[0]!.idempotencyKey);
+    });
+
+    it("aborts a held transfer when the form is left", async () => {
+      const { calls } = transferBff(() => refusedAnswer(503, "unavailable", "unavailable"));
+      const view = renderForm();
+      await fillLarge();
+      await publish();
+      expect(await screen.findByText("Reports are unavailable right now.")).toBeInTheDocument();
+      view.unmount();
+      await waitFor(() => expect(aborts(calls)).toEqual([`/api/reports/transfers/${SESSION}/abort`]));
+    });
   });
 
   it("shows the uploading state while large content is staged", async () => {

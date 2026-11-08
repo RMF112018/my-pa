@@ -172,6 +172,11 @@ Known limitation: after an ambiguous publish answer (network failure or
 replayed safely, but editing the draft first makes it a new intent with a new
 key, so if the first attempt had in fact committed, a second report results (an
 edited update is instead refused as stale, because its expected version moved).
+Known limitation: the edit form locks JSON content holding numbers the browser
+cannot keep exactly; integers beyond 2^53 - 1 are always caught, but excess
+fractional precision is caught only for typed and chunk-loaded content, not for
+inline-loaded content (already parsed by the BFF), whose edit saves the rounded
+value.
 
 ## Worker-plane reporting
 

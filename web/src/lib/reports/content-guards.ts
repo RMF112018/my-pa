@@ -18,11 +18,17 @@
  * Numbers. The browser's `JSON.parse` keeps a number as an IEEE double, so an
  * integer beyond 2^53 - 1 (and any literal whose value a double cannot hold
  * exactly) changes when the data is edited and saved. `hasUnsafeJsonNumber`
- * reads the JSON source text (numbers outside strings); `hasUnsafeNumberValue`
- * is its check for data that was already parsed on the way here (the BFF parses
- * the gateway's answer, so a read's inline data has no source text left): any
- * number whose magnitude exceeds `Number.MAX_SAFE_INTEGER`, or that is not
- * finite. Both answer the same for every literal that lost precision.
+ * reads the JSON source text (numbers outside strings) and flags a literal whose
+ * magnitude exceeds `Number.MAX_SAFE_INTEGER`, that is not finite, or whose
+ * parsed value is not the same decimal value (excess fractional precision
+ * included); it serves typed text and chunk-loaded content.
+ * `hasUnsafeNumberValue` checks data that was already parsed on the way here
+ * (the BFF parses the gateway's answer, so a read's inline data has no source
+ * text left) and flags only a number whose magnitude exceeds
+ * `Number.MAX_SAFE_INTEGER` or that is not finite. The two do NOT answer the
+ * same: a fractional literal that lost precision when parsed (for example
+ * `0.12345678901234567890123`) is invisible once parsed, so inline-loaded
+ * content holding one is not locked and an edit saves the rounded value.
  *
  * Nothing here logs, and no message carries a value from the data.
  */
@@ -148,7 +154,11 @@ export function hasUnsafeJsonNumber(text: string): boolean {
   return false;
 }
 
-/** The parsed-data form of the same check (no source text is left). */
+/**
+ * The parsed-data check (no source text is left): magnitude beyond
+ * `Number.MAX_SAFE_INTEGER` or not finite only; excess fractional precision is
+ * already gone and cannot be detected here.
+ */
 export function hasUnsafeNumberValue(data: unknown): boolean {
   if (typeof data === "number") return unsafeNumber(data);
   if (data === null || typeof data !== "object") return false;

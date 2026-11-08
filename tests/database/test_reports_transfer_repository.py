@@ -15,7 +15,9 @@ The `database` tier, each test on its own disposable head clone
 * PostgreSQL-only: concurrent begins on two real sessions serialize on the
   per-owner advisory lock (B observed blocked, then refused by the quota), and
   eight concurrent begins on eight connections admit exactly four;
-  `expire_due` skips a row another transaction holds (`SKIP LOCKED`); the chunk
+  `expire_due` skips a row another transaction holds (`SKIP LOCKED`); begin's
+  keyed-expired-but-not-reaped branch ends the keyed session both when the
+  reap skipped it (held) and when it was past the reap limit; the chunk
   is staged BEFORE the ledger INSERT (a failing INSERT leaves an unledgered
   file that a later identical append reuses); the row facts the repository
   wrote; no `knowledge.intelligence_*` row changes.
@@ -35,7 +37,14 @@ import pytest
 from sqlalchemy import Connection, Engine, create_engine, text
 from sqlalchemy.pool import NullPool
 
-from my_pa.contracts.ports import ReportTransferQuotaError, ReportTransferRepository
+from my_pa.contracts.ports import (
+    ReportIdempotencyConflictError,
+    ReportTransferQuotaError,
+    ReportTransferRepository,
+    TransferBegin,
+)
+from my_pa.domain.reports.vocabulary import TransferState
+from my_pa.infrastructure.persistence import report_transfers
 from my_pa.infrastructure.persistence.report_transfers import SqlReportTransferRepository
 from my_pa.infrastructure.report_content_stores.staging import FilesystemReportTransferStaging
 from tests.database.test_reports_general_persistence import (
@@ -46,6 +55,7 @@ from tests.database.test_reports_general_persistence import (
 )
 from tests.report_transfer_behaviour import (
     CLIENT_1,
+    EXPIRED,
     PRINCIPAL_A,
     SCENARIOS,
     T0,
@@ -217,6 +227,112 @@ def test_expire_due_skips_a_session_another_transaction_holds(
         ).all()
     states = {str(row[0]): str(row[1]) for row in rows}
     assert states == {held.session_id: "expired", free.session_id: "expired"}
+
+
+def _states(engine: Engine) -> dict[str, str]:
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text("SELECT session_id, state FROM knowledge.report_transfer_sessions")
+        ).all()
+    return {str(row[0]): str(row[1]) for row in rows}
+
+
+def test_a_keyed_session_the_reap_skipped_while_held_is_ended_by_the_keyed_branch(
+    migrated_engine: Engine, tmp_path: Path
+) -> None:
+    """WP08 C-WP06 (review WP06 R2 #1): `begin`'s keyed-expired-but-not-reaped branch.
+
+    The keyed session is expired by time but held by another transaction, so
+    the reap's `SKIP LOCKED` passes it by; the keyed `FOR UPDATE` waits; once
+    the holder rolls back, the keyed lookup finds it live by state and expired
+    by time, and the branch ends it, frees the key, names it among the reaped
+    ids and begins a NEW session for the same declaration.
+    """
+    harness = _harness(migrated_engine, tmp_path)
+    decl = declaration(payload(5), ttl=300)
+    stale, _ = begin(harness, decl, "k-held")
+    outcome: dict[str, object] = {}
+
+    def writer_b() -> None:
+        try:
+            with migrated_engine.begin() as connection:
+                connection.execute(text("SET LOCAL lock_timeout = '20s'"))
+                outcome["result"] = SqlReportTransferRepository(connection).begin(
+                    decl,
+                    principal_id=PRINCIPAL_A,
+                    client_ref=CLIENT_1,
+                    idempotency_key="k-held",
+                    now=EXPIRED,
+                )
+        except Exception as error:  # surfaced by the assertion below
+            outcome["error"] = error
+
+    connection_a = migrated_engine.connect()
+    transaction = connection_a.begin()
+    thread = threading.Thread(target=writer_b, daemon=True)
+    try:
+        connection_a.execute(
+            text(
+                "SELECT session_id FROM knowledge.report_transfer_sessions "
+                "WHERE session_id = :session_id FOR UPDATE"
+            ),
+            {"session_id": stale.session_id},
+        ).one()
+        thread.start()
+        assert _wait_until(lambda: _blocked_on_a_lock(migrated_engine)), "B never blocked"
+        assert thread.is_alive() and not outcome
+    finally:
+        transaction.rollback()
+        connection_a.close()
+    thread.join(timeout=JOIN_SECONDS)
+    assert not thread.is_alive()
+    begun = outcome.get("result")
+    assert isinstance(begun, TransferBegin), outcome
+    assert begun.replayed is False
+    assert begun.session.session_id != stale.session_id
+    assert begun.session.state is TransferState.OPEN
+    assert begun.reaped_session_ids == (stale.session_id,)
+    assert _states(migrated_engine) == {
+        stale.session_id: "expired",
+        begun.session.session_id: "open",
+    }
+    # The key now binds the new session: replay, then conflict on another intent.
+    assert begin(harness, decl, "k-held", now=EXPIRED) == (begun.session, True)
+    with pytest.raises(ReportIdempotencyConflictError):
+        begin(harness, declaration(payload(7)), "k-held", now=EXPIRED)
+
+
+def test_a_keyed_session_past_the_reap_limit_is_ended_by_the_keyed_branch(
+    migrated_engine: Engine, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WP08 C-WP06 (review WP06 R2 #1): the same branch when the keyed row is past the limit.
+
+    With the reap bound lowered to 1, the older expired session fills it and
+    the keyed one (expired later) is left for the keyed branch, which ends it
+    too: both are named reaped, oldest first, and a new session begins.
+    """
+    monkeypatch.setattr(report_transfers, "TRANSFER_BEGIN_REAP_LIMIT", 1)
+    harness = _harness(migrated_engine, tmp_path)
+    older, _ = begin(harness, declaration(payload(5), ttl=300), "k-older")
+    keyed_decl = declaration(payload(6), ttl=600)
+    keyed, _ = begin(harness, keyed_decl, "k-keyed")
+    begun = harness.tx(
+        lambda r: r.begin(
+            keyed_decl,
+            principal_id=PRINCIPAL_A,
+            client_ref=CLIENT_1,
+            idempotency_key="k-keyed",
+            now=EXPIRED,
+        )
+    )
+    assert begun.replayed is False
+    assert begun.session.session_id not in {older.session_id, keyed.session_id}
+    assert begun.reaped_session_ids == (older.session_id, keyed.session_id)
+    assert _states(migrated_engine) == {
+        older.session_id: "expired",
+        keyed.session_id: "expired",
+        begun.session.session_id: "open",
+    }
 
 
 def test_the_chunk_is_staged_before_its_ledger_insert(

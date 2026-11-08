@@ -452,6 +452,93 @@ def test_a_symlinked_transfer_or_shard_directory_is_never_followed(tmp_path: Pat
     assert staging.unreadable_entries() == ("transfer",)
 
 
+def _decoy_session_tree(tmp_path: Path) -> tuple[Path, str]:
+    """A well-formed `transfer/` tree OUTSIDE the root holding one decoy session."""
+    decoy = tmp_path / "decoy"
+    decoy_root = decoy / "root"
+    decoy_root.mkdir(parents=True)
+    decoy_staging = _staging(decoy_root)
+    decoy_session = _session()
+    data = b"synthetic decoy"
+    decoy_staging.put_chunk(decoy_session, 0, chunk_sha256=_sha(data), data=data)
+    return decoy_root / "transfer", decoy_session
+
+
+def test_the_scan_never_enters_a_symlinked_shard_or_session(tmp_path: Path) -> None:
+    """WP08 C-WP06 (R1 #5): links planted at shard and session level are reported, never walked."""
+    root = _root(tmp_path)
+    staging = _staging(root)
+    real = _session()
+    data = b"synthetic"
+    staging.put_chunk(real, 0, chunk_sha256=_sha(data), data=data)
+    decoy_transfer, decoy_session = _decoy_session_tree(tmp_path)
+    decoy_shard = decoy_session.split("_", 1)[1][:2]
+    # A shard-level link to the decoy's shard, and a session-level link (inside the
+    # real session's shard, under a well-formed id) to the decoy's session directory.
+    real_shard = real.split("_", 1)[1][:2]
+    linked_shard = next(name for name in ("zz", "yy", "xx") if name != real_shard)
+    (root / "transfer" / linked_shard).symlink_to(
+        decoy_transfer / decoy_shard, target_is_directory=True
+    )
+    impostor = _session()
+    while impostor.split("_", 1)[1][:2] != real_shard:
+        impostor = _session()
+    (root / "transfer" / real_shard / impostor).symlink_to(
+        decoy_transfer / decoy_shard / decoy_session, target_is_directory=True
+    )
+    before = _tree(decoy_transfer.parent)
+    assert staging.staged_session_ids() == (real,)
+    assert staging.unreadable_entries() == tuple(
+        sorted((f"transfer/{linked_shard}", f"transfer/{real_shard}/{impostor}"))
+    )
+    assert _tree(decoy_transfer.parent) == before
+
+
+def test_the_scan_stays_anchored_when_transfer_is_swapped_for_a_link_mid_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WP08 C-WP06 (R1 #5): a `transfer` swapped for a link after it was checked is not walked.
+
+    The swap is made at the scan's first touch of `transfer` (opening it, or
+    listing it by path), i.e. after any check of it: an anchored scan lists the
+    directory it opened; a path-resolving scan would list the decoy.
+    """
+    root = _root(tmp_path)
+    staging = _staging(root)
+    real = _session()
+    data = b"synthetic"
+    staging.put_chunk(real, 0, chunk_sha256=_sha(data), data=data)
+    decoy_transfer, decoy_session = _decoy_session_tree(tmp_path)
+    transfer = root / "transfer"
+    swapped: list[bool] = []
+
+    def swap() -> None:
+        if not swapped:
+            swapped.append(True)
+            transfer.rename(root / "transfer-moved")
+            transfer.symlink_to(decoy_transfer, target_is_directory=True)
+
+    real_open = os.open
+    real_scandir = os.scandir
+
+    def spy_open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:  # noqa: ANN401
+        descriptor = real_open(path, flags, *args, **kwargs)
+        if path == "transfer" and kwargs.get("dir_fd") is not None:
+            swap()
+        return descriptor
+
+    def spy_scandir(path: Any = ".") -> Any:  # noqa: ANN401
+        if not isinstance(path, int) and Path(path) == transfer:
+            swap()
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "open", spy_open)
+    monkeypatch.setattr(os, "scandir", spy_scandir)
+    assert staging.staged_session_ids() == (real,)
+    assert swapped == [True]
+    assert decoy_session != real
+
+
 # ---- discard and its confinement -----------------------------------------------------
 
 

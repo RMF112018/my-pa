@@ -422,51 +422,98 @@ class FilesystemReportTransferStaging(ReportTransferStaging):
         return tuple(sorted(problem for _name, problems in self._scan() for problem in problems))
 
     def _scan(self) -> Iterator[tuple[str | None, tuple[str, ...]]]:
-        """Walk `transfer/`: `(session id or None, unreadable names)`; never follows a link."""
-        base = self._root / _TRANSFER
+        """Walk `transfer/`: `(session id or None, unreadable names)`; never follows a link.
+
+        Anchored like `discard` (review WP06 R1 #5): every directory is opened
+        `O_DIRECTORY | O_NOFOLLOW` against its parent's descriptor and listed
+        through that descriptor, and every entry is `lstat`ed against it, so a
+        component swapped for a link after a check is never entered. Enumeration
+        only: nothing here removes anything.
+        """
         try:
-            if base.is_symlink() or not base.is_dir():
-                if base.exists() or base.is_symlink():
-                    yield None, (_TRANSFER,)
-                return
-            shards = sorted(os.scandir(base), key=lambda entry: entry.name)
+            root_fd = os.open(self._root, DIRECTORY_FLAGS)
         except OSError:
             yield None, (_TRANSFER,)
             return
-        for shard in shards:
-            relative = f"{_TRANSFER}/{shard.name}"
-            if not shard.is_dir(follow_symlinks=False) or len(shard.name) != _SHARD:
-                yield None, (relative,)
-                continue
-            try:
-                sessions = sorted(os.scandir(shard.path), key=lambda entry: entry.name)
-            except OSError:
-                yield None, (relative,)
-                continue
-            for item in sessions:
-                item_relative = f"{relative}/{item.name}"
-                if not item.is_dir(follow_symlinks=False) or not self._admitted(
-                    shard.name, item.name
-                ):
-                    yield None, (item_relative,)
-                    continue
-                yield item.name, tuple(self._session_problems(item.path, item_relative))
-
-    def _session_problems(self, path: str, relative: str) -> Iterator[str]:
         try:
-            entries = sorted(os.scandir(path), key=lambda entry: entry.name)
+            try:
+                base_fd = os.open(_TRANSFER, DIRECTORY_FLAGS, dir_fd=root_fd)
+            except FileNotFoundError:
+                return
+            except OSError:
+                # A link, a file or anything else that is not a reachable directory.
+                yield None, (_TRANSFER,)
+                return
+        finally:
+            os.close(root_fd)
+        try:
+            shards = self._listed(base_fd)
+            if shards is None:
+                yield None, (_TRANSFER,)
+                return
+            for shard in shards:
+                relative = f"{_TRANSFER}/{shard}"
+                if len(shard) != _SHARD:
+                    yield None, (relative,)
+                    continue
+                shard_fd = self._entered(base_fd, shard)
+                if shard_fd is None:
+                    yield None, (relative,)
+                    continue
+                try:
+                    sessions = self._listed(shard_fd)
+                    if sessions is None:
+                        yield None, (relative,)
+                        continue
+                    for item in sessions:
+                        item_relative = f"{relative}/{item}"
+                        if not self._admitted(shard, item):
+                            yield None, (item_relative,)
+                            continue
+                        session_fd = self._entered(shard_fd, item)
+                        if session_fd is None:
+                            yield None, (item_relative,)
+                            continue
+                        try:
+                            problems = tuple(self._session_problems(session_fd, item_relative))
+                        finally:
+                            os.close(session_fd)
+                        yield item, problems
+                finally:
+                    os.close(shard_fd)
+        finally:
+            os.close(base_fd)
+
+    @staticmethod
+    def _listed(directory_fd: int) -> list[str] | None:
+        """The sorted names in the directory behind `directory_fd`, or `None` if unlistable."""
+        try:
+            return sorted(os.listdir(directory_fd))
         except OSError:
+            return None
+
+    @staticmethod
+    def _entered(directory_fd: int, name: str) -> int | None:
+        """`name` under `directory_fd` opened `O_DIRECTORY | O_NOFOLLOW`, or `None`."""
+        try:
+            return os.open(name, DIRECTORY_FLAGS, dir_fd=directory_fd)
+        except OSError:
+            return None
+
+    def _session_problems(self, session_fd: int, relative: str) -> Iterator[str]:
+        entries = self._listed(session_fd)
+        if entries is None:
             yield relative
             return
         for entry in entries:
-            entry_relative = f"{relative}/{entry.name}"
-            if _TEMPORARY_FILE.match(entry.name) or not _is_chunk_entry(entry.name):
+            entry_relative = f"{relative}/{entry}"
+            if _TEMPORARY_FILE.match(entry) or not _is_chunk_entry(entry):
                 # A temporary is a crash leftover: discard removes it, but it is
                 # not a chunk, so it is reported until then.
                 yield entry_relative
                 continue
             try:
-                status = entry.stat(follow_symlinks=False)
+                status = os.stat(entry, dir_fd=session_fd, follow_symlinks=False)
             except OSError:
                 yield entry_relative
                 continue

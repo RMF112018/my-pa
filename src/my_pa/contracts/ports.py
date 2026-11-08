@@ -8205,7 +8205,10 @@ class GeneralReportRepository(ABC):
         floor(ts_rank * 1e6)`, order `(rank DESC, created_at DESC, report_id
         DESC)`, each entry with its headline over `coalesce(summary, title)`.
         Ids compare in code-point order (`COLLATE "C"`). `after` is the keyset
-        position: only rows strictly after it in that order. Its `rank` must be
+        position: only rows strictly after it in that order (no TTL: a list
+        position's keys never change, but a search position's rank is the HEAD
+        version's, so an update between pages can skip or repeat an item, as can
+        a head change that alters a filter match). Its `rank` must be
         set exactly when `query` is (else `CatalogCursorError`); its id may be
         any report id, standalone or legacy, since the `all` plane merges both
         in one order. Filters: `report_type` equality; `topics`/`tags` all-of

@@ -556,6 +556,15 @@ composition and in every MCP publication that composition produces.
   reports appear only when listed explicitly, under the same `report_read` grant.
   `next_cursor` is opaque and bound to the Principal, operation, plane, filters,
   query and page size; any other use is refused as `invalid_request` (`CURSOR`).
+  Order: `reports.list` is newest first (`created_at` DESC, then report id DESC);
+  `reports.search` is by rank DESC, then `created_at` DESC, then report id DESC,
+  where rank is the integer `floor(ts_rank * 1e6)` over a search document that
+  weights the title A and the body B in both planes, so in `all` the standalone
+  and intelligence pages merge into that one order (ids, compared in code-point
+  order, break ties). The cursor has no TTL: list keyset keys (`created_at`, id)
+  never change, so a list walk neither skips nor repeats; a search page's rank
+  is the head version's, so a report updated (or whose head stops or starts
+  matching the filters) between pages can be skipped or repeated.
   Search matches the head version only, over its title, summary, topics, tags
   and text extracted from the decoded content (a body, and JSON string values),
   truncated to the first 65,536 code points; transport bytes and Base64 are never

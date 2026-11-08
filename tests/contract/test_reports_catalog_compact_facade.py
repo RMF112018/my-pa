@@ -34,6 +34,7 @@ Every identity, title and body here is synthetic.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 from collections.abc import Mapping
@@ -458,6 +459,26 @@ def test_describe_returns_the_exact_extended_list_and_search_schemas(harness: Ha
     search_payload = outcome(exact[1])[1]["input_schema"]["properties"]["payload"]
     assert {"include_superseded", "report_date"} <= set(list_payload["properties"])
     assert search_payload["required"] == ["query"]
+
+
+#: WP08 C-WP04 #3: a frozen golden of the two extended payload schemas, so the
+#: describe test above (which compares the answer with the same code's schema)
+#: is not the only witness. SHA-256 of `{name: input_schema.properties.payload}`
+#: for `reports.list` and `reports.search`, canonical JSON (sorted keys, compact
+#: separators) -- the same measurement as the v1 pins in
+#: `tests/contract/test_commitment_v1_strict_client.py`. Measured at a29e77c7b.
+EXTENDED_CATALOG_PAYLOAD_SCHEMA_SHA256: Final = (
+    "3b80d80c4b17c468ce401d74c85befaf43390d1289bd53d5c08f1a96091feced"
+)
+
+
+def test_the_extended_list_and_search_payload_schemas_match_their_frozen_hash() -> None:
+    payloads = {
+        capability.value: _TOOLS[capability.value].input_schema["properties"]["payload"]
+        for capability in CATALOG
+    }
+    canonical = json.dumps(payloads, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    assert hashlib.sha256(canonical).hexdigest() == EXTENDED_CATALOG_PAYLOAD_SCHEMA_SHA256
 
 
 # ---- list ------------------------------------------------------------------------------------

@@ -501,9 +501,13 @@ describe("ReportEditForm", () => {
       await metadataOnlySave(calls);
     });
 
+    const pad = "a".repeat(600_000);
     it.each([
       ["an identity key", '{"rows":[{"principalId":"p"}]}', IDENTITY_KEYS_MESSAGE],
       ["an integer beyond 2^53", '{"rows":[9007199254740993]}', UNSAFE_NUMBER_MESSAGE],
+      // Above the 512 KiB inline limit the update would travel as a transfer: refused alike (WP08 W7 14a2).
+      ["an identity key, above 512 KiB", `{"rows":[{"principalId":"p"}],"pad":"${pad}"}`, IDENTITY_KEYS_MESSAGE],
+      ["an integer beyond 2^53, above 512 KiB", `{"rows":[9007199254740993],"pad":"${pad}"}`, UNSAFE_NUMBER_MESSAGE],
     ])("(a)/R1 #6: typed JSON with %s is refused before any request", async (_name, json, message) => {
       const calls = stub(() => backend(jsonRead({ rows: [1] })));
       renderForm();
@@ -513,6 +517,7 @@ describe("ReportEditForm", () => {
       await userEvent.click(screen.getByRole("button", { name: "Save" }));
       expect(await screen.findByTestId("report-edit-notice")).toHaveTextContent(message);
       expect(updates(calls)).toEqual([]);
+      expect(calls.filter((call) => call.path.startsWith("/api/reports/transfers"))).toEqual([]);
     });
   });
 

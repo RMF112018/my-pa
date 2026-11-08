@@ -381,6 +381,12 @@ def test_brackets_inside_strings_do_not_count_toward_depth() -> None:
 
 #: An unterminated string of escaped quotes: the input that made the former
 #: regex scan quadratic (each failed string match retried at the next quote).
+#:
+#: Timing bounds (Reports Modernization WP08, measured 2026-11-08 on the
+#: developer Mac, best of 5, foreground): every bound below is >= 5x the measured
+#: time and far below the quadratic blowup, which scales from the regex scan's
+#: 4.35 s at 64 KiB as (size / 64 KiB)^2 -- about 278 s at 512 KiB and about
+#: 285,000 s (~79 h) at 16 MiB. The property each test pins is unchanged.
 def _redos_text(size: int) -> str:
     return '"' + '\\"' * (size // 2)
 
@@ -401,12 +407,14 @@ def _best_of_three(text: str) -> float:
 
 def test_the_pre_scan_handles_the_quadratic_input_of_a_small_size_quickly() -> None:
     # 64 KiB took 4.35 s with the regex scan; a linear pass takes milliseconds.
+    # Measured 0.0005 s; bound 0.25 s (500x headroom, 17x under the quadratic 4.35 s).
     assert _best_of_three(_redos_text(64 * 1024)) < 0.25
 
 
 def test_the_pre_scan_grows_linearly_with_the_text() -> None:
     # Linear doubles (2); quadratic quadruples (4) and far worse in practice.
-    # Large sizes and a threshold of 4 keep CI noise from failing it.
+    # Large sizes and a threshold of 4 keep CI noise from failing it. Measured
+    # 0.031 s (4 MiB) and 0.061 s (8 MiB): ratio 2.0 against the threshold 4.
     small = _best_of_three(_redos_text(4 * 1024 * 1024))
     large = _best_of_three(_redos_text(8 * 1024 * 1024))
     assert large / small < 4
@@ -420,6 +428,8 @@ def test_the_quadratic_input_is_refused_quickly_at_512_kib_and_16_mib(size: int)
         encoding.parse_json_text(
             text, max_depth=MAX_CONTENT_DATA_DEPTH, max_values=MAX_CONTENT_DATA_VALUES
         )
+    # Measured 0.0045 s (512 KiB) and 0.145 s (16 MiB); bound 2 s: >= 13x headroom,
+    # against a quadratic ~278 s (512 KiB) and ~285,000 s (16 MiB).
     assert time.perf_counter() - start < 2
     assert (caught.value.field, caught.value.code) == ("content.encoded", "malformed_json")
 
@@ -431,6 +441,8 @@ def test_the_quadratic_input_through_validate_content_at_16_mib_is_refused_quick
     value = _encoded("json", _b64(_gz(raw, level=0)))
     start = time.perf_counter()
     assert _refused(value) == ("content.encoded", "malformed_json")
+    # Measured 0.22 s (base64 decode, inflate, pre-scan); bound 5 s: 22x headroom,
+    # against a quadratic ~285,000 s at 16 MiB.
     assert time.perf_counter() - start < 5
 
 

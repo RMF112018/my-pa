@@ -40,7 +40,13 @@ objects and unreadable entries (`scan_report_preservation`). It takes no
 copy a hold references, a malformed seal or a wrong object count, an
 unreadable entry) are kept apart from orphans (preservation objects no hold
 seal references, e.g. left by a failed placement; informational, never
-deleted), which are printed in their own section.
+deleted), which are printed in their own section. **Stale temporaries**
+(WP08) -- the store's own `.decoded.tmp` / `.original.tmp` left in an object
+directory by a process killed mid-put -- are informational in the same way:
+counted as `stale_temporaries`, listed in their own section, never an
+unreadable entry or an integrity finding, and never removed (the runbook gives
+the manual procedure). `verify` reports them the same way (`stale_temporaries`,
+apart from `unreadable_entries`).
 
 **Backups do not include the preservation namespace.** `backup` and `restore`
 copy only the `content` objects `managed_blob` rows name (operator decision:
@@ -65,12 +71,17 @@ against the restored rows.
 **No path, body or digest is printed.** Exit codes:
 
 * `verify`, `backup`, `restore`: `0` on success, `1` on refusal (usage or
-  operational error), `2` when `verify` finds the plane inconsistent.
-* `preservation-verify`: `0` when there is no integrity finding (orphans may
-  be present and are reported); `2` on any integrity finding; `3` when
-  `--fail-on-orphans` is given, there is no integrity finding and at least
-  one orphan exists (an integrity finding takes precedence: `2`); `1` on
-  refusal (usage or operational error, e.g. no report content root).
+  operational error), `2` when `verify` finds the plane inconsistent (a
+  missing or mismatched part, an orphan, an unreadable entry or a stale
+  temporary).
+* `preservation-verify`: `0` when there is no integrity finding (orphans and
+  stale temporaries may be present and are reported); `2` on any integrity
+  finding; `3` when `--fail-on-orphans` is given, there is no integrity
+  finding and at least one orphan or stale temporary exists (an integrity
+  finding takes precedence: `2`); `1` on refusal (usage or operational error,
+  e.g. no report content root). Only when `preservation-verify` (or
+  `transfer-gc`) is the subcommand are argparse's usage errors (`2`) answered
+  `1`.
 """
 
 from __future__ import annotations
@@ -153,6 +164,7 @@ def _verify(args: argparse.Namespace) -> int:
     print(f"mismatched_parts {len(scan.mismatched)}")
     print(f"orphaned_objects {len(scan.orphans)}")
     print(f"unreadable_entries {len(scan.unreadable)}")
+    print(f"stale_temporaries {len(scan.stale_temporaries)}")
     for content_id, part in scan.missing:
         print(f"missing {content_id} {part.value}")
     for item in scan.mismatched:
@@ -182,6 +194,7 @@ def _preservation_verify(args: argparse.Namespace) -> int:
     print(f"unreadable_entries {len(scan.unreadable)}")
     print(f"integrity_findings {scan.integrity_findings}")
     print(f"orphans {len(scan.orphans)}")
+    print(f"stale_temporaries {len(scan.stale_temporaries)}")
     for object_id, part in scan.missing:
         print(f"missing {object_id} {part.value}")
     for item in scan.mismatched:
@@ -191,9 +204,15 @@ def _preservation_verify(args: argparse.Namespace) -> int:
         print("orphans_informational (referenced by no hold seal; never deleted)")
         for object_id in scan.orphans:
             print(f"orphan {object_id}")
+    if scan.stale_temporaries:
+        # Informational like orphans: a killed put's own temporaries, never removed.
+        print(
+            "stale_temporaries_informational "
+            f"{len(scan.stale_temporaries)} (left by a killed put; never deleted)"
+        )
     if not scan.intact:
         return EXIT_INCONSISTENT
-    if scan.orphans and args.fail_on_orphans:
+    if (scan.orphans or scan.stale_temporaries) and args.fail_on_orphans:
         return EXIT_ORPHANS
     return EXIT_OK
 
@@ -286,14 +305,18 @@ def build_parser() -> argparse.ArgumentParser:
         "preservation-verify",
         help=(
             "re-verify every legal hold's sealed preservation copy and find orphans; "
-            "exit 0 with no integrity finding (orphans are reported), 2 on any "
-            "integrity finding, 3 with --fail-on-orphans and only orphans, 1 on refusal"
+            "exit 0 with no integrity finding (orphans and stale temporaries are "
+            "reported), 2 on any integrity finding, 3 with --fail-on-orphans and "
+            "only orphans or stale temporaries, 1 on refusal"
         ),
     )
     preservation.add_argument(
         "--fail-on-orphans",
         action="store_true",
-        help="exit 3 when orphans exist and there is no integrity finding (which exits 2)",
+        help=(
+            "exit 3 when orphans or stale temporaries exist and there is no "
+            "integrity finding (which exits 2)"
+        ),
     )
     preservation.set_defaults(handler=_preservation_verify)
     transfer = subcommands.add_parser(
@@ -327,6 +350,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+#: The subcommands whose argparse usage errors are answered `EXIT_REFUSED`.
+_REFUSING_USAGE_SUBCOMMANDS = frozenset({"preservation-verify", "transfer-gc"})
+
+
+def _subcommand(arguments: list[str]) -> str | None:
+    """The subcommand argparse selects: the first argument not an option."""
+    return next((argument for argument in arguments if not argument.startswith("-")), None)
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
     try:
@@ -334,8 +366,10 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit as stop:
         # argparse exits 2 on a usage error; for `preservation-verify` 2 means an
         # integrity finding, so its usage errors are refusals (1). The other
-        # subcommands keep argparse's behaviour.
-        if stop.code == 2 and ("preservation-verify" in arguments or "transfer-gc" in arguments):
+        # subcommands keep argparse's behaviour. The subcommand is the first
+        # positional argument (the top-level parser has no other), never a
+        # value elsewhere in argv (WP08, WP05b corrective n3).
+        if stop.code == 2 and _subcommand(arguments) in _REFUSING_USAGE_SUBCOMMANDS:
             return EXIT_REFUSED
         raise
     try:

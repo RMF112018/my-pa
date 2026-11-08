@@ -34,8 +34,14 @@ The scan keeps two kinds of result apart (finding 2). **Integrity findings**
 unreadable store entry -- mean a copy is damaged (`intact` is false).
 **Orphans** are informational: a placement that failed after some puts
 leaves its objects behind by design (the store has no delete), so they are
-reported apart and do not make the copy damaged. `consistent` is the fully
-clean case: intact AND no orphan.
+reported apart and do not make the copy damaged. **Stale temporaries**
+(Reports Modernization WP08) are informational too: the store's own
+`.decoded.tmp` / `.original.tmp` left in an object directory by a process
+killed mid-put (`ReportContentStore.stale_temporaries`). They are not
+unreadable entries and not integrity findings; a referenced copy whose final
+part is absent or unverifiable beside one is still a missing or mismatched
+part. Nothing removes them. `consistent` is the fully clean case: intact, no
+orphan and no stale temporary.
 
 Nothing here returns a body, a path or a digest value.
 """
@@ -188,6 +194,8 @@ class ReportPreservationScan:
     orphans: tuple[str, ...]
     #: Store entries that are not well-formed objects, relative to its root.
     unreadable: tuple[str, ...]
+    #: The store's own put temporaries a killed process left (informational).
+    stale_temporaries: tuple[str, ...] = ()
 
     @property
     def integrity_findings(self) -> int:
@@ -201,8 +209,8 @@ class ReportPreservationScan:
 
     @property
     def consistent(self) -> bool:
-        """Fully clean: intact and no orphan."""
-        return self.intact and not self.orphans
+        """Fully clean: intact, no orphan and no stale temporary."""
+        return self.intact and not self.orphans and not self.stale_temporaries
 
 
 def scan_report_preservation(
@@ -236,4 +244,5 @@ def scan_report_preservation(
         ),
         orphans=tuple(sorted(set(store.stored_object_ids()) - known)),
         unreadable=store.unreadable_entries(),
+        stale_temporaries=store.stale_temporaries(),
     )

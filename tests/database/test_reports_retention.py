@@ -513,3 +513,119 @@ def test_preservation_verify_exit_codes_keep_orphans_apart_from_integrity_findin
     monkeypatch.setenv("MY_PA_REPORT_CONTENT_ROOT", "")
     code, _out = run("--fail-on-orphans")
     assert code == 1
+
+
+def test_preservation_verify_exits_2_on_an_integrity_finding_with_no_orphan(
+    migrated_engine: Engine,
+    stores: Stores,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # WP08 (WP05b corrective n1): the integrity finding alone decides exit 2.
+    engine = migrated_engine
+    placed = _hold(
+        engine, HoldOperation.PLACE, _publish(engine, key="a"), "h-a", 0, store=stores.preservation
+    )
+    monkeypatch.setenv("MY_PA_REPORT_CONTENT_ROOT", str(stores.root))
+    seal = stores.part_path(placed.preservation.seal_object_id, ReportContentPart.DECODED)
+    (listed,) = {p.preservation_object_id for p in preservation_seal_parts(seal.read_bytes())}
+    path = stores.part_path(listed, ReportContentPart.DECODED)
+    kept = path.read_bytes()
+    path.chmod(0o600)
+    path.write_bytes(kept[:-1] + b"Z")
+    for flags in ((), ("--fail-on-orphans",)):
+        code = report_content_cli.main(["preservation-verify", *flags])
+        out = capsys.readouterr().out
+        assert code == report_content_cli.EXIT_INCONSISTENT == 2
+        assert "integrity_findings 1" in out and "orphans 0" in out
+        assert "orphaned_objects 0" in out and "stale_temporaries 0" in out
+        assert "orphans_informational" not in out
+        assert f"mismatch {listed} decoded digest" in out
+        assert str(stores.root) not in out
+
+
+def test_a_killed_placements_stale_temporaries_are_informational_and_kept(
+    migrated_engine: Engine,
+    stores: Stores,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # WP08 (WP05b corrective n2): `.decoded.tmp` / `.original.tmp` left by a
+    # put killed mid-write are not integrity findings; nothing is removed.
+    engine = migrated_engine
+    placed = _hold(
+        engine, HoldOperation.PLACE, _publish(engine, key="a"), "h-a", 0, store=stores.preservation
+    )
+    monkeypatch.setenv("MY_PA_REPORT_CONTENT_ROOT", str(stores.root))
+
+    def run(*flags: str) -> tuple[int, str]:
+        code = report_content_cli.main(["preservation-verify", *flags])
+        out = capsys.readouterr().out
+        assert str(stores.root) not in out
+        return code, out
+
+    # A placement killed while writing its first object's `.decoded.tmp`: the
+    # object directory holds only the temporary, and no hold row names it.
+    killed = issue_identifier(IdKind.REPORT_PRESERVATION_OBJECT)
+    stores.preservation.put(killed, decoded=b"a killed placement's object", original=None)
+    final = stores.part_path(killed, ReportContentPart.DECODED)
+    temporary = final.with_name(".decoded.tmp")
+    final.rename(temporary)
+    # A stray `.original.tmp` beside a verified referenced object's final
+    # `decoded` (the state a put killed after its first part leaves) is stale too.
+    seal = stores.part_path(placed.preservation.seal_object_id, ReportContentPart.DECODED)
+    (listed,) = {p.preservation_object_id for p in preservation_seal_parts(seal.read_bytes())}
+    beside = stores.part_path(listed, ReportContentPart.DECODED).with_name(".original.tmp")
+    beside.write_bytes(b"partial")
+
+    with engine.connect() as connection:
+        scan = scan_report_preservation(SqlGeneralReportRepository(connection), stores.preservation)
+    assert scan.intact and not scan.consistent
+    assert scan.unreadable == () and scan.integrity_findings == 0
+    assert len(scan.stale_temporaries) == 2
+    assert scan.orphans == (killed,)
+
+    code, out = run()
+    assert code == report_content_cli.EXIT_OK == 0
+    assert "integrity_findings 0" in out and "unreadable_entries 0" in out
+    assert "stale_temporaries 2" in out and "stale_temporaries_informational 2" in out
+    code, _out = run("--fail-on-orphans")
+    assert code == report_content_cli.EXIT_ORPHANS == 3
+    assert temporary.exists() and beside.exists()
+
+    # A referenced object whose final part is absent beside its own temporary
+    # is still a missing part: 2, whatever the flag.
+    listed_final = stores.part_path(listed, ReportContentPart.DECODED)
+    listed_final.chmod(0o600)
+    listed_final.rename(listed_final.with_name(".decoded.tmp"))
+    for flags in ((), ("--fail-on-orphans",)):
+        code, out = run(*flags)
+        assert code == report_content_cli.EXIT_INCONSISTENT == 2
+        assert f"missing {listed} decoded" in out and "unreadable_entries 0" in out
+        assert "stale_temporaries 3" in out
+    assert temporary.exists() and beside.exists()
+    assert listed_final.with_name(".decoded.tmp").exists()
+
+
+def test_stale_temporaries_alone_exit_3_only_with_fail_on_orphans(
+    migrated_engine: Engine,
+    stores: Stores,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    engine = migrated_engine
+    placed = _hold(
+        engine, HoldOperation.PLACE, _publish(engine, key="a"), "h-a", 0, store=stores.preservation
+    )
+    monkeypatch.setenv("MY_PA_REPORT_CONTENT_ROOT", str(stores.root))
+    seal = stores.part_path(placed.preservation.seal_object_id, ReportContentPart.DECODED)
+    (listed,) = {p.preservation_object_id for p in preservation_seal_parts(seal.read_bytes())}
+    stores.part_path(listed, ReportContentPart.DECODED).with_name(".original.tmp").write_bytes(
+        b"partial"
+    )
+    assert report_content_cli.main(["preservation-verify"]) == 0
+    out = capsys.readouterr().out
+    assert "orphans 0" in out and "stale_temporaries 1" in out
+    assert "orphans_informational" not in out
+    assert report_content_cli.main(["preservation-verify", "--fail-on-orphans"]) == 3
+    capsys.readouterr()

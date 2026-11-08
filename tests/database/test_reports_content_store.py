@@ -617,6 +617,34 @@ def test_the_scan_reports_every_kind_of_damage(migrated_engine: Engine, tmp_path
     assert not scan.consistent
 
 
+def test_the_live_scan_reports_stale_temporaries_apart_from_unreadable_entries(
+    migrated_engine: Engine,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # WP08 (WP05b corrective n2): the same classification as preservation-verify;
+    # `verify` treats a stale temporary like an orphan (not clean, exit 2).
+    store = _store(tmp_path)
+    principal = operator()
+    published = _publish(
+        _service(migrated_engine, store), principal, _gzip(_text(2000).encode()), "stale"
+    )
+    content_id = published["content"]["content_id"]
+    leftover = _object_dir(store, content_id) / ".original.tmp"
+    leftover.write_bytes(b"partial")
+    scan = _scan(migrated_engine, store, principal)
+    assert scan.missing == () and scan.mismatched == () and scan.orphans == ()
+    assert scan.unreadable == ()
+    assert len(scan.stale_temporaries) == 1 and not scan.consistent
+    monkeypatch.setenv("MY_PA_REPORT_CONTENT_ROOT", str(store.root))
+    assert report_content_cli.main(["verify", "--principal", principal.principal_id]) == 2
+    out = capsys.readouterr().out
+    assert "unreadable_entries 0" in out and "stale_temporaries 1" in out
+    assert str(tmp_path) not in out
+    assert leftover.exists()
+
+
 def test_reads_and_the_scan_are_principal_scoped(migrated_engine: Engine, tmp_path: Path) -> None:
     store = _store(tmp_path)
     service = _service(migrated_engine, store)

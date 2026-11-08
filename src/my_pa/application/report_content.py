@@ -12,7 +12,9 @@ damaged afterwards. These operations find both, mirroring
   parts against the store (size and SHA-256 of the decoded part, and of the
   original for a `gzip+base64` upload), and, across Principals, every stored
   object against the set of known `managed_blob` content ids (orphans), plus
-  the store's own unreadable entries. It reports and never repairs, deletes or
+  the store's own unreadable entries and, apart from them, its stale put
+  temporaries (`.decoded.tmp` / `.original.tmp` a killed process left; WP08;
+  informational, not unreadable, never removed). It reports and never repairs, deletes or
   reclaims anything: an orphan may be an object whose transaction has not
   committed yet, and destroying bytes is the operator's act (`AGENTS.md` 8.2).
 * `back_up_report_content` copies one Principal's objects, each part read
@@ -77,10 +79,19 @@ class ReportContentScan:
     orphans: tuple[str, ...]
     #: Store entries that are not well-formed objects, relative to its root.
     unreadable: tuple[str, ...]
+    #: The store's own put temporaries a killed process left (WP08): reported
+    #: apart from `unreadable`, and, like an orphan, not fully clean.
+    stale_temporaries: tuple[str, ...] = ()
 
     @property
     def consistent(self) -> bool:
-        return not (self.missing or self.mismatched or self.orphans or self.unreadable)
+        return not (
+            self.missing
+            or self.mismatched
+            or self.orphans
+            or self.unreadable
+            or self.stale_temporaries
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +152,7 @@ def scan_report_content(
         mismatched=tuple(sorted(mismatched, key=lambda item: (item.content_id, item.part))),
         orphans=orphans,
         unreadable=store.unreadable_entries(),
+        stale_temporaries=store.stale_temporaries(),
     )
 
 

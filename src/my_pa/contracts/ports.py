@@ -8428,6 +8428,15 @@ class ReportContentStore(ABC):
     def unreadable_entries(self) -> tuple[str, ...]:
         """Store entries that are not well-formed objects or parts, for the operator."""
 
+    def stale_temporaries(self) -> tuple[str, ...]:
+        """The store's own `put` temporaries left by a process killed mid-put, sorted.
+
+        Informational (Reports Modernization WP08, WP05b corrective n2): never an
+        unreadable entry, never removed by the store. A store that writes no
+        temporaries has none, which is this default.
+        """
+        return ()
+
 
 class ReportTransferStagingError(PortError):
     """A transfer staging operation could not be performed (WP06 T13).

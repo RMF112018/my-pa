@@ -134,6 +134,13 @@ def _temporary(part: ReportContentPart) -> str:
     return f".{part.value}.tmp"
 
 
+#: Exactly the temporary names `_write_part` creates, keyed by name; matched by
+#: whole-name equality (anchored), so `x.decoded.tmp` or `.decoded.tmp~` is not one.
+_TEMPORARY_PARTS: Final[Mapping[str, ReportContentPart]] = {
+    _temporary(part): part for part in ReportContentPart
+}
+
+
 class FilesystemReportContentStore(ReportContentStore):
     """Report content objects of one namespace, under one designated root."""
 
@@ -552,7 +559,7 @@ class FilesystemReportContentStore(ReportContentStore):
         then reported missing or mismatched by the scan, an object no row names
         an orphan); its malformed entries are `unreadable_entries`.
         """
-        return tuple(sorted(name for name, _problems in self._scan() if name is not None))
+        return tuple(sorted(name for name, _problems, _stale in self._scan() if name is not None))
 
     def unreadable_entries(self) -> tuple[str, ...]:
         """Entries that are not well-formed objects or parts, relative to the root.
@@ -560,7 +567,23 @@ class FilesystemReportContentStore(ReportContentStore):
         Operational information for the operator who configured the root;
         never returned to a request.
         """
-        return tuple(sorted(problem for _name, problems in self._scan() for problem in problems))
+        return tuple(
+            sorted(problem for _name, problems, _stale in self._scan() for problem in problems)
+        )
+
+    def stale_temporaries(self) -> tuple[str, ...]:
+        """This store's own `put` temporaries a killed process left, relative to the root.
+
+        Reports Modernization WP08 (WP05b corrective n2). A `put` killed by a
+        signal (not an exception, which `_remove_partial` cleans up) can leave
+        `.decoded.tmp` / `.original.tmp` in its object directory. Exactly those
+        names, as regular files inside a well-formed object directory, are
+        reported here and NOT as unreadable entries; anything else unrecognised
+        stays unreadable. Nothing is removed: the operator moves one aside by
+        hand (see the runbook). Whether a referenced object's final parts are
+        intact is decided by `verify`, never by this classification.
+        """
+        return tuple(sorted(item for _name, _problems, stale in self._scan() for item in stale))
 
     def _admitted(self, shard: str, name: str) -> bool:
         try:
@@ -569,8 +592,8 @@ class FilesystemReportContentStore(ReportContentStore):
             return False
         return derived_shard == shard
 
-    def _scan(self) -> Iterator[tuple[str | None, tuple[str, ...]]]:
-        """Walk the namespace tree: `(object id or None, unreadable relative names)`.
+    def _scan(self) -> Iterator[tuple[str | None, tuple[str, ...], tuple[str, ...]]]:
+        """Walk the tree: `(object id or None, unreadable names, stale temporaries)`.
 
         Never follows a link (`follow_symlinks=False` throughout). An object
         directory whose parts are malformed is still yielded with its id, and
@@ -580,48 +603,90 @@ class FilesystemReportContentStore(ReportContentStore):
         try:
             if base.is_symlink() or not base.is_dir():
                 if base.exists() or base.is_symlink():
-                    yield None, (self._namespace.value,)
+                    yield None, (self._namespace.value,), ()
                 return
             shards = sorted(os.scandir(base), key=lambda entry: entry.name)
         except OSError:
-            yield None, (self._namespace.value,)
+            yield None, (self._namespace.value,), ()
             return
         for shard in shards:
             relative = f"{self._namespace.value}/{shard.name}"
             if not shard.is_dir(follow_symlinks=False) or len(shard.name) != _SHARD:
-                yield None, (relative,)
+                yield None, (relative,), ()
                 continue
             try:
                 objects = sorted(os.scandir(shard.path), key=lambda entry: entry.name)
             except OSError:
-                yield None, (relative,)
+                yield None, (relative,), ()
                 continue
             for item in objects:
                 item_relative = f"{relative}/{item.name}"
                 if not item.is_dir(follow_symlinks=False) or not self._admitted(
                     shard.name, item.name
                 ):
-                    yield None, (item_relative,)
+                    yield None, (item_relative,), ()
                     continue
-                yield item.name, tuple(self._object_problems(item.path, item_relative))
+                problems, stale = self._object_problems(item.path, item_relative)
+                yield item.name, problems, stale
 
-    def _object_problems(self, path: str, relative: str) -> Iterator[str]:
+    def _object_problems(self, path: str, relative: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """One object directory's `(unreadable entries, stale temporaries)`.
+
+        A stale temporary is a regular file named exactly as `_write_part`
+        names one. Its presence also explains the two states a killed `put`
+        leaves around it, which are then not unreadable: a final part not yet
+        linked (the temporary exists, the part does not), and a final part
+        linked but its temporary not yet unlinked (the same inode, two links).
+        `read`/`verify` still refuse both, so a referenced object in either
+        state remains an integrity finding of the scan that verifies it.
+        """
         try:
             entries = {entry.name: entry for entry in os.scandir(path)}
         except OSError:
-            yield relative
-            return
-        if ReportContentPart.DECODED.value not in entries:
-            yield f"{relative}/{ReportContentPart.DECODED.value}"
-        for entry_name, entry in sorted(entries.items()):
-            entry_relative = f"{relative}/{entry_name}"
-            if entry_name not in _PART_NAMES:
-                yield entry_relative
+            return (relative,), ()
+        problems: list[str] = []
+        stale: list[str] = []
+        temporaries: dict[ReportContentPart, os.stat_result] = {}
+        for entry_name, part in _TEMPORARY_PARTS.items():
+            entry = entries.get(entry_name)
+            if entry is None:
                 continue
             try:
                 status = entry.stat(follow_symlinks=False)
             except OSError:
-                yield entry_relative
                 continue
-            if not S_ISREG(status.st_mode) or status.st_nlink > 1:
-                yield entry_relative
+            if S_ISREG(status.st_mode):
+                temporaries[part] = status
+                stale.append(f"{relative}/{entry_name}")
+        if (
+            ReportContentPart.DECODED.value not in entries
+            and ReportContentPart.DECODED not in temporaries
+        ):
+            problems.append(f"{relative}/{ReportContentPart.DECODED.value}")
+        for entry_name, entry in sorted(entries.items()):
+            entry_relative = f"{relative}/{entry_name}"
+            if entry_name in _TEMPORARY_PARTS:
+                if _TEMPORARY_PARTS[entry_name] not in temporaries:
+                    problems.append(entry_relative)
+                continue
+            if entry_name not in _PART_NAMES:
+                problems.append(entry_relative)
+                continue
+            try:
+                status = entry.stat(follow_symlinks=False)
+            except OSError:
+                problems.append(entry_relative)
+                continue
+            if not S_ISREG(status.st_mode):
+                problems.append(entry_relative)
+                continue
+            if status.st_nlink > 1:
+                temporary = temporaries.get(ReportContentPart(entry_name))
+                linked_to_its_temporary = (
+                    status.st_nlink == 2
+                    and temporary is not None
+                    and (temporary.st_dev, temporary.st_ino) == (status.st_dev, status.st_ino)
+                )
+                if not linked_to_its_temporary:
+                    problems.append(entry_relative)
+        return tuple(problems), tuple(sorted(stale))

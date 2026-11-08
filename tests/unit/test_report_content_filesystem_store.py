@@ -317,7 +317,9 @@ def test_unreadable_entries_name_every_malformed_entry(tmp_path: Path) -> None:
     while wrong_shard.split("_", 1)[1][:2] == shard.name:
         wrong_shard = issue_identifier(IdKind.REPORT_CONTENT)
     (shard / wrong_shard).mkdir()
-    (_object_dir(store, good) / ".decoded.tmp").write_bytes(b"leftover")
+    # Near-misses of the store's own temporary names stay unreadable (WP08 n2).
+    for near_miss in ("x.decoded.tmp", ".decoded.tmp~", ".DECODED.tmp", ".decoded.tmp.1"):
+        (_object_dir(store, good) / near_miss).write_bytes(b"leftover")
     no_decoded = issue_identifier(IdKind.REPORT_CONTENT)
     store.put(no_decoded, decoded=DECODED, original=None)
     (_object_dir(store, no_decoded) / "decoded").unlink()
@@ -326,11 +328,94 @@ def test_unreadable_entries_name_every_malformed_entry(tmp_path: Path) -> None:
     assert "content/zzz" in unreadable
     assert f"content/{shard.name}/not-an-id" in unreadable
     assert f"content/{shard.name}/{wrong_shard}" in unreadable
-    assert f"{_object_dir(store, good).relative_to(store.root)}/.decoded.tmp" in unreadable
+    for near_miss in ("x.decoded.tmp", ".decoded.tmp~", ".DECODED.tmp", ".decoded.tmp.1"):
+        assert f"{_object_dir(store, good).relative_to(store.root)}/{near_miss}" in unreadable
+    assert store.stale_temporaries() == ()
     assert f"{_object_dir(store, no_decoded).relative_to(store.root)}/decoded" in unreadable
     assert store.stored_object_ids() == tuple(sorted((good, no_decoded)))
     for entry in unreadable:
         assert not entry.startswith("/")
+
+
+def _relative(store: FilesystemReportContentStore, object_id: str, name: str) -> str:
+    return f"{_object_dir(store, object_id).relative_to(store.root)}/{name}"
+
+
+def test_a_killed_puts_own_temporaries_are_stale_not_unreadable(tmp_path: Path) -> None:
+    # WP08 (WP05b corrective n2): the three states a put killed by a signal
+    # leaves. Nothing is removed, and the final parts still verify or refuse
+    # exactly as before.
+    store = _store(tmp_path)
+    # 1. Killed while writing `.original.tmp`: `decoded` is final.
+    original_tmp = issue_identifier(IdKind.REPORT_CONTENT)
+    store.put(original_tmp, decoded=DECODED, original=None)
+    (_object_dir(store, original_tmp) / ".original.tmp").write_bytes(ORIGINAL[:3])
+    # 2. Killed while writing `.decoded.tmp`: no final part yet.
+    decoded_tmp = issue_identifier(IdKind.REPORT_CONTENT)
+    store.put(decoded_tmp, decoded=DECODED, original=None)
+    folder = _object_dir(store, decoded_tmp)
+    (folder / "decoded").rename(folder / ".decoded.tmp")
+    # 3. Killed between `link` and `unlink`: the part and its temporary share an inode.
+    linked_tmp = issue_identifier(IdKind.REPORT_CONTENT)
+    store.put(linked_tmp, decoded=DECODED, original=None)
+    os.link(
+        _object_dir(store, linked_tmp) / "decoded", _object_dir(store, linked_tmp) / ".decoded.tmp"
+    )
+    assert store.unreadable_entries() == ()
+    assert store.stale_temporaries() == tuple(
+        sorted(
+            (
+                _relative(store, original_tmp, ".original.tmp"),
+                _relative(store, decoded_tmp, ".decoded.tmp"),
+                _relative(store, linked_tmp, ".decoded.tmp"),
+            )
+        )
+    )
+    assert store.stored_object_ids() == tuple(sorted((original_tmp, decoded_tmp, linked_tmp)))
+    assert _read(store, original_tmp, ReportContentPart.DECODED) == DECODED
+    # A final part a temporary stands beside is still refused by read/verify.
+    with pytest.raises(ReportContentMissingError):
+        _read(store, decoded_tmp, ReportContentPart.DECODED)
+    with pytest.raises(ReportContentMissingError):
+        _read(store, linked_tmp, ReportContentPart.DECODED)
+    # Nothing was removed by the scan.
+    assert (_object_dir(store, original_tmp) / ".original.tmp").exists()
+    assert (folder / ".decoded.tmp").exists()
+
+
+def test_only_a_regular_file_of_the_exact_name_is_a_stale_temporary(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(DECODED)
+    symlinked = issue_identifier(IdKind.REPORT_CONTENT)
+    store.put(symlinked, decoded=DECODED, original=None)
+    (_object_dir(store, symlinked) / ".original.tmp").symlink_to(outside)
+    directory = issue_identifier(IdKind.REPORT_CONTENT)
+    store.put(directory, decoded=DECODED, original=None)
+    (_object_dir(store, directory) / ".decoded.tmp").mkdir()
+    # A second name of a part that is NOT its own temporary stays unreadable.
+    foreign_link = issue_identifier(IdKind.REPORT_CONTENT)
+    store.put(foreign_link, decoded=DECODED, original=None)
+    (_object_dir(store, foreign_link) / ".decoded.tmp").write_bytes(b"other")
+    os.link(_object_dir(store, foreign_link) / "decoded", tmp_path / "second-name")
+    # A missing `decoded` beside only `.original.tmp` stays unreadable.
+    wrong_sibling = issue_identifier(IdKind.REPORT_CONTENT)
+    store.put(wrong_sibling, decoded=DECODED, original=None)
+    folder = _object_dir(store, wrong_sibling)
+    (folder / "decoded").rename(folder / ".original.tmp")
+    unreadable = store.unreadable_entries()
+    assert _relative(store, symlinked, ".original.tmp") in unreadable
+    assert _relative(store, directory, ".decoded.tmp") in unreadable
+    assert _relative(store, foreign_link, "decoded") in unreadable
+    assert _relative(store, wrong_sibling, "decoded") in unreadable
+    assert store.stale_temporaries() == tuple(
+        sorted(
+            (
+                _relative(store, foreign_link, ".decoded.tmp"),
+                _relative(store, wrong_sibling, ".original.tmp"),
+            )
+        )
+    )
 
 
 def test_a_put_fsyncs_every_parent_whose_directory_it_created(

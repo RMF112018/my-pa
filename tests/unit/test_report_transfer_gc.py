@@ -204,3 +204,31 @@ def test_the_limit_is_validated(rig: Rig, limit: object) -> None:
 )
 def test_the_operator_command_refuses_usage_errors_with_exit_1(arguments: list[str]) -> None:
     assert report_content_cli.main(arguments) == report_content_cli.EXIT_REFUSED
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["preservation-verify", "--unknown"],
+        ["--unknown", "preservation-verify"],
+    ],
+)
+def test_preservation_verify_usage_errors_are_refusals(arguments: list[str]) -> None:
+    assert report_content_cli.main(arguments) == report_content_cli.EXIT_REFUSED
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        # WP08 (WP05b corrective n3): the literal name as a value or a stray
+        # argument of another subcommand does not select the remap.
+        ["verify", "--unknown", "preservation-verify"],
+        ["verify", "--principal", "preservation-verify", "--unknown"],
+        ["backup", "--principal", "prn_x", "--destination", "transfer-gc", "--unknown"],
+        ["no-such-command", "preservation-verify"],
+    ],
+)
+def test_other_subcommands_keep_argparses_usage_exit_2(arguments: list[str]) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        report_content_cli.main(arguments)
+    assert stopped.value.code == 2

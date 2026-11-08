@@ -7436,12 +7436,32 @@ def _catalog_page_size_ok(value: object) -> bool:
     return True
 
 
+#: RFC 3339 §5.6 `date-time`, exactly: extended `YYYY-MM-DD`, `T`/`t`, `HH:MM:SS`,
+#: at most six fractional digits (a datetime holds microseconds; more digits are
+#: refused, never truncated), then `Z`/`z` or a `±HH:MM` offset. Field ranges
+#: (month 13, day 31 in a 30-day month, hour 24, a `:60` leap second, which a
+#: datetime cannot hold) are refused by the parse after this shape check.
+_RFC3339_DATE_TIME: Final[re.Pattern[str]] = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?"
+    r"(?:[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])"
+)
+
+
 def _catalog_moment(value: object, detail: SafeDetail) -> datetime:
-    """An RFC 3339 timestamp with an offset, or `invalid_request` on `detail`."""
+    """An RFC 3339 `date-time`, or `invalid_request` on `detail` (WP08 C-WP04 #2).
+
+    Strict for the Reports catalog filters only: the ISO-8601 forms RFC 3339
+    excludes (basic format, week or ordinal dates, reduced precision such as
+    hour-only, `±HH` or `±HHMM` offsets, no offset) are refused, and lower-case
+    `t`/`z` are accepted. The repository-wide `_aware_instant` is unchanged.
+    """
     moment: datetime | None = None
-    if isinstance(value, str) and "T" in value.upper():
+    if isinstance(value, str) and _RFC3339_DATE_TIME.fullmatch(value):
+        text = value[:10] + "T" + value[11:]
+        if text[-1] in "Zz":
+            text = text[:-1] + "+00:00"
         try:
-            moment = datetime.fromisoformat(value)
+            moment = datetime.fromisoformat(text)
         except ValueError:
             moment = None
     if moment is None or moment.tzinfo is None or moment.tzinfo.utcoffset(moment) is None:

@@ -13,12 +13,13 @@ from __future__ import annotations
 import base64
 import json
 from dataclasses import replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any, Final
 
 import pytest
 
 from my_pa.adapters.normalization import normalize
+from my_pa.application.commands import _catalog_moment
 from my_pa.application.errors import ApplicationError, InvalidRequestError, SafeDetail
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.errors import ErrorCode
@@ -467,6 +468,89 @@ def test_a_bad_catalog_field_names_itself(
     ):
         refusal = _refused(capability, {**query, "plane": plane, **payload})
         assert refusal.safe_details == details, capability
+
+
+#: WP08 C-WP04 #2: the RFC 3339 `date-time` forms the catalog timestamps accept.
+_RFC3339_ACCEPTED: Final[tuple[tuple[str, datetime], ...]] = (
+    ("2026-08-01T00:00:00Z", datetime(2026, 8, 1, tzinfo=UTC)),
+    ("2026-08-01t00:00:00z", datetime(2026, 8, 1, tzinfo=UTC)),
+    ("2026-08-01T00:00:00+00:00", datetime(2026, 8, 1, tzinfo=UTC)),
+    ("2026-08-01T00:00:00-00:00", datetime(2026, 8, 1, tzinfo=UTC)),
+    (
+        "2026-08-01T09:30:15+05:30",
+        datetime(2026, 8, 1, 9, 30, 15, tzinfo=timezone(timedelta(hours=5, minutes=30))),
+    ),
+    ("2026-08-01T00:00:00-23:59", datetime(2026, 8, 1, 23, 59, tzinfo=UTC)),
+    ("2026-08-01T00:00:00.5Z", datetime(2026, 8, 1, 0, 0, 0, 500000, tzinfo=UTC)),
+    ("2026-08-01T00:00:00.123456Z", datetime(2026, 8, 1, 0, 0, 0, 123456, tzinfo=UTC)),
+    ("2024-02-29T23:59:59Z", datetime(2024, 2, 29, 23, 59, 59, tzinfo=UTC)),
+)
+
+#: ISO-8601 forms RFC 3339 does not admit, and malformed date-times: all refused.
+_RFC3339_REFUSED: Final[tuple[object, ...]] = (
+    "20260801T000000Z",  # basic format
+    "2026-W31-6T00:00:00+00:00",  # week date
+    "2026-213T00:00:00Z",  # ordinal date
+    "2026-08-01T00Z",  # hour only
+    "2026-08-01T00:00Z",  # no seconds
+    "2026-08-01T00:00:00+05",  # ±HH offset
+    "2026-08-01T00:00:00+0530",  # ±HHMM offset
+    "2026-08-01T00:00:00",  # no offset
+    "2026-08-01 00:00:00Z",  # space separator
+    "2026-08-01T00:00:00.1234567Z",  # beyond microseconds: refused, not truncated
+    "2026-08-01T00:00:00.Z",  # empty fraction
+    "2026-08-01T00:00:00,5Z",  # comma fraction
+    "2026-08-01T24:00:00Z",  # hour 24
+    "2026-08-01T23:59:60Z",  # leap second: a datetime cannot hold it
+    "2026-13-01T00:00:00Z",  # month 13
+    "2026-02-30T00:00:00Z",  # no such day
+    "2026-08-01T00:00:00+24:00",  # offset hour out of range
+    "2026-08-01T00:00:00+05:60",  # offset minute out of range
+    "2026-08-01T00:00:00Z\n",  # trailing newline
+    " 2026-08-01T00:00:00Z",  # leading space
+    "2026-08-01T00:00:00ZZ",
+    "+02026-08-01T00:00:00Z",  # expanded year
+    "\uff12\uff10\uff12\uff16-08-01T00:00:00Z",  # fullwidth (non-ASCII) digits
+    "2026-08-01",
+    "",
+    5,
+)
+
+
+@pytest.mark.parametrize(("text", "expected"), _RFC3339_ACCEPTED)
+def test_catalog_timestamps_accept_exactly_rfc3339_date_time(text: str, expected: datetime) -> None:
+    assert _catalog_moment(text, SafeDetail.CREATED_FROM) == expected
+    for field in ("created_from", "created_to"):
+        for capability, query in (
+            (Capability.REPORTS_LIST, {}),
+            (Capability.REPORTS_SEARCH, {"query": "curlew"}),
+        ):
+            normalize(
+                capability.value,
+                {
+                    "request_id": "req",
+                    "purpose": "report_read",
+                    "principal_id": "prn_aaaa0001aaaa0001aaaa0001",
+                    "requested_at": "2026-11-05T12:00:00Z",
+                    "payload": {**query, "plane": "standalone", field: text},
+                },
+            )
+
+
+@pytest.mark.parametrize("text", _RFC3339_REFUSED, ids=repr)
+@pytest.mark.parametrize(
+    ("field", "detail"),
+    [("created_from", SafeDetail.CREATED_FROM), ("created_to", SafeDetail.CREATED_TO)],
+)
+def test_catalog_timestamps_refuse_every_other_iso8601_form(
+    text: object, field: str, detail: SafeDetail
+) -> None:
+    for capability, query in (
+        (Capability.REPORTS_LIST, {}),
+        (Capability.REPORTS_SEARCH, {"query": "curlew"}),
+    ):
+        refusal = _refused(capability, {**query, "plane": "standalone", field: text})
+        assert refusal.safe_details == (detail,), capability
 
 
 def test_closed_vocabularies_are_listed_and_the_association_object_is_closed() -> None:

@@ -575,9 +575,10 @@ def test_the_capability_manifest_and_web_fixtures_agree_for_lineage(runtime: S31
     assert set(committed) == set(rows)
     for name in _LINEAGE_PLANE:
         assert committed[name]["operator_only"] is rows[name]["operator_only"], name
-    # `gateway.json` keeps its 110 entries; no lineage write is a web route.
+    # `gateway.json` kept its 110 entries here; no lineage write is a web route.
+    # Reports Modernization WP07 then admitted eleven standalone `reports.*` (121).
     gateway = json.loads((_WEB / "contracts" / "gateway.json").read_text(encoding="utf-8"))
-    assert len(gateway["capabilities"]) == 110
+    assert len(gateway["capabilities"]) == 121
     # The lineage decoders' closed sets equal the server vocabulary.
     decoder = (_WEB / "lib" / "api" / "decode" / "capabilities" / "records.lineage.ts").read_text(
         encoding="utf-8"

@@ -59,6 +59,17 @@ import { decodeReportsRead } from "./capabilities/reports.read";
 import { decodeReportsLatest } from "./capabilities/reports.latest";
 import { decodeReportsList } from "./capabilities/reports.list";
 import { decodeReportsSearch } from "./capabilities/reports.search";
+import { decodeReportsPublish } from "./capabilities/reports.publish";
+import { decodeReportsUpdate } from "./capabilities/reports.update";
+import { decodeReportsHistory } from "./capabilities/reports.history";
+import { decodeReportsArchive } from "./capabilities/reports.archive";
+import { decodeReportsDelete } from "./capabilities/reports.delete";
+import { decodeReportsRestore } from "./capabilities/reports.restore";
+import { decodeReportsTransferBegin } from "./capabilities/reports.transfer.begin";
+import { decodeReportsTransferAppend } from "./capabilities/reports.transfer.append";
+import { decodeReportsTransferFinalize } from "./capabilities/reports.transfer.finalize";
+import { decodeReportsTransferAbort } from "./capabilities/reports.transfer.abort";
+import { decodeReportsTransferReadChunk } from "./capabilities/reports.transfer.read_chunk";
 import { decodeReportsResolveSet } from "./capabilities/reports.resolve_set";
 import { decodeEntitiesSearch } from "./capabilities/entities.search";
 import { decodeEntitiesGet } from "./capabilities/entities.get";
@@ -179,6 +190,17 @@ export const DECODERS = {
   "reports.list": decodeReportsList,
   "reports.search": decodeReportsSearch,
   "reports.resolve_set": decodeReportsResolveSet,
+  "reports.publish": decodeReportsPublish,
+  "reports.update": decodeReportsUpdate,
+  "reports.history": decodeReportsHistory,
+  "reports.archive": decodeReportsArchive,
+  "reports.delete": decodeReportsDelete,
+  "reports.restore": decodeReportsRestore,
+  "reports.transfer.begin": decodeReportsTransferBegin,
+  "reports.transfer.append": decodeReportsTransferAppend,
+  "reports.transfer.finalize": decodeReportsTransferFinalize,
+  "reports.transfer.abort": decodeReportsTransferAbort,
+  "reports.transfer.read_chunk": decodeReportsTransferReadChunk,
   "entities.search": decodeEntitiesSearch,
   "entities.get": decodeEntitiesGet,
   "entities.resolve": decodeEntitiesResolve,

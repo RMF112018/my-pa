@@ -28,11 +28,13 @@ from unittest.mock import patch
 from my_pa.application.authorization import Authorization
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.commands import (
+    AbortReportTransfer,
     ListIssues,
     ReadIssue,
     ReadIssueTimeline,
     ReadMeetingNoteVersion,
     ReadRecordLineage,
+    ReadReportTransferChunk,
 )
 from my_pa.application.constraint_management import (
     ConstraintCategoryMutationResult,
@@ -56,10 +58,17 @@ from my_pa.application.service import (
     _HANDLERS,
     ApplicationService,
     _constraint_payload,
+    _general_history_payload,
+    _general_lifecycle_payload,
+    _general_publish_payload,
+    _general_update_payload,
     _meeting_series_write_payload,
     _meeting_write_payload,
     _project_controls_configuration_payload,
     _project_controls_status_payload,
+    _transfer_append_payload,
+    _transfer_begin_payload,
+    _transfer_finalize_payload,
 )
 from my_pa.contracts.ports import (
     CaptureSearchMatch,
@@ -69,6 +78,8 @@ from my_pa.contracts.ports import (
     KnowledgeReviewDecisionResult,
     MeetingNoteVersionRecord,
     MutationRecordFamily,
+    TransferChunk,
+    TransferSession,
     UnitOfWork,
 )
 from my_pa.contracts.v1.canvas_workspace import (
@@ -201,6 +212,28 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
 from my_pa.domain.record_events import RecordEventKind
 from my_pa.domain.relationship.entity import RelationshipState
+from my_pa.domain.reports.content import content_of
+from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
+from my_pa.domain.reports.publication import PublicationReceipt, PublicationResult
+from my_pa.domain.reports.records import (
+    HistoryEntries,
+    ReportHistoryPage,
+    ReportRootRecord,
+    ReportVersionRecord,
+    ReportVersionSummary,
+    StoredReportVersion,
+)
+from my_pa.domain.reports.revision import LifecycleResult, UpdateResult
+from my_pa.domain.reports.vocabulary import (
+    ChangeKind,
+    ContentEncoding,
+    ContentFormat,
+    LifecycleOperation,
+    LifecycleState,
+    ReceiptOutcome,
+    StorageKind,
+    TransferState,
+)
 from my_pa.domain.search.query import RankCategory, SearchMatch, label_for_media_type
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.situation.situation import Project, ProjectState
@@ -2192,11 +2225,316 @@ def _issues_timeline() -> dict[str, Any]:
         return service._issues_timeline(unit_of_work, authorization, command).payload
 
 
+# --- the standalone (general) report plane (Reports Modernization WP07 U2) ------
+#
+# Every payload below is the output of the gateway's own builder -- the
+# `service._general_*_payload` / `_transfer_*_payload` functions, or the
+# handler itself where the payload is built inline (`reports.transfer.abort`,
+# `reports.transfer.read_chunk`) -- over synthetic records. Nothing is a
+# hand-written dict of what the payload is believed to look like.
+
+GR_PRINCIPAL_ID: Final = "prn_aaaaaaaa11111111"
+GR_REPORT_ID: Final = "grpt_aaaaaaaa11111111"
+GR_VERSION_ID: Final = "grver_aaaaaaaa11111111"
+GR_PRIOR_VERSION_ID: Final = "grver_bbbbbbbb22222222"
+GR_CONTENT_ID: Final = "grcnt_aaaaaaaa11111111"
+GR_RECEIPT_ID: Final = "grrc_aaaaaaaa11111111"
+GR_EVENT_ID: Final = "grlev_aaaaaaaa11111111"
+GR_SESSION_ID: Final = "grxfr_aaaaaaaa11111111"
+GR_CORRELATION_ID: Final = "corr_aaaaaaaa11111111"
+GR_AUDIT_ID: Final = "audit_aaaaaaaa11111111"
+#: A synthetic token of the real shape (`^grxtk_[0-9a-f]{64}$`); never a live one.
+GR_CONTENT_TOKEN: Final = "grxtk_" + "0" * 64
+GR_CHUNK_BYTES: Final = b"Synthetic chunk."
+GR_TRANSFER_BYTES: Final = 600_000
+
+
+def _gr_creator() -> ReportCreator:
+    return derive_creator(CreatorKind.LOCAL_PRINCIPAL, GR_PRINCIPAL_ID)
+
+
+def _reports_publish() -> dict[str, Any]:
+    receipt = PublicationReceipt(
+        receipt_id=GR_RECEIPT_ID,
+        report_id=GR_REPORT_ID,
+        version_id=GR_VERSION_ID,
+        version_number=1,
+        idempotency_key="parity-report-publish-1",
+        intent_digest=DIGEST,
+        outcome=ReceiptOutcome.APPLIED,
+        issued_at=AT,
+        correlation_id=GR_CORRELATION_ID,
+        audit_id=GR_AUDIT_ID,
+    )
+    return _general_publish_payload(
+        PublicationResult(
+            receipt=receipt,
+            content_id=GR_CONTENT_ID,
+            format=ContentFormat.MARKDOWN,
+            decoded_sha256=DIGEST,
+            decoded_byte_count=15,
+            canonical_sha256=None,
+            manifest_sha256=DIGEST,
+            recorded_at=AT,
+            replayed=False,
+        )
+    )
+
+
+def _reports_update() -> dict[str, Any]:
+    return _general_update_payload(
+        UpdateResult(
+            receipt_id=GR_RECEIPT_ID,
+            report_id=GR_REPORT_ID,
+            outcome=ReceiptOutcome.APPLIED,
+            expected_version=1,
+            version_id=GR_VERSION_ID,
+            version_number=2,
+            change_kind=ChangeKind.CONTENT,
+            content_id=GR_CONTENT_ID,
+            decoded_sha256=DIGEST,
+            manifest_sha256=DIGEST,
+            idempotency_key="parity-report-update-1",
+            intent_digest=DIGEST,
+            issued_at=AT,
+            correlation_id=GR_CORRELATION_ID,
+            audit_id=GR_AUDIT_ID,
+            replayed=False,
+        )
+    )
+
+
+def _reports_lifecycle(
+    operation: LifecycleOperation, prior: LifecycleState, resulting: LifecycleState
+) -> dict[str, Any]:
+    return _general_lifecycle_payload(
+        LifecycleResult(
+            receipt_id=GR_RECEIPT_ID,
+            report_id=GR_REPORT_ID,
+            operation=operation,
+            outcome=ReceiptOutcome.APPLIED,
+            prior_state=prior,
+            resulting_state=resulting,
+            expected_lifecycle_revision=0,
+            lifecycle_revision=1,
+            event_id=GR_EVENT_ID,
+            idempotency_key=f"parity-report-{operation.value}-1",
+            intent_digest=DIGEST,
+            issued_at=AT,
+            correlation_id=GR_CORRELATION_ID,
+            audit_id=GR_AUDIT_ID,
+            replayed=False,
+        )
+    )
+
+
+def _gr_root(
+    *,
+    head_version_number: int = 2,
+    lifecycle_state: LifecycleState = LifecycleState.ACTIVE,
+    lifecycle_revision: int = 0,
+    held: bool = False,
+) -> ReportRootRecord:
+    return ReportRootRecord(
+        report_id=GR_REPORT_ID,
+        created_at=AT,
+        head_version_id=GR_VERSION_ID,
+        head_version_number=head_version_number,
+        lifecycle_state=lifecycle_state,
+        lifecycle_revision=lifecycle_revision,
+        creator=_gr_creator(),
+        held=held,
+    )
+
+
+def _reports_history() -> dict[str, Any]:
+    """A `versions` page: version 1 (no manifest) and version 2 (with one)."""
+    first = ReportVersionSummary(
+        version_id=GR_PRIOR_VERSION_ID,
+        version_number=1,
+        supersedes_version_id=None,
+        change_kind=ChangeKind.INITIAL,
+        change_reason=None,
+        title="Synthetic report",
+        recorded_at=AT,
+        content_id=GR_CONTENT_ID,
+        format=ContentFormat.MARKDOWN,
+        encoding=ContentEncoding.IDENTITY,
+        storage_kind=StorageKind.INLINE,
+        decoded_sha256=DIGEST,
+        decoded_byte_count=15,
+        canonical_sha256=None,
+        original_sha256=DIGEST,
+        manifest_sha256=DIGEST,
+        manifest=None,
+        author=_gr_creator(),
+    )
+    second = replace(
+        first,
+        version_id=GR_VERSION_ID,
+        version_number=2,
+        supersedes_version_id=GR_PRIOR_VERSION_ID,
+        change_kind=ChangeKind.METADATA,
+        change_reason="Synthetic revision.",
+        manifest={"schema": "synthetic"},
+    )
+    return _general_history_payload(
+        ReportHistoryPage(
+            root=_gr_root(held=True),
+            entries=HistoryEntries.VERSIONS,
+            items=(first, second),
+            next_cursor=None,
+        )
+    )
+
+
+def _gr_session(
+    *, state: TransferState = TransferState.OPEN, received_byte_count: int = 0
+) -> TransferSession:
+    return TransferSession(
+        session_id=GR_SESSION_ID,
+        owner_principal_id=GR_PRINCIPAL_ID,
+        client_ref="local",
+        state=state,
+        format=ContentFormat.TEXT,
+        encoding=ContentEncoding.IDENTITY,
+        declared_byte_count=GR_TRANSFER_BYTES,
+        declared_sha256=DIGEST,
+        chunk_byte_limit=262_144,
+        received_byte_count=received_byte_count,
+        idempotency_key="parity-report-transfer-1",
+        intent_digest=DIGEST,
+        created_at=AT,
+        expires_at=AT.replace(hour=13),
+        finalized_at=None,
+        consumed_content_id=None,
+        consumed_at=None,
+    )
+
+
+def _reports_transfer_begin() -> dict[str, Any]:
+    return _transfer_begin_payload(_gr_session(), replayed=False)
+
+
+def _reports_transfer_append() -> dict[str, Any]:
+    chunk = TransferChunk(
+        session_id=GR_SESSION_ID,
+        sequence=0,
+        byte_offset=0,
+        byte_count=262_144,
+        chunk_sha256=DIGEST,
+        received_at=AT,
+    )
+    return _transfer_append_payload(_gr_session(received_byte_count=262_144), chunk, replayed=False)
+
+
+def _reports_transfer_finalize() -> dict[str, Any]:
+    content = content_of(ContentFormat.TEXT, body="Synthetic transfer.", data=None)
+    return _transfer_finalize_payload(
+        _gr_session(state=TransferState.FINALIZED, received_byte_count=GR_TRANSFER_BYTES),
+        content,
+        content_token=GR_CONTENT_TOKEN,
+    )
+
+
+def _gr_authorization() -> Authorization:
+    return cast(
+        Authorization,
+        SimpleNamespace(at=AT, principal=SimpleNamespace(principal_id=GR_PRINCIPAL_ID)),
+    )
+
+
+def _reports_transfer_abort() -> dict[str, Any]:
+    """The `_reports_transfer_abort` handler's own payload, over a fake repository."""
+    service = object.__new__(ApplicationService)
+    service._report_transfer_staging = cast(Any, SimpleNamespace())
+    service._report_content_store = cast(Any, SimpleNamespace())
+    aborted = _gr_session(state=TransferState.ABORTED)
+    unit_of_work = cast(
+        UnitOfWork,
+        SimpleNamespace(report_transfers=SimpleNamespace(abort=lambda *_, **__: (aborted, False))),
+    )
+    with patch.object(ApplicationService, "_transfer_client_ref", return_value="local"):
+        result = service._reports_transfer_abort(
+            unit_of_work, _gr_authorization(), AbortReportTransfer(session_id=GR_SESSION_ID)
+        )
+    return result.payload
+
+
+def _reports_transfer_read_chunk() -> dict[str, Any]:
+    """The `_reports_transfer_read_chunk` handler over one inline version (first range)."""
+    content = content_of(ContentFormat.TEXT, body=GR_CHUNK_BYTES.decode("ascii"), data=None)
+    stored = StoredReportVersion(
+        root=_gr_root(head_version_number=1),
+        version=ReportVersionRecord(
+            version_id=GR_VERSION_ID,
+            report_id=GR_REPORT_ID,
+            version_number=1,
+            supersedes_version_id=None,
+            change_kind=ChangeKind.INITIAL,
+            title="Synthetic report",
+            report_type=None,
+            topics=(),
+            tags=(),
+            summary=None,
+            report_date=None,
+            coverage_start=None,
+            coverage_end=None,
+            metadata={},
+            change_reason=None,
+            content_id=GR_CONTENT_ID,
+            manifest_sha256=DIGEST,
+            recorded_at=AT,
+            author=_gr_creator(),
+        ),
+        content_id=GR_CONTENT_ID,
+        storage_kind=StorageKind.INLINE,
+        content=content,
+        manifest={},
+        associations=(),
+    )
+    service = object.__new__(ApplicationService)
+    service._report_content_store = None
+    unit_of_work = cast(
+        UnitOfWork,
+        SimpleNamespace(general_reports=SimpleNamespace(read_version=lambda *_, **__: stored)),
+    )
+    result = service._reports_transfer_read_chunk(
+        unit_of_work,
+        _gr_authorization(),
+        ReadReportTransferChunk(report_id=GR_REPORT_ID, version_number=1, length=8),
+    )
+    return result.payload
+
+
+def _general_report_success_payloads() -> dict[str, dict[str, Any]]:
+    return {
+        "reports.publish": _reports_publish(),
+        "reports.update": _reports_update(),
+        "reports.history": _reports_history(),
+        "reports.archive": _reports_lifecycle(
+            LifecycleOperation.ARCHIVE, LifecycleState.ACTIVE, LifecycleState.ARCHIVED
+        ),
+        "reports.delete": _reports_lifecycle(
+            LifecycleOperation.DELETE, LifecycleState.ACTIVE, LifecycleState.TRASHED
+        ),
+        "reports.restore": _reports_lifecycle(
+            LifecycleOperation.RESTORE, LifecycleState.TRASHED, LifecycleState.ACTIVE
+        ),
+        "reports.transfer.begin": _reports_transfer_begin(),
+        "reports.transfer.append": _reports_transfer_append(),
+        "reports.transfer.finalize": _reports_transfer_finalize(),
+        "reports.transfer.abort": _reports_transfer_abort(),
+        "reports.transfer.read_chunk": _reports_transfer_read_chunk(),
+    }
+
+
 def python_success_payloads() -> dict[str, dict[str, Any]]:
     """Capability name → gateway `result` dict the matching Vitest decoder must accept."""
     entity_id = _entity_id()
     return {
         **_wp03b_success_payloads(),
+        **_general_report_success_payloads(),
         "capture.create": _capture_create(),
         "capture.list": _capture_list(),
         "capture.read": _capture_read(),

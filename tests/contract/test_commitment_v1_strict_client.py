@@ -13,8 +13,9 @@ keys, with the switch on and over Commitments that store a `project_id`:
   the basis enum plus `program_reporting_read` (R4-F04, R4-F15);
 * `test_v1_commitment_views_keep_their_keys` -- the 3 v1 Commitment views'
   field lists, exactly;
-* `test_s4_adds_no_gateway_entry` -- the web BFF contract still names 110
-  capabilities and no S4 one (section 7.6).
+* `test_s4_adds_no_gateway_entry` -- the web BFF contract names no S4
+  capability (section 7.6); it names 121 (110 at S4, plus the eleven
+  `reports.*` entries Reports Modernization WP07 admitted).
 
 Every identity here is synthetic.
 """
@@ -250,7 +251,8 @@ def test_v1_commitment_views_keep_their_keys() -> None:
 def test_s4_adds_no_gateway_entry() -> None:
     contract: dict[str, Any] = json.loads(GATEWAY_CONTRACT.read_text(encoding="utf-8"))
     declared = set(contract["capabilities"])
-    assert len(declared) == 110
+    # 110 at S4; Reports Modernization WP07 admitted eleven standalone `reports.*`.
+    assert len(declared) == 121
     assert not declared & PROGRAM_REPORTING_CAPABILITIES
     # The v1 Commitment reads the web client calls are still the v1 names.
     assert not {name for name in declared if ".v2." in name}

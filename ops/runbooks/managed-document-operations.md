@@ -297,6 +297,18 @@ error, no `MY_PA_REPORT_CONTENT_ROOT`, a staging failure).
 `restore` copy only `content` objects, and a session whose staging is lost
 can only be aborted and uploaded again (the client begins a new session).
 
+**Chunked reads re-verify the whole part on every call.** For a `managed_blob`
+version, every `reports.transfer.read_chunk` call streams the whole part it
+reads (at most 16 MiB) through the size and SHA-256 checks before it returns
+its window (at most 262,144 bytes), so nothing is ever returned from a part
+that does not verify, and no verification is trusted from one call to the
+next. The cost per call is O(part) CPU and disk reads and O(window) memory: a
+full read of a 16 MiB part takes 64 calls and hashes about 1 GiB, and no permit
+limits concurrent calls. Inline versions are hashed in memory (at most 524,288
+bytes). This is accepted by design; if a client's chunked reads show up as
+sustained gateway CPU or disk load, withdraw that client's
+`reports.transfer.read_chunk` grant rather than relaxing the check.
+
 **Keyed publish and update rely on server-stamped keys.** A transfer-sourced
 `reports.publish` or `reports.update` looks its receipt up by idempotency key
 and Principal only, before it claims the session. A remote client cannot state

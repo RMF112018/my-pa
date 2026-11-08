@@ -7926,6 +7926,15 @@ class GeneralReportRepository(ABC):
         """The stored result this Principal's `publish` key is bound to, or `None`.
 
         Compares no digest: the caller compares `receipt.intent_digest`.
+
+        Keyed by key and Principal only (review WP06 R1 #7), which is sound
+        because remote keys are server-stamped: `adapters.remote_request` derives
+        a remote write's key from its payload hash and authenticated client, so
+        one client's retry finds only its own receipt. A local caller's key is
+        used as given; there the caller's `intent_digest` comparison is what
+        refuses a key reused under another intent (the key's conflict). For a
+        transfer-sourced request that digest binds the session and the token's
+        digest, never the token.
         """
 
     @abstractmethod
@@ -7937,6 +7946,11 @@ class GeneralReportRepository(ABC):
         Compares no digest: the caller compares `intent_digest`. WP06 T10: a
         transfer-sourced update settles its key with this BEFORE it claims the
         session, so a retry after the token was consumed replays.
+
+        Keyed by key and Principal only, relying on server-stamped remote keys
+        exactly as `find_publish_receipt` states (review WP06 R1 #7): a local
+        caller reusing a key under another intent is refused by the caller's
+        `intent_digest` comparison.
         """
 
     @abstractmethod

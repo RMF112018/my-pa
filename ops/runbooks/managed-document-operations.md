@@ -297,6 +297,16 @@ error, no `MY_PA_REPORT_CONTENT_ROOT`, a staging failure).
 `restore` copy only `content` objects, and a session whose staging is lost
 can only be aborted and uploaded again (the client begins a new session).
 
+**Keyed publish and update rely on server-stamped keys.** A transfer-sourced
+`reports.publish` or `reports.update` looks its receipt up by idempotency key
+and Principal only, before it claims the session. A remote client cannot state
+a key: the server stamps one derived from the payload hash and the
+authenticated client, so a retry only ever meets its own receipt. A local
+caller (`apps/cli/invoke.py`) supplies its key as given, so reusing one key for
+a request with another intent (another title, another session, or an earlier
+inline use) is refused `conflict [idempotency_key]` by the intent digest, and
+the named session stays finalized; use a fresh key per distinct request.
+
 ## 8. Report holds and retention (Reports Modernization WP05b)
 
 **What a hold does.** A legal hold is placed and released by the operator only:

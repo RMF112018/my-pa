@@ -274,6 +274,49 @@ def test_a_publish_retry_after_consumption_replays_the_original_receipt(rig: Rig
     assert _consumed_row(rig, other_id).state is TransferState.FINALIZED
 
 
+def test_a_local_caller_reusing_a_key_under_another_intent_gets_the_conflict(rig: Rig) -> None:
+    """WP08 C-WP06 (R1 #7): the keyed consume looks the receipt up by key and Principal only.
+
+    A local caller's key is used as given (no client-bound derivation), so the
+    intent digest is what tells two requests under one key apart: a publish or
+    update whose key is already bound to another intent -- another title, an
+    inline first use, another session -- is the key's `conflict`, nothing is
+    written, and the named session stays finalized (its token unconsumed).
+    """
+    staged = _text(4096, seed=5)
+    # Publish: first use transfer-sourced, then the same reference under another title.
+    session_id, token = _finalized(rig, staged, key="p")
+    _ok(_publish(rig, _reference(session_id, token), key="shared", client=None))
+    second_id, second_token = _finalized(rig, staged, key="p2")
+    before = _snapshot(rig)
+    retitled = _publish(
+        rig, _reference(second_id, second_token), key="shared", client=None, title="Other title"
+    )
+    assert _details(retitled, ErrorCode.CONFLICT) == ["idempotency_key"]
+    assert _snapshot(rig) == before
+    # First use inline, then a transfer reference under the same key.
+    _ok(_publish(rig, {"format": "text", "body": "synthetic inline"}, key="inline-first"))
+    before = _snapshot(rig)
+    after_inline = _publish(rig, _reference(second_id, second_token), key="inline-first")
+    assert _details(after_inline, ErrorCode.CONFLICT) == ["idempotency_key"]
+    assert _snapshot(rig) == before
+    assert _consumed_row(rig, second_id).state is TransferState.FINALIZED
+    # Update: the key bound to one session's update, reused naming another session.
+    head = _ok(_publish(rig, {"format": "text", "body": "synthetic head"}, key="head"))
+    first_id, first_token = _finalized(rig, _text(4096, seed=6), key="u")
+    _ok(_update(rig, head["report_id"], {"content": _reference(first_id, first_token)}, key="uk"))
+    before = _snapshot(rig)
+    reused = _update(
+        rig, head["report_id"], {"content": _reference(second_id, second_token)}, key="uk"
+    )
+    assert _details(reused, ErrorCode.CONFLICT) == ["idempotency_key"]
+    assert _snapshot(rig) == before
+    assert _consumed_row(rig, second_id).state is TransferState.FINALIZED
+    # The session is still consumable under a fresh key.
+    _ok(_publish(rig, _reference(second_id, second_token), key="fresh"))
+    assert _consumed_row(rig, second_id).state is TransferState.CONSUMED
+
+
 def test_every_unusable_session_or_token_is_one_not_found_with_zero_mutation(rig: Rig) -> None:
     staged = _text(300)
     stranger = operator()

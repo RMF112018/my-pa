@@ -16962,6 +16962,14 @@ class ApplicationService:
         version references; the commit is `_run`'s, and the staging is
         discarded after it, best effort. The token is in no receipt, row or
         log: the intent digest binds the session and the token's digest.
+
+        Step (1) finds the receipt by key and Principal only (review WP06 R1
+        #7). That relies on server-stamped keys: a remote client's key is the
+        server's derived hash of its payload and client, so it can only meet
+        its own receipt. A local caller's key is used as given, and the intent
+        digest comparison is what turns a key reused under another intent
+        (another title, an inline first use, another session) into the key's
+        `conflict`, before any session is claimed.
         """
         repository = unit_of_work.general_reports
         principal_id = authorization.principal.principal_id
@@ -17154,7 +17162,9 @@ class ApplicationService:
         consumed naming the content the new version references -- the new
         object, or the head's reused one (also for a `no_op`, which names the
         head). A refusal of the update path writes nothing and leaves the
-        session finalized.
+        session finalized. The keyed lookup relies on server-stamped keys as
+        `_reports_publish_transfer`'s does: a local caller reusing a key under
+        another intent is the key's `conflict`, by the intent digest.
         """
         repository = unit_of_work.general_reports
         principal_id = authorization.principal.principal_id

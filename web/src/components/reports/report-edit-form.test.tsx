@@ -7,6 +7,7 @@
  * a large head, and the transfer path for large new content.
  */
 import { createHash } from "node:crypto";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -14,6 +15,7 @@ import fixtures from "@/lib/api/decode/fixtures/python/success.json";
 import standalone from "@/lib/api/decode/fixtures/python/reports.standalone.json";
 import { MutationFeedbackProvider } from "@/components/ui/mutation-feedback";
 import { CONFLICT_MESSAGE, STALE_MESSAGE } from "@/lib/reports/client";
+import { CONTENT_LOCK_MESSAGES, IDENTITY_KEYS_MESSAGE, UNSAFE_NUMBER_MESSAGE } from "@/lib/reports/content-guards";
 import { ReportEditForm } from "./report-edit-form";
 import { FORM_MESSAGES } from "./report-form";
 
@@ -50,8 +52,9 @@ function stub(answer: (path: string, body?: Json) => Response | Promise<Response
 const updates = (calls: readonly Call[]) => calls.filter((call) => call.path === `/api/reports/${REPORT}/update`);
 const reads = (calls: readonly Call[]) => calls.filter((call) => call.path.startsWith(`/api/reports/${REPORT}?`));
 
-function renderForm() {
-  return render(<MutationFeedbackProvider><ReportEditForm reportId={REPORT} /></MutationFeedbackProvider>);
+function renderForm({ strict = false } = {}) {
+  const form = <MutationFeedbackProvider><ReportEditForm reportId={REPORT} /></MutationFeedbackProvider>;
+  return render(strict ? <StrictMode>{form}</StrictMode> : form);
 }
 async function ready() {
   return screen.findByRole("form", { name: "Edit report" });
@@ -419,6 +422,176 @@ describe("ReportEditForm", () => {
       expect(sent).toHaveLength(3);
       expect((sent[2]!.patch as Json).content).toEqual({ transfer: { sessionId: session(2), contentToken: token(2) } });
       expect(sent[2]!.idempotencyKey).not.toBe(sent[0]!.idempotencyKey);
+    });
+  });
+  describe("WP08 C-WP07 R1 #4/#6: content kept read-only", () => {
+    const jsonRead = (data: unknown, patch: Json = {}) => {
+      const read = readOf("reports.read.json", patch);
+      (read.content as Json).data = data;
+      return read;
+    };
+    async function metadataOnlySave(calls: readonly Call[]) {
+      await userEvent.type(screen.getByLabelText("Tags"), ", z");
+      await userEvent.type(reasonField(), "r");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(updates(calls)).toHaveLength(1));
+      expect(updates(calls)[0]!.body!.patch).toEqual({ tags: ["draft", "z"] });
+    }
+
+    it("(b)+(c) the read's identity_keys_withheld flag: content read-only with a notice; a metadata edit sends no content", async () => {
+      const calls = stub((path) => (path.endsWith("/update") ? backend(updated()) : backend(jsonRead({ rows: [{}] }, { identity_keys_withheld: true }))));
+      renderForm();
+      await ready();
+      const notice = screen.getByTestId("report-edit-content-locked");
+      expect(notice).toHaveAttribute("data-lock", "identity");
+      expect(notice).toHaveTextContent(CONTENT_LOCK_MESSAGES.identity);
+      expect(screen.queryByLabelText("JSON data")).toBeNull();
+      await metadataOnlySave(calls);
+    });
+
+    it("(c) loaded data the BFF would refuse (tid) is read-only too", async () => {
+      const calls = stub((path) => (path.endsWith("/update") ? backend(updated()) : backend(jsonRead({ tid: "t" }))));
+      renderForm();
+      await ready();
+      expect(screen.getByTestId("report-edit-content-locked")).toHaveAttribute("data-lock", "identity");
+      await metadataOnlySave(calls);
+    });
+
+    it("(b) without the flag and without identity keys, the content is editable", async () => {
+      stub(() => backend(jsonRead({ rows: [1] })));
+      renderForm();
+      await ready();
+      expect(screen.queryByTestId("report-edit-content-locked")).toBeNull();
+      expect(screen.getByLabelText("JSON data")).toBeInTheDocument();
+    });
+
+    it("R1 #6: an integer beyond 2^53 in the loaded data keeps the content read-only", async () => {
+      const calls = stub((path) => (path.endsWith("/update") ? backend(updated()) : backend(jsonRead({ n: 2 ** 60 }))));
+      renderForm();
+      await ready();
+      const notice = screen.getByTestId("report-edit-content-locked");
+      expect(notice).toHaveAttribute("data-lock", "precision");
+      expect(notice).toHaveTextContent(CONTENT_LOCK_MESSAGES.precision);
+      await metadataOnlySave(calls);
+    });
+
+    it("R1 #4/#6: content read in chunks is checked after assembly (source text)", async () => {
+      const text = '{"n":12345678901234567890}';
+      const bytes = new TextEncoder().encode(text);
+      const omitted = readOf("reports.read.omitted", { lifecycle_state: "active" });
+      const content = omitted.content as Json;
+      content.format = "json";
+      content.body_chunked_read = { capability: "reports.transfer.read_chunk", part: "decoded", byte_count: bytes.byteLength, sha256: sha(bytes) };
+      const calls = stub((path) => {
+        if (path.endsWith("/update")) return backend(updated());
+        if (path.includes("/content?")) {
+          return backend({
+            plane: "standalone", report_id: REPORT, version_id: omitted.version_id, version_number: 1, part: "decoded",
+            offset: 0, byte_count: bytes.byteLength, chunk: Buffer.from(bytes).toString("base64"), chunk_sha256: sha(bytes),
+            total_byte_count: bytes.byteLength, part_sha256: sha(bytes), eof: true, next_offset: null,
+          });
+        }
+        return backend(omitted);
+      });
+      renderForm();
+      await ready();
+      await userEvent.click(screen.getByRole("button", { name: /^Load full content/ }));
+      expect(await screen.findByTestId("report-edit-content-locked")).toHaveAttribute("data-lock", "precision");
+      expect(screen.queryByLabelText("JSON data")).toBeNull();
+      await metadataOnlySave(calls);
+    });
+
+    it.each([
+      ["an identity key", '{"rows":[{"principalId":"p"}]}', IDENTITY_KEYS_MESSAGE],
+      ["an integer beyond 2^53", '{"rows":[9007199254740993]}', UNSAFE_NUMBER_MESSAGE],
+    ])("(a)/R1 #6: typed JSON with %s is refused before any request", async (_name, json, message) => {
+      const calls = stub(() => backend(jsonRead({ rows: [1] })));
+      renderForm();
+      await ready();
+      fireEvent.change(screen.getByLabelText("JSON data"), { target: { value: json } });
+      await userEvent.type(reasonField(), "r");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      expect(await screen.findByTestId("report-edit-notice")).toHaveTextContent(message);
+      expect(updates(calls)).toEqual([]);
+    });
+  });
+
+  describe("WP08 R3 #2: unmount and StrictMode (mirroring the new form)", () => {
+    const begins = (calls: readonly Call[]) => calls.filter((call) => call.path === "/api/reports/transfers");
+    const aborts = (calls: readonly Call[]) => calls.filter((call) => call.path.endsWith("/abort")).map((call) => call.path);
+    const lost = () => refusedAnswer(503, "unavailable");
+    /** One session per begin; `update` answers the n-th update call. */
+    function bff(update: (n: number) => Response | Promise<Response>) {
+      const limit = 262_144;
+      let declared = { byteCount: 0, sha256: "" };
+      let seen = 0;
+      return stub((path, body) => {
+        if (path === "/api/reports/transfers") {
+          declared = { byteCount: body!.byteCount as number, sha256: body!.sha256 as string };
+          return backend({
+            session_id: SESSION, state: "open", format: "markdown", encoding: "identity",
+            declared_byte_count: declared.byteCount, declared_sha256: declared.sha256, chunk_byte_limit: limit,
+            chunk_count: Math.ceil(declared.byteCount / limit), expires_at: EXPIRES, replayed: false,
+          });
+        }
+        if (path.endsWith("/append")) {
+          const sequence = body!.sequence as number;
+          const chunk = Uint8Array.from(Buffer.from(body!.chunk as string, "base64"));
+          const received = Math.min(declared.byteCount, (sequence + 1) * limit);
+          return backend({
+            session_id: SESSION, sequence, byte_offset: sequence * limit, byte_count: chunk.byteLength,
+            chunk_sha256: sha(chunk), received_byte_count: received, declared_byte_count: declared.byteCount,
+            complete: received === declared.byteCount, next_sequence: received === declared.byteCount ? null : sequence + 1,
+            expires_at: EXPIRES, replayed: false,
+          });
+        }
+        if (path.endsWith("/finalize")) {
+          return backend({
+            session_id: SESSION, state: "finalized", content_token: TOKEN, expires_at: EXPIRES,
+            byte_count: declared.byteCount, sha256: declared.sha256, format: "markdown", encoding: "identity",
+            decoded_byte_count: declared.byteCount, decoded_sha256: declared.sha256,
+          });
+        }
+        if (path.endsWith("/abort")) return backend({ session_id: SESSION, state: "aborted", replayed: false });
+        if (path.endsWith("/update")) return update(++seen);
+        return backend(readOf("reports.read.markdown"));
+      });
+    }
+    async function saveLarge() {
+      await ready();
+      fireEvent.change(screen.getByLabelText("Body"), { target: { value: "z".repeat(530_000) } });
+      await userEvent.type(reasonField(), "r");
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    }
+
+    it("an update in flight when the form is left that then answers ambiguously aborts and holds nothing", async () => {
+      let answer: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => { answer = resolve; });
+      const calls = bff(async () => { await gate; return lost(); });
+      const view = renderForm();
+      await saveLarge();
+      await waitFor(() => expect(updates(calls)).toHaveLength(1));
+      view.unmount();
+      expect(aborts(calls)).toEqual([]);
+      answer();
+      await waitFor(() => expect(aborts(calls)).toEqual([`/api/reports/transfers/${SESSION}/abort`]));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(aborts(calls)).toHaveLength(1);
+    });
+
+    it("under StrictMode (mount -> cleanup -> mount) an ambiguous answer is still kept for the resubmit", async () => {
+      const calls = bff((n) => (n <= 2 ? lost() : backend(updated())));
+      renderForm({ strict: true });
+      await saveLarge();
+      expect(await screen.findByTestId("report-edit-notice")).toBeInTheDocument();
+      expect(aborts(calls)).toEqual([]);
+      await userEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(nav.push).toHaveBeenCalledWith(`/reports/${REPORT}`));
+      expect(begins(calls)).toHaveLength(1);
+      const sent = updates(calls).map((call) => call.body!);
+      expect(sent).toHaveLength(3);
+      for (const body of sent) expect(body).toEqual(sent[0]);
+      expect(aborts(calls)).toEqual([]);
     });
   });
 });

@@ -212,6 +212,38 @@ describe("GET /api/reports/[reportId] (standalone read)", () => {
     const body = await answer(await read(get(`/api/reports/${reportId}`), at()), 404);
     expect(body.error).toMatchObject({ errorClass: "not_found", code: "not_found" });
   });
+
+  describe("WP08 C-WP07 R1 #4: identity keys in content.data", () => {
+    const withData = (name: "reports.read.json" | "reports.read.mixed", data: unknown) => {
+      const result = structuredClone(standalone[name]) as Record<string, unknown>;
+      (result.content as Record<string, unknown>).data = data;
+      return result;
+    };
+    it.each(["reports.read.json", "reports.read.mixed"] as const)(
+      "%s: strips principal keys (no identity echo) and says so with identity_keys_withheld: true",
+      async (name) => {
+        answerWith(ok(withData(name, { rows: [{ principal_id: "p", keep: 1 }], meta: { principalId: "q" } })));
+        const body = await answer(await read(get(`/api/reports/${reportId}?includeBody=true`), at()), 200);
+        expect(body.identity_keys_withheld).toBe(true);
+        expect(body.content.data).toEqual({ rows: [{ keep: 1 }], meta: {} });
+        expect(JSON.stringify(body)).not.toMatch(/principal_?[iI]d/);
+      },
+    );
+    it("leaves the flag off when the strip removes nothing from content.data (tid/oid are not stripped)", async () => {
+      answerWith(ok(withData("reports.read.json", { tid: "t", oid: "o", rows: [1] })));
+      const body = await answer(await read(get(`/api/reports/${reportId}?includeBody=true`), at()), 200);
+      expect(body).not.toHaveProperty("identity_keys_withheld");
+      expect(body.content.data).toEqual({ tid: "t", oid: "o", rows: [1] });
+      answerWith(ok(standalone["reports.read.markdown"]));
+      const plain = await answer(await read(get(`/api/reports/${reportId}`), at()), 200);
+      expect(plain).not.toHaveProperty("identity_keys_withheld");
+    });
+    it("never flags a catalog page", async () => {
+      answerWith(ok(standalone["reports.list.standalone"]));
+      const body = await answer(await catalog(get("/api/reports?plane=standalone")), 200);
+      expect(body).not.toHaveProperty("identity_keys_withheld");
+    });
+  });
 });
 
 describe("POST /api/reports (publish)", () => {

@@ -25,12 +25,11 @@ import { mutationKey } from "@/lib/api/work-client";
 import type { Decoder } from "@/lib/api/decode/types";
 import {
   decodeStandaloneReportList,
-  decodeStandaloneReportRead,
   decodeStandaloneReportSearch,
   type StandaloneReportListResult,
-  type StandaloneReportReadResult,
   type StandaloneReportSearchResult,
 } from "@/lib/api/decode/capabilities/reports.standalone";
+import { decodeReportReadAnswer, type ReportReadAnswer } from "./content-guards";
 import { decodeReportsPublish, type ReportsPublishResult } from "@/lib/api/decode/capabilities/reports.publish";
 import { decodeReportsUpdate, type ReportsUpdateResult } from "@/lib/api/decode/capabilities/reports.update";
 import { decodeReportsHistory, type ReportsHistoryResult } from "@/lib/api/decode/capabilities/reports.history";
@@ -291,14 +290,17 @@ export interface ReadOptions {
   readonly includeWithdrawn?: boolean;
 }
 
-/** `GET /api/reports/[reportId]`: one exact version (or the head). */
-export function fetchReport(reportId: string, options: ReadOptions = {}): Promise<ReportOutcome<StandaloneReportReadResult>> {
+/**
+ * `GET /api/reports/[reportId]`: one exact version (or the head), with the
+ * BFF's `identity_keys_withheld` flag when it applies (content-guards.ts).
+ */
+export function fetchReport(reportId: string, options: ReadOptions = {}): Promise<ReportOutcome<ReportReadAnswer>> {
   const search = new URLSearchParams();
   if (options.versionNumber !== undefined) search.set("versionNumber", String(options.versionNumber));
   if (options.includeBody !== undefined) search.set("includeBody", String(options.includeBody));
   if (options.includeWithdrawn !== undefined) search.set("includeWithdrawn", String(options.includeWithdrawn));
   const query = search.size > 0 ? `?${search.toString()}` : "";
-  return send(`${reportPath(reportId)}${query}`, decodeStandaloneReportRead);
+  return send(`${reportPath(reportId)}${query}`, decodeReportReadAnswer);
 }
 
 export interface HistoryOptions {

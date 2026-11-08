@@ -22,6 +22,13 @@
  * draft is kept either way. "Review latest" reads the head again into a side
  * panel, and the next submit is checked against that version, with a new
  * idempotency key (the payload changed, and the key rotated after the 409).
+ *
+ * Read-only content (WP08 C-WP07 R1 #4/#6, lib/reports/content-guards.ts): when
+ * the read says identity keys were withheld from its JSON data, when the loaded
+ * data holds a key the BFF would refuse, or when it holds a number this browser
+ * cannot keep exactly, the content is not editable here and a notice says why;
+ * details (metadata) can still be changed, and such an edit never sends
+ * content. Typed JSON is checked the same way before any request.
  */
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -33,7 +40,6 @@ import { Input } from "@/components/ui/input";
 import { useMutationFeedback } from "@/components/ui/mutation-feedback";
 import { LoadingStatus, SurfaceState } from "@/components/ui/surface-state";
 import { mutationKey } from "@/lib/api/work-client";
-import type { StandaloneReportReadResult } from "@/lib/api/decode/capabilities/reports.standalone";
 import type { ReportsUpdateResult } from "@/lib/api/decode/capabilities/reports.update";
 import {
   CONFLICT_MESSAGE,
@@ -47,10 +53,18 @@ import {
   type UpdateRequest,
 } from "@/lib/reports/client";
 import {
+  CONTENT_LOCK_MESSAGES,
+  contentLockOf,
+  jsonSubmitProblem,
+  type ContentLock,
+  type ReportReadAnswer,
+} from "@/lib/reports/content-guards";
+import {
   contentFromDecoded,
   needsTransfer,
   readFullContent,
   transferBinding,
+  type TransferBinding,
 } from "@/lib/reports/transfer-client";
 import {
   HeldBadge,
@@ -73,6 +87,7 @@ import {
   isNoChange,
   metadataDraft,
   stagedBytesOf,
+  usesData,
   validateDraft,
   withContent,
   type DraftErrors,
@@ -82,7 +97,7 @@ import {
 type Load =
   | { readonly kind: "loading" }
   | { readonly kind: "failed"; readonly refused: ReportRefusal }
-  | { readonly kind: "ready"; readonly report: StandaloneReportReadResult };
+  | { readonly kind: "ready"; readonly report: ReportReadAnswer };
 
 type Phase = "idle" | "sending" | "uploading" | "done";
 
@@ -93,9 +108,9 @@ type Notice =
 type Latest =
   | { readonly kind: "loading" }
   | { readonly kind: "failed"; readonly text: string }
-  | { readonly kind: "ready"; readonly report: StandaloneReportReadResult };
+  | { readonly kind: "ready"; readonly report: ReportReadAnswer };
 
-function hasInlineContent(report: StandaloneReportReadResult): boolean {
+function hasInlineContent(report: ReportReadAnswer): boolean {
   return report.content.body !== undefined || report.content.data !== undefined;
 }
 
@@ -149,16 +164,20 @@ function EditForm({
   report,
   trail,
 }: {
-  readonly report: StandaloneReportReadResult;
+  readonly report: ReportReadAnswer;
   readonly trail: readonly { readonly label: string; readonly href?: string }[];
 }) {
   const router = useRouter();
   const feedback = useMutationFeedback();
   const reasonId = useId();
   const intent = useRef(reportIntent("report-update"));
-  const transfer = useRef(transferBinding());
+  // Filled by the effect below (no binding is built per render).
+  const transfer = useRef<TransferBinding | null>(null);
   const inFlight = useRef(false);
   const initialContent = hasInlineContent(report);
+  const initialLock = initialContent || report.identity_keys_withheld === true
+    ? contentLockOf({ withheld: report.identity_keys_withheld === true, data: report.content.data })
+    : null;
   const initial = initialContent
     ? withContent(metadataDraft(report), { body: report.content.body, data: report.content.data })
     : metadataDraft(report);
@@ -166,6 +185,7 @@ function EditForm({
   const [baseline, setBaseline] = useState<ReportDraft>(initial);
   const [draft, setDraft] = useState<ReportDraft>(initial);
   const [contentLoaded, setContentLoaded] = useState(initialContent);
+  const [lock, setLock] = useState<ContentLock | null>(initialLock);
   const [contentLoad, setContentLoad] = useState<{ readonly kind: "idle" | "loading" } | { readonly kind: "failed"; readonly text: string }>({ kind: "idle" });
   const [reason, setReason] = useState("");
   const [reasonError, setReasonError] = useState<string | null>(null);
@@ -183,6 +203,8 @@ function EditForm({
     return () => { void binding.dispose(); };
   }, []);
 
+  /** Content is sent only when it was loaded and nothing locks it. */
+  const contentEditable = contentLoaded && lock === null;
   const latestReport = latest?.kind === "ready" ? latest.report : null;
   const latestEditable = latestReport === null || latestReport.lifecycle_state === "active";
 
@@ -196,6 +218,8 @@ function EditForm({
       setContentLoad({ kind: "failed", text: outcome.ok ? REPORT_MESSAGES.unverified : refusalWords(outcome) });
       return;
     }
+    const text = usesData(report.content.format) ? new TextDecoder("utf-8").decode(outcome.value) : undefined;
+    setLock(contentLockOf({ data: decoded.data, ...(text !== undefined ? { text } : {}) }));
     // Only the content fields are filled; metadata the user already typed stays.
     setBaseline((current) => withContent(current, decoded));
     setDraft((current) => withContent(current, decoded));
@@ -217,8 +241,9 @@ function EditForm({
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (inFlight.current || !latestEditable) return;
-    const found = validateDraft(draft, { content: contentLoaded });
+    const binding = transfer.current;
+    if (inFlight.current || !latestEditable || binding === null) return;
+    const found = validateDraft(draft, { content: contentEditable });
     setErrors(found);
     const trimmedReason = reason.trim();
     const reasonProblem = trimmedReason === ""
@@ -226,9 +251,15 @@ function EditForm({
       : codePoints(trimmedReason) > REASON_MAX_CHARACTERS ? FORM_MESSAGES.reasonTooLong : null;
     setReasonError(reasonProblem);
     if (hasErrors(found) || reasonProblem) return;
-    const change = buildPatch(baseline, draft, { content: contentLoaded });
+    const change = buildPatch(baseline, draft, { content: contentEditable });
     if (isNoChange(change)) {
       setNotice({ kind: "error", text: FORM_MESSAGES.nothingChanged });
+      return;
+    }
+    const typed = change.patch.content;
+    const problem = typed !== undefined && "data" in typed ? jsonSubmitProblem(draft.json, typed.data) : null;
+    if (problem !== null) {
+      setNotice({ kind: "error", text: problem });
       return;
     }
     inFlight.current = true;
@@ -245,14 +276,14 @@ function EditForm({
     let outcome: ReportOutcome<ReportsUpdateResult>;
     if (content !== undefined && !("transfer" in content) && needsTransfer(request)) {
       setPhase("uploading");
-      outcome = await transfer.current.submit(
+      outcome = await binding.submit(
         JSON.stringify(signed),
         { format: content.format, staged: stagedBytesOf(content), idempotencyKey: mutationKey("report-transfer") },
         (staged) => updateReport(report.report_id, { ...request, patch: { ...request.patch, content: staged } }),
       );
     } else {
       setPhase("sending");
-      await transfer.current.release();
+      await binding.release();
       outcome = await updateReport(report.report_id, request);
     }
     intent.current.settle(outcome);
@@ -279,7 +310,11 @@ function EditForm({
 
   const busy = phase !== "idle";
   const pointer = report.content.body_chunked_read;
-  const contentNotice = (
+  const contentNotice = lock !== null ? (
+    <div role="status" className="grid gap-2 rounded-lg border border-border p-3" data-testid="report-edit-content-locked" data-lock={lock}>
+      <p className="text-sm text-text-secondary">{CONTENT_LOCK_MESSAGES[lock]}</p>
+    </div>
+  ) : (
     <div className="grid gap-2 rounded-lg border border-border p-3" data-testid="report-edit-content-omitted">
       <p className="text-sm text-text-secondary">
         This report&apos;s content is too large to show at once. You can change its details without it, or load it to edit it.
@@ -316,7 +351,7 @@ function EditForm({
             draft={draft}
             onChange={setDraft}
             errors={errors}
-            contentEditable={contentLoaded}
+            contentEditable={contentEditable}
             contentNotice={contentNotice}
             disabled={busy}
           />

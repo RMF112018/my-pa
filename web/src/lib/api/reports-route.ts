@@ -18,6 +18,10 @@
  *   `coverage_period` are not accepted (carried to WP08).
  * - `reportConflictCurrent`: on a `409` from update/archive/delete/restore,
  *   one `reports.read` (no body, withdrawn included) supplies `current`.
+ * - `identity_keys_withheld: true` on a `reports.read` answer whose
+ *   `content.data` holds keys `publicResult` strips (WP08 C-WP07 R1 #4): the
+ *   strip still happens (no identity echo), and the browser is told that it did
+ *   so its edit form can keep that content read-only.
  *
  * Nothing here logs. Refusal messages name a field, never its value, so no
  * body, chunk or content token can reach an error.
@@ -25,6 +29,7 @@
 import type { NextRequest } from "next/server";
 import { invokeStandaloneReports } from "@/lib/api/gateway";
 import type { StandaloneReportCapability } from "@/lib/api/decode/standalone";
+import { IDENTITY_KEYS_WITHHELD, losesStrippedIdentityKeys } from "@/lib/reports/content-guards";
 import {
   isCanonicalId,
   workGet,
@@ -270,7 +275,13 @@ export function reportsRead(
   return workGet(request, REPORTS_SCOPE, capability, fields, fixed, {
     ...options,
     strictQuery: true,
-    invoke: (principal, _capability, payload) => invokeStandaloneReports(principal, capability, payload),
+    invoke: async (principal, _capability, payload) => {
+      const outcome = await invokeStandaloneReports(principal, capability, payload);
+      if (!outcome.ok || capability !== "reports.read") return outcome;
+      const content = (outcome.result as { readonly content?: { readonly data?: unknown } }).content;
+      if (!losesStrippedIdentityKeys(content?.data)) return outcome;
+      return { ...outcome, result: { ...outcome.result, [IDENTITY_KEYS_WITHHELD]: true } };
+    },
   });
 }
 

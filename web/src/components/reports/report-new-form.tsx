@@ -15,6 +15,10 @@
  * definitive answer or a changed draft. A second submit while one is in
  * flight is ignored. On success the shell's feedback says the version and
  * receipt, and the browser goes to the report.
+ *
+ * JSON data holding an identity key, or a number the browser cannot keep
+ * exactly, is refused here before any request, on the inline and the transfer
+ * path alike (`jsonSubmitProblem`, lib/reports/content-guards.ts).
  */
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -23,7 +27,8 @@ import { Button } from "@/components/ui/button";
 import { useMutationFeedback } from "@/components/ui/mutation-feedback";
 import { mutationKey } from "@/lib/api/work-client";
 import { publishReport, reportIntent, type PublishRequest, type ReportOutcome } from "@/lib/reports/client";
-import { needsTransfer, transferBinding } from "@/lib/reports/transfer-client";
+import { jsonSubmitProblem } from "@/lib/reports/content-guards";
+import { needsTransfer, transferBinding, type TransferBinding } from "@/lib/reports/transfer-client";
 import type { ReportsPublishResult } from "@/lib/api/decode/capabilities/reports.publish";
 import { refusalWords, reportHref, shortId } from "./presentation";
 import {
@@ -46,7 +51,8 @@ export function ReportNewForm() {
   const router = useRouter();
   const feedback = useMutationFeedback();
   const intent = useRef(reportIntent("report-publish"));
-  const transfer = useRef(transferBinding());
+  // Filled by the effect below (no binding is built per render).
+  const transfer = useRef<TransferBinding | null>(null);
   const inFlight = useRef(false);
   const [draft, setDraft] = useState<ReportDraft>(EMPTY_DRAFT);
   const [errors, setErrors] = useState<DraftErrors>({});
@@ -67,7 +73,14 @@ export function ReportNewForm() {
     const found = validateDraft(draft, { content: true });
     setErrors(found);
     const content = contentOf(draft);
-    if (hasErrors(found) || content === null) return;
+    const binding = transfer.current;
+    if (hasErrors(found) || content === null || binding === null) return;
+    // Before inline-vs-transfer is chosen, so both paths refuse alike.
+    const problem = "data" in content ? jsonSubmitProblem(draft.json, content.data) : null;
+    if (problem !== null) {
+      setFailure(problem);
+      return;
+    }
     inFlight.current = true;
     setFailure(null);
     const payload = { ...publishFields(draft), content };
@@ -75,7 +88,7 @@ export function ReportNewForm() {
     let outcome: ReportOutcome<ReportsPublishResult>;
     if (needsTransfer(request)) {
       setPhase("uploading");
-      outcome = await transfer.current.submit(
+      outcome = await binding.submit(
         JSON.stringify(payload),
         // Each fresh upload is its own session; the publish key is the intent's.
         { format: content.format, staged: stagedBytesOf(content), idempotencyKey: mutationKey("report-transfer") },
@@ -83,7 +96,7 @@ export function ReportNewForm() {
       );
     } else {
       setPhase("sending");
-      await transfer.current.release();
+      await binding.release();
       outcome = await publishReport(request);
     }
     intent.current.settle(outcome);

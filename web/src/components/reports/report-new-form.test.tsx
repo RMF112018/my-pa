@@ -16,6 +16,7 @@ import userEvent from "@testing-library/user-event";
 import fixtures from "@/lib/api/decode/fixtures/python/success.json";
 import { MutationFeedbackProvider } from "@/components/ui/mutation-feedback";
 import { MAX_STAGED_BYTES, UPLOAD_STATE_UNKNOWN_MESSAGE } from "@/lib/reports/transfer-client";
+import { IDENTITY_KEYS_MESSAGE, UNSAFE_NUMBER_MESSAGE } from "@/lib/reports/content-guards";
 import { ReportNewForm } from "./report-new-form";
 import {
   EMPTY_DRAFT,
@@ -459,6 +460,39 @@ describe("ReportNewForm", () => {
     await userEvent.upload(screen.getByLabelText("Read text from a local file"), file);
     expect(await screen.findByText(FORM_MESSAGES.fileNotText)).toBeInTheDocument();
     expect(screen.getByLabelText("Body")).toHaveValue("keep");
+  });
+
+  describe("WP08 C-WP07: JSON data the browser refuses, inline and transfer alike, before any request", () => {
+    const pad = "a".repeat(600_000);
+    it.each([
+      ["an identity key, inline", "json", '{"rows":[{"principal_id":"p"}]}', IDENTITY_KEYS_MESSAGE],
+      ["an identity key, above 512 KiB", "json", `{"tid":"t","pad":"${pad}"}`, IDENTITY_KEYS_MESSAGE],
+      ["an identity key in mixed data", "mixed", '{"oid":"o"}', IDENTITY_KEYS_MESSAGE],
+      ["an integer beyond 2^53, inline", "json", '{"n":9007199254740993}', UNSAFE_NUMBER_MESSAGE],
+      ["an integer beyond 2^53, above 512 KiB", "json", `{"n":-12345678901234567890,"pad":"${pad}"}`, UNSAFE_NUMBER_MESSAGE],
+    ])("%s", async (_name, format, json, message) => {
+      const calls = stub(() => backend(published()));
+      renderForm();
+      await userEvent.type(screen.getByLabelText(/^Title/), "T");
+      fireEvent.change(screen.getByLabelText("Format"), { target: { value: format } });
+      if (format === "mixed") fireEvent.change(screen.getByLabelText("Text"), { target: { value: "b" } });
+      fireEvent.change(screen.getByLabelText("JSON data"), { target: { value: json } });
+      await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+      expect(await screen.findByText(message)).toBeInTheDocument();
+      expect(calls).toEqual([]);
+      expect(nav.push).not.toHaveBeenCalled();
+    });
+
+    it("publishes digits inside strings and safe numbers as typed", async () => {
+      const calls = stub(() => backend(published()));
+      renderForm();
+      await userEvent.type(screen.getByLabelText(/^Title/), "T");
+      fireEvent.change(screen.getByLabelText("Format"), { target: { value: "json" } });
+      fireEvent.change(screen.getByLabelText("JSON data"), { target: { value: '{"id":"9007199254740993","n":9007199254740991}' } });
+      await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+      await waitFor(() => expect(posts(calls)).toHaveLength(1));
+      expect(posts(calls)[0]!.body!.content).toEqual({ format: "json", data: { id: "9007199254740993", n: 9007199254740991 } });
+    });
   });
 
   it("previews markdown through the shared renderer", async () => {

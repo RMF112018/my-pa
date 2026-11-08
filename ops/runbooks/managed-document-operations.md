@@ -317,6 +317,11 @@ Every `reports.delete` also preflights the report's content integrity, so a
 report with a missing or altered part is refused `internal_error` with no
 lifecycle row, held or not.
 
+The manual Reports UI in `web/` (Reports Modernization WP07) has no hold,
+release or retention control and its BFF contract cannot address those
+capabilities; it shows a held report's `held` flag read-only ("On hold"), and
+its Move to Trash of a held report receives the same `denied` refusal.
+
 **What retention does.** Retention is an operator policy per Principal:
 `reports.retention.set` and `reports.retention.get` (purpose
 `report_retention`), operator-only on the same terms. It is **unset by default**:

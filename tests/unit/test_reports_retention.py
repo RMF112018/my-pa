@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any, Final
 
 import pytest
@@ -44,6 +44,7 @@ from my_pa.contracts.ports import (
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.reports.content import validate_content
 from my_pa.domain.reports.creator import CreatorKind, derive_creator
 from my_pa.domain.reports.custody import (
@@ -59,7 +60,7 @@ from my_pa.domain.reports.custody import (
     purge_eligibility,
     retention_clock_start,
 )
-from my_pa.domain.reports.errors import ReportValidationError
+from my_pa.domain.reports.errors import ReportRetentionOverflowError, ReportValidationError
 from my_pa.domain.reports.publication import PublicationRequest
 from my_pa.domain.reports.records import ReportLifecycleEventRecord
 from my_pa.domain.reports.revision import LifecycleRequest
@@ -306,6 +307,68 @@ def test_years_are_calendar_years_and_feb_29_lands_on_feb_28() -> None:
         now=datetime(2029, 2, 28, 8, 0, tzinfo=UTC),
     )
     assert answer.eligible and answer.eligible_at == datetime(2029, 2, 28, 8, 0, tzinfo=UTC)
+
+
+def test_a_period_landing_past_year_9999_raises_the_typed_domain_error() -> None:
+    # WP08 (WP05b review #8): the boundary is the last representable instant.
+    last = datetime.max.replace(tzinfo=UTC)
+    assert RetentionPeriod(1, RetentionUnit.YEARS).added_to(
+        datetime(9998, 12, 31, 23, 59, tzinfo=UTC)
+    ) == datetime(9999, 12, 31, 23, 59, tzinfo=UTC)
+    assert RetentionPeriod(1, RetentionUnit.DAYS).added_to(last - timedelta(days=1)) == last
+    overflowing = [
+        (RetentionPeriod(1, RetentionUnit.YEARS), datetime(9999, 1, 1, tzinfo=UTC)),
+        (RetentionPeriod(100, RetentionUnit.YEARS), datetime(9900, 1, 1, tzinfo=UTC)),
+        (RetentionPeriod(1, RetentionUnit.DAYS), last),
+        (RetentionPeriod(36525, RetentionUnit.DAYS), datetime(9950, 1, 1, tzinfo=UTC)),
+        # A start whose UTC instant is itself past year 9999.
+        (
+            RetentionPeriod(1, RetentionUnit.DAYS),
+            datetime(9999, 12, 31, 23, 0, tzinfo=timezone(timedelta(hours=-5))),
+        ),
+    ]
+    for period, start in overflowing:
+        with pytest.raises(ReportRetentionOverflowError) as caught:
+            period.added_to(start)
+        assert isinstance(caught.value, ReportValidationError)
+        assert (caught.value.field, caught.value.code) == ("eligible_at", "out_of_range")
+        with pytest.raises(ReportRetentionOverflowError):
+            purge_eligibility(
+                period=period,
+                held=False,
+                lifecycle_state=LifecycleState.TRASHED,
+                clock_start=start,
+                now=WHEN,
+            )
+
+
+def test_the_get_handler_answers_an_overflowing_eligibility_as_internal_error(
+    scene: Scene,
+) -> None:
+    service = build_service(scene.world, scene.providers)
+    reports, p = _GeneralReports(scene.world), scene.principal.principal_id
+    report = _publish(reports, p)
+    _move(
+        reports, p, LifecycleOperation.DELETE, report, 0, "d1", at=datetime(9998, 6, 1, tzinfo=UTC)
+    )
+    _set(reports, p, YEARS_5, 0, "r1")
+    metadata, command = normalize(
+        Capability.REPORTS_RETENTION_GET.value,
+        {
+            "request_id": "req",
+            "purpose": "report_retention",
+            "principal_id": p,
+            "requested_at": "2026-11-06T12:00:00Z",
+            "payload": {"report_id": report},
+        },
+    )
+    answer = service.invoke(
+        metadata, command, principal=scene.principal, operator_surface=OperatorSurface.CLI
+    ).model_dump(mode="json")
+    assert answer["result"] is None
+    assert answer["error"]["code"] == ErrorCode.INTERNAL_ERROR.value
+    assert answer["error"]["safe_details"] == []
+    assert report not in json.dumps(answer["error"])
 
 
 def test_eligibility_refuses_naive_and_inconsistent_inputs() -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 __all__ = [
     "ReportDomainError",
     "ReportLifecycleRefusal",
+    "ReportRetentionOverflowError",
     "ReportValidationError",
 ]
 
@@ -31,6 +32,20 @@ class ReportValidationError(ReportDomainError):
         super().__init__(f"{field}: {code}")
         self.field = field
         self.code = code
+
+
+class ReportRetentionOverflowError(ReportValidationError):
+    """A retention period added to a clock start lands past `datetime.max` (year 9999).
+
+    Reports Modernization WP08 (WP05b review #8). A subclass of
+    `ReportValidationError`, so every handler that maps an invalid retention
+    computation maps this one the same way (`reports.retention.get`:
+    `internal_error`), never an unmapped `OverflowError`. Unreachable with
+    server-clock timestamps; the field and code name the rule, not the value.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("eligible_at", "out_of_range")
 
 
 class ReportLifecycleRefusal(ReportDomainError):  # noqa: N818 - contract section 2 name

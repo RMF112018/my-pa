@@ -47,7 +47,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import MAXYEAR, UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Final, NamedTuple
 
@@ -56,7 +56,7 @@ from my_pa.domain.lineage.vocabulary import (
     ATTESTED_DECISION_CHANNELS,
 )
 from my_pa.domain.reports.content import canonical_json
-from my_pa.domain.reports.errors import ReportValidationError
+from my_pa.domain.reports.errors import ReportRetentionOverflowError, ReportValidationError
 from my_pa.domain.reports.records import ReportLifecycleEventRecord
 from my_pa.domain.reports.values import validate_change_reason
 from my_pa.domain.reports.vocabulary import LifecycleOperation, LifecycleState
@@ -467,11 +467,21 @@ class RetentionPeriod:
         return {"count": self.count, "unit": self.unit.value}
 
     def added_to(self, start: datetime) -> datetime:
-        """`start` plus this period, in UTC; calendar years land Feb 29 on Feb 28."""
-        instant = _aware(start, "clock_start").astimezone(UTC)
-        if self.unit is RetentionUnit.DAYS:
-            return instant + timedelta(days=self.count)
+        """`start` plus this period, in UTC; calendar years land Feb 29 on Feb 28.
+
+        A result past year 9999 raises `ReportRetentionOverflowError` (a
+        `ReportValidationError`), never a bare `OverflowError`/`ValueError`.
+        """
+        aware = _aware(start, "clock_start")
+        try:
+            instant = aware.astimezone(UTC)
+            if self.unit is RetentionUnit.DAYS:
+                return instant + timedelta(days=self.count)
+        except OverflowError as error:
+            raise ReportRetentionOverflowError() from error
         year = instant.year + self.count
+        if year > MAXYEAR:
+            raise ReportRetentionOverflowError()
         try:
             return instant.replace(year=year)
         except ValueError:  # Feb 29 in a year that has none

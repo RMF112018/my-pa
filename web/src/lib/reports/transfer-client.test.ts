@@ -392,6 +392,23 @@ describe("R1-2: transferBinding keeps a transfer for the same resubmit while the
     await binding.release();
     expect(aborts(calls)).toHaveLength(1);
   });
+
+  it("C3: after dispose, a submit in flight that answers ambiguously aborts and holds nothing", async () => {
+    let answer: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { answer = resolve; });
+    const { calls } = withSubmit(async () => { await gate; throw new TypeError("network"); });
+    const binding = transferBinding();
+    const submit: Submit = (content) => publishReport({ title: "T", content, idempotencyKey: "k" });
+    const pending = binding.submit("d", request("abc"), submit);
+    await vi.waitFor(() => expect(calls.some((call) => call.url.endsWith("/finalize"))).toBe(true));
+    await binding.dispose();
+    expect(aborts(calls)).toHaveLength(0);
+    answer();
+    expect(await pending).toMatchObject({ ok: false, code: "transport_failed" });
+    expect(aborts(calls).map((call) => call.url)).toEqual([`/api/reports/transfers/${SESSION}/abort`]);
+    await binding.release();
+    expect(aborts(calls)).toHaveLength(1);
+  });
 });
 
 describe("readFullContent", () => {

@@ -176,8 +176,11 @@ function EditForm({
   const [latest, setLatest] = useState<Latest | null>(null);
 
   useEffect(() => {
-    const binding = transfer.current;
-    return () => { void binding.release(); };
+    // One binding per mount: the cleanup disposes it, and a remount (StrictMode
+    // runs mount -> cleanup -> mount) gets a live one rather than the disposed one.
+    const binding = transferBinding();
+    transfer.current = binding;
+    return () => { void binding.dispose(); };
   }, []);
 
   const latestReport = latest?.kind === "ready" ? latest.report : null;

@@ -29,7 +29,8 @@
  * transfer with the SAME idempotency key and the server replays the original
  * receipt (WP06 T10). A definitive refusal aborts the session; a changed draft
  * or an abandoned intent drops the reference and aborts it, best effort; a
- * success consumed it.
+ * success consumed it. An unmounted form disposes its binding: an answer still
+ * in flight that comes back ambiguous then aborts instead of holding.
  *
  * Read: `readFullContent` reads `/content` sequentially from offset 0, checks
  * every chunk's sha256 and the whole part's sha256 (= the pointer's) with
@@ -227,10 +228,18 @@ export interface TransferBinding {
   ): Promise<ReportOutcome<T>>;
   /** The intent is abandoned or the draft changed: drop the held transfer, abort it best effort. */
   release(): Promise<void>;
+  /**
+   * The owner is gone (unmount): release, and from now on hold nothing, so a
+   * submit still in flight that answers ambiguously aborts its transfer (best
+   * effort) instead of keeping a session nobody will release. Final: a
+   * remounted owner uses a new binding.
+   */
+  dispose(): Promise<void>;
 }
 
 export function transferBinding(): TransferBinding {
   let held: { readonly signature: string; readonly transfer: StagedTransfer } | undefined;
+  let disposed = false;
   async function release(): Promise<void> {
     const dropped = held;
     held = undefined;
@@ -248,14 +257,19 @@ export function transferBinding(): TransferBinding {
       held = undefined;
       const outcome = await submit({ transfer: { sessionId: transfer.sessionId, contentToken: transfer.contentToken } });
       if (outcome.ok) return outcome; // consumed by the publish/update
-      if (isAmbiguous(outcome)) {
+      if (isAmbiguous(outcome) && !disposed) {
         held = { signature, transfer }; // may have been applied: keep it for the same resubmit
         return outcome;
       }
-      await abortQuietly(transfer.sessionId); // definitively refused: not consumed
+      // Definitively refused (not consumed), or ambiguous after dispose (nobody would release it).
+      await abortQuietly(transfer.sessionId);
       return outcome;
     },
     release,
+    async dispose() {
+      disposed = true;
+      await release();
+    },
   };
 }
 

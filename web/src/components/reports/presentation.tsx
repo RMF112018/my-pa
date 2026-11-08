@@ -9,6 +9,7 @@
  */
 import { Badge } from "@/components/ui/badge";
 import type { ReportRefusal } from "@/lib/reports/client";
+import { UPLOAD_STATE_UNKNOWN_MESSAGE } from "@/lib/reports/transfer-client";
 
 export const LIFECYCLE_WORDS = {
   active: "Active",
@@ -59,12 +60,14 @@ export const REPORT_MESSAGES = {
   network: "The request could not be sent. Check your connection and try again.",
   unverified: "The content could not be verified, so it is not shown.",
   tooLarge: "The content is larger than 16 MB.",
+  uploadStateUnknown: UPLOAD_STATE_UNKNOWN_MESSAGE,
 } as const;
 
 /** One refusal in product language. */
 export function refusalWords(refused: ReportRefusal): string {
   if (refused.code === "transfer_mismatch") return REPORT_MESSAGES.unverified;
   if (refused.code === "content_too_large") return REPORT_MESSAGES.tooLarge;
+  if (refused.code === "transfer_state_unknown") return REPORT_MESSAGES.uploadStateUnknown;
   if (refused.code === "transport_failed") return REPORT_MESSAGES.network;
   if (refused.status === 404 || refused.code === "not_found") return REPORT_MESSAGES.notFound;
   if (refused.status === 401) return REPORT_MESSAGES.signIn;

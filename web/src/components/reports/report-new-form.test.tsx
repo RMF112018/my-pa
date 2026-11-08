@@ -9,12 +9,13 @@
  * Node's SHA-256 over a copy of the same bytes (as report-view.test.tsx does).
  */
 import { createHash } from "node:crypto";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import fixtures from "@/lib/api/decode/fixtures/python/success.json";
 import { MutationFeedbackProvider } from "@/components/ui/mutation-feedback";
-import { MAX_STAGED_BYTES } from "@/lib/reports/transfer-client";
+import { MAX_STAGED_BYTES, UPLOAD_STATE_UNKNOWN_MESSAGE } from "@/lib/reports/transfer-client";
 import { ReportNewForm } from "./report-new-form";
 import {
   EMPTY_DRAFT,
@@ -60,7 +61,10 @@ const sessionOf = (n: number) => (n === 1 ? SESSION : `grxfr_bbbbbbbb2222222${n}
 const tokenOf = (n: number) => (n === 1 ? TOKEN : `grxtk_${String(n).repeat(64)}`);
 
 /** A fake transfer BFF (begin/append/finalize/abort) plus a publish answer; each begin opens a new session. */
-function transferBff(publish: (body: Json) => Response = () => backend(published())) {
+function transferBff(
+  publish: (body: Json) => Response | Promise<Response> = () => backend(published()),
+  finalize?: () => Response,
+) {
   const limit = 262_144;
   let declared = { byteCount: 0, sha256: "", format: "text" };
   let opened = 0;
@@ -89,6 +93,7 @@ function transferBff(publish: (body: Json) => Response = () => backend(published
       });
     }
     if (path.endsWith("/finalize")) {
+      if (finalize) return finalize();
       return backend({
         session_id: sessionOf(opened), state: "finalized", content_token: tokenOf(opened), expires_at: EXPIRES,
         byte_count: declared.byteCount, sha256: declared.sha256, format: declared.format, encoding: "identity",
@@ -102,8 +107,9 @@ function transferBff(publish: (body: Json) => Response = () => backend(published
   return { calls, chunks };
 }
 
-function renderForm() {
-  return render(<MutationFeedbackProvider><ReportNewForm /></MutationFeedbackProvider>);
+function renderForm({ strict = false } = {}) {
+  const form = <MutationFeedbackProvider><ReportNewForm /></MutationFeedbackProvider>;
+  return render(strict ? <StrictMode>{form}</StrictMode> : form);
 }
 const posts = (calls: readonly Call[]) => calls.filter((call) => call.method === "POST");
 
@@ -320,6 +326,64 @@ describe("ReportNewForm", () => {
       view.unmount();
       await waitFor(() => expect(aborts(calls)).toEqual([`/api/reports/transfers/${SESSION}/abort`]));
     });
+
+    it("C3: a submit in flight when the form is left that then answers ambiguously aborts and holds nothing", async () => {
+      let answer: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => { answer = resolve; });
+      const { calls } = transferBff(async () => { await gate; return refusedAnswer(503, "unavailable", "unavailable"); });
+      const view = renderForm();
+      await fillLarge();
+      await publish();
+      await waitFor(() => expect(publishes(calls)).toHaveLength(1));
+      view.unmount();
+      expect(aborts(calls)).toEqual([]);
+      answer();
+      await waitFor(() => expect(aborts(calls)).toEqual([`/api/reports/transfers/${SESSION}/abort`]));
+      // Nothing is held: no later release would find a session to abort.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(aborts(calls)).toHaveLength(1);
+    });
+
+    it("C3: under StrictMode (mount -> cleanup -> mount) an ambiguous answer is still kept for the resubmit", async () => {
+      let answered = 0;
+      const { calls } = transferBff(() => (++answered <= 2 ? refusedAnswer(503, "unavailable", "unavailable") : backend(published())));
+      renderForm({ strict: true });
+      await fillLarge();
+      await publish();
+      expect(await screen.findByText("Reports are unavailable right now.")).toBeInTheDocument();
+      expect(aborts(calls)).toEqual([]);
+      await publish();
+      await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/reports/grpt_aaaaaaaa11111111"));
+      expect(begins(calls)).toHaveLength(1);
+      const sent = publishes(calls).map((call) => call.body!);
+      expect(sent).toHaveLength(3);
+      for (const body of sent) expect(body).toEqual(sent[0]);
+      expect(aborts(calls)).toEqual([]);
+    });
+  });
+
+  it("C3: an ambiguous finalize says the upload state is unknown, aborts, and the next submit uploads afresh", async () => {
+    let finalizes = 0;
+    const { calls } = transferBff(undefined, () => {
+      finalizes += 1;
+      return finalizes === 1 ? refusedAnswer(503, "unavailable", "unavailable") : backend({
+        session_id: sessionOf(2), state: "finalized", content_token: tokenOf(2), expires_at: EXPIRES,
+        byte_count: 600_000, sha256: sha(new TextEncoder().encode("a".repeat(600_000))), format: "text", encoding: "identity",
+        decoded_byte_count: 600_000, decoded_sha256: sha(new TextEncoder().encode("a".repeat(600_000))),
+      });
+    });
+    renderForm();
+    await userEvent.type(screen.getByLabelText(/^Title/), "Large");
+    fireEvent.change(screen.getByLabelText("Body"), { target: { value: "a".repeat(600_000) } });
+    await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+    expect(await screen.findByText(UPLOAD_STATE_UNKNOWN_MESSAGE)).toBeInTheDocument();
+    expect(screen.queryByText("Reports are unavailable right now.")).toBeNull();
+    expect(calls.filter((call) => call.path.endsWith("/finalize"))).toHaveLength(1);
+    expect(calls.filter((call) => call.path.endsWith("/abort")).map((call) => call.path)).toEqual([`/api/reports/transfers/${SESSION}/abort`]);
+    expect(posts(calls).filter((call) => call.path === "/api/reports")).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+    await waitFor(() => expect(nav.push).toHaveBeenCalled());
+    expect(calls.filter((call) => call.path === "/api/reports/transfers")).toHaveLength(2);
   });
 
   it("shows the uploading state while large content is staged", async () => {

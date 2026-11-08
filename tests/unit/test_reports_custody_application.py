@@ -20,7 +20,7 @@ from typing import Any, Final
 import pytest
 
 from my_pa.adapters.mcp.chatllm_gateway import facade_kind
-from my_pa.adapters.mcp.remote import is_remote_write
+from my_pa.adapters.mcp.remote import _WRITE_PURPOSES, is_remote_write
 from my_pa.adapters.normalization import normalize
 from my_pa.adapters.remote_request import _IDEMPOTENT_REMOTE_CAPABILITIES
 from my_pa.application.errors import ApplicationError, SafeDetail
@@ -127,6 +127,10 @@ def test_the_four_are_classified_operator_only_with_their_own_purposes() -> None
         # Keyed (one replay identity, as the attested confirms).
         assert is_remote_write(capability) and capability in _IDEMPOTENT_REMOTE_CAPABILITIES
     assert not is_write_capability(Capability.REPORTS_RETENTION_GET)
+    # WP08 (WP05b review #4): a remote read, though `report_retention` is a write
+    # purpose; still operator-only, so withheld remotely either way.
+    assert not is_remote_write(Capability.REPORTS_RETENTION_GET)
+    assert Purpose.REPORT_RETENTION in _WRITE_PURPOSES
     assert Capability.REPORTS_RETENTION_GET not in _IDEMPOTENT_REMOTE_CAPABILITIES
     hold = frozenset({Purpose.REPORT_HOLD})
     retention = frozenset({Purpose.REPORT_RETENTION})

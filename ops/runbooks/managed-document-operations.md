@@ -520,3 +520,34 @@ restore, update, retention get/set/get, release, delete, store-less refusal,
 unstamped `denied`) is exercised against a disposable database and a temporary
 root by `tests/database/test_reports_custody_cli.py`; nothing here has been run
 against a real deployment root, which remains an operator action.
+
+## 9. Deploying Reports (operator)
+
+Reports Modernization (WP08) changes nothing here by itself; these are the
+operator's steps, in order, when the branch is deployed. None is run by an
+agent, a migration or the code.
+
+1. **Merge order.** PR #349 merges first, so the Alembic history has the single
+   head `2a90f91dd786`; this branch then moves it to `4c37731671fc` (the general
+   report plane). Migrate to that single head before starting the new code.
+2. **Content store.** Set `MY_PA_REPORT_CONTENT_ROOT` (section 7) to the store
+   root. Unset is the default and composes no store: content stays inline and
+   larger content, holds and transfers are refused.
+3. **Remote memory.** The remote MCP service needs `MY_PA_REMOTE_MEMORY=896m`.
+   It was already applied to the deployment's environment on 2026-11-06 and
+   takes effect at the next container recreate.
+4. **ChatLLM profile.** For each ChatLLM client run `profile-plan`, then
+   `profile-apply --apply`, for `chatllm-data-v12`
+   ([`managed-knowledge-context.md`](managed-knowledge-context.md)). A client
+   converged on `chatllm-data-v11` adds exactly the 11 Reports names. Reconnect
+   the client afterwards.
+5. **Retention.** After the deploy, set the operator-approved period once with
+   `reports.retention.set` and `{"period": {"count": 5, "unit": "years"}}`
+   (section 8's example).
+6. **Transfer staging.** Schedule `report_content.py transfer-gc` hourly
+   (section 7.1).
+7. **Backup and preservation.** Include the store in backups (section 7's
+   `backup`, after `pg_dump`) and run `report_content.py preservation-verify`
+   (section 8): exit `0` clean, `3` orphans or stale temporaries with
+   `--fail-on-orphans`, `2` an integrity finding, `1` refused. Stale
+   temporaries are cleared by hand as section 8 describes.

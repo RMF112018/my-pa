@@ -723,6 +723,28 @@ describe("invokeStandaloneReports (WP07 Amendment A1)", () => {
     errorSpy.mockRestore();
   });
 
+  it.each([
+    ["reports.read", "reports.read.markdown", { report_id: "grpt_aaaaaaaa11111111" }],
+    ["reports.list", "reports.list.standalone", { plane: "standalone" }],
+    ["reports.search", "reports.search.all", { plane: "all", query: "brief" }],
+  ] as const)(
+    "pins invokeGateway(%s) to the legacy decoder: standalone is 503 upstream_contract_invalid, legacy is ok",
+    async (capability, variant, payload) => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      stubGateway({ result: standaloneVariants[variant], disclosure: DISCLOSURE });
+      const refused = await invokeGateway(PRINCIPAL, capability, payload);
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) {
+        expect(refused.status).toBe(503);
+        expect(refused.error.code).toBe("upstream_contract_invalid");
+      }
+      stubGateway({ result: legacySuccess[capability], disclosure: DISCLOSURE });
+      const legacy = await invokeGateway(PRINCIPAL, capability, payload);
+      expect(legacy).toEqual({ ok: true, result: legacySuccess[capability], disclosure: DISCLOSURE });
+      errorSpy.mockRestore();
+    },
+  );
+
   it("refuses a legacy pipeline result without echoing it", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     stubGateway({ result: legacySuccess["reports.read"], disclosure: DISCLOSURE });

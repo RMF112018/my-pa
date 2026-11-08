@@ -13,7 +13,27 @@ import { describe, expect, it } from "vitest";
 const SRC = join(__dirname, "..", "..");
 const ROOTS = ["components/reports", "app/(app)/reports", "lib/reports", "app/api/reports"];
 
-const FORBIDDEN_WORDING = /purge|permanent|empty\s+trash|legal\s+hold|place\s+hold|release\s+hold|retention/i;
+/**
+ * Hold/retention/purge control wording (case-insensitive, comments stripped). A bare `hold` is not banned:
+ * the read-only "On hold" badge (U7) is the one hold datum the UI shows, and none of these phrases match it.
+ */
+const FORBIDDEN_WORDING = new RegExp(
+  [
+    "purge",
+    "permanent", // also "permanently"
+    "empty\\s+trash",
+    "legal\\s+hold",
+    "place\\s+(on\\s+)?hold",
+    "put\\s+on\\s+hold",
+    "release\\s+hold",
+    "remove\\s+hold",
+    "lift\\s+hold",
+    "un-?hold",
+    "set\\s+retention",
+    "retention",
+  ].join("|"),
+  "i",
+);
 const FORBIDDEN_CAPABILITY = /reports\.(hold|retention|purge|commit|record_run_state|types|manifest)\b/;
 
 function sources(directory: string): string[] {
@@ -32,6 +52,17 @@ function code(text: string): string {
 const FILES = ROOTS.flatMap((root) => sources(join(SRC, root)));
 
 describe("Reports UI source guard", () => {
+  it.each([
+    "Remove hold", "LIFT HOLD", "Put on hold", "Place hold", "place on hold", "Unhold", "un-hold", "Legal hold",
+    "Set retention", "Purge", "Delete permanently", "Empty trash", "Release hold",
+  ])("treats %j as forbidden wording", (phrase) => {
+    expect(phrase).toMatch(FORBIDDEN_WORDING);
+  });
+
+  it.each(["On hold", "Held", "Move to Trash", "Restore", "Archive"])("allows the existing UI text %j", (phrase) => {
+    expect(phrase).not.toMatch(FORBIDDEN_WORDING);
+  });
+
   it("scans the reports UI, client and route files (including the new and edit forms)", () => {
     const names = FILES.map((file) => relative(SRC, file));
     for (const expected of [

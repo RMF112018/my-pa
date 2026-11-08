@@ -88,11 +88,30 @@ beforeEach(() => {
     consoleSpies.push(vi.spyOn(console, method).mockImplementation(() => undefined));
   }
 });
+/** Only the publish/update submit may carry a content token, and only in its body. */
+const TOKEN_BODY_ROUTE = /^\/api\/reports(\/grpt_[^/]+\/update)?$/;
+
+/** Every fetch call any test made: no token in a URL or header; in a body only on the submit. */
+function tokenLeaks(fetchMock: unknown): string[] {
+  if (!vi.isMockFunction(fetchMock)) return [];
+  return (fetchMock.mock.calls as Parameters<typeof fetch>[]).flatMap(([input, init]) => {
+    const url = String(input);
+    const leaks: string[] = [];
+    if (url.includes("grxtk_")) leaks.push(`url ${url}`);
+    new Headers(init?.headers).forEach((value, name) => {
+      if (value.includes("grxtk_") || name.includes("grxtk_")) leaks.push(`header ${name} on ${url}`);
+    });
+    if (String(init?.body ?? "").includes("grxtk_") && !TOKEN_BODY_ROUTE.test(url)) leaks.push(`body on ${url}`);
+    return leaks;
+  });
+}
+
 afterEach(() => {
   for (const spy of consoleSpies.splice(0)) {
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   }
+  expect(tokenLeaks(globalThis.fetch)).toEqual([]);
   vi.unstubAllGlobals();
 });
 
@@ -268,7 +287,9 @@ describe("withTransferredContent + publishReport", () => {
     const outcome = await withTransferredContent({ format: "text", staged: enc("abc"), idempotencyKey: "x" }, (content) =>
       publishReport({ title: "T", content, idempotencyKey: "p" }));
     expect(outcome).toMatchObject({ ok: false, status: 400 });
-    expect(calls.at(-1)!.url.endsWith("/abort")).toBe(true);
+    expect(calls.at(-1)!.url).toBe(`/api/reports/transfers/${SESSION}/abort`);
+    expect(calls.every((call) => !call.url.includes("grxtk_"))).toBe(true);
+    expect(tokenLeaks(fetchMock)).toEqual([]);
   });
 });
 

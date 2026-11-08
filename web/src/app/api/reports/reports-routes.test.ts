@@ -246,6 +246,20 @@ describe("POST /api/reports (publish)", () => {
       await refusedBeforeGateway(publish(post("/api/reports", { ...base, content: inline, ...extra })));
     }
   });
+  it("refuses a principal key nested inside inline json/mixed content data before dispatch", async () => {
+    for (const key of ["principal_id", "principalId", "tid", "oid"]) {
+      for (const inline of [
+        { format: "json", data: { [key]: "prn_x" } },
+        { format: "json", data: { outer: [{ inner: { [key]: "prn_x" } }] } },
+        { format: "mixed", body: "x", data: { [key]: "prn_x" } },
+      ]) {
+        await refusedBeforeGateway(publish(post("/api/reports", { ...base, content: inline })));
+      }
+    }
+    answerWith(ok(fixtures["reports.publish"]));
+    await answer(await publish(post("/api/reports", { ...base, content: { format: "json", data: { outer: [{ inner: { owner: "x" } }] } } })), 200);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
   it("refuses open or malformed content before dispatch, never echoing it", async () => {
     for (const bad of [
       { format: "markdown", body: "x", encoding: "identity" },
@@ -304,6 +318,19 @@ describe("POST /api/reports/[reportId]/update", () => {
         clear_fields: ["report_date", "type"],
       },
     });
+  });
+  it("refuses a principal key nested inside patch content data before dispatch", async () => {
+    for (const key of ["principal_id", "principalId", "tid", "oid"]) {
+      for (const content of [
+        { format: "json", data: { [key]: "prn_x" } },
+        { format: "mixed", body: "x", data: { nested: { [key]: "prn_x" } } },
+      ]) {
+        await refusedBeforeGateway(update(post(`/api/reports/${reportId}/update`, { ...base, patch: { content } }), at()));
+      }
+    }
+    answerWith(ok(fixtures["reports.update"]));
+    await answer(await update(post(`/api/reports/${reportId}/update`, { ...base, patch: { content: { format: "json", data: { nested: { owner: "x" } } } } }), at()), 200);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
   });
   it("refuses open patches and unknown clear fields before dispatch", async () => {
     for (const extra of [

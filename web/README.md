@@ -167,6 +167,11 @@ retention are operator-only (`ops/runbooks/managed-document-operations.md`
 section 8): `reports.hold.*` and `reports.retention.*` are not in
 `gateway.json`, no route or control reaches them, there is no purge, and the UI
 shows `held` read-only as "On hold". Intelligence pages are unchanged.
+Known limitation: after an ambiguous publish answer (network failure or
+502/503/504), resubmitting the unchanged draft reuses its idempotency key and is
+replayed safely, but editing the draft first makes it a new intent with a new
+key, so if the first attempt had in fact committed, a second report results (an
+edited update is instead refused as stale, because its expected version moved).
 
 ## Worker-plane reporting
 

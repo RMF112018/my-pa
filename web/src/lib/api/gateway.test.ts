@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import contract from "@/contracts/gateway.json";
+import standaloneVariants from "@/lib/api/decode/fixtures/python/reports.standalone.json";
+import legacySuccess from "@/lib/api/decode/fixtures/python/success.json";
 import {
   GATEWAY_TIMEOUT_MS,
   GatewayIsServerOnlyError,
@@ -21,6 +23,7 @@ import {
   callGateway,
   correlationPrincipalId,
   invokeGateway,
+  invokeStandaloneReports,
   transportLimitations,
   type PythonDisclosure,
 } from "@/lib/api/gateway";
@@ -687,6 +690,65 @@ describe("invokeGateway", () => {
     vi.stubEnv("MYPA_GATEWAY_AUTH_MODE", "entra");
     const { fetchStub } = stubGateway({ result: { anything: true }, disclosure: DISCLOSURE });
     const outcome = await invokeGateway(PRINCIPAL, "capabilities.get");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error.code).toBe("no_forwardable_credential");
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+});
+
+describe("invokeStandaloneReports (WP07 Amendment A1)", () => {
+  it("sends the same document to the same path and decodes the standalone result", async () => {
+    const { calls } = stubGateway({ result: standaloneVariants["reports.read.markdown"], disclosure: DISCLOSURE });
+    const outcome = await invokeStandaloneReports(PRINCIPAL, "reports.read", { report_id: "grpt_aaaaaaaa11111111" });
+    expect(outcome).toEqual({
+      ok: true,
+      result: standaloneVariants["reports.read.markdown"],
+      disclosure: DISCLOSURE,
+    });
+    stubGateway({ result: standaloneVariants["reports.read.markdown"], disclosure: DISCLOSURE });
+    const legacy = await callGateway(PRINCIPAL, "reports.read", { report_id: "grpt_aaaaaaaa11111111" });
+    expect(legacy.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("http://127.0.0.1:8000/v1/reports.read");
+    const sent = JSON.parse(String(calls[0].init.body)) as Record<string, unknown>;
+    expect(sent.payload).toEqual({ report_id: "grpt_aaaaaaaa11111111" });
+  });
+
+  it("leaves invokeGateway on the legacy decoder: a standalone result is upstream_contract_invalid", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    stubGateway({ result: standaloneVariants["reports.list.all"], disclosure: DISCLOSURE });
+    const outcome = await invokeGateway(PRINCIPAL, "reports.list", { plane: "all" });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error.code).toBe("upstream_contract_invalid");
+    errorSpy.mockRestore();
+  });
+
+  it("refuses a legacy pipeline result without echoing it", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    stubGateway({ result: legacySuccess["reports.read"], disclosure: DISCLOSURE });
+    const outcome = await invokeStandaloneReports(PRINCIPAL, "reports.read", { report_id: "rpt_aaaaaaaa11111111" });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.status).toBe(503);
+      expect(outcome.error.code).toBe("upstream_contract_invalid");
+      expect(JSON.stringify(outcome.error)).not.toContain("Morning Brief");
+    }
+    expect(errorSpy.mock.calls[0]?.[0]).toEqual({ capability: "reports.read", code: "upstream_contract_invalid" });
+    errorSpy.mockRestore();
+  });
+
+  it("passes gateway refusals through unchanged and still refuses entra mode without a request", async () => {
+    stubGateway(
+      { error: { code: "not_found", message: "no such report", correlation_id: "corr_aaaaaaaa11111111" } },
+      404,
+    );
+    const refused = await invokeStandaloneReports(PRINCIPAL, "reports.read", { report_id: "grpt_aaaaaaaa11111111" });
+    const legacy = await invokeGateway(PRINCIPAL, "reports.read", { report_id: "grpt_aaaaaaaa11111111" });
+    expect(refused).toEqual(legacy);
+    expect(refused.ok).toBe(false);
+    vi.stubEnv("MYPA_GATEWAY_AUTH_MODE", "entra");
+    const { fetchStub } = stubGateway({ result: standaloneVariants["reports.list.standalone"], disclosure: DISCLOSURE });
+    const outcome = await invokeStandaloneReports(PRINCIPAL, "reports.list", { plane: "standalone" });
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.error.code).toBe("no_forwardable_credential");
     expect(fetchStub).not.toHaveBeenCalled();

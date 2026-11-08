@@ -192,6 +192,14 @@ def test_the_disposition_translation_lands_on_real_domain_members(
 #: the argument break because the routes wrap the call over several lines.
 _CALL_SITE: Final = re.compile(r"callGateway<?[^(]*\(\s*[^,]+,\s*\"([a-z_.]+)\"", re.MULTILINE)
 
+#: The same call through either authority path built on it -- `invokeGateway`
+#: or (Reports Modernization WP07 Amendment A1) `invokeStandaloneReports` --
+#: in a production module (`.ts`/`.tsx`, tests excluded: their mocks name
+#: stand-in strings, not capabilities).
+_AUTHORITY_CALL_SITE: Final = re.compile(
+    r"\b(?:invokeGateway|invokeStandaloneReports)\s*\(\s*[^,()]+,\s*\"([a-z_.]+)\"", re.MULTILINE
+)
+
 
 def test_no_web_module_addresses_a_capability_the_contract_does_not_declare(
     declared: dict[str, dict[str, Any]],
@@ -208,8 +216,23 @@ def test_no_web_module_addresses_a_capability_the_contract_does_not_declare(
     called: set[str] = set()
     for path in sorted(WEB_SOURCE.rglob("*.ts")):
         called.update(_CALL_SITE.findall(path.read_text(encoding="utf-8")))
+    for path in sorted([*WEB_SOURCE.rglob("*.ts"), *WEB_SOURCE.rglob("*.tsx")]):
+        if ".test." not in path.name:
+            called.update(_AUTHORITY_CALL_SITE.findall(path.read_text(encoding="utf-8")))
     assert called, "no callGateway site was found, so this rule is describing nothing"
     undeclared = called - set(declared)
     assert not undeclared, (
         f"web modules call capabilities the shared contract does not declare: {undeclared}"
     )
+
+
+def test_the_authority_call_site_lock_sees_both_paths() -> None:
+    """WP07 Amendment A1: a call through either authority path is one the lock reads."""
+    sample = (
+        'await invokeGateway(principal, "reports.read", {});\n'
+        "const outcome = await invokeStandaloneReports(\n"
+        '  guard.principal,\n  "reports.list",\n  { plane: "standalone" },\n);\n'
+    )
+    assert _AUTHORITY_CALL_SITE.findall(sample) == ["reports.read", "reports.list"]
+    # Not a call: a name in prose followed later by an unrelated argument list.
+    assert _AUTHORITY_CALL_SITE.findall('see invokeGateway. f(x, "worker_stale")') == []

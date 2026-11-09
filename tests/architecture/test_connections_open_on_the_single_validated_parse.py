@@ -133,9 +133,12 @@ def _bindings(tree: ast.AST) -> dict[str, list[ast.expr]]:
             targets = [target for target in node.targets if isinstance(target, ast.Name)]
             for target in targets:
                 bound.setdefault(target.id, []).append(node.value)
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            if node.value is not None:
-                bound.setdefault(node.target.id, []).append(node.value)
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.value is not None
+        ):
+            bound.setdefault(node.target.id, []).append(node.value)
     return bound
 
 

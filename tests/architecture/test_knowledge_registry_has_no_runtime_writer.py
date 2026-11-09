@@ -228,9 +228,12 @@ def table_writers(source: str, table: str) -> list[str]:
                     and _names_table(function.value, local, table)
                 ):
                     found.append(scope)
-            elif isinstance(child, ast.Constant) and isinstance(child.value, str):
-                if sql.search(child.value):
-                    found.append(scope)
+            elif (
+                isinstance(child, ast.Constant)
+                and isinstance(child.value, str)
+                and sql.search(child.value)
+            ):
+                found.append(scope)
 
     tree = ast.parse(source)
     module_aliases = frozenset({table})

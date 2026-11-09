@@ -465,8 +465,8 @@ jobs:
     runs-on: ubuntu-latest
     # Per-shard budget, as for `validate-fast` (see the comment above
     # `validate-static`): shard 1 holds only the walk file, which bounds it
-    # from below; 55 minutes (3300 s) leaves about 31% over a ~2285 s worst
-    # case. Measurement headroom, not an SLA.
+    # from below; a ~2285 s worst case is about 69% of 55 minutes (3300 s).
+    # Measurement headroom, not an SLA.
     timeout-minutes: 55
     strategy:
       fail-fast: false
@@ -758,8 +758,10 @@ jobs:
     # Ordinary current-schema tests. One Alembic upgrade per worker, then clones.
     runs-on: ubuntu-latest
     # Main took 3071 s (pytest 2971 s); the PR's pytest ran 3555 s and was
-    # cancelled at the old 60 minutes with ~97% of tests done, so ~3780 s
-    # projected. Of 90 minutes (5400 s): ~70% projected, main 57%.
+    # cancelled at the old 60 minutes with ~97% of tests done, so pytest
+    # projects to ~3665 s (3555/0.97) and the job to ~3780 s with main's
+    # ~100 s of setup and profile-proof overhead (3071 - 2971).
+    # Of 90 minutes (5400 s): ~70% projected, main 57%.
     # Measurement headroom, not an SLA.
     timeout-minutes: 90
     services:

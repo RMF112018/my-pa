@@ -266,6 +266,15 @@ KNOWLEDGE_REVIEW_PATH: Final = FIXTURE_DIR / "review.knowledge.json"
 #: `reports.read`, `reports.list` and `reports.search`, decoded by the separate
 #: `STANDALONE_REPORT_DECODERS` path, never by the legacy `DECODERS` entries.
 REPORTS_STANDALONE_PATH: Final = FIXTURE_DIR / "reports.standalone.json"
+#: The `reports.read.gzip` variant's original bytes, pinned rather than produced by
+#: `gzip.compress(..., mtime=0)`: the gzip header's OS byte varies with the platform's
+#: zlib (0x13 from macOS zlib, which these bytes carry; 0x03 on Linux), and so could the
+#: deflate stream under another zlib build, while the committed fixture pins these exact
+#: bytes through `original_sha256` and `encoded`.
+STANDALONE_GZIP_BODY: Final = b"Synthetic gzip body."
+STANDALONE_GZIP_ORIGINAL: Final = bytes.fromhex(
+    "1f8b08000000000002130baecc2bc9482dc94c5648afca2c5048ca4fa9d40300a6b11f3d14000000"
+)
 SERVICE_PATH: Final = ROOT / "src" / "my_pa" / "application" / "service.py"
 GATEWAY_PATH: Final = ROOT / "web" / "src" / "contracts" / "gateway.json"
 
@@ -2640,7 +2649,7 @@ def _gr_intelligence_artifact() -> IntelligenceArtifact:
 
 def standalone_report_payloads() -> dict[str, dict[str, Any]]:
     """Variant name -> gateway `result` the standalone Vitest decoders must accept."""
-    gzip_original = gzip.compress(b"Synthetic gzip body.", mtime=0)
+    gzip_original = STANDALONE_GZIP_ORIGINAL
     omitted = content_facts(
         ContentFormat.TEXT,
         ContentEncoding.GZIP_BASE64,
@@ -3742,6 +3751,14 @@ def test_knowledge_review_wire_shapes_are_the_frozen_ones() -> None:
 
 def test_committed_standalone_report_fixtures_match_live_payloads() -> None:
     """WP07 A1: the standalone read/list/search variants Vitest decodes are the live builders'."""
+    # The pinned gzip original must stay one well-formed gzip member of the body
+    # the variant declares, so pinning it never desynchronises `body` from `encoded`.
+    assert STANDALONE_GZIP_ORIGINAL[:4] == b"\x1f\x8b\x08\x00", "gzip magic, deflate, no flags"
+    assert STANDALONE_GZIP_ORIGINAL[4:8] == b"\x00\x00\x00\x00", "gzip mtime must be zero"
+    member = zlib.decompressobj(wbits=31)
+    assert member.decompress(STANDALONE_GZIP_ORIGINAL) == STANDALONE_GZIP_BODY
+    assert member.eof and member.unused_data == b"", "exactly one gzip member"
+    assert gzip.decompress(STANDALONE_GZIP_ORIGINAL) == STANDALONE_GZIP_BODY
     assert REPORTS_STANDALONE_PATH.is_file(), (
         f"standalone report fixtures missing at {REPORTS_STANDALONE_PATH}"
     )

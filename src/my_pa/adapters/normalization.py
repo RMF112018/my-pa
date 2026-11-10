@@ -48,6 +48,7 @@ delivered — but the number they enforce is one number.
 
 from __future__ import annotations
 
+import dataclasses
 from base64 import b64decode
 from binascii import Error as BinasciiError
 from collections.abc import Callable, Mapping
@@ -59,6 +60,10 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from my_pa.application.commands import (
+    REPORT_CATALOG_FILTER_FIELDS,
+    REPORT_CATALOG_LEGACY_FIELDS,
+    REPORT_PUBLISH_PIPELINE_FIELDS,
+    AbortReportTransfer,
     AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
@@ -66,13 +71,16 @@ from my_pa.application.commands import (
     AddEntityName,
     AddIssueMembership,
     AddIssueProjectLink,
+    AppendReportTransfer,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
+    ArchiveGeneralReport,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
     AssertRecordAssociation,
     BeginIntelligenceCycle,
+    BeginReportTransfer,
     BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
@@ -120,6 +128,7 @@ from my_pa.application.commands import (
     CreateTaskComment,
     DeactivateConstraintCategory,
     DecideReviewCase,
+    DeleteGeneralReport,
     EndEntityAffiliation,
     EndEntityAssignment,
     EndEntityParticipation,
@@ -129,6 +138,7 @@ from my_pa.application.commands import (
     EndRecordAssociation,
     EnrollSource,
     FetchSource,
+    FinalizeReportTransfer,
     GetCanvasWorkspace,
     GetCapabilities,
     GetCommitmentHistory,
@@ -139,6 +149,7 @@ from my_pa.application.commands import (
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
+    GetGeneralReportHistory,
     GetGoodNotesContent,
     GetGoodNotesPullStatus,
     GetGoodNotesWork,
@@ -149,6 +160,7 @@ from my_pa.application.commands import (
     GetRecordEventProvenance,
     GetRelationshipMemory,
     GetRelationshipMemoryHistory,
+    GetReportRetention,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
@@ -194,6 +206,7 @@ from my_pa.application.commands import (
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
+    PlaceReportHold,
     PlanLineageBackfill,
     PrepareContext,
     PreviewConstraintSync,
@@ -201,6 +214,7 @@ from my_pa.application.commands import (
     PreviewEntitySplit,
     ProposeRelationshipMemory,
     PublishConstraint,
+    PublishGeneralReport,
     PullGoodNotesWork,
     PutCanvasWorkspace,
     ReadCapture,
@@ -230,6 +244,7 @@ from my_pa.application.commands import (
     ReadRecordLineage,
     ReadRelatedRecords,
     ReadReportManifest,
+    ReadReportTransferChunk,
     ReadScheduleActivityHistory,
     ReadSchedulePublication,
     ReadTask,
@@ -238,6 +253,7 @@ from my_pa.application.commands import (
     RecordIssueHandoff,
     RecordTask,
     ReinstateRecordAssociation,
+    ReleaseReportHold,
     ReopenConstraint,
     ReopenIssue,
     ReorderConstraintCategories,
@@ -250,6 +266,7 @@ from my_pa.application.commands import (
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
+    RestoreGeneralReport,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
     RetireEntityAddress,
@@ -281,6 +298,7 @@ from my_pa.application.commands import (
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
+    SetReportRetention,
     SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
@@ -294,6 +312,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateGeneralReport,
     UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
@@ -318,6 +337,7 @@ from my_pa.domain.capture.review import (
     ReviewSubjectKind,
 )
 from my_pa.domain.capture.submission import CaptureKind
+from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.context import ContextPlane
 from my_pa.domain.context.preference import ContextPreferenceAction
 from my_pa.domain.identity.operation import (
@@ -389,6 +409,8 @@ from my_pa.domain.relationship.governance import (
 )
 from my_pa.domain.relationship.memory import MemoryKind, MemoryLifecycle
 from my_pa.domain.relationship.proposal_payload import EntityProposalKind
+from my_pa.domain.reports.catalog import ReportPlane
+from my_pa.domain.reports.records import HistoryEntries
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
@@ -1818,8 +1840,169 @@ def _record_intelligence_run_state(payload: Mapping[str, Any]) -> Command:
     return RecordIntelligenceRunState(**converted)
 
 
+#: The selectors only a standalone (`grpt_`) read declares.
+_STANDALONE_READ_SELECTORS: Final = frozenset(
+    {"version_id", "version_number", "include_manifest", "include_withdrawn"}
+)
+
+
 def _read_intelligence_artifact(payload: Mapping[str, Any]) -> Command:
+    """`reports.read`: only a `grpt_` read may name the standalone selectors.
+
+    The pipeline plane never had them, so before the extension any of them --
+    even at its default value (`null`, `false`) -- was an unknown field: a bare
+    `invalid_request`, whatever the `report_id`. The command cannot tell an
+    omitted field from a default one, so the presence is refused here, exactly
+    as it was, for every read that is not of a standalone report.
+    """
+    named = payload.get("report_id")
+    standalone = isinstance(named, str) and named.startswith(f"{IdKind.REPORT}_")
+    if not standalone and _STANDALONE_READ_SELECTORS & set(payload):
+        raise InvalidRequestError()
     return ReadIntelligenceArtifact(**payload)
+
+
+#: The caller fields of `reports.publish`, read off the command so the two
+#: cannot disagree.
+_PUBLISH_FIELDS: Final = frozenset(item.name for item in dataclasses.fields(PublishGeneralReport))
+
+
+def _publish_general_report(payload: Mapping[str, Any]) -> Command:
+    """`reports.publish`: refuse the pipeline plane's fields by name, then any unknown one.
+
+    A pipeline field names the token the pipeline plane would have refused it
+    under, so a caller that sent a `reports.commit` payload here learns which
+    field does not belong. Any other key the command does not declare --
+    `principal_id`, `report_id`, `version_id`, `manifest_sha256`, `receipt_id`,
+    `verification`, a timestamp -- is a bare `invalid_request`, exactly what an
+    unknown field is on every other capability. JSON arrays become the tuples
+    the command declares.
+    """
+    for name, detail in REPORT_PUBLISH_PIPELINE_FIELDS.items():
+        if name in payload:
+            raise InvalidRequestError(detail)
+    if not set(payload) <= _PUBLISH_FIELDS:
+        raise InvalidRequestError()
+    converted = dict(payload)
+    for name, detail in (
+        ("topics", SafeDetail.TOPICS),
+        ("tags", SafeDetail.TAGS),
+        ("associations", SafeDetail.ASSOCIATIONS),
+    ):
+        if name in converted:
+            if not isinstance(converted[name], list):
+                raise InvalidRequestError(detail)
+            converted[name] = tuple(converted[name])
+    return PublishGeneralReport(**converted)
+
+
+def _general_report_fields(payload: Mapping[str, Any], command: type) -> dict[str, Any]:
+    """The payload of a WP03 general-report command, checked as `reports.publish` checks its own.
+
+    A pipeline field names its pipeline token; any other key the command does
+    not declare -- a server-owned field such as `principal_id`, `version_id`,
+    `version_number`, `lifecycle_state`, `event_id` or `receipt_id` included --
+    is a bare `invalid_request`.
+    """
+    for name, detail in REPORT_PUBLISH_PIPELINE_FIELDS.items():
+        if name in payload:
+            raise InvalidRequestError(detail)
+    if not set(payload) <= {item.name for item in dataclasses.fields(command)}:
+        raise InvalidRequestError()
+    return dict(payload)
+
+
+def _update_general_report(payload: Mapping[str, Any]) -> Command:
+    """`reports.update`: the top level and the `patch` object, each refused as publish refuses.
+
+    Inside `patch` a pipeline field names its pipeline token too, and any
+    other key that is not a patchable field is a bare `invalid_request` (by the
+    command). A JSON null inside `patch` is refused naming its field (by the
+    command, `report_patch`). `clear_fields` arrives as an array and becomes
+    the tuple the command declares.
+    """
+    converted = _general_report_fields(payload, UpdateGeneralReport)
+    patch = converted.get("patch")
+    if isinstance(patch, dict):
+        for name, detail in REPORT_PUBLISH_PIPELINE_FIELDS.items():
+            if name in patch:
+                raise InvalidRequestError(detail)
+    if "clear_fields" in converted:
+        if not isinstance(converted["clear_fields"], list):
+            raise InvalidRequestError(SafeDetail.CLEAR_FIELDS)
+        converted["clear_fields"] = tuple(converted["clear_fields"])
+    return UpdateGeneralReport(**converted)
+
+
+def _archive_general_report(payload: Mapping[str, Any]) -> Command:
+    return ArchiveGeneralReport(**_general_report_fields(payload, ArchiveGeneralReport))
+
+
+def _delete_general_report(payload: Mapping[str, Any]) -> Command:
+    return DeleteGeneralReport(**_general_report_fields(payload, DeleteGeneralReport))
+
+
+def _restore_general_report(payload: Mapping[str, Any]) -> Command:
+    return RestoreGeneralReport(**_general_report_fields(payload, RestoreGeneralReport))
+
+
+def _place_report_hold(payload: Mapping[str, Any]) -> Command:
+    """`reports.hold.place` (WP05b): server-owned fields (`held`, `hold_revision`
+    as a result, `authority_class`, `decision_channel`, `principal_id`, ...) are
+    undeclared and so refused, as every general-report write refuses them."""
+    return PlaceReportHold(**_general_report_fields(payload, PlaceReportHold))
+
+
+def _release_report_hold(payload: Mapping[str, Any]) -> Command:
+    return ReleaseReportHold(**_general_report_fields(payload, ReleaseReportHold))
+
+
+def _set_report_retention(payload: Mapping[str, Any]) -> Command:
+    return SetReportRetention(**_general_report_fields(payload, SetReportRetention))
+
+
+def _get_report_retention(payload: Mapping[str, Any]) -> Command:
+    return GetReportRetention(**_general_report_fields(payload, GetReportRetention))
+
+
+def _begin_report_transfer(payload: Mapping[str, Any]) -> Command:
+    """`reports.transfer.begin` (WP06): every server-owned session field -- `session_id`,
+    `principal_id`, `client_ref`, `state`, `chunk_byte_limit`, `expires_at`,
+    `intent_digest`, a token or its digest -- is undeclared and so refused, as
+    every general-report write refuses them."""
+    return BeginReportTransfer(**_general_report_fields(payload, BeginReportTransfer))
+
+
+def _append_report_transfer(payload: Mapping[str, Any]) -> Command:
+    """`reports.transfer.append`: `byte_offset`, `received_byte_count` and the
+    like are server-derived and refused as undeclared."""
+    return AppendReportTransfer(**_general_report_fields(payload, AppendReportTransfer))
+
+
+def _finalize_report_transfer(payload: Mapping[str, Any]) -> Command:
+    return FinalizeReportTransfer(**_general_report_fields(payload, FinalizeReportTransfer))
+
+
+def _abort_report_transfer(payload: Mapping[str, Any]) -> Command:
+    return AbortReportTransfer(**_general_report_fields(payload, AbortReportTransfer))
+
+
+def _read_report_transfer_chunk(payload: Mapping[str, Any]) -> Command:
+    return ReadReportTransferChunk(**_general_report_fields(payload, ReadReportTransferChunk))
+
+
+def _general_report_history(payload: Mapping[str, Any]) -> Command:
+    """`reports.history`: `entries` arrives as its wire string."""
+    converted = _general_report_fields(payload, GetGeneralReportHistory)
+    if "entries" in converted:
+        entries = converted["entries"]
+        if not isinstance(entries, str):
+            raise invalid_choice(SafeDetail.ENTRIES, HistoryEntries)
+        try:
+            converted["entries"] = HistoryEntries(entries)
+        except ValueError:
+            raise invalid_choice(SafeDetail.ENTRIES, HistoryEntries) from None
+    return GetGeneralReportHistory(**converted)
 
 
 def _latest_intelligence_artifact(payload: Mapping[str, Any]) -> Command:
@@ -1841,42 +2024,74 @@ def _latest_intelligence_artifact(payload: Mapping[str, Any]) -> Command:
     return GetLatestIntelligenceArtifact(**converted)
 
 
-def _list_intelligence_artifacts(payload: Mapping[str, Any]) -> Command:
+_PLANES: Final[Mapping[str, ReportPlane]] = MappingProxyType(
+    {member.value: member for member in ReportPlane}
+)
+
+
+def _catalog_mode(payload: Mapping[str, Any], wp04_fields: frozenset[str]) -> dict[str, Any]:
+    """The plane rule shared by `reports.list` and `reports.search` (WP04 contract C1).
+
+    An invalid `plane` names `plane` with its vocabulary. In the pipeline
+    (`intelligence`) plane -- `plane` omitted or explicit -- every catalog
+    field is refused by presence, even at its default value, as the unknown
+    field it was before the selector existed; the refusal comes after the
+    pipeline conversions, exactly where the constructor refused an unknown
+    field. In `standalone`/`all` the pipeline fields are refused the same way
+    and JSON arrays become the tuples the command declares. Returns the
+    converted payload, whose `plane` (if any) is a `ReportPlane`.
+    """
     converted = dict(payload)
-    if converted.get("stage") is not None:
-        converted["stage"] = _enum_or_invalid(
-            converted["stage"], IntelligenceStage, SafeDetail.STAGE
-        )
-    if converted.get("artifact_kind") is not None:
-        converted["artifact_kind"] = _report_kind_token(converted["artifact_kind"])
-    if converted.get("focus_area_id") is not None:
-        converted["focus_area_id"] = _enum_or_invalid(
-            converted["focus_area_id"], FocusAreaId, SafeDetail.FOCUS_AREA_ID
-        )
-    if converted.get("source_lane") is not None:
-        converted["source_lane"] = _enum_or_invalid(
-            converted["source_lane"], SourceLaneId, SafeDetail.SOURCE_LANE
-        )
-    return ListIntelligenceArtifacts(**converted)
+    if "plane" in converted:
+        # Looked up rather than constructed, so no `ValueError` naming the
+        # rejected value ever becomes the refusal's `__context__`.
+        plane = _PLANES.get(converted["plane"]) if isinstance(converted["plane"], str) else None
+        if plane is None:
+            raise invalid_choice(SafeDetail.PLANE, ReportPlane)
+        converted["plane"] = plane
+    if converted.get("plane", ReportPlane.INTELLIGENCE) is ReportPlane.INTELLIGENCE:
+        if converted.get("stage") is not None:
+            converted["stage"] = _enum_or_invalid(
+                converted["stage"], IntelligenceStage, SafeDetail.STAGE
+            )
+        if converted.get("artifact_kind") is not None:
+            converted["artifact_kind"] = _report_kind_token(converted["artifact_kind"])
+        if converted.get("focus_area_id") is not None:
+            converted["focus_area_id"] = _enum_or_invalid(
+                converted["focus_area_id"], FocusAreaId, SafeDetail.FOCUS_AREA_ID
+            )
+        if converted.get("source_lane") is not None:
+            converted["source_lane"] = _enum_or_invalid(
+                converted["source_lane"], SourceLaneId, SafeDetail.SOURCE_LANE
+            )
+        if wp04_fields & set(converted):
+            raise InvalidRequestError()
+        return converted
+    if REPORT_CATALOG_LEGACY_FIELDS & set(converted):
+        raise InvalidRequestError()
+    for name, detail in (
+        ("topics", SafeDetail.TOPICS),
+        ("tags", SafeDetail.TAGS),
+        ("lifecycle_states", SafeDetail.LIFECYCLE_STATES),
+    ):
+        if name in converted:
+            if not isinstance(converted[name], list):
+                raise InvalidRequestError(detail)
+            converted[name] = tuple(converted[name])
+    return converted
+
+
+#: The catalog fields each capability's pipeline plane refuses by presence.
+_LIST_CATALOG_FIELDS: Final = REPORT_CATALOG_FILTER_FIELDS
+_SEARCH_CATALOG_FIELDS: Final = REPORT_CATALOG_FILTER_FIELDS | {"cursor"}
+
+
+def _list_intelligence_artifacts(payload: Mapping[str, Any]) -> Command:
+    return ListIntelligenceArtifacts(**_catalog_mode(payload, _LIST_CATALOG_FIELDS))
 
 
 def _search_intelligence_artifacts(payload: Mapping[str, Any]) -> Command:
-    converted = dict(payload)
-    if converted.get("stage") is not None:
-        converted["stage"] = _enum_or_invalid(
-            converted["stage"], IntelligenceStage, SafeDetail.STAGE
-        )
-    if converted.get("artifact_kind") is not None:
-        converted["artifact_kind"] = _report_kind_token(converted["artifact_kind"])
-    if converted.get("focus_area_id") is not None:
-        converted["focus_area_id"] = _enum_or_invalid(
-            converted["focus_area_id"], FocusAreaId, SafeDetail.FOCUS_AREA_ID
-        )
-    if converted.get("source_lane") is not None:
-        converted["source_lane"] = _enum_or_invalid(
-            converted["source_lane"], SourceLaneId, SafeDetail.SOURCE_LANE
-        )
-    return SearchIntelligenceArtifacts(**converted)
+    return SearchIntelligenceArtifacts(**_catalog_mode(payload, _SEARCH_CATALOG_FIELDS))
 
 
 def _resolve_intelligence_set(payload: Mapping[str, Any]) -> Command:
@@ -2775,6 +2990,23 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.REPORTS_RESOLVE_SET: _resolve_intelligence_set,
         Capability.REPORTS_TYPES_CREATE: _create_report_type,
         Capability.REPORTS_TYPES_LIST: _list_report_types,
+        Capability.REPORTS_PUBLISH: _publish_general_report,
+        Capability.REPORTS_UPDATE: _update_general_report,
+        Capability.REPORTS_HISTORY: _general_report_history,
+        Capability.REPORTS_ARCHIVE: _archive_general_report,
+        Capability.REPORTS_DELETE: _delete_general_report,
+        Capability.REPORTS_RESTORE: _restore_general_report,
+        # Reports Modernization WP05b: the operator custody capabilities.
+        Capability.REPORTS_HOLD_PLACE: _place_report_hold,
+        Capability.REPORTS_HOLD_RELEASE: _release_report_hold,
+        Capability.REPORTS_RETENTION_SET: _set_report_retention,
+        Capability.REPORTS_RETENTION_GET: _get_report_retention,
+        # Reports Modernization WP06: the bounded chunked transfer.
+        Capability.REPORTS_TRANSFER_BEGIN: _begin_report_transfer,
+        Capability.REPORTS_TRANSFER_APPEND: _append_report_transfer,
+        Capability.REPORTS_TRANSFER_FINALIZE: _finalize_report_transfer,
+        Capability.REPORTS_TRANSFER_ABORT: _abort_report_transfer,
+        Capability.REPORTS_TRANSFER_READ_CHUNK: _read_report_transfer_chunk,
         Capability.ENTITIES_SEARCH: _search_entities,
         Capability.ENTITIES_GET: _get_entity,
         Capability.ENTITIES_RESOLVE: _resolve_entity,

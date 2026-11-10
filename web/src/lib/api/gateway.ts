@@ -45,7 +45,13 @@ import contract from "@/contracts/gateway.json";
 import { canonicalPrincipalUuid, rejectCallerSuppliedPrincipal } from "@/lib/auth/claims";
 import { decodeCapability } from "@/lib/api/decode";
 import type { CapabilityResults } from "@/lib/api/decode";
+import {
+  decodeStandaloneReport,
+  type StandaloneReportCapability,
+  type StandaloneReportResults,
+} from "@/lib/api/decode/standalone";
 import type { DecodedDisclosure } from "@/lib/api/decode/disclosure";
+import type { DecodeResult } from "@/lib/api/decode/primitives";
 import { decodeEnvelope } from "@/lib/api/decode/envelope";
 import {
   httpStatusForProblem,
@@ -329,9 +335,36 @@ export async function invokeGateway<C extends GatewayCapability>(
   capability: C,
   payload: Record<string, unknown> = {},
 ): Promise<GatewayOutcome<CapabilityResults[C]>> {
-  const outcome = await callGateway(principal, capability, payload);
+  return decodedOutcome(capability, await callGateway(principal, capability, payload), (result) =>
+    decodeCapability(capability, result),
+  );
+}
+
+/**
+ * WP07 Amendment A1: the same transport, identity, envelope and error mapping
+ * as `invokeGateway`, with the standalone-plane result decoder in place of the
+ * legacy one. Only the /api/reports routes call it; every other consumer of
+ * `reports.read` / `reports.list` / `reports.search` keeps the pipeline decoder
+ * and its base behaviour.
+ */
+export async function invokeStandaloneReports<C extends StandaloneReportCapability>(
+  principal: PrincipalSession,
+  capability: C,
+  payload: Record<string, unknown> = {},
+): Promise<GatewayOutcome<StandaloneReportResults[C]>> {
+  return decodedOutcome(capability, await callGateway(principal, capability, payload), (result) =>
+    decodeStandaloneReport(capability, result),
+  );
+}
+
+/** One decode step for both authority paths: a refused result is `upstream_contract_invalid`. */
+function decodedOutcome<T>(
+  capability: GatewayCapability,
+  outcome: GatewayOutcome<unknown>,
+  decode: (result: unknown) => DecodeResult<T>,
+): GatewayOutcome<T> {
   if (!outcome.ok) return outcome;
-  const decoded = decodeCapability(capability, outcome.result);
+  const decoded = decode(outcome.result);
   if (!decoded.ok) {
     logDecodeFailure(capability, "upstream_contract_invalid");
     return {

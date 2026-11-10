@@ -238,7 +238,7 @@ def test_s3_capabilities_are_operator_decision_required() -> None:
         assert policy.exclusion_rationale is None
         assert not is_operator_only(capability)
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
 
 
 def test_backfill_capabilities_are_operator_only_and_control_plane_excluded() -> None:
@@ -319,6 +319,23 @@ def test_s3_requests_reject_server_owned_fields(name: str) -> None:
 _V1_PAYLOAD_SCHEMA_SHA256: Final = (
     "e87a5186273905f60ae033764f70d6715cb01829a56a19e77409ab2d2de63ebb"
 )
+#: The same measurement without `reports.read`, taken at the Reports
+#: Modernization WP02 base `09a05158c`: WP02 adds `reports.publish` and
+#: deliberately extends `reports.read` (the `grpt_` selectors), so both are
+#: excluded and the other 191 shapes stay pinned byte for byte. The legacy
+#: `rpt_` read's answers are pinned by `tests/unit/test_reports_legacy_read_golden.py`.
+_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ: Final = (
+    "f4dc83a1e8e4699dc047d58279d97321fd750c1ecdff521b4cd148bb77fafb71"
+)
+#: The same measurement without `reports.read`, `reports.list` and
+#: `reports.search`, taken at the Reports Modernization WP04 base `f933f9fb3`:
+#: WP04 deliberately extends `reports.list` and `reports.search` (the `plane`
+#: selector and the catalog filters), so both are excluded too and the other
+#: 189 shapes stay pinned byte for byte. Their legacy answers are pinned by
+#: `tests/unit/test_reports_legacy_list_search_golden.py`.
+_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG: Final = (
+    "4a66657c422eb2c538a3cf7725cca2fab7b71325b883d3a0e724f200a7093459"
+)
 #: The v1 view modules and the SHA-256 of their models' field names
 #: (`module.Model` -> sorted field names, canonical JSON), measured alike.
 _V1_VIEW_MODULES: Final = (
@@ -351,13 +368,39 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     lineage |= {
         capability.value for capability in Capability if capability.value.startswith("schedule_")
     }
+    # Reports Modernization WP02: see `_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ`.
+    lineage |= {Capability.REPORTS_PUBLISH.value, Capability.REPORTS_READ.value}
+    # Reports Modernization WP03: its five additions, each excluded as new.
+    lineage |= {
+        Capability.REPORTS_UPDATE.value,
+        Capability.REPORTS_HISTORY.value,
+        Capability.REPORTS_ARCHIVE.value,
+        Capability.REPORTS_DELETE.value,
+        Capability.REPORTS_RESTORE.value,
+    }
+    # Reports Modernization WP05b: its four operator custody names, new too.
+    lineage |= {
+        Capability.REPORTS_HOLD_PLACE.value,
+        Capability.REPORTS_HOLD_RELEASE.value,
+        Capability.REPORTS_RETENTION_SET.value,
+        Capability.REPORTS_RETENTION_GET.value,
+    }
+    # Reports Modernization WP04: see `_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG`.
+    lineage |= {Capability.REPORTS_LIST.value, Capability.REPORTS_SEARCH.value}
+    # Reports Modernization WP06: its five transfer names, new too (pinned by
+    # `tests/contract/test_reports_transfer_compact_facade.py`).
+    lineage |= {
+        capability.value
+        for capability in Capability
+        if capability.value.startswith("reports.transfer.")
+    }
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
         if tool.name not in lineage
     }
-    assert len(payloads) == 192
-    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256
+    assert len(payloads) == 189
+    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG
     views: dict[str, list[str]] = {}
     for name in _V1_VIEW_MODULES:
         module = importlib.import_module(f"my_pa.contracts.v1.{name}")
@@ -375,13 +418,18 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     # Program purpose after it (S4 contract sections 8 and 10, R4-F04, R4-F15).
     basis_tail = ["record_lineage_authoring", "meeting_note_history_read", "issue_work_authoring"]
     published = TOOLS[0].input_schema["$defs"]["Purpose"]["enum"]
-    # CPM Workbench S5b-2 appends its 2 purposes after S4's (contract 3.12).
-    assert published[-7:] == [
+    # CPM Workbench S5b-2 appends its 2 purposes after S4's (contract 3.12),
+    # and Reports Modernization WP03 its `report_lifecycle` after those, and
+    # WP05b `report_hold` and `report_retention` after that.
+    assert published[-10:] == [
         *basis_tail,
         "lineage_backfill",
         "program_reporting_read",
         "schedule_import",
         "schedule_read",
+        "report_lifecycle",
+        "report_hold",
+        "report_retention",
     ]
 
 

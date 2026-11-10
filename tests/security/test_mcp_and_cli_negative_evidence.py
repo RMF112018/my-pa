@@ -383,6 +383,23 @@ SCOPED_CAPABILITIES = [
         Capability.REPORTS_RESOLVE_SET,
         Capability.REPORTS_TYPES_CREATE,
         Capability.REPORTS_TYPES_LIST,
+        Capability.REPORTS_PUBLISH,
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_HISTORY,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
+        # Reports Modernization WP05b: the owner's root and retention policy.
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
+        Capability.REPORTS_RETENTION_GET,
+        # Reports Modernization WP06: the owner's (and its client's) transfer sessions.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
+        Capability.REPORTS_TRANSFER_READ_CHUNK,
         # The relationship-intelligence entity plane (WP-RI-05) is scopeless for
         # the reason the two planes above are: an entity belongs to no `src_…`
         # and no `enr_…`, so there is no scope for a request to name and none to
@@ -977,6 +994,15 @@ KNOWLEDGE_AUTHORING_EXEMPTION = frozenset({Capability.KNOWLEDGE_ASSERTIONS_CREAT
 #: and no enrollment.
 REPORT_TYPE_AUTHORING_EXEMPTION = frozenset({Capability.REPORTS_TYPES_CREATE})
 
+#: Reports Modernization WP03's two writes the substring proxy refuses --
+#: `reports.update` and `reports.delete` -- on the same reading: they append a
+#: version to, or move to the recoverable Trash, the acting Principal's own
+#: standalone report, remove no row, and reach no source provider and no
+#: enrollment.
+GENERAL_REPORT_MANAGEMENT_EXEMPTION = frozenset(
+    {Capability.REPORTS_UPDATE, Capability.REPORTS_DELETE}
+)
+
 #: Record lineage S1's two Issue writes the substring proxy refuses --
 #: `issues.create` and `issues.update` -- on the same reading: they write the
 #: acting Principal's own Issue rows and revisions and reach no source provider
@@ -1024,6 +1050,7 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
         | MEETING_AUTHORING_EXEMPTION
         | KNOWLEDGE_AUTHORING_EXEMPTION
         | REPORT_TYPE_AUTHORING_EXEMPTION
+        | GENERAL_REPORT_MANAGEMENT_EXEMPTION
         | ISSUE_AUTHORING_EXEMPTION
     )
     checked = [c for c in IMPLEMENTED_CAPABILITIES if c not in exempt]

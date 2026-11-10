@@ -44,6 +44,9 @@ from my_pa.domain.intelligence.source_manifest import (
     recorded_release_requirement,
     structured_content_sha256,
 )
+from my_pa.domain.reports.catalog import CatalogCursor, CatalogFilters
+from my_pa.domain.reports.errors import ReportValidationError
+from my_pa.domain.reports.vocabulary import LifecycleState
 from my_pa.domain.search.query import SearchQuery, SearchQueryError
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
@@ -51,6 +54,7 @@ from my_pa.infrastructure.persistence.principal_scope import (
     principal_bound_values,
     principal_scoped,
 )
+from my_pa.infrastructure.persistence.reports import catalog_after, catalog_limit, catalog_rank
 from my_pa.infrastructure.persistence.tables import (
     intelligence_artifact_manifests,
     intelligence_artifacts,
@@ -643,6 +647,100 @@ class SqlIntelligenceStore:
         )
         rows = self._connection.execute(statement).mappings()
         return tuple((self._artifact(row), str(row["snippet"])) for row in rows)
+
+    def catalog_page(
+        self,
+        principal_id: str,
+        *,
+        filters: CatalogFilters,
+        query: SearchQuery | None,
+        after: CatalogCursor | None,
+        limit: int,
+    ) -> tuple[tuple[IntelligenceArtifact, int | None, str | None], ...]:
+        """Current artifacts as the `all` catalog plane reads them (WP04 C2/C6), read-only.
+
+        `is_current` rows only, of any kind (an unregistered `type` just
+        matches nothing); a list also leaves out `superseded` rows, as the
+        legacy list does by default (contract C2 refinement). Excluded
+        entirely, `()`, when the filters name topics, tags, an association or a
+        creator (legacy rows carry none) or omit `active` (a legacy row counts as
+        active). `type` is `artifact_kind`, the created
+        range `committed_at` (half-open), the report-date range `report_date`
+        (inclusive). Order, rank and keyset are the standalone catalog's over
+        `(committed_at, artifact_id COLLATE "C")`; a search's snippet is the
+        legacy headline over the title. Each item is `(artifact, rank, snippet)`,
+        rank and snippet `None` in a list.
+        """
+        if not isinstance(filters, CatalogFilters):
+            raise ReportValidationError("filters", "type")
+        if query is not None and not isinstance(query, SearchQuery):
+            raise ReportValidationError("query", "type")
+        size = catalog_limit(limit)
+        artifacts = intelligence_artifacts
+        rank: ColumnElement[int] | None = None
+        tsquery: ColumnElement[Any] | None = None
+        if query is not None:
+            tsquery = func.websearch_to_tsquery("english", query.text)
+            rank = catalog_rank(literal_column("search_document"), tsquery)
+        position = catalog_after(
+            after,
+            rank=rank,
+            sort_time=artifacts.c.committed_at,
+            identifier=artifacts.c.artifact_id,
+        )
+        if (
+            filters.topics is not None
+            or filters.tags is not None
+            or filters.associated_with is not None
+            or filters.created_by is not None
+            or LifecycleState.ACTIVE not in filters.lifecycle_states
+        ):
+            return ()
+        conditions: list[ColumnElement[bool]] = [artifacts.c.is_current.is_(True)]
+        if query is None:
+            # The list mirrors the legacy list's default (`include_superseded`
+            # false); the search keeps the legacy search's `is_current` only.
+            conditions.append(artifacts.c.artifact_state != ArtifactState.SUPERSEDED.value)
+        if filters.report_type is not None:
+            conditions.append(artifacts.c.artifact_kind == filters.report_type)
+        if filters.created_from is not None:
+            conditions.append(artifacts.c.committed_at >= filters.created_from)
+        if filters.created_to is not None:
+            conditions.append(artifacts.c.committed_at < filters.created_to)
+        if filters.report_date_from is not None:
+            conditions.append(artifacts.c.report_date >= filters.report_date_from)
+        if filters.report_date_to is not None:
+            conditions.append(artifacts.c.report_date <= filters.report_date_to)
+        if position is not None:
+            conditions.append(position)
+        order: list[ColumnElement[Any]] = [
+            artifacts.c.committed_at.desc(),
+            artifacts.c.artifact_id.collate("C").desc(),
+        ]
+        columns: list[ColumnElement[Any]] = []
+        if rank is not None and tsquery is not None:
+            conditions.append(literal_column("search_document").op("@@")(tsquery))
+            order.insert(0, rank.desc())
+            columns = [
+                rank.label("catalog_rank"),
+                func.ts_headline(
+                    "english", artifacts.c.title, tsquery, "MaxWords=20,MinWords=5"
+                ).label("catalog_snippet"),
+            ]
+        statement = principal_scoped(
+            select(artifacts, *columns).where(*conditions).order_by(*order).limit(size),
+            artifacts,
+            self._context,
+        )
+        rows = self._connection.execute(statement).mappings()
+        return tuple(
+            (
+                self._artifact(row),
+                None if rank is None else int(row["catalog_rank"]),
+                None if rank is None else str(row["catalog_snippet"]),
+            )
+            for row in rows
+        )
 
     def failed_run(
         self,

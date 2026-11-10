@@ -181,6 +181,7 @@ EXEMPT = {
     "migration.py": "tests/contract/test_cli_transport.py",
     # Managed-document writes, contained to their one writer.
     "managed_documents.py": "tests/architecture/test_managed_writes_are_contained.py",
+    "report_content.py": "tests/architecture/test_managed_writes_are_contained.py",
     # The legacy TBR import; no cutover path, writes contained.
     "tbr_import.py": "tests/architecture/test_tbr_import_has_no_cutover_path.py",
     # GSQS B0 evaluation; may not reach the operator surface.

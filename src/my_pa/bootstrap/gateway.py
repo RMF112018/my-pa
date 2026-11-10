@@ -87,7 +87,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the 240 capabilities.
+the 255 capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -206,6 +206,9 @@ from my_pa.bootstrap.settings import AuthMode, Settings
 from my_pa.contracts.ports import (
     ManagedByteStore,
     ProgramReadUnitOfWork,
+    ReportContentNamespace,
+    ReportContentStore,
+    ReportTransferStaging,
     ScheduleUnitOfWork,
     UnitOfWork,
 )
@@ -259,6 +262,11 @@ from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManag
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from my_pa.infrastructure.persistence.user_accounts import UserAccountRepository
 from my_pa.infrastructure.persistence.webauthn_auth import AuthSessionStore
+from my_pa.infrastructure.report_content_stores.filesystem import (
+    FilesystemReportContentStore,
+    ReportContentRootError,
+)
+from my_pa.infrastructure.report_content_stores.staging import FilesystemReportTransferStaging
 from my_pa.infrastructure.security.entra_token import EntraTokenVerifier, jwks_signing_key_source
 from my_pa.infrastructure.security.principal_identity import PrincipalIdentityService
 from my_pa.infrastructure.security.webauthn_ceremony import (
@@ -274,6 +282,9 @@ __all__ = [
     "entra_authenticator",
     "local_principal",
     "remote_client_authenticator",
+    "report_content_backup_store",
+    "report_content_store",
+    "report_transfer_staging",
 ]
 
 #: How a transport asks the composition root who is calling. The first argument
@@ -573,6 +584,105 @@ def managed_byte_store(settings: Settings, work_engine: Engine) -> ManagedByteSt
         source_roots = configured_source_roots(connection)
     return FilesystemManagedByteStore(
         Path(configured), source_roots=[Path(root) for root in source_roots]
+    )
+
+
+def report_content_store(settings: Settings, work_engine: Engine) -> ReportContentStore | None:
+    """The report content store, or `None` when no report content root is configured (WP05 C3).
+
+    `None` is the backward-compatible default: an unset or blank
+    `MY_PA_REPORT_CONTENT_ROOT` keeps every report content inline and refuses
+    decoded content above the inline threshold, and a `gzip+base64` upload
+    whose gunzipped bytes are above it. A configured root is built
+    into `FilesystemReportContentStore` with the configured source roots and
+    the managed document root, whose constructor refuses to start on an
+    unusable root or any overlap -- a misconfiguration the operator must fix,
+    never quietly a disabled store. Composed whatever else the runtime
+    permits: a `managed_blob` report written through one composition must
+    verify and read through every other.
+    """
+    configured = settings.report_content_root.strip()
+    if not configured:
+        return None
+    with work_engine.begin() as connection:
+        source_roots = configured_source_roots(connection)
+    managed = settings.managed_document_root.strip()
+    return FilesystemReportContentStore(
+        Path(configured),
+        ReportContentNamespace.CONTENT,
+        source_roots=[Path(root) for root in source_roots],
+        managed_documents_root=Path(managed) if managed else None,
+    )
+
+
+def report_preservation_store(settings: Settings, work_engine: Engine) -> ReportContentStore | None:
+    """The `preservation` namespace of the report content store, or `None` (WP05b B5).
+
+    The same root, constructor and refusals as `report_content_store`, under
+    `ReportContentNamespace.PRESERVATION` (admitting only `grprv_` objects).
+    `None` when `MY_PA_REPORT_CONTENT_ROOT` is unset: no hold can be placed.
+    """
+    configured = settings.report_content_root.strip()
+    if not configured:
+        return None
+    with work_engine.begin() as connection:
+        source_roots = configured_source_roots(connection)
+    managed = settings.managed_document_root.strip()
+    return FilesystemReportContentStore(
+        Path(configured),
+        ReportContentNamespace.PRESERVATION,
+        source_roots=[Path(root) for root in source_roots],
+        managed_documents_root=Path(managed) if managed else None,
+    )
+
+
+def report_transfer_staging(
+    settings: Settings, work_engine: Engine
+) -> ReportTransferStaging | None:
+    """The transfer staging under the report content root, or `None` (WP06 T13).
+
+    The same root and the same refusals as `report_content_store` (source
+    roots, the managed document root, a link or missing root), its chunks
+    under the root's constant `transfer` directory. `None` when
+    `MY_PA_REPORT_CONTENT_ROOT` is unset: no transfer can be staged.
+    """
+    configured = settings.report_content_root.strip()
+    if not configured:
+        return None
+    with work_engine.begin() as connection:
+        source_roots = configured_source_roots(connection)
+    managed = settings.managed_document_root.strip()
+    return FilesystemReportTransferStaging(
+        Path(configured),
+        source_roots=[Path(root) for root in source_roots],
+        managed_documents_root=Path(managed) if managed else None,
+    )
+
+
+def report_content_backup_store(
+    settings: Settings, work_engine: Engine, location: Path
+) -> FilesystemReportContentStore:
+    """An operator-designated backup or restore-source report content store (WP05 C7).
+
+    The same constructor and refusals as the live store, and additionally
+    clear of the live report content root, so "back up in place" is refused
+    by the same overlap check. Requires a configured live root.
+    """
+    live = report_content_store(settings, work_engine)
+    if not isinstance(live, FilesystemReportContentStore):
+        raise ReportContentRootError(
+            "MY_PA_REPORT_CONTENT_ROOT is unset; there is no report content store "
+            "in this process to operate on"
+        )
+    with work_engine.begin() as connection:
+        source_roots = configured_source_roots(connection)
+    managed = settings.managed_document_root.strip()
+    return FilesystemReportContentStore(
+        location,
+        ReportContentNamespace.CONTENT,
+        source_roots=[Path(root) for root in source_roots],
+        managed_documents_root=Path(managed) if managed else None,
+        other_roots=[live.root],
     )
 
 
@@ -1267,6 +1377,16 @@ def build_gateway_runtime(
             goodnotes_pull_assignment_lease_seconds=(
                 settings.goodnotes_pull_assignment_lease_seconds
             ),
+            # WP05 C3: the report content store (`None` when no root is
+            # configured) and the inline threshold settings validated.
+            report_content_store=report_content_store(settings, work_engine),
+            report_content_inline_max_bytes=settings.report_content_inline_max_bytes,
+            # WP05b H4: the same root's `preservation` namespace, where a hold
+            # placement seals its copy (`None` when no root: placement refused).
+            report_preservation_store=report_preservation_store(settings, work_engine),
+            # WP06 T13/T14: the same root's `transfer` staging (`None` when no
+            # root: the four transfer uploads are withheld).
+            report_transfer_staging=report_transfer_staging(settings, work_engine),
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, control_engine) if entra else None,

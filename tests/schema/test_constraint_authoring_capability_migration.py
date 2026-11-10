@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "2a90f91dd786"
+CURRENT_HEAD: Final = "4c37731671fc"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -142,6 +142,8 @@ CPM_WORKBENCH_VOCABULARY_MIGRATION: Final = (
 SCHEDULE_SCENARIOS_MIGRATION: Final = (
     MIGRATIONS / "20261103_2a90f91dd786_schedule_scenarios_persistence.py"
 )
+#: Reports Modernization WP01's additive head (`4c37731671fc`), on the same precedent.
+GENERAL_REPORT_PLANE_MIGRATION: Final = MIGRATIONS / "20261104_4c37731671fc_general_report_plane.py"
 #: The one sanctioned edit to a historical revision (operator ruling
 #: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
 #: work freezes `a_managed_document_is_identified_within_its_owner` out of
@@ -221,6 +223,9 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_auth_identity_and_grants_migration.py",
     "tests/schema/test_canvas_workspace_migration.py",
     "tests/schema/test_capture_lifecycle_migration.py",
+    # Names the head only in a comment: Reports Modernization WP02's revision
+    # restates `capability_is_known` to admit `reports.publish`.
+    "tests/schema/test_capture_schema_migration.py",
     # The Commitment counterparty Entity cutover's own revision module names
     # the head as the revision it tests.
     "tests/schema/test_commitment_counterparty_entity_migration.py",
@@ -271,6 +276,8 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     # Record lineage S3.1's own revision module names the head as the revision it tests.
     "tests/schema/test_record_lineage_s31_migration.py",
     "tests/schema/test_record_event_truncate_refusal_migration.py",
+    # Reports Modernization WP01's own revision module names the head as the revision it tests.
+    "tests/schema/test_reports_general_migration.py",
     "tests/schema/test_schedule_scenarios_migration.py",
     "tests/schema/test_record_events_migration.py",
     "tests/schema/test_oauth_refresh_migration.py",
@@ -281,6 +288,9 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_webauthn_auth_persistence_migration.py",
     "tests/schema/test_work_task_commitment_migration.py",
     "tests/unit/test_cli_auth.py",
+    # Reports Modernization WP06: names the head's migration file to read its
+    # chunk bound, never as a head constant.
+    "tests/unit/test_reports_transfer_domain.py",
 )
 
 #: The constant names those files use for the chain's head.
@@ -358,7 +368,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "621ef6786c64"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "2a90f91dd786"
+    assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
     assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
     assert script.get_revision("6c2306330ceb").down_revision == "023f8f7eb499"
     assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"
@@ -388,7 +399,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 126
+    assert len(list(MIGRATIONS.glob("*.py"))) == 127
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -548,6 +559,7 @@ def test_no_historical_revision_was_edited() -> None:
         CPM_WORKBENCH_FOUNDATION_MIGRATION.relative_to(ROOT).as_posix(),
         CPM_WORKBENCH_VOCABULARY_MIGRATION.relative_to(ROOT).as_posix(),
         SCHEDULE_SCENARIOS_MIGRATION.relative_to(ROOT).as_posix(),
+        GENERAL_REPORT_PLANE_MIGRATION.relative_to(ROOT).as_posix(),
         # Not an additive head: the one sanctioned historical edit (see
         # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).
         SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix(),

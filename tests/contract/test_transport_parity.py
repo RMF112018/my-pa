@@ -77,6 +77,7 @@ from tests.conftest import (
     staged_capture,
     staged_commitment,
     staged_continuity_project,
+    staged_general_report,
     staged_goodnotes_raster,
     staged_goodnotes_work,
     staged_managed_document,
@@ -1253,6 +1254,80 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "display_name": "Parity weekly digest",
         },
         Capability.REPORTS_TYPES_LIST: {"stage": "reporter"},
+        Capability.REPORTS_PUBLISH: {
+            "title": "Parity standalone report",
+            "content": {"format": "markdown", "body": "# Parity\n\nSynthetic body."},
+            "idempotency_key": "parity-publish",
+            "type": "parity_note",
+            "topics": ["parity"],
+            "client_intent_id": "parity-1",
+        },
+        # Reports Modernization WP03: a staged active report, and a staged
+        # archived one for `reports.restore` (`staged_general_report`).
+        Capability.REPORTS_UPDATE: {
+            "report_id": staged_general_report(scene),
+            "expected_version": 1,
+            "patch": {"title": "Revised"},
+            "change_reason": "Synthetic revision.",
+            "idempotency_key": "parity-update",
+        },
+        Capability.REPORTS_HISTORY: {"report_id": staged_general_report(scene)},
+        Capability.REPORTS_ARCHIVE: {
+            "report_id": staged_general_report(scene, label="archive"),
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "parity-archive",
+        },
+        Capability.REPORTS_DELETE: {
+            "report_id": staged_general_report(scene, label="trash"),
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "parity-delete",
+        },
+        Capability.REPORTS_RESTORE: {
+            "report_id": staged_general_report(scene, archived=True),
+            "expected_lifecycle_revision": 1,
+            "idempotency_key": "parity-restore",
+        },
+        # Reports Modernization WP05b: the operator custody names on a staged report.
+        Capability.REPORTS_HOLD_PLACE: {
+            "report_id": staged_general_report(scene, label="hold"),
+            "expected_hold_revision": 0,
+            "reason": "Synthetic hold.",
+            "idempotency_key": "parity-hold-place",
+        },
+        Capability.REPORTS_HOLD_RELEASE: {
+            "report_id": staged_general_report(scene, held=True, label="release"),
+            "expected_hold_revision": 1,
+            "reason": "Synthetic release.",
+            "idempotency_key": "parity-hold-release",
+        },
+        Capability.REPORTS_RETENTION_SET: {
+            "expected_policy_revision": 0,
+            "reason": "Synthetic retention.",
+            "idempotency_key": "parity-retention-set",
+            "period": {"count": 5, "unit": "years"},
+        },
+        Capability.REPORTS_RETENTION_GET: {},
+        # Reports Modernization WP06: the bounded chunked transfer (the uploads
+        # are uncomposed without a content store and staging; read_chunk answers).
+        Capability.REPORTS_TRANSFER_BEGIN: {
+            "format": "markdown",
+            "encoding": "identity",
+            "byte_count": 16,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "idempotency_key": "parity-transfer-begin",
+        },
+        Capability.REPORTS_TRANSFER_APPEND: {
+            "session_id": "grxfr_paritysession01",
+            "sequence": 0,
+            "chunk": "c3ludGhldGlj",
+            "chunk_sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+        },
+        Capability.REPORTS_TRANSFER_FINALIZE: {"session_id": "grxfr_paritysession01"},
+        Capability.REPORTS_TRANSFER_ABORT: {"session_id": "grxfr_paritysession01"},
+        Capability.REPORTS_TRANSFER_READ_CHUNK: {
+            "report_id": staged_general_report(scene),
+            "version_number": 1,
+        },
         # The relationship-intelligence entity plane (WP-RI-05). `person` and
         # `organization` are staged before the world is copied per transport, so
         # all three read the same rows and a read is the same read everywhere.
@@ -2367,7 +2442,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 241, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 256, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2650,7 +2725,16 @@ def masked(answer: Mapping[str, Any], supplied: set[str]) -> Any:  # noqa: ANN40
                 minted[value] = placeholder(value)
             return minted[value]
         if isinstance(value, dict):
-            return {key: walk(item) for key, item in value.items()}
+            standalone = value.get("plane") == "standalone"
+            return {
+                # A standalone report's manifest names its minted identifiers,
+                # so its digest is minted too; the content digest beside it is
+                # still compared literally.
+                key: "<minted-manifest-digest>"
+                if standalone and key == "manifest_sha256"
+                else walk(item)
+                for key, item in value.items()
+            }
         if isinstance(value, list):
             return [walk(item) for item in value]
         return value
@@ -2680,6 +2764,12 @@ def assert_same_answer(
 #: comparison below still covers them and the reason is legible.
 UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
     {
+        # Reports Modernization WP06 T14: the four transfer uploads need a report
+        # content store and the transfer staging; this harness composes neither.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT_PREVIEW,
@@ -2760,9 +2850,27 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
 )
 
 
+#: Reports Modernization WP05b: the operator custody capabilities are attested to
+#: the local operator surface (`attested_lineage_authority`), so the CLI and the
+#: HTTP gateway's stamped operator surface answer them and stdio MCP -- no
+#: operator surface -- is `denied` before anything is read. Compared separately.
+ATTESTED_LOCAL_HERE: frozenset[Capability] = frozenset(
+    {
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
+        Capability.REPORTS_RETENTION_GET,
+    }
+)
+
+
 @pytest.mark.parametrize(
     "capability",
-    [c for c in IMPLEMENTED_CAPABILITIES if c not in UNCOMPOSED_HERE],
+    [
+        c
+        for c in IMPLEMENTED_CAPABILITIES
+        if c not in UNCOMPOSED_HERE and c not in ATTESTED_LOCAL_HERE
+    ],
     ids=lambda c: c.value,
 )
 def test_every_capability_answers_identically_over_all_three_transports(
@@ -2779,6 +2887,35 @@ def test_every_capability_answers_identically_over_all_three_transports(
         assert answer.document["error"] is None, f"{name} refused {capability.value}"
         assert answer.document["request_id"] == request["request_id"]
     assert_same_answer(answers, request, capability.value)
+
+
+@pytest.mark.parametrize("capability", sorted(ATTESTED_LOCAL_HERE), ids=lambda c: c.value)
+def test_attested_custody_answers_identically_locally_and_is_denied_over_stdio_mcp(
+    capability: Capability, staged: tuple[Scene, KnowledgeRecord]
+) -> None:
+    """WP05b H1: the CLI and the HTTP gateway agree; stdio MCP is `denied`."""
+    scene, record = staged
+    request = document(
+        capability, scene.principal.principal_id, payloads_for(scene, record)[capability]
+    )
+    answers = answers_for(scene, capability.value, request)
+    local = {name: answer for name, answer in answers.items() if name != "mcp"}
+    for name, answer in local.items():
+        assert answer.document["error"] is None, f"{name} refused {capability.value}"
+        assert answer.document["request_id"] == request["request_id"]
+    supplied = _identifiers(dict(request))
+    documents = {name: masked(answer.document, supplied) for name, answer in local.items()}
+    for body in documents.values():
+        preservation = (body.get("result") or {}).get("preservation")
+        if preservation is not None:
+            # The seal lists the minted identifiers the mask hides, so its digest
+            # differs per world by construction; its shape is compared.
+            assert re.fullmatch(r"[0-9a-f]{64}", preservation.pop("seal_sha256"))
+    assert documents["http"] == documents["cli"], documents
+    refused = answers["mcp"].document
+    assert refused["error"] is not None
+    assert refused["error"]["code"] == "denied"
+    assert refused["result"] is None
 
 
 @pytest.mark.parametrize("capability", sorted(UNCOMPOSED_HERE), ids=lambda c: c.value)
@@ -3345,7 +3482,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 240
+    assert len(IMPLEMENTED_CAPABILITIES) == 255
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

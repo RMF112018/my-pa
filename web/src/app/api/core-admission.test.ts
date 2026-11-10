@@ -19,6 +19,17 @@ import { PATCH as seriesUpdate } from "./meetings/series/[meetingSeriesId]/route
 import { GET as documentRead } from "./documents/[documentId]/route";
 import { POST as documentArchive } from "./documents/[documentId]/archive/route";
 import { POST as documentRestore } from "./documents/[documentId]/restore/route";
+import { POST as reportPublish } from "./reports/route";
+import { POST as reportUpdate } from "./reports/[reportId]/update/route";
+import { GET as reportHistory } from "./reports/[reportId]/history/route";
+import { POST as reportArchive } from "./reports/[reportId]/archive/route";
+import { POST as reportDelete } from "./reports/[reportId]/delete/route";
+import { POST as reportRestore } from "./reports/[reportId]/restore/route";
+import { GET as reportContent } from "./reports/[reportId]/content/route";
+import { POST as transferBegin } from "./reports/transfers/route";
+import { POST as transferAppend } from "./reports/transfers/[sessionId]/append/route";
+import { POST as transferFinalize } from "./reports/transfers/[sessionId]/finalize/route";
+import { POST as transferAbort } from "./reports/transfers/[sessionId]/abort/route";
 
 const { resolveSessionPrincipal } = vi.hoisted(() => ({ resolveSessionPrincipal: vi.fn() }));
 vi.mock("@/lib/auth/principal", () => ({
@@ -34,6 +45,12 @@ const PRINCIPAL: PrincipalSession = {
 const suffix = "aaaaaaaa11111111";
 const projectId = `prj_${suffix}`, captureId = `cap_${suffix}`, meetingId = `mtg_${suffix}`;
 const meetingSeriesId = `mser_${suffix}`, documentId = `mdoc_${suffix}`;
+const reportId = `grpt_${suffix}`, sessionId = `grxfr_${suffix}`;
+const lifecycle = { expectedLifecycleRevision: 0, idempotencyKey: "wp07-key-1" };
+const reportParams = (run: (r: NextRequest, c: { params: Promise<{ reportId: string }> }) => Promise<Response>) =>
+  (r: NextRequest, id = reportId) => run(r, { params: Promise.resolve({ reportId: id }) });
+const sessionParams = (run: (r: NextRequest, c: { params: Promise<{ sessionId: string }> }) => Promise<Response>) =>
+  (r: NextRequest, id = sessionId) => run(r, { params: Promise.resolve({ sessionId: id }) });
 const keyed = { expectedVersion: 1, idempotencyKey: "wp03b-key-1" };
 const DISCLOSURE: PythonDisclosure = {
   coverage: { state: "not_enrolled" },
@@ -45,6 +62,8 @@ type Capability = keyof typeof fixtures;
 type Scenario = {
   capability: Capability; method: string; path: string; body?: Record<string, unknown>;
   required?: string[]; pathId?: string; scalar?: string;
+  /** WP07 U5: a 409 is followed by exactly one `reports.read` for `current`. */
+  conflictRead?: boolean;
   run: (request: NextRequest, id?: string) => Promise<Response>;
 };
 const scenarios: Scenario[] = [
@@ -60,6 +79,19 @@ const scenarios: Scenario[] = [
   { capability: "documents.read", method: "GET", path: `/api/documents/${documentId}`, pathId: documentId, scalar: "includeBytes", run: (r, id = documentId) => documentRead(r, { params: Promise.resolve({ documentId: id }) }) },
   { capability: "documents.archive", method: "POST", path: `/api/documents/${documentId}/archive`, pathId: documentId, body: {}, run: (r, id = documentId) => documentArchive(r, { params: Promise.resolve({ documentId: id }) }) },
   { capability: "documents.restore", method: "POST", path: `/api/documents/${documentId}/restore`, pathId: documentId, body: {}, run: (r, id = documentId) => documentRestore(r, { params: Promise.resolve({ documentId: id }) }) },
+  // Reports Modernization WP07 (U4): the capabilities success.json covers. The
+  // standalone reads (read/list/search) are in reports/reports-routes.test.ts.
+  { capability: "reports.publish", method: "POST", path: "/api/reports", body: { title: "Synthetic report", content: { format: "markdown", body: "Synthetic body." }, idempotencyKey: "wp07-key-1" }, required: ["title", "content", "idempotencyKey"], run: reportPublish },
+  { capability: "reports.update", method: "POST", path: `/api/reports/${reportId}/update`, pathId: reportId, body: { expectedVersion: 1, patch: { title: "Synthetic revision" }, changeReason: "Synthetic.", idempotencyKey: "wp07-key-1" }, required: ["expectedVersion", "changeReason", "idempotencyKey"], conflictRead: true, run: reportParams(reportUpdate) },
+  { capability: "reports.history", method: "GET", path: `/api/reports/${reportId}/history`, pathId: reportId, scalar: "pageSize", run: reportParams(reportHistory) },
+  { capability: "reports.archive", method: "POST", path: `/api/reports/${reportId}/archive`, pathId: reportId, body: lifecycle, required: ["expectedLifecycleRevision", "idempotencyKey"], conflictRead: true, run: reportParams(reportArchive) },
+  { capability: "reports.delete", method: "POST", path: `/api/reports/${reportId}/delete`, pathId: reportId, body: lifecycle, required: ["expectedLifecycleRevision", "idempotencyKey"], conflictRead: true, run: reportParams(reportDelete) },
+  { capability: "reports.restore", method: "POST", path: `/api/reports/${reportId}/restore`, pathId: reportId, body: lifecycle, required: ["expectedLifecycleRevision", "idempotencyKey"], conflictRead: true, run: reportParams(reportRestore) },
+  { capability: "reports.transfer.read_chunk", method: "GET", path: `/api/reports/${reportId}/content?versionNumber=1`, pathId: reportId, scalar: "versionNumber", run: reportParams(reportContent) },
+  { capability: "reports.transfer.begin", method: "POST", path: "/api/reports/transfers", body: { format: "text", byteCount: 600000, sha256: "a".repeat(64), idempotencyKey: "wp07-key-1" }, required: ["format", "byteCount", "sha256", "idempotencyKey"], run: transferBegin },
+  { capability: "reports.transfer.append", method: "POST", path: `/api/reports/transfers/${sessionId}/append`, pathId: sessionId, body: { sequence: 0, chunk: "U3ludGhldGlj", chunkSha256: "a".repeat(64) }, required: ["sequence", "chunk", "chunkSha256"], run: sessionParams(transferAppend) },
+  { capability: "reports.transfer.finalize", method: "POST", path: `/api/reports/transfers/${sessionId}/finalize`, pathId: sessionId, body: {}, run: sessionParams(transferFinalize) },
+  { capability: "reports.transfer.abort", method: "POST", path: `/api/reports/transfers/${sessionId}/abort`, pathId: sessionId, body: {}, run: sessionParams(transferAbort) },
 ];
 const fetchStub = vi.fn<typeof fetch>();
 function scenario(capability: Capability) { return scenarios.find((s) => s.capability === capability)!; }
@@ -161,7 +193,13 @@ describe.each(scenarios)("$capability actual BFF pipeline", (s) => {
     expect(body.shape).toBeUndefined();
     expect(body.meetings).toBeUndefined();
     expect(JSON.stringify(body)).not.toContain("private-marker");
-    dispatched();
+    if (s.conflictRead && Number(status) === 409) {
+      // The one `current` read reuses the consumed stub answer, fails, and so
+      // leaves the plain refusal: no `current`, no retry of the mutation.
+      expect(fetchStub).toHaveBeenCalledTimes(2);
+      expect(fetchStub.mock.calls[1]![0]).toBe("http://127.0.0.1:8000/v1/reports.read");
+      expect(body.current).toBeUndefined();
+    } else dispatched();
   });
   it("refuses malformed decoded success and unknown private fields", async () => {
     success(s, { ...canonical(s.capability), owner_principal_id: "private-marker" });

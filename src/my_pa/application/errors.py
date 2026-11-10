@@ -644,6 +644,108 @@ class SafeDetail(StrEnum):
     HIERARCHY_PREFIX = "hierarchy_prefix"
     ROW_TYPE = "row_type"
     DATE_RANGE = "date_range"
+    #: Reports Modernization WP02: the `reports.publish` fields of these names
+    #: (`REPORT_TYPE` is the caller field `type`; `COVERAGE_PERIOD` either
+    #: bound or their order; `ASSOCIATIONS` any association member;
+    #: `CONTENT_ENCODING` was an encoding this build did not decode, answered
+    #: `unsupported`; WP05 decodes `gzip+base64`, so no refusal names it now and
+    #: it stays only as a stable public token), and the standalone `reports.read` selectors
+    #: `VERSION_NUMBER`, `INCLUDE_MANIFEST` and `INCLUDE_WITHDRAWN`. `TITLE`,
+    #: `CONTENT`, `REPORT_DATE`, `IDEMPOTENCY_KEY`, `ARTIFACT_ID`, `VERSION_ID`,
+    #: `INCLUDE_BODY` and `MAX_BYTES` are reused.
+    REPORT_TYPE = "type"
+    TOPICS = "topics"
+    TAGS = "tags"
+    SUMMARY = "summary"
+    COVERAGE_PERIOD = "coverage_period"
+    ASSOCIATIONS = "associations"
+    METADATA = "metadata"
+    CLIENT_INTENT_ID = "client_intent_id"
+    CONTENT_ENCODING = "content_encoding"
+    VERSION_NUMBER = "version_number"
+    INCLUDE_MANIFEST = "include_manifest"
+    INCLUDE_WITHDRAWN = "include_withdrawn"
+    #: Reports Modernization WP03: `reports.update`'s `patch` (malformed, or
+    #: empty with no `clear_fields`) and its required `change_reason`;
+    #: `reports.history`'s `entries` and `include_manifests` selectors; and
+    #: `REPORT_WITHDRAWN`, the `denied` subject when an update names an
+    #: archived or trashed report the caller owns (D3; a foreign or absent one
+    #: is still `not_found`, so it only ever describes the caller's own root,
+    #: exactly as `CAPTURE_WITHDRAWN`). `CLEAR_FIELDS`, `EXPECTED_VERSION`,
+    #: `STALE_VERSION`, `EXPECTED_LIFECYCLE_REVISION`, `LIFECYCLE_STATE`,
+    #: `REASON`, `CURSOR`, `PAGE_SIZE` and `ARTIFACT_ID` are reused.
+    PATCH = "patch"
+    CHANGE_REASON = "change_reason"
+    ENTRIES = "entries"
+    INCLUDE_MANIFESTS = "include_manifests"
+    REPORT_WITHDRAWN = "report_withdrawn"
+    #: Reports Modernization WP04: the `reports.list`/`reports.search` plane
+    #: selector and the standalone/all catalog filters of these names (a
+    #: from/to range in the wrong order names both bounds). `REPORT_TYPE`,
+    #: `TOPICS`, `TAGS`, `QUERY`, `CURSOR` and `PAGE_SIZE` are reused.
+    PLANE = "plane"
+    ASSOCIATED_WITH = "associated_with"
+    LIFECYCLE_STATES = "lifecycle_states"
+    CREATED_FROM = "created_from"
+    CREATED_TO = "created_to"
+    REPORT_DATE_FROM = "report_date_from"
+    REPORT_DATE_TO = "report_date_to"
+    #: Reports Modernization WP05 (A5): the standalone/all `created_by` filter,
+    #: a creator pseudonym from a read or list item (never its value).
+    CREATED_BY = "created_by"
+    #: Reports Modernization WP05b (B4): `REPORT_HELD`, the `denied` subject
+    #: when `reports.delete` names a report under a legal hold the caller owns
+    #: (a foreign or absent one is still `not_found`, so it only ever describes
+    #: the caller's own root, exactly as `REPORT_WITHDRAWN`).
+    REPORT_HELD = "report_held"
+    #: Reports Modernization WP05b (Part C): the operator custody capabilities.
+    #: `EXPECTED_HOLD_REVISION` and `EXPECTED_POLICY_REVISION` name a stale (or
+    #: malformed) precondition of `reports.hold.*` and `reports.retention.set`;
+    #: `HOLD_STATE` a placement on a held report or a release of one not held;
+    #: `PERIOD` and `UNSET` the retention change (exactly one of them);
+    #: `HISTORY_LIMIT` the `reports.retention.get` history page bound; and
+    #: `PRESERVATION_STORE`, the `unavailable` subject of a placement in a
+    #: process composed without a report content store (H4: no store, no hold).
+    #: `ARTIFACT_ID`, `REASON` and `IDEMPOTENCY_KEY` are reused.
+    EXPECTED_HOLD_REVISION = "expected_hold_revision"
+    EXPECTED_POLICY_REVISION = "expected_policy_revision"
+    HOLD_STATE = "hold_state"
+    PERIOD = "period"
+    UNSET = "unset"
+    HISTORY_LIMIT = "history_limit"
+    PRESERVATION_STORE = "preservation_store"
+    #: Reports Modernization WP06 (Part C): the bounded chunked transfer.
+    #: `TRANSFER` is a publish/update transfer reference (`content` or
+    #: `patch.content`) or the staged content a finalize verifies;
+    #: `SESSION_ID` a transfer session (`grxfr_`); `SEQUENCE`, `CHUNK` and
+    #: `CHUNK_SHA256` an append; `FORMAT`, `ENCODING`, `BYTE_COUNT`, `SHA256`
+    #: and `TTL_SECONDS` a begin's declaration; `PART`, `OFFSET` and `LENGTH`
+    #: a `reports.transfer.read_chunk` range. `ARTIFACT_ID`, `VERSION_ID`,
+    #: `VERSION_NUMBER`, `INCLUDE_WITHDRAWN` and `IDEMPOTENCY_KEY` are reused.
+    TRANSFER = "transfer"
+    SESSION_ID = "session_id"
+    SEQUENCE = "sequence"
+    CHUNK = "chunk"
+    CHUNK_SHA256 = "chunk_sha256"
+    FORMAT = "format"
+    ENCODING = "encoding"
+    BYTE_COUNT = "byte_count"
+    SHA256 = "sha256"
+    TTL_SECONDS = "ttl_seconds"
+    PART = "part"
+    OFFSET = "offset"
+    LENGTH = "length"
+    #: WP06 T5/T8/T9: the `conflict` subjects of an operation on the caller's
+    #: OWN live session (a chunk re-sent with other bytes, a chunk out of
+    #: order, an append/finalize on a finalized session, a finalize before
+    #: every declared byte arrived); never answered for a session that is not
+    #: the caller's (that is the bare `not_found`). T6: `TRANSFER_QUOTA`, the
+    #: `rate_limited` subject of a begin past the live-session quotas.
+    TRANSFER_CHUNK_CONFLICT = "transfer_chunk_conflict"
+    TRANSFER_SEQUENCE = "transfer_sequence"
+    TRANSFER_STATE = "transfer_state"
+    TRANSFER_INCOMPLETE = "transfer_incomplete"
+    TRANSFER_QUOTA = "transfer_quota"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

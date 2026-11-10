@@ -28,7 +28,7 @@ test("WP02 exposes one Search or create launcher and safe transitional destinati
     const moreButton = page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "More" });
     await moreButton.click();
     const more = page.getByRole("dialog", { name: "More" });
-    for (const name of ["Intelligence", "Knowledge", "Map", "Review", "System"]) {
+    for (const name of ["Intelligence", "Reports", "Knowledge", "Map", "Review", "System"]) {
       await expect(more.getByRole("link", { name, exact: true })).toBeVisible();
     }
     await expect(more.getByRole("link", { name: "Search" })).toHaveCount(0);

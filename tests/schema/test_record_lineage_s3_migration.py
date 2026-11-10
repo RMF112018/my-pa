@@ -74,7 +74,7 @@ SCHEMA: Final = "knowledge"
 REVISION: Final = "6f1476b8da52"
 PREVIOUS: Final = "d020b532ad7d"
 #: Record lineage S4 (`c5260943d933`, ADR-015) is additive on this revision.
-HEAD: Final = "2a90f91dd786"
+HEAD: Final = "4c37731671fc"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 #: Record lineage S3.1 (`023f8f7eb499`, ADR-015 decision 15), additive on S4.
 S31_MIGRATION: Final = MIGRATIONS / "20261025_023f8f7eb499_record_lineage_s31.py"
@@ -230,7 +230,7 @@ def test_the_revision_is_the_single_head_on_d020b532ad7d() -> None:
     assert script.get_revision(PREVIOUS).down_revision == "264310e0416a"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert MIGRATION.name.endswith("_record_lineage_s3.py")
-    assert len(list(MIGRATIONS.glob("*.py"))) == 126
+    assert len(list(MIGRATIONS.glob("*.py"))) == 127
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -402,10 +402,36 @@ def test_at_vocabulary_adds_exactly_the_s3_names() -> None:
         - S4_CAPABILITIES
         - S31_CAPABILITIES
         - S5B2_CAPABILITIES
+        # And Reports Modernization WP02's `reports.publish` and WP03's five, the
+        # head's (4c37731671fc).
+        - {
+            "reports.publish",
+            "reports.update",
+            "reports.history",
+            "reports.archive",
+            "reports.delete",
+            "reports.restore",
+            "reports.hold.place",
+            "reports.hold.release",
+            "reports.retention.set",
+            "reports.retention.get",
+            # Reports Modernization WP06: bounded chunked transfer.
+            "reports.transfer.begin",
+            "reports.transfer.append",
+            "reports.transfer.finalize",
+            "reports.transfer.abort",
+            "reports.transfer.read_chunk",
+        }
     )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s3_admitted_ahead("capability")
-    purposes = {purpose.value for purpose in Purpose} - S4_PURPOSES - S5B2_PURPOSES
+    purposes = (
+        {purpose.value for purpose in Purpose}
+        - S4_PURPOSES
+        - S5B2_PURPOSES
+        # Reports Modernization WP03's purpose, the head's (4c37731671fc).
+        - {"report_lifecycle", "report_hold", "report_retention"}
+    )
     assert set(purposes_at) == purposes | gap.lineage_s3_admitted_ahead("purpose")
     assert S3_CAPABILITIES & declared == gap.S3_CAPABILITIES_DECLARED_BY_DOMAIN
     assert S3_PURPOSES & purposes == gap.S3_PURPOSES_DECLARED_BY_DOMAIN

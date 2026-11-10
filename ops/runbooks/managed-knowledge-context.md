@@ -61,29 +61,42 @@ returns a complete no-match or empty package and must not fabricate evidence.
 ChatLLM is a **full MY-PA application data manager**, not a system
 administrator. The machine-readable policy is
 `src/my_pa/domain/identity/chatllm_capability_policy.py` at profile version
-`chatllm-data-v11`. Do not grant every `Capability` enum member.
+`chatllm-data-v12`. Do not grant every `Capability` enum member.
 
-On the current head, the derived **effective** ChatLLM catalog is 164 names
+On the current head, the derived **effective** ChatLLM catalog is 175 names
 when documents, relationship intelligence (with writes), relationship memory,
-and constraints are composed, and 98 in the default composition. The
-policy-data target is the same 164: every data-management name (74
+and constraints are composed, and 109 in the default composition. The
+policy-data target is the same 175: every data-management name (85
 `DATA_REQUIRED` and 90 `DATA_CONDITIONAL`) now has a handler, the Run-01 Project
 Controls names included, so none is `not_implemented`. `gsqs.start` / `gsqs.status` stay omitted pending a separate
 reclassification. Report-cycle writes (`reports.begin_cycle`,
 `reports.commit`, `reports.record_run_state`) are ChatLLM `DATA_REQUIRED` /
 full-data eligible, and so, since `chatllm-data-v9`, are the report type
 registry's `reports.types.create` (write, `report_authoring`) and
-`reports.types.list` (read, `report_read`). `continuity.tasks.create` is
+`reports.types.list` (read, `report_read`), and, since `chatllm-data-v12` (Reports
+Modernization), the 11 standalone Reports names: `reports.publish` and `reports.update`
+(write, `report_authoring`), `reports.history` (read, `report_read`), `reports.archive`,
+`reports.delete` and `reports.restore` (write, `report_lifecycle`, never implied by
+`report_authoring`), and the 5 `reports.transfer.*` names (`begin`, `append`,
+`finalize`, `abort`: write, `report_authoring`; `read_chunk`: read, `report_read`).
+Reports Modernization WP04 adds no name: it extends
+`reports.list` and `reports.search` with an opt-in `plane` selector (default
+`intelligence`, the unchanged legacy path; `standalone` or `all` for the general
+report catalog), described in
+[`mcp-and-cli-operations.md`](mcp-and-cli-operations.md). Reports Modernization
+WP05 adds no name either: it adds creator attribution, `gzip+base64` content
+and the optional report content store to the same capabilities, described
+there too. `continuity.tasks.create` is
 compatibility-only; use Work `tasks.create`. Identity correction, source
 enrollment, GoodNotes pull, and `constraint_sync.*` are control-plane
 exclusions. Since `chatllm-data-v10` (record lineage P1, ADR-015 decision 16) the
 34 client-usable lineage-plane names are `DATA_CONDITIONAL` on the lineage
-switches, so the target above grows to 191 with `MY_PA_LINEAGE_ENABLED` composed
-and to 198 with `MY_PA_PROGRAM_REPORTING_ENABLED` as well; `issues.close`,
+switches, so the target above grows to 197 with `MY_PA_LINEAGE_ENABLED` composed
+and to 204 with `MY_PA_PROGRAM_REPORTING_ENABLED` as well; `issues.close`,
 `issues.reopen`, the 3 `confirm` names and the 2 `records.backfill.` names are
 control-plane exclusions withheld from every client. Since `chatllm-data-v11` (CPM
 Workbench S5b-2) the 6 Schedule reads are `DATA_CONDITIONAL` on
-`MY_PA_SCHEDULE_ENABLED`, so the target is 170 with that switch alone and 204 with all
+`MY_PA_SCHEDULE_ENABLED`, so the target is 176 with that switch alone and 210 with all
 three switches; `schedule_publications.import` is a control-plane exclusion. The lineage grant set, its
 companions and the P2 procedure are in
 [`remote-mcp-cloudflare.md`](remote-mcp-cloudflare.md#record-lineage-client-exposure-p1).
@@ -97,14 +110,14 @@ Inspect and (operator-gated) reconcile with:
 ```bash
 python apps/cli/remote_mcp.py profile-diff \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v11
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12
 python apps/cli/remote_mcp.py profile-plan \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v11
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12
 # operator-gated; never run against production from this runbook alone
 python apps/cli/remote_mcp.py profile-apply \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v11 \
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12 \
   --apply
 ```
 
@@ -182,7 +195,7 @@ populates it. Every command below that writes is **operator-only**.
   `knowledge-profile-plan` / `knowledge-profile-apply --apply` for
   `knowledge-discovery-v2`, which adds only the `record_events.provenance`
   grant; an ordinary ChatLLM client re-runs `profile-plan` / `profile-apply`
-  for `chatllm-data-v11`, which carries the same read when the Knowledge plane is
+  for `chatllm-data-v12`, which carries the same read when the Knowledge plane is
   composed. Each of these commands prints `allowlist_fingerprint <hex>` so the operator can confirm
   which allowlists the process loaded.
 
@@ -214,7 +227,7 @@ strips or refuses them, and its profile tooling reports them as
    profile.
 4. Run `profile-plan` (shape under [Activation sequence](#activation-sequence)).
    The plan reports `knowledge_role: manager`. For a client already converged
-   on `chatllm-data-v11`, its `add` set must be exactly
+   on `chatllm-data-v12`, its `add` set must be exactly
    `knowledge.assertions.submit` and `knowledge.discovery.checkpoint` under
    `knowledge_assertion_observation` (write), with nothing revoked or replaced.
    Then run `profile-apply --apply`.
@@ -288,7 +301,7 @@ grant. **Nothing here is commissioned**, and this section authorizes no grant.
 - **Who already holds the pair.** The Knowledge discovery profile
   (`knowledge-discovery-v2`) and the operator-review profile
   (`knowledge-operator-review-v1`) do not include it. The ChatLLM profile
-  `chatllm-data-v11` **does** include `knowledge.assertions.search` once the
+  `chatllm-data-v12` **does** include `knowledge.assertions.search` once the
   Knowledge plane is composed. Applying that profile to a client of a process
   with the plane on therefore admits the plane for that client. Do not run
   `profile-apply` for such a process, and do not grant the search capability
@@ -339,13 +352,13 @@ steps require a separate operator decision.
    ```bash
    python apps/cli/remote_mcp.py profile-diff \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v11
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12
    python apps/cli/remote_mcp.py profile-plan \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v11
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12
    python apps/cli/remote_mcp.py profile-apply \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v11 \
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12 \
      --apply
    ```
 

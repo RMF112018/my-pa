@@ -419,7 +419,7 @@ class Capability(StrEnum):
     # Principal's own partition. Real handwriting remains fail-closed.
     GSQS_START = "gsqs.start"
     GSQS_STATUS = "gsqs.status"
-    # Intelligence Artifact / Report plane. Eleven `reports.*` names rather than a
+    # Intelligence Artifact / Report plane. Twenty-six `reports.*` names rather than a
     # widening of `capture.*`, `documents.*`, `knowledge.*`, or `context.*`
     # (`D-91`). Capture is user-authored notes. Documents are managed bytes.
     # Knowledge is enrollment-scoped extraction. Context assembles a retrieval
@@ -449,6 +449,59 @@ class Capability(StrEnum):
     #: names committed, immutable artifacts, so retiring one would orphan them.
     REPORTS_TYPES_CREATE = "reports.types.create"
     REPORTS_TYPES_LIST = "reports.types.list"
+    #: The general (standalone) report plane (Reports Modernization WP02,
+    #: revision `4c37731671fc`). `publish` writes a new Principal-owned report
+    #: root at version 1 with a title and an inline content object -- no cycle
+    #: run, stage, producer, focus area or source lane -- and never a row in a
+    #: `knowledge.intelligence_*` table. `reports.read` reads it by its `grpt_`
+    #: identifier. Insert-only: a publish reaches no existing report.
+    REPORTS_PUBLISH = "reports.publish"
+    #: Mutable management of a standalone report (Reports Modernization WP03).
+    #: `update` appends version N+1 of an `active` report under an
+    #: `expected_version` CAS (an archived or trashed report is refused until
+    #: restored); `history` pages its version or lifecycle ledger, oldest first.
+    #: `archive`, `delete` and `restore` move its lifecycle under an
+    #: `expected_lifecycle_revision` CAS: `delete` moves it to the recoverable
+    #: Trash and never removes a row, and `restore` returns it to the state the
+    #: delete recorded. Every version, content object, manifest and association
+    #: stays exactly as written. The three lifecycle writes take
+    #: `report_lifecycle` only, never `report_authoring` (least privilege).
+    REPORTS_UPDATE = "reports.update"
+    REPORTS_HISTORY = "reports.history"
+    REPORTS_ARCHIVE = "reports.archive"
+    REPORTS_DELETE = "reports.delete"
+    REPORTS_RESTORE = "reports.restore"
+    #: Operator custody of a standalone report (Reports Modernization WP05b).
+    #: `hold.place` puts a legal hold on a report after sealing a digest-verified
+    #: preservation copy of all its content; a held report cannot be moved to the
+    #: Trash (archive, restore, update and reads are unaffected). `hold.release`
+    #: lifts it and keeps the preservation copy. `retention.set` appends a new
+    #: revision of the Principal's retention policy (unset by default; it gates
+    #: only purge eligibility, and purge does not exist) and `retention.get`
+    #: reads the policy, its history and, for one report, its purge eligibility.
+    #: All four are operator-only, attested to the local operator surface, under
+    #: their own purposes `report_hold` and `report_retention`.
+    REPORTS_HOLD_PLACE = "reports.hold.place"
+    REPORTS_HOLD_RELEASE = "reports.hold.release"
+    REPORTS_RETENTION_SET = "reports.retention.set"
+    REPORTS_RETENTION_GET = "reports.retention.get"
+    #: Bounded chunked transfer of standalone report content (Reports
+    #: Modernization WP06). `transfer.begin` opens a keyed, client-bound upload
+    #: session declaring the format, encoding, staged byte count and sha256;
+    #: `transfer.append` stages one fixed-size chunk (262,144 raw bytes, every
+    #: chunk but the last full, at most 64); `transfer.finalize` verifies the
+    #: whole staged content through the one content pipeline and returns a
+    #: one-use content token that `reports.publish` / `reports.update` consume;
+    #: `transfer.abort` ends an uncommitted upload. None creates a report or
+    #: destroys a content object, so the four writes are additive.
+    #: `transfer.read_chunk` reads a verified byte range of one version's decoded
+    #: or original content, with `reports.read`'s visibility. Client-usable,
+    #: under the existing `report_authoring` / `report_read` purposes.
+    REPORTS_TRANSFER_BEGIN = "reports.transfer.begin"
+    REPORTS_TRANSFER_APPEND = "reports.transfer.append"
+    REPORTS_TRANSFER_FINALIZE = "reports.transfer.finalize"
+    REPORTS_TRANSFER_ABORT = "reports.transfer.abort"
+    REPORTS_TRANSFER_READ_CHUNK = "reports.transfer.read_chunk"
     # The relationship-intelligence entity plane. Fifty-five `entities.` names
     # over `knowledge.entities` and the tables around it, declared in four
     # blocks by the package that added each: WP-RI-05's six reads here, then
@@ -1186,6 +1239,15 @@ _OPERATOR_ONLY: frozenset[AuthorizedCapability] = frozenset(
         # surface (S3.1 D-16: the handler calls `attested_lineage_authority`),
         # so it is never satisfiable remotely or over stdio MCP.
         Capability.SCHEDULE_PUBLICATIONS_IMPORT,
+        # Reports Modernization WP05b (operator decision 2026-11-05, H1): report
+        # holds and the retention policy, read included. Attested to the local
+        # operator surface (the handlers call `attested_lineage_authority`, the
+        # lineage confirm precedent), so no remote or stdio-MCP caller can ever
+        # satisfy them and they are never published remotely.
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
+        Capability.REPORTS_RETENTION_GET,
     }
 )
 
@@ -1394,6 +1456,28 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.REPORTS_RESOLVE_SET: frozenset({Purpose.REPORT_READ}),
         Capability.REPORTS_TYPES_CREATE: frozenset({Purpose.REPORT_AUTHORING}),
         Capability.REPORTS_TYPES_LIST: frozenset({Purpose.REPORT_READ}),
+        Capability.REPORTS_PUBLISH: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_UPDATE: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_HISTORY: frozenset({Purpose.REPORT_READ}),
+        # Lifecycle moves take their own purpose and only it: a grant issued to
+        # publish or revise a report must not also be able to Trash it (RD-14).
+        Capability.REPORTS_ARCHIVE: frozenset({Purpose.REPORT_LIFECYCLE}),
+        Capability.REPORTS_DELETE: frozenset({Purpose.REPORT_LIFECYCLE}),
+        Capability.REPORTS_RESTORE: frozenset({Purpose.REPORT_LIFECYCLE}),
+        # WP05b custody: purposes of their own, implied by no other purpose, so
+        # a grant to publish or move a report can neither hold it nor change the
+        # retention policy.
+        Capability.REPORTS_HOLD_PLACE: frozenset({Purpose.REPORT_HOLD}),
+        Capability.REPORTS_HOLD_RELEASE: frozenset({Purpose.REPORT_HOLD}),
+        Capability.REPORTS_RETENTION_SET: frozenset({Purpose.REPORT_RETENTION}),
+        Capability.REPORTS_RETENTION_GET: frozenset({Purpose.REPORT_RETENTION}),
+        # WP06 transfer: uploading content is authoring it; reading a range of a
+        # version is reading the report. No new purpose.
+        Capability.REPORTS_TRANSFER_BEGIN: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_TRANSFER_APPEND: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_TRANSFER_FINALIZE: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_TRANSFER_ABORT: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_TRANSFER_READ_CHUNK: frozenset({Purpose.REPORT_READ}),
         Capability.ENTITIES_SEARCH: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_GET: frozenset({Purpose.ENTITY_READ}),
@@ -1761,6 +1845,24 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_COMMIT,
         Capability.REPORTS_RECORD_RUN_STATE,
         Capability.REPORTS_TYPES_CREATE,
+        Capability.REPORTS_PUBLISH,
+        # Not additive: an update moves the head, and the lifecycle writes move
+        # the root's state (the `capture.archive`/`capture.restore` precedent).
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
+        # WP05b: placing or releasing a hold flips the root's held state, and a
+        # retention change supersedes the Principal's current policy; none is
+        # additive (`reports.retention.get` is a read and stays out).
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
+        # WP06: the four upload writes (additive below); `read_chunk` is a read.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
         Capability.RELATIONSHIP_MEMORY_CREATE,
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
@@ -1927,6 +2029,17 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_RECORD_RUN_STATE,
         # Insert-only: a registered type is never rewritten or removed.
         Capability.REPORTS_TYPES_CREATE,
+        # Insert-only: a publish mints a new report root, version 1 and its
+        # receipt, and reaches no existing report; a replay writes nothing.
+        Capability.REPORTS_PUBLISH,
+        # WP06: an upload session creates no report and destroys nothing.
+        # `begin` inserts a session, `append` a ledger row and a staged chunk,
+        # `finalize` seals the upload with a token digest, and `abort` ends only
+        # an uncommitted upload; no report, version or content object is reached.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
         Capability.RELATIONSHIP_MEMORY_CREATE,
         Capability.ENTITIES_CREATE,
         Capability.ENTITIES_IDENTIFIERS_BIND,

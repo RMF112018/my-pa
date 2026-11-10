@@ -48,6 +48,7 @@ from tests.conftest import (
     FakeProviders,
     FakeTaskManagementUnitOfWork,
     FakeUnitOfWork,
+    InMemoryReportContentStore,
     Scene,
     World,
     _ConstraintReads,
@@ -58,6 +59,7 @@ from tests.conftest import (
     staged_capture,
     staged_commitment,
     staged_continuity_project,
+    staged_general_report,
     staged_goodnotes_raster,
     staged_goodnotes_work,
     staged_managed_document,
@@ -86,6 +88,7 @@ from my_pa.adapters.http import create_http_app
 from my_pa.adapters.http.app import _STATUS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
+    AbortReportTransfer,
     AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
@@ -93,13 +96,16 @@ from my_pa.application.commands import (
     AddEntityName,
     AddIssueMembership,
     AddIssueProjectLink,
+    AppendReportTransfer,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
+    ArchiveGeneralReport,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
     AssertRecordAssociation,
     BeginIntelligenceCycle,
+    BeginReportTransfer,
     BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
@@ -146,6 +152,7 @@ from my_pa.application.commands import (
     CreateTaskComment,
     DeactivateConstraintCategory,
     DecideReviewCase,
+    DeleteGeneralReport,
     EndEntityAffiliation,
     EndEntityAssignment,
     EndEntityParticipation,
@@ -155,6 +162,7 @@ from my_pa.application.commands import (
     EndRecordAssociation,
     EnrollSource,
     FetchSource,
+    FinalizeReportTransfer,
     GetCanvasWorkspace,
     GetCapabilities,
     GetCommitmentHistory,
@@ -165,6 +173,7 @@ from my_pa.application.commands import (
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
+    GetGeneralReportHistory,
     GetGoodNotesContent,
     GetGoodNotesPullStatus,
     GetGoodNotesWork,
@@ -175,6 +184,7 @@ from my_pa.application.commands import (
     GetRecordEventProvenance,
     GetRelationshipMemory,
     GetRelationshipMemoryHistory,
+    GetReportRetention,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
@@ -220,6 +230,7 @@ from my_pa.application.commands import (
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
+    PlaceReportHold,
     PlanLineageBackfill,
     PrepareContext,
     PreviewConstraintSync,
@@ -227,6 +238,7 @@ from my_pa.application.commands import (
     PreviewEntitySplit,
     ProposeRelationshipMemory,
     PublishConstraint,
+    PublishGeneralReport,
     PullGoodNotesWork,
     PutCanvasWorkspace,
     ReadCapture,
@@ -256,6 +268,7 @@ from my_pa.application.commands import (
     ReadRecordLineage,
     ReadRelatedRecords,
     ReadReportManifest,
+    ReadReportTransferChunk,
     ReadScheduleActivityHistory,
     ReadSchedulePublication,
     ReadTask,
@@ -264,6 +277,7 @@ from my_pa.application.commands import (
     RecordIssueHandoff,
     RecordTask,
     ReinstateRecordAssociation,
+    ReleaseReportHold,
     ReopenConstraint,
     ReopenIssue,
     ReorderConstraintCategories,
@@ -276,6 +290,7 @@ from my_pa.application.commands import (
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
+    RestoreGeneralReport,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
     RetireEntityAddress,
@@ -307,6 +322,7 @@ from my_pa.application.commands import (
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
+    SetReportRetention,
     SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
@@ -320,6 +336,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateGeneralReport,
     UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
@@ -332,7 +349,7 @@ from my_pa.application.commands import (
 from my_pa.application.intelligence import begin_cycle, commit_artifact
 from my_pa.application.producer_origin import ProducerOriginRegistry
 from my_pa.application.service import _HANDLERS, ApplicationService
-from my_pa.contracts.ports import KnowledgeRecord, WorkCursorError
+from my_pa.contracts.ports import KnowledgeRecord, ReportContentNamespace, WorkCursorError
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode, ProblemDetail
 from my_pa.domain.capture.review import Disposition
@@ -532,6 +549,12 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.SCHEDULE_ACTIVITIES_LIST,
         Capability.SCHEDULE_ACTIVITIES_HISTORY,
         Capability.SCHEDULE_CHANGES_LIST,
+        # Reports Modernization WP06 T14: the 4 transfer uploads need a report
+        # content store and the transfer staging; this harness composes neither.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
     }
 )
 
@@ -976,6 +999,77 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "display_name": "HTTP weekly digest",
         },
         Capability.REPORTS_TYPES_LIST: {"stage": "reporter"},
+        Capability.REPORTS_PUBLISH: {
+            "title": "HTTP standalone report",
+            "content": {"format": "markdown", "body": "# HTTP\n\nSynthetic body."},
+            "idempotency_key": "http-publish",
+        },
+        # Reports Modernization WP03: a staged active report, and a staged
+        # archived one for `reports.restore` (`staged_general_report`).
+        Capability.REPORTS_UPDATE: {
+            "report_id": staged_general_report(scene),
+            "expected_version": 1,
+            "patch": {"title": "Revised"},
+            "change_reason": "Synthetic revision.",
+            "idempotency_key": "http-update",
+        },
+        Capability.REPORTS_HISTORY: {"report_id": staged_general_report(scene)},
+        Capability.REPORTS_ARCHIVE: {
+            "report_id": staged_general_report(scene, label="archive"),
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "http-archive",
+        },
+        Capability.REPORTS_DELETE: {
+            "report_id": staged_general_report(scene, label="trash"),
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "http-delete",
+        },
+        Capability.REPORTS_RESTORE: {
+            "report_id": staged_general_report(scene, archived=True),
+            "expected_lifecycle_revision": 1,
+            "idempotency_key": "http-restore",
+        },
+        # Reports Modernization WP05b: the operator custody names on a staged report.
+        Capability.REPORTS_HOLD_PLACE: {
+            "report_id": staged_general_report(scene, label="hold"),
+            "expected_hold_revision": 0,
+            "reason": "Synthetic hold.",
+            "idempotency_key": "http-hold-place",
+        },
+        Capability.REPORTS_HOLD_RELEASE: {
+            "report_id": staged_general_report(scene, held=True, label="release"),
+            "expected_hold_revision": 1,
+            "reason": "Synthetic release.",
+            "idempotency_key": "http-hold-release",
+        },
+        Capability.REPORTS_RETENTION_SET: {
+            "expected_policy_revision": 0,
+            "reason": "Synthetic retention.",
+            "idempotency_key": "http-retention-set",
+            "period": {"count": 5, "unit": "years"},
+        },
+        Capability.REPORTS_RETENTION_GET: {},
+        # Reports Modernization WP06: the bounded chunked transfer (the uploads
+        # are uncomposed without a content store and staging; read_chunk answers).
+        Capability.REPORTS_TRANSFER_BEGIN: {
+            "format": "markdown",
+            "encoding": "identity",
+            "byte_count": 16,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "idempotency_key": "http-transfer-begin",
+        },
+        Capability.REPORTS_TRANSFER_APPEND: {
+            "session_id": "grxfr_httpsession01",
+            "sequence": 0,
+            "chunk": "c3ludGhldGlj",
+            "chunk_sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+        },
+        Capability.REPORTS_TRANSFER_FINALIZE: {"session_id": "grxfr_httpsession01"},
+        Capability.REPORTS_TRANSFER_ABORT: {"session_id": "grxfr_httpsession01"},
+        Capability.REPORTS_TRANSFER_READ_CHUNK: {
+            "report_id": staged_general_report(scene),
+            "version_number": 1,
+        },
         # The relationship-intelligence entity plane (WP-RI-05). `person` and
         # `organization` are staged once per scene, so the payload table and the
         # command table below name the same two entities rather than each
@@ -2302,6 +2396,76 @@ def commands_for(
             display_name="HTTP weekly digest",
         ),
         Capability.REPORTS_TYPES_LIST: ListReportTypes(stage=IntelligenceStage.REPORTER),
+        Capability.REPORTS_PUBLISH: PublishGeneralReport(
+            title="HTTP standalone report",
+            content={"format": "markdown", "body": "# HTTP\n\nSynthetic body."},
+            idempotency_key="http-publish",
+        ),
+        # Reports Modernization WP03: the same staged reports as the payload table.
+        Capability.REPORTS_UPDATE: UpdateGeneralReport(
+            report_id=staged_general_report(scene),
+            expected_version=1,
+            patch={"title": "Revised"},
+            change_reason="Synthetic revision.",
+            idempotency_key="http-update",
+        ),
+        Capability.REPORTS_HISTORY: GetGeneralReportHistory(report_id=staged_general_report(scene)),
+        Capability.REPORTS_ARCHIVE: ArchiveGeneralReport(
+            report_id=staged_general_report(scene, label="archive"),
+            expected_lifecycle_revision=0,
+            idempotency_key="http-archive",
+        ),
+        Capability.REPORTS_DELETE: DeleteGeneralReport(
+            report_id=staged_general_report(scene, label="trash"),
+            expected_lifecycle_revision=0,
+            idempotency_key="http-delete",
+        ),
+        Capability.REPORTS_RESTORE: RestoreGeneralReport(
+            report_id=staged_general_report(scene, archived=True),
+            expected_lifecycle_revision=1,
+            idempotency_key="http-restore",
+        ),
+        # Reports Modernization WP05b: the operator custody names.
+        Capability.REPORTS_HOLD_PLACE: PlaceReportHold(
+            report_id=staged_general_report(scene, label="hold"),
+            expected_hold_revision=0,
+            reason="Synthetic hold.",
+            idempotency_key="http-hold-place",
+        ),
+        Capability.REPORTS_HOLD_RELEASE: ReleaseReportHold(
+            report_id=staged_general_report(scene, held=True, label="release"),
+            expected_hold_revision=1,
+            reason="Synthetic release.",
+            idempotency_key="http-hold-release",
+        ),
+        Capability.REPORTS_RETENTION_SET: SetReportRetention(
+            expected_policy_revision=0,
+            reason="Synthetic retention.",
+            idempotency_key="http-retention-set",
+            period={"count": 5, "unit": "years"},
+        ),
+        Capability.REPORTS_RETENTION_GET: GetReportRetention(),
+        # Reports Modernization WP06: the bounded chunked transfer.
+        Capability.REPORTS_TRANSFER_BEGIN: BeginReportTransfer(
+            format="markdown",
+            encoding="identity",
+            byte_count=16,
+            sha256="0000000000000000000000000000000000000000000000000000000000000000",
+            idempotency_key="http-transfer-begin",
+        ),
+        Capability.REPORTS_TRANSFER_APPEND: AppendReportTransfer(
+            session_id="grxfr_httpsession01",
+            sequence=0,
+            chunk="c3ludGhldGlj",
+            chunk_sha256="b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+        ),
+        Capability.REPORTS_TRANSFER_FINALIZE: FinalizeReportTransfer(
+            session_id="grxfr_httpsession01"
+        ),
+        Capability.REPORTS_TRANSFER_ABORT: AbortReportTransfer(session_id="grxfr_httpsession01"),
+        Capability.REPORTS_TRANSFER_READ_CHUNK: ReadReportTransferChunk(
+            report_id=staged_general_report(scene), version_number=1
+        ),
         # The entity plane. `person` is the same staged entity the payload table
         # names, because `staged_entities` answers with the pair already in the
         # world: two tables each staging their own would be comparing two
@@ -3261,6 +3425,11 @@ class RecordingService(ApplicationService):
             # this suite asserting reachability for names its own build refuses.
             relationship_intelligence_writes_enabled=True,
             producer_origins=ProducerOriginRegistry(world.producer_origins),
+            # WP05b: composed for the same reason, so `reports.hold.place` is
+            # reachable (an uncomposed build refuses it `unavailable`).
+            report_preservation_store=InMemoryReportContentStore(
+                ReportContentNamespace.PRESERVATION
+            ),
         )
         self.envelopes: list[ResponseEnvelope] = []
 

@@ -1,0 +1,536 @@
+{
+  "reports.read.markdown": {
+    "plane": "standalone",
+    "report_id": "grpt_aaaaaaaa11111111",
+    "created_at": "2026-08-09T12:00:00.000Z",
+    "creator": {
+      "kind": "local_principal",
+      "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+    },
+    "head_version_id": "grver_aaaaaaaa11111111",
+    "head_version_number": 1,
+    "lifecycle_state": "active",
+    "lifecycle_revision": 0,
+    "held": true,
+    "version_id": "grver_aaaaaaaa11111111",
+    "version_number": 1,
+    "supersedes_version_id": null,
+    "change_kind": "initial",
+    "change_reason": null,
+    "title": "Synthetic report",
+    "type": "weekly_note",
+    "topics": [
+      "synthetic"
+    ],
+    "tags": [
+      "draft"
+    ],
+    "summary": "A synthetic summary.",
+    "report_date": "2026-08-09",
+    "coverage_period": {
+      "start": "2026-08-09T12:00:00.000Z",
+      "end": null
+    },
+    "metadata": {
+      "origin": "synthetic"
+    },
+    "recorded_at": "2026-08-09T12:00:00.000Z",
+    "author": {
+      "kind": "local_principal",
+      "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+    },
+    "content": {
+      "content_id": "grcnt_aaaaaaaa11111111",
+      "format": "markdown",
+      "encoding": "identity",
+      "storage_kind": "inline",
+      "decoded_sha256": "ed404346c513a01a337b5d5fe757f364be79eb788e5a01931273212ea1bfecc5",
+      "decoded_byte_count": 18,
+      "canonical_sha256": null,
+      "original_sha256": "ed404346c513a01a337b5d5fe757f364be79eb788e5a01931273212ea1bfecc5",
+      "original_byte_count": 18,
+      "body": "# Synthetic\n\nBody."
+    },
+    "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "associations": [
+      {
+        "ordinal": 0,
+        "target_kind": "external_source",
+        "target_ref": "synthetic:source-1",
+        "target_version_ref": null,
+        "relation": "references",
+        "verification": "asserted"
+      }
+    ]
+  },
+  "reports.read.json": {
+    "plane": "standalone",
+    "report_id": "grpt_aaaaaaaa11111111",
+    "created_at": "2026-08-09T12:00:00.000Z",
+    "creator": {
+      "kind": "local_principal",
+      "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+    },
+    "head_version_id": "grver_aaaaaaaa11111111",
+    "head_version_number": 1,
+    "lifecycle_state": "active",
+    "lifecycle_revision": 0,
+    "held": true,
+    "version_id": "grver_aaaaaaaa11111111",
+    "version_number": 1,
+    "supersedes_version_id": null,
+    "change_kind": "initial",
+    "change_reason": null,
+    "title": "Synthetic report",
+    "type": "weekly_note",
+    "topics": [
+      "synthetic"
+    ],
+    "tags": [
+      "draft"
+    ],
+    "summary": "A synthetic summary.",
+    "report_date": "2026-08-09",
+    "coverage_period": {
+      "start": "2026-08-09T12:00:00.000Z",
+      "end": null
+    },
+    "metadata": {
+      "origin": "synthetic"
+    },
+    "recorded_at": "2026-08-09T12:00:00.000Z",
+    "author": {
+      "kind": "local_principal",
+      "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+    },
+    "content": {
+      "content_id": "grcnt_aaaaaaaa11111111",
+      "format": "json",
+      "encoding": "identity",
+      "storage_kind": "inline",
+      "decoded_sha256": "8d3b5454bc534d1d609c5093efcd6a9437f58d549942d99d78c90cfecd2c31e2",
+      "decoded_byte_count": 24,
+      "canonical_sha256": "8d3b5454bc534d1d609c5093efcd6a9437f58d549942d99d78c90cfecd2c31e2",
+      "original_sha256": "8d3b5454bc534d1d609c5093efcd6a9437f58d549942d99d78c90cfecd2c31e2",
+      "original_byte_count": 24,
+      "data": {
+        "rows": [
+          1,
+          2
+        ],
+        "ok": true
+      }
+    },
+    "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "associations": [
+      {
+        "ordinal": 0,
+        "target_kind": "external_source",
+        "target_ref": "synthetic:source-1",
+        "target_version_ref": null,
+        "relation": "references",
+        "verification": "asserted"
+      }
+    ],
+    "manifest": {
+      "schema": "synthetic"
+    }
+  },
+  "reports.read.mixed": {
+    "plane": "standalone",
+    "report_id": "grpt_aaaaaaaa11111111",
+    "created_at": "2026-08-09T12:00:00.000Z",
+    "creator": {
+      "kind": "local_principal",
+      "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+    },
+    "head_version_id": "grver_aaaaaaaa11111111",
+    "head_version_number": 1,
+    "lifecycle_state": "active",
+    "lifecycle_revision": 0,
+    "held": true,
+    "version_id": "grver_aaaaaaaa11111111",
+    "version_number": 1,
+    "supersedes_version_id": null,
+    "change_kind": "initial",
+    "change_reason": null,
+    "title": "Synthetic report",
+    "type": "weekly_note",
+    "topics": [
+      "synthetic"
+    ],
+    "tags": [
+      "draft"
+    ],
+    "summary": "A synthetic summary.",
+    "report_date": "2026-08-09",
+    "coverage_period": {
+      "start": "2026-08-09T12:00:00.000Z",
+      "end": null
+    },
+    "metadata": {
+      "origin": "synthetic"
+    },
+    "recorded_at": "2026-08-09T12:00:00.000Z",
+    "author": {
+      "kind": "local_principal",
+      "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+    },
+    "content": {
+      "content_id": "grcnt_aaaaaaaa11111111",
+      "format": "mixed",
+      "encoding": "identity",
+      "storage_kind": "inline",
+      "decoded_sha256": "473528d6d63b64bf74b9bb63fea04b11f02bd5c31e507b156963448e7ab51601",
+      "decoded_byte_count": 38,
+      "canonical_sha256": "473528d6d63b64bf74b9bb63fea04b11f02bd5c31e507b156963448e7ab51601",
+      "original_sha256": "473528d6d63b64bf74b9bb63fea04b11f02bd5c31e507b156963448e7ab51601",
+      "original_byte_count": 38,
+      "body": "Synthetic.",
+      "data": {
+        "k": "v"
+      }
+    },
+    "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "associations": [
+      {
+        "ordinal": 0,
+        "target_kind": "external_source",
+        "target_ref": "synthetic:source-1",
+        "target_version_ref": null,
+        "relation": "references",
+        "verification": "asserted"
+      }
+    ]
+  },
+  "reports.read.gzip": {
+    "plane": "standalone",
+    "report_id": "grpt_aaaaaaaa11111111",
+    "created_at": "2026-08-09T12:00:00.000Z",
+    "creator": {
+      "kind": "local_principal",
+      "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+    },
+    "head_version_id": "grver_aaaaaaaa11111111",
+    "head_version_number": 1,
+    "lifecycle_state": "active",
+    "lifecycle_revision": 0,
+    "held": true,
+    "version_id": "grver_aaaaaaaa11111111",
+    "version_number": 1,
+    "supersedes_version_id": null,
+    "change_kind": "initial",
+    "change_reason": null,
+    "title": "Synthetic report",
+    "type": "weekly_note",
+    "topics": [
+      "synthetic"
+    ],
+    "tags": [
+      "draft"
+    ],
+    "summary": "A synthetic summary.",
+    "report_date": "2026-08-09",
+    "coverage_period": {
+      "start": "2026-08-09T12:00:00.000Z",
+      "end": null
+    },
+    "metadata": {
+      "origin": "synthetic"
+    },
+    "recorded_at": "2026-08-09T12:00:00.000Z",
+    "author": {
+      "kind": "local_principal",
+      "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+    },
+    "content": {
+      "content_id": "grcnt_aaaaaaaa11111111",
+      "format": "text",
+      "encoding": "gzip+base64",
+      "storage_kind": "inline",
+      "decoded_sha256": "40289e95027b5740f8935e30b73ec505822b59093b16f05a561de4c8b23f4218",
+      "decoded_byte_count": 20,
+      "canonical_sha256": null,
+      "original_sha256": "bdf4e78b5554c3ebf316c82740d58e64c2d06e3b9552b6fed3c8d2d3c85c3013",
+      "original_byte_count": 40,
+      "body": "Synthetic gzip body.",
+      "encoded": "H4sIAAAAAAACEwuuzCvJSC3JTFZIr8osUEjKT6nUAwCmsR89FAAAAA=="
+    },
+    "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "associations": [
+      {
+        "ordinal": 0,
+        "target_kind": "external_source",
+        "target_ref": "synthetic:source-1",
+        "target_version_ref": null,
+        "relation": "references",
+        "verification": "asserted"
+      }
+    ]
+  },
+  "reports.read.omitted": {
+    "plane": "standalone",
+    "report_id": "grpt_aaaaaaaa11111111",
+    "created_at": "2026-08-09T12:00:00.000Z",
+    "creator": {
+      "kind": "local_principal",
+      "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+    },
+    "head_version_id": "grver_aaaaaaaa11111111",
+    "head_version_number": 1,
+    "lifecycle_state": "active",
+    "lifecycle_revision": 0,
+    "held": true,
+    "version_id": "grver_aaaaaaaa11111111",
+    "version_number": 1,
+    "supersedes_version_id": null,
+    "change_kind": "initial",
+    "change_reason": null,
+    "title": "Synthetic report",
+    "type": "weekly_note",
+    "topics": [
+      "synthetic"
+    ],
+    "tags": [
+      "draft"
+    ],
+    "summary": "A synthetic summary.",
+    "report_date": "2026-08-09",
+    "coverage_period": {
+      "start": "2026-08-09T12:00:00.000Z",
+      "end": null
+    },
+    "metadata": {
+      "origin": "synthetic"
+    },
+    "recorded_at": "2026-08-09T12:00:00.000Z",
+    "author": {
+      "kind": "local_principal",
+      "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+    },
+    "content": {
+      "content_id": "grcnt_aaaaaaaa11111111",
+      "format": "text",
+      "encoding": "gzip+base64",
+      "storage_kind": "managed_blob",
+      "decoded_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "decoded_byte_count": 900000,
+      "canonical_sha256": null,
+      "original_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "original_byte_count": 600000,
+      "body_omitted": "exceeds_response_bound",
+      "body_chunked_read": {
+        "capability": "reports.transfer.read_chunk",
+        "part": "decoded",
+        "byte_count": 900000,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "encoded_omitted": "exceeds_response_bound",
+      "encoded_chunked_read": {
+        "capability": "reports.transfer.read_chunk",
+        "part": "original",
+        "byte_count": 600000,
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "associations": [
+      {
+        "ordinal": 0,
+        "target_kind": "external_source",
+        "target_ref": "synthetic:source-1",
+        "target_version_ref": null,
+        "relation": "references",
+        "verification": "asserted"
+      }
+    ]
+  },
+  "reports.read.no_body": {
+    "plane": "standalone",
+    "report_id": "grpt_aaaaaaaa11111111",
+    "created_at": "2026-08-09T12:00:00.000Z",
+    "creator": {
+      "kind": "local_principal",
+      "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+    },
+    "head_version_id": "grver_aaaaaaaa11111111",
+    "head_version_number": 1,
+    "lifecycle_state": "active",
+    "lifecycle_revision": 0,
+    "held": true,
+    "version_id": "grver_aaaaaaaa11111111",
+    "version_number": 1,
+    "supersedes_version_id": null,
+    "change_kind": "initial",
+    "change_reason": null,
+    "title": "Synthetic report",
+    "type": "weekly_note",
+    "topics": [
+      "synthetic"
+    ],
+    "tags": [
+      "draft"
+    ],
+    "summary": "A synthetic summary.",
+    "report_date": "2026-08-09",
+    "coverage_period": {
+      "start": "2026-08-09T12:00:00.000Z",
+      "end": null
+    },
+    "metadata": {
+      "origin": "synthetic"
+    },
+    "recorded_at": "2026-08-09T12:00:00.000Z",
+    "author": {
+      "kind": "local_principal",
+      "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+    },
+    "content": {
+      "content_id": "grcnt_aaaaaaaa11111111",
+      "format": "text",
+      "encoding": "identity",
+      "storage_kind": "inline",
+      "decoded_sha256": "b457f2443d41141cfa30980a4602b11c3a600488bd51a3f952594bb6c1c05eba",
+      "decoded_byte_count": 10,
+      "canonical_sha256": null,
+      "original_sha256": "b457f2443d41141cfa30980a4602b11c3a600488bd51a3f952594bb6c1c05eba",
+      "original_byte_count": 10
+    },
+    "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "associations": [
+      {
+        "ordinal": 0,
+        "target_kind": "external_source",
+        "target_ref": "synthetic:source-1",
+        "target_version_ref": null,
+        "relation": "references",
+        "verification": "asserted"
+      }
+    ]
+  },
+  "reports.list.standalone": {
+    "plane": "standalone",
+    "items": [
+      {
+        "plane": "standalone",
+        "report_id": "grpt_aaaaaaaa11111111",
+        "title": "Synthetic report",
+        "type": "weekly_note",
+        "topics": [
+          "synthetic"
+        ],
+        "tags": [
+          "draft"
+        ],
+        "summary": "A synthetic summary.",
+        "report_date": "2026-08-09",
+        "lifecycle_state": "active",
+        "lifecycle_revision": 0,
+        "head_version_id": "grver_aaaaaaaa11111111",
+        "head_version_number": 1,
+        "created_at": "2026-08-09T12:00:00.000Z",
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "creator": {
+          "kind": "local_principal",
+          "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+        },
+        "held": true
+      }
+    ],
+    "next_cursor": null
+  },
+  "reports.list.all": {
+    "plane": "all",
+    "items": [
+      {
+        "plane": "standalone",
+        "report_id": "grpt_aaaaaaaa11111111",
+        "title": "Synthetic report",
+        "type": "weekly_note",
+        "topics": [
+          "synthetic"
+        ],
+        "tags": [
+          "draft"
+        ],
+        "summary": "A synthetic summary.",
+        "report_date": "2026-08-09",
+        "lifecycle_state": "active",
+        "lifecycle_revision": 0,
+        "head_version_id": "grver_aaaaaaaa11111111",
+        "head_version_number": 1,
+        "created_at": "2026-08-09T12:00:00.000Z",
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "creator": {
+          "kind": "local_principal",
+          "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+        },
+        "held": true
+      },
+      {
+        "plane": "intelligence",
+        "report_id": "rpt_aaaaaaaa11111111",
+        "title": "E2E morning brief collector",
+        "type": "collector_candidates",
+        "report_date": "2026-08-20",
+        "created_at": "2026-08-09T12:00:00.000Z",
+        "cycle_run_id": "micr_aaaaaaaa11111111",
+        "stage": "collector",
+        "artifact_kind": "collector_candidates",
+        "focus_area_id": "communications",
+        "source_lane": null,
+        "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "artifact_state": "final"
+      }
+    ],
+    "next_cursor": "synthetic-cursor"
+  },
+  "reports.search.all": {
+    "plane": "all",
+    "items": [
+      {
+        "plane": "standalone",
+        "report_id": "grpt_aaaaaaaa11111111",
+        "title": "Synthetic report",
+        "type": "weekly_note",
+        "topics": [
+          "synthetic"
+        ],
+        "tags": [
+          "draft"
+        ],
+        "summary": "A synthetic summary.",
+        "report_date": "2026-08-09",
+        "lifecycle_state": "active",
+        "lifecycle_revision": 0,
+        "head_version_id": "grver_aaaaaaaa11111111",
+        "head_version_number": 1,
+        "created_at": "2026-08-09T12:00:00.000Z",
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "creator": {
+          "kind": "local_principal",
+          "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+        },
+        "held": true,
+        "snippet": "synthetic summary"
+      },
+      {
+        "plane": "intelligence",
+        "report_id": "rpt_aaaaaaaa11111111",
+        "title": "E2E morning brief collector",
+        "type": "collector_candidates",
+        "report_date": "2026-08-20",
+        "created_at": "2026-08-09T12:00:00.000Z",
+        "cycle_run_id": "micr_aaaaaaaa11111111",
+        "stage": "collector",
+        "artifact_kind": "collector_candidates",
+        "focus_area_id": "communications",
+        "source_lane": null,
+        "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "artifact_state": "final",
+        "snippet": "morning brief"
+      }
+    ],
+    "next_cursor": null
+  }
+}

@@ -195,3 +195,359 @@ refusal rather than a duplication. Restore into an empty root and an empty plane
   delete command, no delete statement, and no `deleted` state in the schema.
 * **Backup retention and off-host copies.** This runbook covers taking a backup,
   not where it lives afterwards.
+
+## 7. The report content store (Reports Modernization WP05 C)
+
+A second, separate filesystem plane: report content whose decoded size is above
+`MY_PA_REPORT_CONTENT_INLINE_MAX_BYTES` (default 524,288, valid 1..524,288) is
+held under `MY_PA_REPORT_CONTENT_ROOT` as `managed_blob` objects, one per
+`grcnt_` content row, at `<root>/content/<shard>/<grcnt_id>/{decoded,original}`.
+Unset, the root composes no store: report content stays inline, and content is
+refused (`invalid_request`, `content`, `max_bytes`) when its decoded size is
+above the threshold or, for a `gzip+base64` upload, when its gunzipped bytes
+are (a store-less server never inflates past the threshold). The root
+must be an existing real directory (not a symbolic link) clear of every source
+root and of the managed document root; the gateway refuses to start otherwise.
+Neither variable is a secret.
+
+The write window is the same as section 3's: an object is written before the
+first row of its request, so a failure can leave an orphan object, never a row
+naming absent bytes. Every standalone `reports.read` of a `managed_blob`
+version verifies its parts (size and SHA-256), whether or not the body is
+requested, and answers `internal_error` without a body when one is missing or
+altered. A verified body is returned only up to 524,288 decoded bytes; above
+that the read carries `body_omitted: "exceeds_response_bound"` with every
+digest. `reports.history`, `reports.list` and `reports.search` never read the
+store.
+
+`apps/cli/report_content.py` (`verify`, `backup`, `restore`, each with
+`--principal`, in the shape of `apps/cli/managed_documents.py` above) reports
+that Principal's missing parts and per-part size or digest mismatches, the
+store's orphans (objects no `managed_blob` row of any Principal names; an orphan
+may also be an object whose transaction has not committed yet) and unreadable
+entries, and copies verified objects to and from a backup root clear of the
+live one. It never deletes or repairs anything. The database is backed up with `pg_dump` and
+restored first; the objects are then restored and verified against the restored
+rows. A `restore` stops at the first damaged object it meets, whether a damaged
+copy in the backup root or a damaged object already in the live store (which it
+verifies but never overwrites): run `verify` first, move each damaged object it
+reports aside (out of the live store root), and move any damaged copy aside out
+of the backup root before restoring again. The full dump, copy, restore and
+scan cycle is exercised against
+temporary roots and a disposable database by
+`tests/recovery/test_report_content_recovery.py`; nothing here has been run
+against a real deployment root, which remains an operator action.
+
+### 7.1 Transfer staging garbage collection (Reports Modernization WP06)
+
+Content larger than one request is uploaded in chunks through
+`reports.transfer.begin` / `append` / `finalize` and consumed by
+`reports.publish` or `reports.update`. Until a session is consumed or aborted
+its chunks are **transfer staging** under the same root, in its own constant
+directory `<root>/transfer/<shard>/<grxfr_id>/<sequence>-<sha256>`, beside the
+`content` and `preservation` namespaces. A consume or abort discards the
+session's staging after its commit, best effort. Every `begin` first moves its
+Principal's (any client's) open or finalized sessions whose `expires_at` has
+passed to `expired` (at most 16 of them per begin, oldest first, plus the
+begin's own keyed session when it too has expired) and discards their
+staging after its own commit, best effort; a refused begin rolls back and
+discards nothing. So a Principal's staging on disk is bounded by its live
+quota (8 sessions, 64 MiB declared) plus the sessions that ended with no later
+begin of that Principal. The collector is still needed for those (a Principal
+that stops beginning), for a failed consume, abort or begin discard, and for a
+staging directory with no session row:
+
+```sh
+MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \
+  .venv/bin/python apps/cli/report_content.py transfer-gc [--limit N] [--discard-orphans]
+```
+
+**Schedule it hourly as an operator step.** Nothing in the repository
+creates a scheduler, timer or cron entry; run it from the operator's own
+schedule (and by hand after an incident). It is bounded (`--limit`, 1..1000,
+default 100, per step) and idempotent, so an overlapping or repeated run is
+harmless; a session a request holds is skipped (`FOR UPDATE SKIP LOCKED`) and
+collected next time.
+
+**What one run does.** (1) Moves up to `--limit` `open` or `finalized`
+sessions whose `expires_at` has passed to `expired` (no row is deleted). (2)
+Discards the staging of consumed, aborted and expired sessions (at most
+`--limit`). (3) Reports staging directories that have no session row
+(orphans, e.g. after a database restore) and, only with `--discard-orphans`,
+discards them (at most `--limit`). Unreadable staging entries (anything that
+is not a well-formed session directory or chunk file, links included) are
+counted and never removed; inspect them by hand.
+
+**What it can remove.** Only consumed, aborted, expired or orphaned transfer
+staging, and only under `<root>/transfer/`: the staging port admits only
+`grxfr_` session identifiers, takes no path, walks the directory anchored
+without following links and unlinks only chunk-named regular files. The
+`content` and `preservation` namespaces are never touched (the content store
+has no delete), and the session queries it uses are operator scans across
+every Principal by design (staging is one directory for all owners).
+
+**Output and exit codes.** One JSON object of counts, no identifier, path or
+byte: `expired`, `discarded`, `orphans_found`, `orphans_discarded`,
+`orphans_remaining`, `unreadable`, `more_remaining`. Exit `0` when clean; `3`
+when a bound left more to do (`more_remaining`), orphans remain unremoved, or
+unreadable entries exist (run again, or add `--discard-orphans` after
+checking the orphans are not a restore in progress); `1` on refusal (usage
+error, no `MY_PA_REPORT_CONTENT_ROOT`, a staging failure).
+
+**Backups need not include `transfer/`.** Staging is transient: `backup` and
+`restore` copy only `content` objects, and a session whose staging is lost
+can only be aborted and uploaded again (the client begins a new session).
+
+**Chunked reads re-verify the whole part on every call.** For a `managed_blob`
+version, every `reports.transfer.read_chunk` call streams the whole part it
+reads (at most 16 MiB) through the size and SHA-256 checks before it returns
+its window (at most 262,144 bytes), so nothing is ever returned from a part
+that does not verify, and no verification is trusted from one call to the
+next. The cost per call is O(part) CPU and disk reads and O(window) memory: a
+full read of a 16 MiB part takes 64 calls and hashes about 1 GiB, and no permit
+limits concurrent calls. Inline versions are hashed in memory (at most 524,288
+bytes). This is accepted by design; if a client's chunked reads show up as
+sustained gateway CPU or disk load, withdraw that client's
+`reports.transfer.read_chunk` grant rather than relaxing the check.
+
+**Keyed publish and update rely on server-stamped keys.** A transfer-sourced
+`reports.publish` or `reports.update` looks its receipt up by idempotency key
+and Principal only, before it claims the session. A remote client cannot state
+a key: the server stamps one derived from the payload hash and the
+authenticated client, so a retry only ever meets its own receipt. A local
+caller (`apps/cli/invoke.py`) supplies its key as given, so reusing one key for
+a request with another intent (another title, another session, or an earlier
+inline use) is refused `conflict [idempotency_key]` by the intent digest, and
+the named session stays finalized; use a fresh key per distinct request.
+
+## 8. Report holds and retention (Reports Modernization WP05b)
+
+**What a hold does.** A legal hold is placed and released by the operator only:
+`reports.hold.place` and `reports.hold.release` (purpose `report_hold`) are
+operator-only capabilities attested to the local operator surface — the CLI
+(`apps/cli/invoke.py`) or the HTTP gateway's stamped operator surface. A held
+report cannot be moved to the Trash: `reports.delete` is refused `denied
+[report_held]` and writes no lifecycle row, and any future purge is blocked the
+same way. Nothing else is: archive, restore, update, `reports.read`,
+`reports.history`, list and search all work on a held report, and `reports.read`
+and `reports.history` answer `"held": true`. Placing a hold first writes a
+sealed, digest-verified **preservation copy** of every version, content object
+and lifecycle event to the report content store, in the `preservation`
+namespace (`<root>/preservation/<shard>/<grprv_id>/...`, beside section 7's
+`content` namespace), reads it back and verifies it, and only then records the
+hold. The copy is kept after the hold is released; the store has no delete.
+Every `reports.delete` also preflights the report's content integrity, so a
+report with a missing or altered part is refused `internal_error` with no
+lifecycle row, held or not.
+
+The manual Reports UI in `web/` (Reports Modernization WP07) has no hold,
+release or retention control and its BFF contract cannot address those
+capabilities; it shows a held report's `held` flag read-only ("On hold"), and
+its Move to Trash of a held report receives the same `denied` refusal.
+
+**What retention does.** Retention is an operator policy per Principal:
+`reports.retention.set` and `reports.retention.get` (purpose
+`report_retention`), operator-only on the same terms. It is **unset by default**:
+no period applies until the operator sets one. Every change is appended to the
+policy history (who, when, old period, new period, reason); nothing is
+overwritten. Retention gates only **purge eligibility**, which
+`reports.retention.get` reports for one report as information: purge is not
+implemented, and retention never blocks an update, archive, restore or Trash.
+Eligibility is decided in this order: `no_policy`, `held`, `not_trashed`,
+`retention_running`, `eligible`. **Operator decisions (2026-11-06):** the
+retention clock starts at the report's most recent move to the Trash
+(`most_recent_trash_event`, the implemented default), and the operator approved
+a period of **5 years**. The code still sets and assumes no period: the policy
+stays **unset by default** in every deployment until the operator runs the
+`reports.retention.set` example below (`{"count": 5, "unit": "years"}`, the
+operator-approved value) once, as the operator, **after** the Reports code is
+deployed. No agent or migration applies it.
+
+**Commands.** All four run through `apps/cli/invoke.py` as the local operator,
+with `MY_PA_DATABASE_URL` set and, for a placement, `MY_PA_REPORT_CONTENT_ROOT`
+(section 7). `--principal-id` is the local operator Principal; `--requested-at`
+is the request time in RFC 3339. Reasons are required (1..500 characters) and
+are recorded, never echoed. `expected_hold_revision` is the `hold_revision` you
+last read (0 for a report never held); `expected_policy_revision` is the
+`policy_revision` you last read (0 before the first change). A retry with the
+same `idempotency_key` and the same request replays (`"replayed": true`).
+
+```sh
+MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \
+  .venv/bin/python apps/cli/invoke.py reports.hold.place \
+    --request-id req-hold-0001 --purpose report_hold \
+    --principal-id prn_... --requested-at 2026-11-06T12:00:00Z \
+    --payload '{"report_id": "grpt_...", "expected_hold_revision": 0, "reason": "Litigation hold.", "idempotency_key": "hold-0001"}'
+
+.venv/bin/python apps/cli/invoke.py reports.hold.release \
+    --request-id req-hold-0002 --purpose report_hold \
+    --principal-id prn_... --requested-at 2026-11-06T12:00:00Z \
+    --payload '{"report_id": "grpt_...", "expected_hold_revision": 1, "reason": "Hold lifted.", "idempotency_key": "hold-0002"}'
+
+.venv/bin/python apps/cli/invoke.py reports.retention.set \
+    --request-id req-retention-0001 --purpose report_retention \
+    --principal-id prn_... --requested-at 2026-11-06T12:00:00Z \
+    --payload '{"expected_policy_revision": 0, "reason": "Policy adopted.", "idempotency_key": "retention-0001", "period": {"count": 5, "unit": "years"}}'
+
+.venv/bin/python apps/cli/invoke.py reports.retention.set \
+    --request-id req-retention-0002 --purpose report_retention \
+    --principal-id prn_... --requested-at 2026-11-06T12:00:00Z \
+    --payload '{"expected_policy_revision": 1, "reason": "Policy withdrawn.", "idempotency_key": "retention-0002", "unset": true}'
+
+.venv/bin/python apps/cli/invoke.py reports.retention.get \
+    --request-id req-retention-0003 --purpose report_retention \
+    --principal-id prn_... --requested-at 2026-11-06T12:00:00Z \
+    --payload '{"report_id": "grpt_...", "history_limit": 20}'
+```
+
+`reports.retention.set` takes exactly one of `period` (`{"count", "unit"}`:
+1..36525 `days` or 1..100 `years`) and `"unset": true`. `reports.retention.get`
+takes an optional `report_id` (for that report's eligibility) and an optional
+`history_limit` (1..50, default 20).
+
+**Outputs** (the `result` of the one-line JSON envelope the CLI prints):
+
+* hold place/release: `plane` (`standalone`), `report_id`, `operation`
+  (`place`/`release`), `held`, `hold_revision`, `event_id`, `recorded_at`,
+  `replayed`, and on a placement `preservation` {`seal_object_id`,
+  `seal_sha256`, `seal_byte_count`, `object_count`, `version_count`} — the
+  sealed copy's identity and size, never its content or the reason;
+* retention set: `policy_revision`, `period` (or `null` when unset),
+  `previous_period`, `event_id`, `recorded_at`, `replayed`;
+* retention get: `policy` {`policy_revision`, `period`, `set_at`, `reason`} or
+  `null` when never set, `history` (newest first: `event_id`,
+  `policy_revision`, `period`, `previous_period`, `reason`, `authority_class`,
+  `decision_channel`, `recorded_at`), and with `report_id` an `eligibility`
+  {`report_id`, `eligible`, `reason`, `clock_start`, `eligible_at`,
+  `clock_start_strategy`}.
+
+**Refusals** (`code [safe_details]`):
+
+* `denied [report_held]` — `reports.delete` on a held report; nothing written.
+* `unavailable [preservation_store]` — a placement in a process without
+  `MY_PA_REPORT_CONTENT_ROOT`; no hold row is written.
+* `conflict [expected_hold_revision]` / `conflict [expected_policy_revision]` —
+  a stale revision; `conflict [hold_state]` — placing a hold on a held report
+  or releasing one not held; `conflict [idempotency_key]` — a key reused for a
+  different request; `not_found [artifact_id]` — no such report of yours.
+* `internal_error` — the preservation copy could not be written or did not
+  verify; no hold row is written.
+* `denied` (no detail) — any of the four from a surface that is not the local
+  operator surface (stdio MCP, an unattested local caller); nothing is read or
+  written.
+* Local stdio MCP: the four are **listed** on local stdio (`tools/list`), as the
+  other operator-only names are (the schedule import, the attested lineage
+  confirms), and **refused unless attested operator authority** — a stdio call
+  carries none, so the handler answers `denied` before any read. This is the
+  operator-only precedent, kept deliberately (WP08).
+* Remote and compact ChatLLM facade: these custody operations are absent from
+  `my_pa.describe` and every remote tool list, and naming one is `unsupported`,
+  even with a forged grant. The ChatLLM capability policy classifies all four
+  `CONTROL_PLANE_EXCLUDED`.
+
+**Verifying preservation copies.**
+
+```sh
+MY_PA_REPORT_CONTENT_ROOT=/path/to/report-content \
+  .venv/bin/python apps/cli/report_content.py preservation-verify [--fail-on-orphans]
+```
+
+It takes no `--principal` (the orphan direction cannot be partitioned) and
+prints `holds_checked`, `missing_parts`, `mismatched_parts`, `orphaned_objects`,
+`unreadable_entries`, `integrity_findings`, `orphans` and `stale_temporaries`,
+then one `missing` or `mismatch` line per integrity finding and, in their own
+section headed `orphans_informational`, one `orphan` line per orphan, and a
+`stale_temporaries_informational` count line (identifiers and counts only; no
+path, body or digest).
+
+* **Integrity findings** — a missing, mismatched or corrupt part of a copy a
+  hold seal references, a missing or malformed seal, a seal listing another
+  number of objects than its hold row records, and unreadable store entries.
+  A copy is damaged.
+* **Orphans** — preservation objects no hold seal references. A placement that
+  failed after writing some objects leaves them behind by design: they are
+  reported, never deleted, and no hold row names them. Informational.
+* **Stale temporaries** — the store's own `.decoded.tmp` / `.original.tmp`
+  files inside an object directory. They come **only** from a process killed
+  mid-`put` (a signal or power loss; an ordinary failure removes everything
+  the `put` created). They are not unreadable entries and not integrity
+  findings, and nothing removes them. Only these exact names count; any other
+  unrecognised entry is still an unreadable entry. A copy a hold references
+  whose final part is absent or unverifiable is still an integrity finding,
+  whatever temporary sits beside it. Informational, like orphans.
+
+Exit codes of `preservation-verify`:
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | no integrity finding (orphans and stale temporaries may be present and are reported) |
+| `1` | refused: a usage or operational error (for example, no root configured) |
+| `2` | at least one integrity finding (with or without orphans, with or without `--fail-on-orphans`) |
+| `3` | `--fail-on-orphans` given, no integrity finding, at least one orphan or stale temporary |
+
+The other subcommands are unchanged: section 7's `verify` exits `0`
+consistent, `1` refused, `2` inconsistent. `verify` counts stale temporaries
+(`stale_temporaries`) apart from `unreadable_entries`, and, like an orphan, a
+stale temporary makes it inconsistent (`2`). A usage error is `1` only when
+`preservation-verify` (or `transfer-gc`) is the subcommand; other subcommands
+keep argparse's `2`.
+
+**Clearing a stale temporary (operator, manual).** Nothing does this
+automatically.
+
+1. Stop every writer of the root: the gateway and remote MCP processes that
+   compose the report content store, and any running `report_content.py`.
+2. Locate them yourself (the commands print counts, never paths):
+   `find "$MY_PA_REPORT_CONTENT_ROOT" -type f \( -name .decoded.tmp -o -name .original.tmp \)`;
+   the directory holding one is named by its object id. Run
+   `preservation-verify` (and section 7's `verify` for the `content`
+   namespace). Decide, for each object directory with a stale temporary,
+   that either every referenced copy's final parts verify (no `missing` or
+   `mismatch` line names the object), or the object is an orphan (an
+   `orphan` line names it: no hold seal or row references it).
+3. Move the `.tmp` file aside, outside the store root (`mv`, not `rm`; keep it
+   until you are satisfied), and rerun the verification. If a referenced
+   object's final part is missing, do not move anything: treat it as damage
+   (restore from backup) instead.
+
+**Backups do not copy the preservation namespace.** Section 7's `backup` and
+`restore` copy only `content` objects (operator decision: backups need not
+honor holds). After a restore, `preservation-verify` reports any preservation
+copy the restored store lacks as missing parts.
+
+The end-to-end CLI sequence above (publish, place, delete refused, archive,
+restore, update, retention get/set/get, release, delete, store-less refusal,
+unstamped `denied`) is exercised against a disposable database and a temporary
+root by `tests/database/test_reports_custody_cli.py`; nothing here has been run
+against a real deployment root, which remains an operator action.
+
+## 9. Deploying Reports (operator)
+
+Reports Modernization (WP08) changes nothing here by itself; these are the
+operator's steps, in order, when the branch is deployed. None is run by an
+agent, a migration or the code.
+
+1. **Merge order.** PR #349 merges first, so the Alembic history has the single
+   head `2a90f91dd786`; this branch then moves it to `4c37731671fc` (the general
+   report plane). Migrate to that single head before starting the new code.
+2. **Content store.** Set `MY_PA_REPORT_CONTENT_ROOT` (section 7) to the store
+   root. Unset is the default and composes no store: content stays inline and
+   larger content, holds and transfers are refused.
+3. **Remote memory.** The remote MCP service needs `MY_PA_REMOTE_MEMORY=896m`.
+   It was already applied to the deployment's environment on 2026-11-06 and
+   takes effect at the next container recreate.
+4. **ChatLLM profile.** For each ChatLLM client run `profile-plan`, then
+   `profile-apply --apply`, for `chatllm-data-v12`
+   ([`managed-knowledge-context.md`](managed-knowledge-context.md)). A client
+   converged on `chatllm-data-v11` adds exactly the 11 Reports names. Reconnect
+   the client afterwards.
+5. **Retention.** After the deploy, set the operator-approved period once with
+   `reports.retention.set` and `{"period": {"count": 5, "unit": "years"}}`
+   (section 8's example).
+6. **Transfer staging.** Schedule `report_content.py transfer-gc` hourly
+   (section 7.1).
+7. **Backup and preservation.** Include the store in backups (section 7's
+   `backup`, after `pg_dump`) and run `report_content.py preservation-verify`
+   (section 8): exit `0` clean, `3` orphans or stale temporaries with
+   `--fail-on-orphans`, `2` an integrity finding, `1` refused. Stale
+   temporaries are cleared by hand as section 8 describes.

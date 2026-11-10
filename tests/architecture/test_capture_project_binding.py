@@ -56,7 +56,25 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: Moved again by the Schedule Scenarios S6-2 revision, which declares the 11 plane
 #: tables, restates the 2 publication CHECKs and builds the 6 `record_links`
 #: CHECKs from the lineage storage vocabulary; `captures` is untouched.
-TABLES_SHA256: Final = "ddb77223417236275a59ac33eba29321fd8989a5c44cc80771ccabde97a981e4"
+#: Moved again by the Reports Modernization WP01 revision, which declares the 8
+#: general report tables and names their 3 deferred commit triggers in a
+#: comment; `captures` is untouched. Moved again by its R1-R4 corrective cycle,
+#: which declares the receipt version, update no-op and event CHECKs, the inline
+#: mixed-content CHECK and the settled-transfer byte-count CHECK, and names the
+#: two insert guards in the plane comment; `captures` is untouched. Moved again
+#: by Reports Modernization WP04, which declares the report version search
+#: projection (`search_text`, its bound and the generated `search_document` with
+#: its GIN index) and the root catalog-order index; `captures` is untouched.
+#: Moved again by Reports Modernization WP05 A2, which declares the root
+#: creator and version author columns, their four CHECKs and the root
+#: creator-filter index; `captures` is untouched. Moved again by Reports
+#: Modernization WP05b A1-A3, which declares the root hold cache (three columns,
+#: three CHECKs, the deferred hold-cache reference), `report_hold_events` and
+#: `report_retention_policy_events`; `captures` is untouched. Moved again by
+#: Reports Modernization WP06 A1/A2, which declares the transfer session's client
+#: binding, begin key, fixed chunk limit, owner key and quota index, and
+#: `report_transfer_chunks`; `captures` is untouched.
+TABLES_SHA256: Final = "037c52449c745391205188e90c4c02d72f87f0cf7a9b280a7749fb2862b066b3"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

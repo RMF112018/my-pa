@@ -38,9 +38,10 @@ import os
 import re
 import stat
 import sys
-from collections.abc import Callable, Iterable, Iterator, Mapping
+import threading
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import TracebackType
@@ -59,7 +60,7 @@ from my_pa.application.goodnotes_gsqs_b0_workflow import (
     default_repository_root,
     start_workflow,
 )
-from my_pa.application.intelligence import InMemoryIntelligenceStore
+from my_pa.application.intelligence import InMemoryIntelligenceStore, in_memory_search_rank
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
 from my_pa.application.service import ApplicationService
@@ -99,6 +100,7 @@ from my_pa.contracts.ports import (
     EntityMutationReceipt,
     EntitySummary,
     EntityWriteRequest,
+    GeneralReportRepository,
     GoodNotesProposalAdmission,
     GoodNotesProposalConflictError,
     GoodNotesSemanticRepository,
@@ -141,6 +143,31 @@ from my_pa.contracts.ports import (
     RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
     RelationshipWriteRequest,
+    ReportAssociationTargetNotFoundError,
+    ReportContentIntegrityError,
+    ReportContentMissingError,
+    ReportContentNamespace,
+    ReportContentPart,
+    ReportContentStore,
+    ReportContentStoreError,
+    ReportHeldError,
+    ReportHoldStateError,
+    ReportIdempotencyConflictError,
+    ReportNotFoundError,
+    ReportPreservationError,
+    ReportPreservationUnavailableError,
+    ReportStaleHoldRevisionError,
+    ReportStaleLifecycleRevisionError,
+    ReportStalePolicyRevisionError,
+    ReportStaleVersionError,
+    ReportTransferConflictError,
+    ReportTransferDigestError,
+    ReportTransferNotFoundError,
+    ReportTransferQuotaError,
+    ReportTransferRepository,
+    ReportTransferStaging,
+    ReportTrashPreflightError,
+    ReportWithdrawnError,
     RepositoryFailureError,
     ReviewDecisionRequest,
     ReviewRepository,
@@ -151,6 +178,9 @@ from my_pa.contracts.ports import (
     SourceRepository,
     TaskManagementRepository,
     TaskManagementUnitOfWork,
+    TransferBegin,
+    TransferChunk,
+    TransferSession,
     UnitOfWork,
     UnknownScopeError,
     WorkCursorError,
@@ -222,6 +252,7 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import (
     IdKind,
+    InvalidIdentifierError,
     make_identifier,
     parse_identifier,
     validate_identifier,
@@ -262,6 +293,7 @@ from my_pa.domain.goodnotes.models import (
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.identity.secret_digests import digests_match
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
 from my_pa.domain.lineage.vocabulary import SituationKind
 from my_pa.domain.meeting.model import (
@@ -404,7 +436,91 @@ from my_pa.domain.relationship.normalization import (
     is_normalized_name,
     normalize_name,
 )
-from my_pa.domain.search.query import RankCategory, SearchMatch, SearchRequest
+from my_pa.domain.reports.catalog import (
+    MAX_CATALOG_PAGE_SIZE,
+    CatalogCursor,
+    CatalogCursorError,
+    CatalogFilters,
+    extract_search_text,
+)
+from my_pa.domain.reports.content import (
+    INLINE_CONTENT_MAX_BYTES,
+    ReportContent,
+    content_facts,
+    validate_content,
+)
+from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
+from my_pa.domain.reports.custody import (
+    DEFAULT_RETENTION_HISTORY,
+    MAX_RETENTION_HISTORY,
+    CustodyAuthority,
+    HoldOperation,
+    HoldPreservation,
+    HoldRequest,
+    HoldResult,
+    PreservedLifecycleEvent,
+    PreservedRoot,
+    ReportEligibilityInputs,
+    ReportHoldEventRecord,
+    RetentionPolicyEventRecord,
+    RetentionPolicyView,
+    RetentionResult,
+    RetentionSetRequest,
+)
+from my_pa.domain.reports.errors import ReportValidationError
+from my_pa.domain.reports.lifecycle import decide_lifecycle_transition
+from my_pa.domain.reports.manifest import build_initial_manifest, build_version_manifest
+from my_pa.domain.reports.publication import (
+    PublicationReceipt,
+    PublicationRequest,
+    PublicationResult,
+    RequestedAssociation,
+)
+from my_pa.domain.reports.records import (
+    DEFAULT_HISTORY_PAGE,
+    MAX_HISTORY_PAGE,
+    MAX_HISTORY_PAGE_WITH_MANIFESTS,
+    CatalogEntry,
+    HistoryEntries,
+    ManagedContentRecord,
+    ReportHistoryPage,
+    ReportLifecycleEventRecord,
+    ReportRootRecord,
+    ReportVersionRecord,
+    ReportVersionSummary,
+    StoredReportVersion,
+)
+from my_pa.domain.reports.revision import (
+    LifecycleRequest,
+    LifecycleResult,
+    UpdateRequest,
+    UpdateResult,
+    apply_patch,
+    snapshot_of_version,
+)
+from my_pa.domain.reports.transfer import CLIENT_REF_PATTERN as TRANSFER_CLIENT_REF_PATTERN
+from my_pa.domain.reports.transfer import (
+    TRANSFER_BEGIN_REAP_LIMIT,
+    TRANSFER_DECLARED_BYTES_PER_OWNER,
+    TRANSFER_SESSIONS_PER_CLIENT,
+    TRANSFER_SESSIONS_PER_OWNER,
+    TransferDeclaration,
+)
+from my_pa.domain.reports.transfer import content_token_digest as transfer_content_token_digest
+from my_pa.domain.reports.values import ReportAssociation
+from my_pa.domain.reports.vocabulary import (
+    TRANSFER_CHUNK_MAX_BYTES,
+    AssociationTargetKind,
+    AssociationVerification,
+    ChangeKind,
+    ContentEncoding,
+    LifecycleOperation,
+    LifecycleState,
+    ReceiptOutcome,
+    StorageKind,
+)
+from my_pa.domain.reports.vocabulary import TransferState as ReportTransferState
+from my_pa.domain.search.query import RankCategory, SearchMatch, SearchQuery, SearchRequest
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     Commitment,
@@ -463,6 +579,17 @@ from my_pa.domain.task.lifecycle import (
 )
 from my_pa.domain.task.role import TaskRole
 from my_pa.domain.task.task import Task as TaskV2
+from my_pa.infrastructure.persistence.report_custody import (
+    PreservationSource,
+    preservation_source,
+    seal_preservation_copy,
+)
+from my_pa.infrastructure.persistence.report_transfers import (
+    check_chunk_digest as check_transfer_chunk_digest,
+)
+from my_pa.infrastructure.persistence.report_transfers import (
+    check_chunk_size as check_transfer_chunk_size,
+)
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
 
 pytest_plugins = ("tests.db.fixtures", "tests.ci_shard")
@@ -700,6 +827,32 @@ class _MeetingAttachmentRow:
     removed_at: datetime | None = None
 
 
+class _WorldLock:
+    """A `threading.Lock` a `deepcopy` of the `World` copies as a fresh lock.
+
+    Several suites run each case against `deepcopy(scene.world)`; a bare lock
+    cannot be copied (`cannot pickle '_thread.lock'`), and a copied world must
+    never share its lock with the original anyway.
+    """
+
+    __slots__ = ("_lock",)
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    def __enter__(self) -> bool:
+        return self._lock.acquire()
+
+    def __exit__(self, *_exc: object) -> None:
+        self._lock.release()
+
+    def __copy__(self) -> _WorldLock:
+        return _WorldLock()
+
+    def __deepcopy__(self, _memo: dict[int, object]) -> _WorldLock:
+        return _WorldLock()
+
+
 @dataclass
 class World:
     """Everything the fake repositories know, in one mutable place."""
@@ -902,6 +1055,43 @@ class World:
     )
     goodnotes_rasters: dict[tuple[str, str], GoodNotesPageRaster] = field(default_factory=dict)
     intelligence: InMemoryIntelligenceStore = field(default_factory=InMemoryIntelligenceStore)
+    #: The general report plane (Reports Modernization WP02): stored results by
+    #: (principal, publish key) and stored versions by (principal, report id).
+    general_report_receipts: dict[tuple[str, str], PublicationResult] = field(default_factory=dict)
+    general_report_versions: dict[tuple[str, str], StoredReportVersion] = field(
+        default_factory=dict
+    )
+    #: WP03: every version of a report, oldest first (the head view above holds
+    #: the root, which is the truth for state, head and revision); the
+    #: lifecycle events; the update receipts by (principal, key); the lifecycle
+    #: receipts by (principal, operation, key).
+    general_report_ledger: dict[tuple[str, str], list[StoredReportVersion]] = field(
+        default_factory=dict
+    )
+    general_report_events: dict[tuple[str, str], list[ReportLifecycleEventRecord]] = field(
+        default_factory=dict
+    )
+    general_report_update_receipts: dict[tuple[str, str], UpdateResult] = field(
+        default_factory=dict
+    )
+    general_report_lifecycle_receipts: dict[tuple[str, str, str], LifecycleResult] = field(
+        default_factory=dict
+    )
+    #: WP05b: each report's hold ledger, oldest first, by (principal, report).
+    general_report_hold_events: dict[tuple[str, str], list[ReportHoldEventRecord]] = field(
+        default_factory=dict
+    )
+    #: WP05b W3: each owner's retention policy history, oldest first, by principal.
+    general_report_retention_events: dict[str, list[RetentionPolicyEventRecord]] = field(
+        default_factory=dict
+    )
+    #: WP06: transfer sessions by id, their chunk ledgers, and the lock that
+    #: stands in for the per-owner begin advisory lock.
+    report_transfer_sessions: dict[str, TransferSession] = field(default_factory=dict)
+    report_transfer_chunks: dict[str, list[TransferChunk]] = field(default_factory=dict)
+    report_transfer_lock: _WorldLock = field(
+        default_factory=lambda: _WorldLock(), repr=False, compare=False
+    )
     #: The relationship-intelligence entity plane. Flat lists for the reason
     #: every other plane on `World` is one: the fake's whole job is the
     #: partition predicate, and a list a filter runs over is the clearest place
@@ -9629,6 +9819,1476 @@ class _UnmodelledPlane:
         raise NotImplementedError(f"the FAST world does not model {self._name}.{item}")
 
 
+class InMemoryReportContentStore(ReportContentStore):
+    """`ReportContentStore` in memory (WP05 C2), for the FAST tier.
+
+    The port's rules without a filesystem: an exclusive `put` (an existing
+    object refuses), `read`/`verify` comparing size and SHA-256
+    (`ReportContentMissingError` / `ReportContentIntegrityError`), and only
+    `grcnt_` identifiers (`grprv_` in the `preservation` namespace). `objects`
+    is public so a test can tamper with or delete a part; `puts` counts calls,
+    and `fail_puts` makes `put` raise `ReportContentStoreError` before storing
+    anything.
+    """
+
+    def __init__(self, namespace: ReportContentNamespace = ReportContentNamespace.CONTENT) -> None:
+        self.objects: dict[str, dict[ReportContentPart, bytes]] = {}
+        self.puts = 0
+        self.fail_puts = False
+        # WP05b B5: `preservation` admits only `grprv_`, `content` only `grcnt_`.
+        self._kind = (
+            IdKind.REPORT_PRESERVATION_OBJECT
+            if namespace is ReportContentNamespace.PRESERVATION
+            else IdKind.REPORT_CONTENT
+        )
+
+    def _admit(self, object_id: str) -> None:
+        try:
+            validate_identifier(object_id, self._kind)
+        except InvalidIdentifierError:
+            raise ReportContentStoreError(
+                "the report content object identifier is not admitted"
+            ) from None
+
+    def put(self, object_id: str, *, decoded: bytes, original: bytes | None) -> None:
+        self._admit(object_id)
+        self.puts += 1
+        if self.fail_puts:
+            raise ReportContentStoreError("the report content object could not be stored")
+        if object_id in self.objects:
+            raise ReportContentStoreError("the report content object already exists")
+        parts = {ReportContentPart.DECODED: bytes(decoded)}
+        if original is not None:
+            parts[ReportContentPart.ORIGINAL] = bytes(original)
+        self.objects[object_id] = parts
+
+    def read(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> bytes:
+        self._admit(object_id)
+        stored = self.objects.get(object_id, {}).get(part)
+        if stored is None:
+            raise ReportContentMissingError("the report content part is not readable")
+        if len(stored) != expected_byte_count:
+            raise ReportContentIntegrityError("size")
+        if hashlib.sha256(stored).hexdigest() != expected_sha256:
+            raise ReportContentIntegrityError("digest")
+        return stored
+
+    def verify(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> None:
+        self.read(
+            object_id,
+            part,
+            expected_sha256=expected_sha256,
+            expected_byte_count=expected_byte_count,
+        )
+
+    def read_range(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        offset: int,
+        length: int,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> bytes:
+        """WP06 T15: the whole part verified as `read` does, then only the range."""
+        if (
+            type(offset) is not int
+            or type(length) is not int
+            or not 0 <= offset <= expected_byte_count
+            or length < 1
+        ):
+            raise ReportContentStoreError("the report content range is not admitted")
+        stored = self.read(
+            object_id,
+            part,
+            expected_sha256=expected_sha256,
+            expected_byte_count=expected_byte_count,
+        )
+        return stored[offset : offset + length]
+
+    def has(self, object_id: str) -> bool:
+        self._admit(object_id)
+        return object_id in self.objects
+
+    def stored_object_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(self.objects))
+
+    def unreadable_entries(self) -> tuple[str, ...]:
+        return ()
+
+
+def _placement(
+    content: ReportContent, content_store: ReportContentStore | None, inline_max_bytes: int
+) -> StorageKind:
+    """The SQL repository's placement (WP05 C4): inline, `managed_blob`, or `too_large`."""
+    if type(inline_max_bytes) is not int or not 1 <= inline_max_bytes <= INLINE_CONTENT_MAX_BYTES:
+        raise ValueError("the report content inline threshold is out of bounds")
+    if content.decoded_byte_count <= inline_max_bytes:
+        return StorageKind.INLINE
+    if content_store is None:
+        raise ReportValidationError("content", "too_large")
+    return StorageKind.MANAGED_BLOB
+
+
+def _as_read(stored: StoredReportVersion) -> StoredReportVersion:
+    """A version as the SQL repository returns it: a `managed_blob` one as facts only."""
+    content = stored.content
+    if stored.storage_kind is not StorageKind.MANAGED_BLOB or not content.materialized:
+        return stored
+    return replace(
+        stored,
+        content=content_facts(
+            content.format,
+            content.encoding,
+            decoded_sha256=content.decoded_sha256,
+            decoded_byte_count=content.decoded_byte_count,
+            canonical_sha256=content.canonical_sha256,
+            original_sha256=content.original_sha256,
+            original_byte_count=content.original_byte_count,
+        ),
+    )
+
+
+class _ReportTransfers(ReportTransferRepository):
+    """`ReportTransferRepository` over a `World` (Reports Modernization WP06 B3).
+
+    The same order and outcomes as `SqlReportTransferRepository`: the per-owner
+    begin serialization (a `threading.Lock` stands in for the advisory lock),
+    the keyed replay among live sessions (T7'), the T6 quotas, the T5 uniform
+    refusal, the append order and the GC queries; the T2 size and digest rules
+    are the SQL module's own pure functions. The two are run against one behaviour table in
+    `tests/database/test_reports_transfer_repository.py` and
+    `tests/unit/test_reports_transfer_repository_fake.py`. It cannot prove
+    row locks, triggers or rollback: those are the `database` tier's.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    @staticmethod
+    def _client(client_ref: str) -> str:
+        if type(client_ref) is not str or not re.fullmatch(
+            TRANSFER_CLIENT_REF_PATTERN.strip("^$"), client_ref
+        ):
+            raise ReportValidationError("client_ref", "pattern")
+        return client_ref
+
+    @staticmethod
+    def _now(now: object) -> datetime:
+        if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
+            raise ReportValidationError("now", "naive")
+        return now.astimezone(UTC)
+
+    def _own(
+        self, session_id: object, principal_id: str, client_ref: str
+    ) -> TransferSession | None:
+        if type(session_id) is not str:
+            return None
+        found = self._world.report_transfer_sessions.get(session_id)
+        if found is None or found.owner_principal_id != principal_id:
+            return None
+        return found if found.client_ref == client_ref else None
+
+    def begin(
+        self,
+        declaration: TransferDeclaration,
+        *,
+        principal_id: str,
+        client_ref: str,
+        idempotency_key: str,
+        now: datetime,
+    ) -> TransferBegin:
+        if not isinstance(declaration, TransferDeclaration):
+            raise ReportValidationError("declaration", "type")
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        client = self._client(client_ref)
+        if type(idempotency_key) is not str or not 1 <= len(idempotency_key) <= 128:
+            raise ReportValidationError("idempotency_key", "bounds")
+        at = self._now(now)
+        with self._world.report_transfer_lock:
+            sessions = self._world.report_transfer_sessions
+            live_states = (ReportTransferState.OPEN, ReportTransferState.FINALIZED)
+            # Review R1 #1: reap the owner's (every client's) time-expired
+            # live sessions, oldest first and bounded, before the key and quota.
+            # The fake World has no rollback, so the reap is applied only once
+            # nothing can refuse (a refused begin reaps nothing, as on SQL).
+            mine = [s for s in sessions.values() if s.owner_principal_id == principal_id]
+            due = sorted(
+                (s for s in mine if s.state in live_states and s.expires_at <= at),
+                key=lambda s: (s.expires_at, s.session_id),
+            )[:TRANSFER_BEGIN_REAP_LIMIT]
+            reaped = [s.session_id for s in due]
+
+            def settle() -> None:
+                for session_id in reaped:
+                    sessions[session_id] = replace(
+                        sessions[session_id], state=ReportTransferState.EXPIRED
+                    )
+
+            # T7': the key binds only a live session; an ended one is ignored.
+            keyed = next(
+                (
+                    s
+                    for s in mine
+                    if s.client_ref == client
+                    and s.idempotency_key == idempotency_key
+                    and s.state in live_states
+                    and s.session_id not in reaped
+                ),
+                None,
+            )
+            if keyed is not None:
+                if keyed.expires_at > at:
+                    if keyed.intent_digest != declaration.intent_digest:
+                        raise ReportIdempotencyConflictError()
+                    settle()
+                    return TransferBegin(keyed, True, tuple(reaped))
+                reaped.append(keyed.session_id)
+            live = [s for s in mine if s.usable_at(at)]
+            if (
+                sum(1 for s in live if s.client_ref == client) >= TRANSFER_SESSIONS_PER_CLIENT
+                or len(live) >= TRANSFER_SESSIONS_PER_OWNER
+                or sum(s.declared_byte_count for s in live) + declaration.byte_count
+                > TRANSFER_DECLARED_BYTES_PER_OWNER
+            ):
+                raise ReportTransferQuotaError()
+            settle()
+            session = TransferSession(
+                session_id=issue_identifier(IdKind.REPORT_TRANSFER_SESSION),
+                owner_principal_id=principal_id,
+                client_ref=client,
+                state=ReportTransferState.OPEN,
+                format=declaration.format,
+                encoding=declaration.encoding,
+                declared_byte_count=declaration.byte_count,
+                declared_sha256=declaration.sha256,
+                chunk_byte_limit=TRANSFER_CHUNK_MAX_BYTES,
+                received_byte_count=0,
+                idempotency_key=idempotency_key,
+                intent_digest=declaration.intent_digest,
+                created_at=at,
+                expires_at=at + timedelta(seconds=declaration.ttl_seconds),
+                finalized_at=None,
+                consumed_content_id=None,
+                consumed_at=None,
+            )
+            self._world.report_transfer_sessions[session.session_id] = session
+            self._world.report_transfer_chunks[session.session_id] = []
+            return TransferBegin(session, False, tuple(reaped))
+
+    def lock_usable(
+        self, session_id: str, *, principal_id: str, client_ref: str, now: datetime
+    ) -> TransferSession:
+        client = self._client(client_ref)
+        at = self._now(now)
+        session = self._own(session_id, principal_id, client)
+        if session is None or not session.usable_at(at):
+            raise ReportTransferNotFoundError()
+        return session
+
+    def chunks(self, session_id: str, *, principal_id: str) -> tuple[TransferChunk, ...]:
+        session = self._world.report_transfer_sessions.get(session_id)
+        if session is None or session.owner_principal_id != principal_id:
+            return ()
+        return tuple(self._world.report_transfer_chunks.get(session_id, ()))
+
+    def append_chunk(
+        self,
+        session: TransferSession,
+        *,
+        sequence: int,
+        chunk_sha256: str,
+        data: bytes,
+        staging: ReportTransferStaging,
+        now: datetime,
+    ) -> tuple[TransferChunk, bool]:
+        at = self._now(now)
+        if type(sequence) is not int:
+            raise ReportValidationError("sequence", "type")
+        if type(data) is not bytes:
+            raise ReportValidationError("chunk", "type")
+        current = self._world.report_transfer_sessions[session.session_id]
+        if current.state is ReportTransferState.FINALIZED:
+            raise ReportTransferConflictError("transfer_state")
+        if current.state is not ReportTransferState.OPEN:
+            raise ReportTransferNotFoundError()
+        check_transfer_chunk_size(current, sequence, data)
+        check_transfer_chunk_digest(chunk_sha256, data)
+        ledger = self._world.report_transfer_chunks[session.session_id]
+        existing = next((c for c in ledger if c.sequence == sequence), None)
+        if existing is not None:
+            if existing.byte_count == len(data) and existing.chunk_sha256 == chunk_sha256:
+                return existing, True
+            raise ReportTransferConflictError("transfer_chunk_conflict")
+        if sequence != len(ledger):
+            raise ReportTransferConflictError("transfer_sequence")
+        staging.put_chunk(session.session_id, sequence, chunk_sha256=chunk_sha256, data=data)
+        chunk = TransferChunk(
+            session_id=session.session_id,
+            sequence=sequence,
+            byte_offset=sequence * TRANSFER_CHUNK_MAX_BYTES,
+            byte_count=len(data),
+            chunk_sha256=chunk_sha256,
+            received_at=at,
+        )
+        ledger.append(chunk)
+        self._world.report_transfer_sessions[session.session_id] = replace(
+            current, received_byte_count=current.received_byte_count + len(data)
+        )
+        return chunk, False
+
+    def staged_bytes(self, session: TransferSession, *, staging: ReportTransferStaging) -> bytes:
+        staged = b"".join(
+            staging.read_chunk(
+                session.session_id,
+                c.sequence,
+                chunk_sha256=c.chunk_sha256,
+                expected_byte_count=c.byte_count,
+            )
+            for c in self.chunks(session.session_id, principal_id=session.owner_principal_id)
+        )
+        if (
+            len(staged) != session.declared_byte_count
+            or hashlib.sha256(staged).hexdigest() != session.declared_sha256
+        ):
+            raise ReportTransferDigestError()
+        return staged
+
+    def _move(
+        self, session: TransferSession, states: tuple[ReportTransferState, ...], **values: object
+    ) -> TransferSession:
+        current = self._world.report_transfer_sessions.get(session.session_id)
+        if (
+            current is None
+            or current.owner_principal_id != session.owner_principal_id
+            or current.client_ref != session.client_ref
+            or current.state not in states
+        ):
+            raise ReportTransferNotFoundError()
+        moved = replace(current, **values)  # type: ignore[arg-type]
+        self._world.report_transfer_sessions[session.session_id] = moved
+        return moved
+
+    def finalize(
+        self, session: TransferSession, *, token_digest: str, now: datetime
+    ) -> TransferSession:
+        at = self._now(now)
+        if type(token_digest) is not str or not re.fullmatch(r"[0-9a-f]{64}", token_digest):
+            raise ReportValidationError("content_token_digest", "pattern")
+        if session.state is ReportTransferState.FINALIZED:
+            raise ReportTransferConflictError("transfer_state")
+        if session.state is not ReportTransferState.OPEN:
+            raise ReportTransferNotFoundError()
+        if session.received_byte_count != session.declared_byte_count:
+            raise ReportTransferConflictError("transfer_incomplete")
+        return self._move(
+            session,
+            (ReportTransferState.OPEN,),
+            state=ReportTransferState.FINALIZED,
+            content_token_digest=token_digest,
+            finalized_at=at,
+        )
+
+    def claim_for_consumption(
+        self,
+        session_id: str,
+        content_token: str,
+        *,
+        principal_id: str,
+        client_ref: str,
+        now: datetime,
+    ) -> TransferSession:
+        session = self.lock_usable(
+            session_id, principal_id=principal_id, client_ref=client_ref, now=now
+        )
+        presented = transfer_content_token_digest(content_token)
+        if (
+            session.state is not ReportTransferState.FINALIZED
+            or presented is None
+            or not digests_match(presented, session.content_token_digest)
+        ):
+            raise ReportTransferNotFoundError()
+        return session
+
+    def mark_consumed(
+        self, session: TransferSession, *, content_id: str, now: datetime
+    ) -> TransferSession:
+        at = self._now(now)
+        validate_identifier(content_id, IdKind.REPORT_CONTENT)
+        if session.state is not ReportTransferState.FINALIZED:
+            raise ReportTransferNotFoundError()
+        return self._move(
+            session,
+            (ReportTransferState.FINALIZED,),
+            state=ReportTransferState.CONSUMED,
+            consumed_content_id=content_id,
+            consumed_at=at,
+        )
+
+    def abort(
+        self, session_id: str, *, principal_id: str, client_ref: str, now: datetime
+    ) -> tuple[TransferSession, bool]:
+        client = self._client(client_ref)
+        at = self._now(now)
+        session = self._own(session_id, principal_id, client)
+        if session is None or session.expires_at <= at:
+            raise ReportTransferNotFoundError()
+        if session.state is ReportTransferState.ABORTED:
+            return session, True
+        live = (ReportTransferState.OPEN, ReportTransferState.FINALIZED)
+        if session.state not in live:
+            raise ReportTransferNotFoundError()
+        return self._move(session, live, state=ReportTransferState.ABORTED), False
+
+    def expire_due(self, *, now: datetime, limit: int) -> tuple[str, ...]:
+        at = self._now(now)
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ReportValidationError("limit", "bounds")
+        due = sorted(
+            (
+                s
+                for s in self._world.report_transfer_sessions.values()
+                if s.state in (ReportTransferState.OPEN, ReportTransferState.FINALIZED)
+                and s.expires_at <= at
+            ),
+            key=lambda s: (s.expires_at, s.session_id),
+        )[:limit]
+        for s in due:
+            self._world.report_transfer_sessions[s.session_id] = replace(
+                s, state=ReportTransferState.EXPIRED
+            )
+        return tuple(s.session_id for s in due)
+
+    def terminal_session_ids(self, session_ids: Iterable[str]) -> frozenset[str]:
+        terminal = (
+            ReportTransferState.CONSUMED,
+            ReportTransferState.ABORTED,
+            ReportTransferState.EXPIRED,
+        )
+        return frozenset(
+            i
+            for i in session_ids
+            if (s := self._world.report_transfer_sessions.get(i)) is not None
+            and s.state in terminal
+        )
+
+    def known_session_ids(self, session_ids: Iterable[str]) -> frozenset[str]:
+        return frozenset(i for i in session_ids if i in self._world.report_transfer_sessions)
+
+
+class _GeneralReports(GeneralReportRepository):
+    """`GeneralReportRepository` over a `World`: the partition rule and the replay rule.
+
+    The SQL repository is proved against PostgreSQL in
+    `tests/database/test_reports_general_persistence.py`; this fake exists so the
+    transport and policy suites can reach `reports.publish` and the standalone
+    `reports.read` at all. Only a `standalone_report` target resolves here.
+
+    WP03: `update`, `transition` and the two histories mirror the SQL order
+    and outcomes (not found, key replay or conflict, withdrawn, stale, then
+    the write; content reuse; the no-op receipts; restore from trash to the
+    delete's prior state). It cannot prove locking, constraint or rollback
+    behaviour: those are the `database` tier's.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def publish(
+        self,
+        request: PublicationRequest,
+        *,
+        principal_id: str,
+        creator: ReportCreator,
+        idempotency_key: str,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+        content_store: ReportContentStore | None = None,
+        inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
+    ) -> PublicationResult:
+        stored = self._world.general_report_receipts.get((principal_id, idempotency_key))
+        if stored is not None:
+            if stored.receipt.intent_digest != request.intent_digest:
+                raise ReportIdempotencyConflictError()
+            return replace(stored, replayed=True)
+        storage_kind = _placement(request.content, content_store, inline_max_bytes)
+        associations = self._verified(request.associations, principal_id)
+        report_id = issue_identifier(IdKind.REPORT)
+        version_id = issue_identifier(IdKind.REPORT_VERSION)
+        content_id = issue_identifier(IdKind.REPORT_CONTENT)
+        manifest = build_initial_manifest(
+            request,
+            report_id=report_id,
+            version_id=version_id,
+            content_id=content_id,
+            associations=associations,
+            recorded_at=recorded_at,
+            author=creator,
+            storage_kind=storage_kind,
+        )
+        if storage_kind is StorageKind.MANAGED_BLOB and content_store is not None:
+            # The SQL order (C4): after every refusal, before anything is kept.
+            content_store.put(
+                content_id, decoded=request.content.decoded, original=request.content.original
+            )
+        result = PublicationResult(
+            receipt=PublicationReceipt(
+                receipt_id=issue_identifier(IdKind.REPORT_RECEIPT),
+                report_id=report_id,
+                version_id=version_id,
+                version_number=1,
+                idempotency_key=idempotency_key,
+                intent_digest=request.intent_digest,
+                outcome=ReceiptOutcome.APPLIED,
+                issued_at=recorded_at,
+                correlation_id=correlation_id,
+                audit_id=audit_id,
+            ),
+            content_id=content_id,
+            format=request.content.format,
+            decoded_sha256=request.content.decoded_sha256,
+            decoded_byte_count=request.content.decoded_byte_count,
+            canonical_sha256=request.content.canonical_sha256,
+            manifest_sha256=manifest.sha256,
+            recorded_at=recorded_at,
+            replayed=False,
+        )
+        self._world.general_report_versions[(principal_id, report_id)] = StoredReportVersion(
+            root=ReportRootRecord(
+                report_id=report_id,
+                created_at=recorded_at,
+                head_version_id=version_id,
+                head_version_number=1,
+                lifecycle_state=LifecycleState.ACTIVE,
+                lifecycle_revision=0,
+                creator=creator,
+            ),
+            version=ReportVersionRecord(
+                version_id=version_id,
+                report_id=report_id,
+                version_number=1,
+                supersedes_version_id=None,
+                change_kind=ChangeKind.INITIAL,
+                title=request.title,
+                report_type=request.report_type,
+                topics=request.topics,
+                tags=request.tags,
+                summary=request.summary,
+                report_date=request.report_date,
+                coverage_start=request.coverage_start,
+                coverage_end=request.coverage_end,
+                metadata=dict(request.metadata),
+                change_reason=None,
+                content_id=content_id,
+                manifest_sha256=manifest.sha256,
+                recorded_at=recorded_at,
+                author=creator,
+            ),
+            content_id=content_id,
+            storage_kind=storage_kind,
+            content=request.content,
+            manifest=dict(manifest.document),
+            associations=tuple(associations),
+        )
+        self._world.general_report_ledger[(principal_id, report_id)] = [
+            self._world.general_report_versions[(principal_id, report_id)]
+        ]
+        self._world.general_report_receipts[(principal_id, idempotency_key)] = result
+        return result
+
+    def _verified(
+        self, requested: Sequence[RequestedAssociation], principal_id: str
+    ) -> tuple[ReportAssociation, ...]:
+        resolved = self.resolve_association_targets(
+            [(item.target_kind, item.target_ref) for item in requested],
+            principal_id=principal_id,
+        )
+        associations: list[ReportAssociation] = []
+        for item in requested:
+            if item.target_kind is AssociationTargetKind.EXTERNAL_SOURCE:
+                associations.append(item.as_stored(AssociationVerification.ASSERTED))
+            elif (item.target_kind, item.target_ref) in resolved and (
+                item.target_version_ref is None
+                or (
+                    item.target_kind is AssociationTargetKind.STANDALONE_REPORT
+                    and any(
+                        stored.version.version_id == item.target_version_ref
+                        for stored in self._versions(principal_id, item.target_ref)
+                    )
+                )
+            ):
+                # As the SQL repository: only a standalone report's own version,
+                # in the caller's scope, verifies; any other version ref refuses.
+                associations.append(item.as_stored(AssociationVerification.VERIFIED))
+            else:
+                raise ReportAssociationTargetNotFoundError()
+        return tuple(associations)
+
+    def _versions(self, principal_id: str, report_id: str) -> list[StoredReportVersion]:
+        """Every version of the report, oldest first (a head-only entry is its own ledger)."""
+        key = (principal_id, report_id)
+        if key not in self._world.general_report_versions:
+            return []
+        head = self._world.general_report_versions[key]
+        ledger = self._world.general_report_ledger.get(key) or [head]
+        # A test may replace the head entry directly; the head view stays the truth.
+        return (
+            [*ledger[:-1], head]
+            if ledger[-1].version.version_id == head.version.version_id
+            else ledger
+        )
+
+    def _root(self, principal_id: str, report_id: str) -> ReportRootRecord | None:
+        stored = self._world.general_report_versions.get((principal_id, report_id))
+        return None if stored is None else stored.root
+
+    def _set_root(self, principal_id: str, report_id: str, root: ReportRootRecord) -> None:
+        key = (principal_id, report_id)
+        self._world.general_report_versions[key] = replace(
+            self._world.general_report_versions[key], root=root
+        )
+
+    def update(
+        self,
+        request: UpdateRequest,
+        *,
+        principal_id: str,
+        creator: ReportCreator,
+        idempotency_key: str,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+        content_store: ReportContentStore | None = None,
+        inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
+    ) -> UpdateResult:
+        """The SQL order (D6): not found, key, withdrawn, stale, then the write."""
+        root = self._root(principal_id, request.report_id)
+        if root is None:
+            raise ReportNotFoundError()
+        stored = self._world.general_report_update_receipts.get((principal_id, idempotency_key))
+        if stored is not None:
+            if stored.intent_digest != request.intent_digest:
+                raise ReportIdempotencyConflictError()
+            return replace(stored, replayed=True)
+        if root.lifecycle_state is not LifecycleState.ACTIVE:
+            raise ReportWithdrawnError()
+        if root.head_version_number != request.expected_version:
+            raise ReportStaleVersionError()
+        key = (principal_id, request.report_id)
+        kept = self._world.general_report_versions[key]
+        # The head as SQL reads it: a `managed_blob` head is facts only.
+        head = _as_read(kept)
+        patch = request.patch
+        patched = (
+            None if patch.associations is None else self._verified(patch.associations, principal_id)
+        )
+        version = head.version
+        result, change_kind = apply_patch(
+            snapshot_of_version(
+                title=version.title,
+                content=head.content,
+                report_type=version.report_type,
+                topics=version.topics,
+                tags=version.tags,
+                summary=version.summary,
+                report_date=version.report_date,
+                coverage_start=version.coverage_start,
+                coverage_end=version.coverage_end,
+                metadata=version.metadata,
+                associations=head.associations,
+            ),
+            patch,
+            request.clear_fields,
+        )
+        placed: StorageKind | None = None
+        if result.content is not head.content:
+            placed = _placement(result.content, content_store, inline_max_bytes)
+        common = {
+            "receipt_id": issue_identifier(IdKind.REPORT_RECEIPT),
+            "report_id": request.report_id,
+            "expected_version": request.expected_version,
+            "idempotency_key": idempotency_key,
+            "intent_digest": request.intent_digest,
+            "issued_at": recorded_at,
+            "correlation_id": correlation_id,
+            "audit_id": audit_id,
+            "replayed": False,
+        }
+        if change_kind is None:
+            outcome = UpdateResult(
+                outcome=ReceiptOutcome.NO_OP,
+                version_id=version.version_id,
+                version_number=version.version_number,
+                change_kind=None,
+                content_id=head.content_id,
+                decoded_sha256=head.content.decoded_sha256,
+                manifest_sha256=version.manifest_sha256,
+                **common,  # type: ignore[arg-type]
+            )
+            self._world.general_report_update_receipts[(principal_id, idempotency_key)] = outcome
+            return outcome
+        number = version.version_number + 1
+        version_id = issue_identifier(IdKind.REPORT_VERSION)
+        reused = result.content is head.content
+        content_id = head.content_id if reused else issue_identifier(IdKind.REPORT_CONTENT)
+        storage_kind = head.storage_kind if reused or placed is None else placed
+        associations = head.associations if patched is None else patched
+        manifest = build_version_manifest(
+            report_id=request.report_id,
+            version_id=version_id,
+            version_number=number,
+            supersedes_version_id=version.version_id,
+            change_kind=change_kind,
+            change_reason=request.change_reason,
+            title=result.title,
+            report_type=result.report_type,
+            topics=result.topics,
+            tags=result.tags,
+            summary=result.summary,
+            report_date=result.report_date,
+            coverage_start=result.coverage_start,
+            coverage_end=result.coverage_end,
+            metadata=result.metadata,
+            content=result.content,
+            content_id=content_id,
+            associations=associations,
+            recorded_at=recorded_at,
+            author=creator,
+            storage_kind=storage_kind,
+        )
+        if not reused and storage_kind is StorageKind.MANAGED_BLOB and content_store is not None:
+            # The SQL order (C4): after the manifest bound, before anything is kept.
+            content_store.put(
+                content_id, decoded=result.content.decoded, original=result.content.original
+            )
+        new_root = replace(root, head_version_id=version_id, head_version_number=number)
+        new = StoredReportVersion(
+            root=new_root,
+            version=ReportVersionRecord(
+                version_id=version_id,
+                report_id=request.report_id,
+                version_number=number,
+                supersedes_version_id=version.version_id,
+                change_kind=change_kind,
+                title=result.title,
+                report_type=result.report_type,
+                topics=result.topics,
+                tags=result.tags,
+                summary=result.summary,
+                report_date=result.report_date,
+                coverage_start=result.coverage_start,
+                coverage_end=result.coverage_end,
+                metadata=dict(result.metadata),
+                change_reason=request.change_reason,
+                content_id=content_id,
+                manifest_sha256=manifest.sha256,
+                recorded_at=recorded_at,
+                author=creator,
+            ),
+            content_id=content_id,
+            storage_kind=storage_kind,
+            # The world keeps the full content (the catalog's search reads it);
+            # reads return it as SQL does through `_as_read`.
+            content=kept.content if reused else result.content,
+            manifest=dict(manifest.document),
+            associations=tuple(associations),
+        )
+        self._world.general_report_ledger[key] = [*self._versions(*key), new]
+        self._world.general_report_versions[key] = new
+        outcome = UpdateResult(
+            outcome=ReceiptOutcome.APPLIED,
+            version_id=version_id,
+            version_number=number,
+            change_kind=change_kind,
+            content_id=content_id,
+            decoded_sha256=result.content.decoded_sha256,
+            manifest_sha256=manifest.sha256,
+            **common,  # type: ignore[arg-type]
+        )
+        self._world.general_report_update_receipts[(principal_id, idempotency_key)] = outcome
+        return outcome
+
+    def transition(
+        self,
+        request: LifecycleRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+        content_store: ReportContentStore | None = None,
+    ) -> LifecycleResult:
+        """The SQL order (D7): not found, key, stale revision, decide, then the write.
+
+        WP05b B4: a held delete refuses before the decision; an applied delete
+        then runs the trash preflight (`_trash_preflight`) before any write.
+        """
+        root = self._root(principal_id, request.report_id)
+        if root is None:
+            raise ReportNotFoundError()
+        receipt_key = (principal_id, request.operation.value, idempotency_key)
+        stored = self._world.general_report_lifecycle_receipts.get(receipt_key)
+        if stored is not None:
+            if stored.intent_digest != request.intent_digest:
+                raise ReportIdempotencyConflictError()
+            return replace(stored, replayed=True)
+        if root.lifecycle_revision != request.expected_lifecycle_revision:
+            raise ReportStaleLifecycleRevisionError()
+        if request.operation is LifecycleOperation.DELETE and root.held:
+            raise ReportHeldError()  # WP05b B4: a hold blocks trashing only
+        key = (principal_id, request.report_id)
+        events = self._world.general_report_events.setdefault(key, [])
+        current = events[-1] if events else None
+        trashed_from = (
+            current.prior_state
+            if root.lifecycle_state is LifecycleState.TRASHED and current is not None
+            else None
+        )
+        decision = decide_lifecycle_transition(
+            root.lifecycle_state, request.operation, trashed_from=trashed_from
+        )
+        if request.operation is LifecycleOperation.DELETE:
+            self._trash_preflight(principal_id, request.report_id, content_store)
+        event_id: str | None
+        if decision.outcome is ReceiptOutcome.NO_OP:
+            event_id = (
+                current.event_id
+                if current is not None and current.operation is LifecycleOperation.ARCHIVE
+                else None
+            )
+            revision = root.lifecycle_revision
+        else:
+            event_id = issue_identifier(IdKind.REPORT_LIFECYCLE_EVENT)
+            revision = root.lifecycle_revision + 1
+            events.append(
+                ReportLifecycleEventRecord(
+                    event_id=event_id,
+                    lifecycle_revision=revision,
+                    operation=request.operation,
+                    prior_state=decision.prior_state,
+                    resulting_state=decision.resulting_state,
+                    reason=request.reason,
+                    transitioned_at=recorded_at,
+                )
+            )
+            self._set_root(
+                principal_id,
+                request.report_id,
+                replace(
+                    root, lifecycle_state=decision.resulting_state, lifecycle_revision=revision
+                ),
+            )
+        result = LifecycleResult(
+            receipt_id=issue_identifier(IdKind.REPORT_RECEIPT),
+            report_id=request.report_id,
+            operation=request.operation,
+            outcome=decision.outcome,
+            prior_state=decision.prior_state,
+            resulting_state=decision.resulting_state,
+            expected_lifecycle_revision=root.lifecycle_revision,
+            lifecycle_revision=revision,
+            event_id=event_id,
+            idempotency_key=idempotency_key,
+            intent_digest=request.intent_digest,
+            issued_at=recorded_at,
+            correlation_id=correlation_id,
+            audit_id=audit_id,
+            replayed=False,
+        )
+        self._world.general_report_lifecycle_receipts[receipt_key] = result
+        return result
+
+    def _trash_preflight(
+        self, principal_id: str, report_id: str, content_store: ReportContentStore | None
+    ) -> None:
+        """The SQL preflight (B4) over the world: every distinct content object verified.
+
+        Inline: the held bytes re-hashed and re-counted against the content's
+        own digests (decoded, and the original for gzip). `managed_blob`:
+        every part `verify`-ed through `content_store`; no store is missing.
+        """
+        seen: set[str] = set()
+        for stored in self._versions(principal_id, report_id):
+            if stored.content_id in seen:
+                continue
+            seen.add(stored.content_id)
+            content = stored.content
+            gzip_encoded = content.encoding is ContentEncoding.GZIP_BASE64
+            if stored.storage_kind is StorageKind.MANAGED_BLOB:
+                if content_store is None:
+                    raise ReportTrashPreflightError()
+                parts = [
+                    (ReportContentPart.DECODED, content.decoded_sha256, content.decoded_byte_count)
+                ]
+                if gzip_encoded:
+                    parts.append(
+                        (
+                            ReportContentPart.ORIGINAL,
+                            content.original_sha256,
+                            content.original_byte_count,
+                        )
+                    )
+                for part, sha256, byte_count in parts:
+                    try:
+                        content_store.verify(
+                            stored.content_id,
+                            part,
+                            expected_sha256=sha256,
+                            expected_byte_count=byte_count,
+                        )
+                    except ReportContentStoreError:
+                        raise ReportTrashPreflightError() from None
+                continue
+            checks = [(content.decoded, content.decoded_sha256, content.decoded_byte_count)]
+            if gzip_encoded:
+                if content.original is None:
+                    raise ReportTrashPreflightError()
+                checks.append(
+                    (content.original, content.original_sha256, content.original_byte_count)
+                )
+            for data, sha256, byte_count in checks:
+                if hashlib.sha256(data).hexdigest() != sha256 or len(data) != byte_count:
+                    raise ReportTrashPreflightError()
+
+    # ---- WP05b W3 retention: the SQL order (B6) -----------------------------
+
+    def set_retention(
+        self,
+        request: RetentionSetRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> RetentionResult:
+        if not isinstance(request, RetentionSetRequest):
+            raise ReportValidationError("retention_request", "type")
+        attested = CustodyAuthority(*authority).validated()
+        ledger = self._world.general_report_retention_events.setdefault(principal_id, [])
+        for event in ledger:
+            if event.idempotency_key == idempotency_key:
+                if event.intent_digest != request.intent_digest:
+                    raise ReportIdempotencyConflictError()
+                return RetentionResult.of(event, replayed=True)
+        newest = ledger[-1] if ledger else None
+        if (0 if newest is None else newest.policy_revision) != request.expected_policy_revision:
+            raise ReportStalePolicyRevisionError()
+        event = RetentionPolicyEventRecord(
+            event_id=issue_identifier(IdKind.REPORT_RETENTION_EVENT),
+            policy_revision=1 if newest is None else newest.policy_revision + 1,
+            period=request.period,
+            previous_period=None if newest is None else newest.period,
+            predecessor_event_id=None if newest is None else newest.event_id,
+            reason=request.reason,
+            intent_digest=request.intent_digest,
+            idempotency_key=idempotency_key,
+            authority=attested,
+            recorded_at=recorded_at,
+            correlation_id=correlation_id,
+            audit_id=audit_id,
+        )
+        ledger.append(event)
+        return RetentionResult.of(event, replayed=False)
+
+    def retention_policy(
+        self, *, principal_id: str, history_limit: int = DEFAULT_RETENTION_HISTORY
+    ) -> RetentionPolicyView:
+        if type(history_limit) is not int or not 1 <= history_limit <= MAX_RETENTION_HISTORY:
+            raise ReportValidationError("history_limit", "bounds")
+        ledger = self._world.general_report_retention_events.get(principal_id, [])
+        history = tuple(reversed(ledger))[:history_limit]
+        return RetentionPolicyView(current=next(iter(history), None), history=history)
+
+    def retention_eligibility_inputs(
+        self, report_id: str, *, principal_id: str
+    ) -> ReportEligibilityInputs | None:
+        root = self._root(principal_id, report_id)
+        if root is None:
+            return None
+        return ReportEligibilityInputs(
+            report_id=report_id,
+            lifecycle_state=root.lifecycle_state,
+            held=root.held,
+            lifecycle_events=tuple(
+                self._world.general_report_events.get((principal_id, report_id), [])
+            ),
+        )
+
+    def hold_seal_events(self) -> tuple[ReportHoldEventRecord, ...]:
+        return tuple(
+            event
+            for ledger in self._world.general_report_hold_events.values()
+            for event in ledger
+            if event.operation is HoldOperation.PLACE
+        )
+
+    # ---- WP05b holds: the SQL order (B3), sealing through the shared helper ----
+
+    def place_hold(
+        self,
+        request: HoldRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+        preservation_store: ReportContentStore | None,
+        content_store: ReportContentStore | None,
+    ) -> HoldResult:
+        return self._hold(
+            request,
+            HoldOperation.PLACE,
+            principal_id=principal_id,
+            idempotency_key=idempotency_key,
+            authority=authority,
+            recorded_at=recorded_at,
+            correlation_id=correlation_id,
+            audit_id=audit_id,
+            preservation_store=preservation_store,
+            content_store=content_store,
+        )
+
+    def release_hold(
+        self,
+        request: HoldRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> HoldResult:
+        return self._hold(
+            request,
+            HoldOperation.RELEASE,
+            principal_id=principal_id,
+            idempotency_key=idempotency_key,
+            authority=authority,
+            recorded_at=recorded_at,
+            correlation_id=correlation_id,
+            audit_id=audit_id,
+            preservation_store=None,
+            content_store=None,
+        )
+
+    def _hold(
+        self,
+        request: HoldRequest,
+        operation: HoldOperation,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+        preservation_store: ReportContentStore | None,
+        content_store: ReportContentStore | None,
+    ) -> HoldResult:
+        if not isinstance(request, HoldRequest):
+            raise ReportValidationError("hold_request", "type")
+        if request.operation is not operation:
+            raise ReportValidationError("hold_operation", "mismatch")
+        attested = CustodyAuthority(*authority).validated()
+        root = self._root(principal_id, request.report_id)
+        if root is None:
+            raise ReportNotFoundError()
+        for events in (
+            ledger
+            for (owner, _report), ledger in self._world.general_report_hold_events.items()
+            if owner == principal_id
+        ):
+            for event in events:
+                if event.operation is operation and event.idempotency_key == idempotency_key:
+                    if event.intent_digest != request.intent_digest:
+                        raise ReportIdempotencyConflictError()
+                    return HoldResult.of(event, replayed=True)
+        if root.hold_revision != request.expected_hold_revision:
+            raise ReportStaleHoldRevisionError()
+        if root.held is (operation is HoldOperation.PLACE):
+            raise ReportHoldStateError()
+        event_id = issue_identifier(IdKind.REPORT_HOLD_EVENT)
+        preservation: HoldPreservation | None = None
+        if operation is HoldOperation.PLACE:
+            if preservation_store is None:
+                raise ReportPreservationUnavailableError()
+            preservation = self._preserve(
+                principal_id, root, event_id, recorded_at, preservation_store, content_store
+            )
+        revision = root.hold_revision + 1
+        held = operation is HoldOperation.PLACE
+        event = ReportHoldEventRecord(
+            event_id=event_id,
+            report_id=request.report_id,
+            hold_revision=revision,
+            operation=operation,
+            resulting_held=held,
+            predecessor_event_id=root.hold_event_id,
+            reason=request.reason,
+            intent_digest=request.intent_digest,
+            idempotency_key=idempotency_key,
+            authority=attested,
+            recorded_at=recorded_at,
+            correlation_id=correlation_id,
+            audit_id=audit_id,
+            preservation=preservation,
+        )
+        self._world.general_report_hold_events.setdefault(
+            (principal_id, request.report_id), []
+        ).append(event)
+        self._set_root(
+            principal_id,
+            request.report_id,
+            replace(root, hold_revision=revision, hold_event_id=event_id, held=held),
+        )
+        return HoldResult.of(event, replayed=False)
+
+    def _preserve(
+        self,
+        principal_id: str,
+        root: ReportRootRecord,
+        event_id: str,
+        recorded_at: datetime,
+        preservation_store: ReportContentStore,
+        content_store: ReportContentStore | None,
+    ) -> HoldPreservation:
+        # As the SQL `_preserve`: the versions' records and manifests up front,
+        # each distinct content object's bytes only when `load` is called for it
+        # (one at a time, finding 1). The world's own versions are referenced,
+        # never copied; a blob's bytes are read from `content_store` on demand.
+        read = [_as_read(kept) for kept in self._versions(principal_id, root.report_id)]
+        by_content = {stored.content_id: stored for stored in reversed(read)}
+        versions = [stored.version for stored in read]
+        manifests = [stored.manifest for stored in read]
+
+        def load(content_id: str) -> PreservationSource:
+            stored = by_content.get(content_id)
+            if stored is None:
+                raise ReportPreservationError()
+            return preservation_source(
+                content_id, stored.storage_kind, stored.content, content_store
+            )
+
+        return seal_preservation_copy(
+            preservation_store,
+            root=PreservedRoot(
+                report_id=root.report_id,
+                owner_principal_id=principal_id,
+                head_version_id=root.head_version_id,
+                head_version_number=root.head_version_number,
+                lifecycle_state=root.lifecycle_state.value,
+                lifecycle_revision=root.lifecycle_revision,
+                created_by_kind=root.creator.kind.value,
+                created_by_id=root.creator.creator_id,
+            ),
+            hold_event_id=event_id,
+            sealed_at=recorded_at,
+            versions=versions,
+            manifests=manifests,
+            load=load,
+            lifecycle_events=[
+                PreservedLifecycleEvent(
+                    event_id=item.event_id,
+                    lifecycle_revision=item.lifecycle_revision,
+                    operation=item.operation.value,
+                    prior_state=item.prior_state.value,
+                    resulting_state=item.resulting_state.value,
+                    reason=item.reason,
+                    transitioned_at=item.transitioned_at,
+                )
+                for item in self._world.general_report_events.get(
+                    (principal_id, root.report_id), []
+                )
+            ],
+        )
+
+    def hold_events(
+        self, report_id: str, *, principal_id: str
+    ) -> tuple[ReportHoldEventRecord, ...] | None:
+        if self._root(principal_id, report_id) is None:
+            return None
+        return tuple(self._world.general_report_hold_events.get((principal_id, report_id), []))
+
+    @staticmethod
+    def _page(value: object, maximum: int) -> int:
+        if type(value) is not int or not 1 <= value <= maximum:
+            raise ReportValidationError("page_size", "bounds")
+        return value
+
+    def version_history(
+        self,
+        report_id: str,
+        *,
+        principal_id: str,
+        after_version_id: str | None = None,
+        page_size: int = DEFAULT_HISTORY_PAGE,
+        include_manifests: bool = False,
+    ) -> ReportHistoryPage[ReportVersionSummary] | None:
+        size = self._page(
+            page_size, MAX_HISTORY_PAGE_WITH_MANIFESTS if include_manifests else MAX_HISTORY_PAGE
+        )
+        root = self._root(principal_id, report_id)
+        if root is None:
+            return None
+        versions = self._versions(principal_id, report_id)
+        start = 0
+        if after_version_id is not None:
+            numbers = [s.version.version_id for s in versions]
+            if after_version_id not in numbers:
+                raise ReportValidationError("cursor", "unknown")
+            start = numbers.index(after_version_id) + 1
+        page = [_as_read(stored) for stored in versions[start : start + size]]
+        items = tuple(
+            ReportVersionSummary(
+                version_id=s.version.version_id,
+                version_number=s.version.version_number,
+                supersedes_version_id=s.version.supersedes_version_id,
+                change_kind=s.version.change_kind,
+                change_reason=s.version.change_reason,
+                title=s.version.title,
+                recorded_at=s.version.recorded_at,
+                content_id=s.content_id,
+                format=s.content.format,
+                encoding=s.content.encoding,
+                storage_kind=s.storage_kind,
+                decoded_sha256=s.content.decoded_sha256,
+                decoded_byte_count=s.content.decoded_byte_count,
+                canonical_sha256=s.content.canonical_sha256,
+                original_sha256=s.content.original_sha256,
+                manifest_sha256=s.version.manifest_sha256,
+                manifest=dict(s.manifest) if include_manifests else None,
+                author=s.version.author,
+            )
+            for s in page
+        )
+        more = start + size < len(versions)
+        return ReportHistoryPage(
+            root=root,
+            entries=HistoryEntries.VERSIONS,
+            items=items,
+            next_cursor=items[-1].version_id if more and items else None,
+        )
+
+    def lifecycle_history(
+        self,
+        report_id: str,
+        *,
+        principal_id: str,
+        after_event_id: str | None = None,
+        page_size: int = DEFAULT_HISTORY_PAGE,
+    ) -> ReportHistoryPage[ReportLifecycleEventRecord] | None:
+        size = self._page(page_size, MAX_HISTORY_PAGE)
+        root = self._root(principal_id, report_id)
+        if root is None:
+            return None
+        events = self._world.general_report_events.get((principal_id, report_id), [])
+        start = 0
+        if after_event_id is not None:
+            ids = [event.event_id for event in events]
+            if after_event_id not in ids:
+                raise ReportValidationError("cursor", "unknown")
+            start = ids.index(after_event_id) + 1
+        items = tuple(events[start : start + size])
+        more = start + size < len(events)
+        return ReportHistoryPage(
+            root=root,
+            entries=HistoryEntries.LIFECYCLE,
+            items=items,
+            next_cursor=items[-1].event_id if more and items else None,
+        )
+
+    def find_publish_receipt(
+        self, idempotency_key: str, *, principal_id: str
+    ) -> PublicationResult | None:
+        return self._world.general_report_receipts.get((principal_id, idempotency_key))
+
+    def find_update_receipt(
+        self, idempotency_key: str, *, principal_id: str
+    ) -> UpdateResult | None:
+        stored = self._world.general_report_update_receipts.get((principal_id, idempotency_key))
+        return None if stored is None else replace(stored, replayed=True)
+
+    def read_version(
+        self,
+        report_id: str,
+        *,
+        principal_id: str,
+        version_id: str | None = None,
+        version_number: int | None = None,
+    ) -> StoredReportVersion | None:
+        if version_id is not None and version_number is not None:
+            raise ReportValidationError("version", "exclusive")
+        root = self._root(principal_id, report_id)
+        if root is None:
+            return None
+        for stored in self._versions(principal_id, report_id):
+            version = stored.version
+            if (
+                (version_id is not None and version.version_id == version_id)
+                or (version_number is not None and version.version_number == version_number)
+                or (
+                    version_id is None
+                    and version_number is None
+                    and version.version_id == root.head_version_id
+                )
+            ):
+                # Every version reads with the report's current root, as in SQL.
+                return _as_read(replace(stored, root=root))
+        return None
+
+    def resolve_association_targets(
+        self,
+        targets: Sequence[tuple[AssociationTargetKind, str]],
+        *,
+        principal_id: str,
+    ) -> frozenset[tuple[AssociationTargetKind, str]]:
+        return frozenset(
+            (kind, ref)
+            for kind, ref in targets
+            if kind is AssociationTargetKind.STANDALONE_REPORT
+            and (principal_id, ref) in self._world.general_report_versions
+        )
+
+    def catalog_page(
+        self,
+        *,
+        principal_id: str,
+        filters: CatalogFilters,
+        query: SearchQuery | None,
+        after: CatalogCursor | None,
+        limit: int,
+    ) -> tuple[CatalogEntry, ...]:
+        """The SQL catalog's filters, HEAD-only scope, order and keyset (WP04).
+
+        Search is `in_memory_search_rank` over the head's title (weighted) and
+        its summary, topics, tags and `extract_search_text` of its content; the
+        snippet is the summary, else the title (no headline markup). The
+        `database` tier is the authority on ranking and on `@>`/`EXISTS`.
+        """
+        if type(limit) is not int or not 1 <= limit <= MAX_CATALOG_PAGE_SIZE + 1:
+            raise ReportValidationError("limit", "bounds")
+        if after is not None and (after.rank is None) != (query is None):
+            raise CatalogCursorError
+        found: list[tuple[tuple[int, datetime, str], CatalogEntry]] = []
+        for (owner, report_id), head in self._world.general_report_versions.items():
+            root, version = head.root, head.version
+            if owner != principal_id or root.lifecycle_state not in filters.lifecycle_states:
+                continue
+            if filters.report_type is not None and version.report_type != filters.report_type:
+                continue
+            if filters.topics is not None and not set(filters.topics) <= set(version.topics):
+                continue
+            if filters.tags is not None and not set(filters.tags) <= set(version.tags):
+                continue
+            wanted = filters.associated_with
+            if wanted is not None and not any(
+                (a.target_kind, a.target_ref) == (wanted.target_kind, wanted.target_ref)
+                for a in head.associations
+            ):
+                continue
+            if filters.created_from is not None and root.created_at < filters.created_from:
+                continue
+            if filters.created_to is not None and root.created_at >= filters.created_to:
+                continue
+            if filters.created_by is not None and root.creator.creator_id != filters.created_by:
+                continue
+            if filters.report_date_from is not None and (
+                version.report_date is None or version.report_date < filters.report_date_from
+            ):
+                continue
+            if filters.report_date_to is not None and (
+                version.report_date is None or version.report_date > filters.report_date_to
+            ):
+                continue
+            rank: int | None = None
+            if query is not None:
+                rank = in_memory_search_rank(
+                    query,
+                    version.title,
+                    (
+                        version.summary or "",
+                        *version.topics,
+                        *version.tags,
+                        extract_search_text(head.content),
+                    ),
+                )
+                if rank is None:
+                    continue
+            entry = CatalogEntry(
+                report_id=report_id,
+                title=version.title,
+                report_type=version.report_type,
+                topics=version.topics,
+                tags=version.tags,
+                summary=version.summary,
+                report_date=version.report_date,
+                lifecycle_state=root.lifecycle_state,
+                lifecycle_revision=root.lifecycle_revision,
+                head_version_id=root.head_version_id,
+                head_version_number=root.head_version_number,
+                created_at=root.created_at,
+                updated_at=version.recorded_at,
+                rank=rank,
+                snippet=None if rank is None else (version.summary or version.title),
+                creator=root.creator,
+                held=root.held,
+            )
+            found.append(((rank or 0, root.created_at, report_id), entry))
+        found.sort(key=lambda item: item[0], reverse=True)
+        if after is not None:
+            position = (after.rank or 0, after.sort_time, after.report_id)
+            found = [item for item in found if item[0] < position]
+        return tuple(entry for _key, entry in found[:limit])
+
+    def _managed(self) -> dict[str, tuple[str, ReportContent]]:
+        """Every `managed_blob` content object in the world: id -> (owner, content)."""
+        found: dict[str, tuple[str, ReportContent]] = {}
+        for (owner, report_id), _head in self._world.general_report_versions.items():
+            for stored in self._versions(owner, report_id):
+                if stored.storage_kind is StorageKind.MANAGED_BLOB:
+                    found[stored.content_id] = (owner, stored.content)
+        return found
+
+    def managed_content(self, *, principal_id: str) -> tuple[ManagedContentRecord, ...]:
+        return tuple(
+            ManagedContentRecord(
+                content_id=content_id,
+                encoding=content.encoding,
+                decoded_sha256=content.decoded_sha256,
+                decoded_byte_count=content.decoded_byte_count,
+                original_sha256=content.original_sha256,
+                original_byte_count=content.original_byte_count,
+            )
+            for content_id, (owner, content) in sorted(self._managed().items())
+            if owner == principal_id
+        )
+
+    def known_managed_content_ids(self) -> frozenset[str]:
+        return frozenset(self._managed())
+
+
 class FakeUnitOfWork(UnitOfWork):
     """One transaction over a `World`, counting how it ended."""
 
@@ -9765,6 +11425,16 @@ class FakeUnitOfWork(UnitOfWork):
 
     def intelligence_for(self, principal_id: str) -> InMemoryIntelligenceStore:
         return self._world.intelligence
+
+    @property
+    def general_reports(self) -> GeneralReportRepository:
+        """The general report plane over this `World` (Reports Modernization WP02)."""
+        return _GeneralReports(self._world)
+
+    @property
+    def report_transfers(self) -> ReportTransferRepository:
+        """The transfer sessions and chunk ledger over this `World` (Reports Modernization WP06)."""
+        return _ReportTransfers(self._world)
 
     @property
     def entities(self) -> EntitiesRepository:
@@ -10327,6 +11997,11 @@ class Scene:
 _COMPOSE_CONSTRAINTS: Final = cast("Callable[[], ConstraintManagementUnitOfWork]", object())
 
 
+#: WP05b: "not stated" for `build_service`'s preservation store, distinct from the
+#: meaningful `None` (no store composed), on the `_COMPOSE_CONSTRAINTS` precedent.
+_COMPOSE_PRESERVATION: Final = cast("ReportContentStore", object())
+
+
 def _unopened_program_read() -> ProgramReadUnitOfWork:
     """Record lineage S4: a composed Program read factory that FAST never opens."""
     raise AssertionError("a FAST test opened a Program read; prove it against a server")
@@ -10355,6 +12030,10 @@ def build_service(
     constraint_management_unit_of_work: (
         Callable[[], ConstraintManagementUnitOfWork] | None
     ) = _COMPOSE_CONSTRAINTS,
+    report_content_store: ReportContentStore | None = None,
+    report_content_inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
+    report_preservation_store: ReportContentStore | None = _COMPOSE_PRESERVATION,
+    report_transfer_staging: ReportTransferStaging | None = None,
 ) -> ApplicationService:
     """The service under test, with a fixed clock and in-memory repositories.
 
@@ -10478,6 +12157,21 @@ def build_service(
             session_factory=lambda rasters: DiskContentSession(rasters),
             case_count=2,
         ),
+        # WP05 C3: no report content store unless a test composes one (the
+        # backward-compatible default: content above the threshold is refused).
+        report_content_store=report_content_store,
+        report_content_inline_max_bytes=report_content_inline_max_bytes,
+        # WP05b H4: a fresh in-memory preservation store per service unless a
+        # test states one; an explicit `None` is the uncomposed build, whose hold
+        # placement is refused (`unavailable`, `preservation_store`).
+        report_preservation_store=(
+            InMemoryReportContentStore(ReportContentNamespace.PRESERVATION)
+            if report_preservation_store is _COMPOSE_PRESERVATION
+            else report_preservation_store
+        ),
+        # WP06 T14: no transfer staging unless a test composes one (with a
+        # report content store), so the four uploads stay withheld by default.
+        report_transfer_staging=report_transfer_staging,
     )
 
 
@@ -10704,6 +12398,70 @@ def staged_continuity_project(scene: Scene, *, name: str = "a synthetic project"
     )
     scene.world.projects.append(project)
     return project
+
+
+def staged_general_report(
+    scene: Scene, *, archived: bool = False, label: str = "", held: bool = False
+) -> str:
+    """One standalone report in `scene`'s world (Reports Modernization WP03), its `grpt_` id.
+
+    Written through the in-memory port, as `staged_capture` is. Idempotent: the
+    same fixed key replays, so a payload table and a command table that each
+    call this name the same report. `archived=True` stages a second report,
+    archived once (lifecycle revision 1), so `reports.restore` has a legal move.
+    A `label` stages a further distinct report under that name, so a table
+    driving every capability over one world gives each lifecycle move its own.
+    `held=True` (WP05b) stages it under a legal hold (hold revision 1), sealed
+    into a throwaway in-memory preservation store, so `reports.hold.release`
+    has a legal move.
+    """
+    reports = _GeneralReports(scene.world)
+    principal_id = scene.principal.principal_id
+    suffix = (
+        ("archived" if archived else "active")
+        + ("-held" if held else "")
+        + (f"-{label}" if label else "")
+    )
+    published = reports.publish(
+        PublicationRequest(
+            title=f"a synthetic {suffix} standalone report",
+            content=validate_content({"format": "markdown", "body": "Synthetic body."}),
+            client_intent_id=f"staged-{suffix}",
+        ),
+        principal_id=principal_id,
+        creator=derive_creator(CreatorKind.LOCAL_PRINCIPAL, principal_id),
+        idempotency_key=f"staged-general-report-{suffix}",
+        recorded_at=WHEN,
+        correlation_id=issue_identifier(IdKind.CORRELATION),
+        audit_id=issue_identifier(IdKind.AUDIT),
+    )
+    report_id = published.receipt.report_id
+    if archived:
+        reports.transition(
+            LifecycleRequest(
+                operation=LifecycleOperation.ARCHIVE,
+                report_id=report_id,
+                expected_lifecycle_revision=0,
+            ),
+            principal_id=principal_id,
+            idempotency_key=f"staged-general-report-archive-{suffix}",
+            recorded_at=WHEN,
+            correlation_id=issue_identifier(IdKind.CORRELATION),
+            audit_id=issue_identifier(IdKind.AUDIT),
+        )
+    if held:
+        reports.place_hold(
+            HoldRequest(HoldOperation.PLACE, report_id, 0, "Synthetic staged hold."),
+            principal_id=principal_id,
+            idempotency_key=f"staged-general-report-hold-{suffix}",
+            authority=CustodyAuthority("local_operator", "local_cli"),
+            recorded_at=WHEN,
+            correlation_id=issue_identifier(IdKind.CORRELATION),
+            audit_id=issue_identifier(IdKind.AUDIT),
+            preservation_store=InMemoryReportContentStore(ReportContentNamespace.PRESERVATION),
+            content_store=None,
+        )
+    return report_id
 
 
 def staged_task(scene: Scene, *, title: str = "a synthetic task") -> TaskV2:

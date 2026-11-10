@@ -48,6 +48,7 @@ const SHELL_DESTINATIONS = [
   "People",
   "Knowledge",
   "Intelligence",
+  "Reports",
   "System",
 ] as const;
 

@@ -76,9 +76,9 @@ All three transports call one function — `adapters.normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-The public vocabulary declares two hundred and forty capabilities.
+The public vocabulary declares two hundred and fifty-five capabilities.
 `tests/contract/test_transport_parity.py` distinguishes that vocabulary from
-the two hundred and forty command-backed names and holds positive request
+the two hundred and fifty-five command-backed names and holds positive request
 and response parity over the latter set. Its
 separate unwired contract is vacuous now that no declared name is left without one,
 without an MCP tool or command schema, while the generic HTTP/CLI name path
@@ -222,17 +222,17 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build declares **240** capability
-names; 240 have application commands/handlers and no declared name is left without one.
+same as the tools this build implements. The build declares **255** capability
+names; 255 have application commands/handlers and no declared name is left without one.
 The measured application composition with GoodNotes pull enabled has
-**113 application-available capabilities**: 240 implemented handlers less the six
+**124 application-available capabilities**: 255 implemented handlers less the six
 `documents.`, fifty-five `entities.`, nine `relationship_memory.`, and the seven
 `knowledge.assertions.`, one `knowledge.discovery.checkpoint` and one
 `record_events.provenance` handlers and the thirty-four record lineage S1, S2, S3 and S3.1 handlers (`issues.`, `records.`, `meetings.notes.`)
-(`MY_PA_LINEAGE_ENABLED`) and the seven record lineage S4 Program-reporting handlers (`MY_PA_PROGRAM_REPORTING_ENABLED`) and the seven CPM Workbench Schedule handlers (`MY_PA_SCHEDULE_ENABLED`) whose composition gates remain off. A local stdio MCP session has no authenticated
+(`MY_PA_LINEAGE_ENABLED`) and the seven record lineage S4 Program-reporting handlers (`MY_PA_PROGRAM_REPORTING_ENABLED`) and the seven CPM Workbench Schedule handlers (`MY_PA_SCHEDULE_ENABLED`) and the four `reports.transfer.` uploads (`begin`, `append`, `finalize`, `abort`) behind `MY_PA_REPORT_CONTENT_ROOT` (the report content store and its transfer staging) whose composition gates remain off. A local stdio MCP session has no authenticated
 client identity, so it additionally withholds the three client-bound GoodNotes
-pull operations and publishes **110 tools**. An authenticated MCP client against
-that same 113-capability application composition sees all 113. These figures are
+pull operations and publishes **121 tools**. An authenticated MCP client against
+that same 124-capability application composition sees all 124. These figures are
 derived in `test_current_state_docs_derive_the_default_capability_split` from a
 real `ApplicationService` and `published_tools`, not from a second list.
 
@@ -241,8 +241,8 @@ configured**, and nothing else gates them. There is no default location and no
 inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
-same application composition serves 119 capabilities; its unauthenticated local
-stdio MCP publication serves 116. The remaining composition-gated names are the
+same application composition serves 130 capabilities; its unauthenticated local
+stdio MCP publication serves 127. The remaining composition-gated names are the
 fifty-five `entities.` names, which `D-RI-20`
 gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
 — and whose thirty-eight writes need
@@ -251,7 +251,7 @@ the plane switch alone still withholds its write half — and the nine
 `relationship_memory.` names, which need the plane variable *and*
 `MY_PA_RELATIONSHIP_MEMORY_ENABLED`; and the seven `knowledge.assertions.` names and `knowledge.discovery.checkpoint`, which need
 `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` and the plane variable; a fully composed authenticated child publishes
-all 240 implemented tools, every declared name now having a handler. An operator who expects `documents.create`
+all 255 implemented tools, every declared name now having a handler. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
 remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
@@ -260,10 +260,10 @@ the same gating and the plane's limits.)
 Measured against a real child process — `.venv/bin/python apps/gateway.py mcp`
 — by
 `tests/contract/test_mcp_transport.py::test_a_real_child_process_publishes_only_what_it_was_composed_with`
-(unconfigured local stdio: 110, with the three authenticated-client capabilities
+(unconfigured local stdio: 121, with the three authenticated-client capabilities
 absent) and
 `::test_a_child_with_a_managed_root_publishes_every_locally_available_capability`
-(fully feature-composed local stdio: 235, excluding those three and the two
+(fully feature-composed local stdio: 250, excluding those three and the two
 KLP-WP-04 Knowledge discovery capabilities, which are served only to an
 authenticated remote client).
 
@@ -308,8 +308,8 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
-**240** implemented capability commands from the **240** declared names, and the schema has
-**one hundred and twenty-six** revisions at head `2a90f91dd786` (`2a90f91dd786` is additive on `621ef6786c64` for Schedule Scenarios S6-2 (the scenario and baseline plane schema, revision A: eleven plane tables, the retired publication role and kind, the `record_links` storage-vocabulary widening; nothing public until S6-3); `621ef6786c64` is additive on `6c2306330ceb` for CPM Workbench S5b-2 (the Schedule audit and worker-plane vocabulary, R2 WP-03: the seven Schedule capability names and the `schedule_import`/`schedule_read` purposes admitted to the frozen `audit_events` closed sets and the `schedule` plane to `worker_heartbeats`; no table, no row and no grant); `6c2306330ceb` is additive on `023f8f7eb499` for CPM Workbench S5b-1 (the Schedule foundation, R2 WP-01: the seven `schedule_*` tables with their lifecycle, append-only and TRUNCATE guards, and the two database-only support uniques on `enrollments` and `source_object_versions`; no grant, and no audit or heartbeat vocabulary change); `023f8f7eb499` is additive on `c5260943d933` for record lineage Slice S3.1 (ADR-015 decision 15: the client provenance columns and CHECKs of the four lineage fact tables, the human channel's `confirm` revision and Project-link event, the request-row writer columns, the schema-2 report manifest, and the four S3.1 capability names admitted to the frozen `audit_events` capability set); `c5260943d933` is additive on `6f1476b8da52` for record lineage Slice S4 (ADR-015: the immutable Intelligence report manifest `intelligence_artifact_manifests`, its digest, append-only and TRUNCATE guards and the deferred every-artifact-has-a-manifest trigger); `6f1476b8da52` is additive on `d020b532ad7d` for record lineage Slice S3 (ADR-015: the per-Principal commit-mark knowledge clock, contest and reinstate, handoff corrections and the backfill dry-run ledger, and their database guards); `d020b532ad7d` is additive on `264310e0416a` for record lineage Slice S2 (ADR-015: Issue close and reopen with frozen closure evidence, the responsibility handoff ledger, composite-request links, member native versions and the S2 relation types, and their database guards); `264310e0416a` is additive on `b9025e7fb738` for record lineage Slice S1 (ADR-015: Issue Situations, typed record links with exact evidence anchors, and their database guards); `b9025e7fb738` is additive on `5c1e7a9b3d42` for WP-MCP-PROJ-05 legacy Project-Entity bridge reconciliation; `5c1e7a9b3d42` is additive on `c8f7ae406d47` and replaces `knowledge.commitments.counterparty_person_id` with `counterparty_entity_id` (an `ent_` identifier with a composite foreign key onto `entities (entity_id, principal_id)`), refusing in both directions while any Commitment row exists; `c8f7ae406d47` is additive on `a591b81f10a2` and adds the append-only `observability.mcp_interactions` MCP interaction log; `a591b81f10a2` is additive on `cc373834a485` for the Intelligence report type registry; `cc373834a485` is additive on `93f3aa113f58` and adds sixteen fields to `knowledge.projects` -- `aliases`, `project_number`, `sector`, `type`, `address`, `city`, `county`, `address_state`, `zip`, `value`, and six independent schedule dates -- with `project_number` unique per Principal; `93f3aa113f58` is additive on `6734f039f7a6` for Intelligence focus-area admission; `6734f039f7a6` is additive on `0641c354ca85` for KLP-WP-02 Knowledge Assertion layer; `0641c354ca85` is additive on `c8e4a1b70d35` for CRL-WP-03 Capture lifecycle; `c8e4a1b70d35` is additive on `1d9b248e7f83` for RE-DBH-01 Record Event TRUNCATE refusal; `1d9b248e7f83` is additive on `7d9a450dfd07` for WP-RE-01 Record Events; `7d9a450dfd07` is additive on `6f6ead27d122` for WP-MTG-04 Meeting records; `6f6ead27d122` is additive on `e6a4c2f91b73` for CCA-005 WP-TUX-01 legacy direct-Principal origin reconciliation; `e6a4c2f91b73` is additive on `c4f1a8e52d90` for R01-WP03 integrity; `c4f1a8e52d90` is additive on `b3e9d7a41c25` for WP-MCP-PROJ-03 continuity.projects.update/close and project_history; `b3e9d7a41c25` is additive on `9f2c8a1d4e70` for WP-MCP-PROJ-02 continuity.projects.read and the Project list keyset index; `9f2c8a1d4e70` is additive on `de5ec1c65857` for WP-MCP-PROJ-01 Project.version and the Continuity Project↔Entity bridge; `de5ec1c65857` is additive on `c1a8e4d70b29` for WP-TUX-01 task origin/closure/comments; `c1a8e4d70b29` is additive on `b8e4d6f20a11` for append-only `knowledge.capture_labels`; `b8e4d6f20a11` is additive on `f7a2c9d51e64` for the bounded Constraint synchronization backend; `f7a2c9d51e64` is additive on `4e9a1c7b2d60` and widens the two frozen `audit_events` closed sets to admit the twelve Constraint Management authoring capabilities together with the single `constraint_authoring` purpose, and no Constraint synchronisation vocabulary (PC-CM-IMP-WP07); `4e9a1c7b2d60` is additive on `c5b71e0a8d43` and normalizes account identity plus one-time digest-backed auth grants targeting the fixed local operator; `c5b71e0a8d43` is additive on `a1c9e4b72f80` and admits the six Constraint Management read capabilities `constraints.read`, `constraints.list`, `constraints.search`, `constraints.history`, `constraints.overview`, and `constraint_categories.list` together with the single `constraint_read` purpose, and no Constraint authoring or synchronisation vocabulary (PC-CM-IMP-WP04); `a1c9e4b72f80` is additive on `2774329487be` and admits `goodnotes.notebooks.list`, `goodnotes.pages.list`, `goodnotes.runs.list`, `goodnotes.read`, `goodnotes.search`, and `goodnotes.correct` together with `goodnotes_browse`, `goodnotes_read`, and `goodnotes_correction`; `2774329487be` is additive on `e8f2a6c9d104` and adds the fourteen-table Constraint-management plane (PC-CM-IMP-WP02); `e8f2a6c9d104` is additive on `d4e8b1c7a902` and adds immutable GoodNotes client lease policy and client-scoped attempt/completion uniqueness; `d4e8b1c7a902` is additive on `a4d8e31b2c90` and adds the Principal-partitioned canvas workspace overlay; `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`; corrected 2026-09-03 from
+**255** implemented capability commands from the **255** declared names, and the schema has
+**one hundred and twenty-seven** revisions at head `4c37731671fc` (`4c37731671fc` is additive on `2a90f91dd786` for Reports Modernization WP01 (the general report plane schema: eight `report_*` tables at WP01, amended in place to eleven by the WP05b hold and retention ledgers and the WP06 transfer chunk ledger, with deferred head and lifecycle-cache references and append-only, guarded and TRUNCATE-refusal triggers; nothing public yet); `2a90f91dd786` is additive on `621ef6786c64` for Schedule Scenarios S6-2 (the scenario and baseline plane schema, revision A: eleven plane tables, the retired publication role and kind, the `record_links` storage-vocabulary widening; nothing public until S6-3); `621ef6786c64` is additive on `6c2306330ceb` for CPM Workbench S5b-2 (the Schedule audit and worker-plane vocabulary, R2 WP-03: the seven Schedule capability names and the `schedule_import`/`schedule_read` purposes admitted to the frozen `audit_events` closed sets and the `schedule` plane to `worker_heartbeats`; no table, no row and no grant); `6c2306330ceb` is additive on `023f8f7eb499` for CPM Workbench S5b-1 (the Schedule foundation, R2 WP-01: the seven `schedule_*` tables with their lifecycle, append-only and TRUNCATE guards, and the two database-only support uniques on `enrollments` and `source_object_versions`; no grant, and no audit or heartbeat vocabulary change); `023f8f7eb499` is additive on `c5260943d933` for record lineage Slice S3.1 (ADR-015 decision 15: the client provenance columns and CHECKs of the four lineage fact tables, the human channel's `confirm` revision and Project-link event, the request-row writer columns, the schema-2 report manifest, and the four S3.1 capability names admitted to the frozen `audit_events` capability set); `c5260943d933` is additive on `6f1476b8da52` for record lineage Slice S4 (ADR-015: the immutable Intelligence report manifest `intelligence_artifact_manifests`, its digest, append-only and TRUNCATE guards and the deferred every-artifact-has-a-manifest trigger); `6f1476b8da52` is additive on `d020b532ad7d` for record lineage Slice S3 (ADR-015: the per-Principal commit-mark knowledge clock, contest and reinstate, handoff corrections and the backfill dry-run ledger, and their database guards); `d020b532ad7d` is additive on `264310e0416a` for record lineage Slice S2 (ADR-015: Issue close and reopen with frozen closure evidence, the responsibility handoff ledger, composite-request links, member native versions and the S2 relation types, and their database guards); `264310e0416a` is additive on `b9025e7fb738` for record lineage Slice S1 (ADR-015: Issue Situations, typed record links with exact evidence anchors, and their database guards); `b9025e7fb738` is additive on `5c1e7a9b3d42` for WP-MCP-PROJ-05 legacy Project-Entity bridge reconciliation; `5c1e7a9b3d42` is additive on `c8f7ae406d47` and replaces `knowledge.commitments.counterparty_person_id` with `counterparty_entity_id` (an `ent_` identifier with a composite foreign key onto `entities (entity_id, principal_id)`), refusing in both directions while any Commitment row exists; `c8f7ae406d47` is additive on `a591b81f10a2` and adds the append-only `observability.mcp_interactions` MCP interaction log; `a591b81f10a2` is additive on `cc373834a485` for the Intelligence report type registry; `cc373834a485` is additive on `93f3aa113f58` and adds sixteen fields to `knowledge.projects` -- `aliases`, `project_number`, `sector`, `type`, `address`, `city`, `county`, `address_state`, `zip`, `value`, and six independent schedule dates -- with `project_number` unique per Principal; `93f3aa113f58` is additive on `6734f039f7a6` for Intelligence focus-area admission; `6734f039f7a6` is additive on `0641c354ca85` for KLP-WP-02 Knowledge Assertion layer; `0641c354ca85` is additive on `c8e4a1b70d35` for CRL-WP-03 Capture lifecycle; `c8e4a1b70d35` is additive on `1d9b248e7f83` for RE-DBH-01 Record Event TRUNCATE refusal; `1d9b248e7f83` is additive on `7d9a450dfd07` for WP-RE-01 Record Events; `7d9a450dfd07` is additive on `6f6ead27d122` for WP-MTG-04 Meeting records; `6f6ead27d122` is additive on `e6a4c2f91b73` for CCA-005 WP-TUX-01 legacy direct-Principal origin reconciliation; `e6a4c2f91b73` is additive on `c4f1a8e52d90` for R01-WP03 integrity; `c4f1a8e52d90` is additive on `b3e9d7a41c25` for WP-MCP-PROJ-03 continuity.projects.update/close and project_history; `b3e9d7a41c25` is additive on `9f2c8a1d4e70` for WP-MCP-PROJ-02 continuity.projects.read and the Project list keyset index; `9f2c8a1d4e70` is additive on `de5ec1c65857` for WP-MCP-PROJ-01 Project.version and the Continuity Project↔Entity bridge; `de5ec1c65857` is additive on `c1a8e4d70b29` for WP-TUX-01 task origin/closure/comments; `c1a8e4d70b29` is additive on `b8e4d6f20a11` for append-only `knowledge.capture_labels`; `b8e4d6f20a11` is additive on `f7a2c9d51e64` for the bounded Constraint synchronization backend; `f7a2c9d51e64` is additive on `4e9a1c7b2d60` and widens the two frozen `audit_events` closed sets to admit the twelve Constraint Management authoring capabilities together with the single `constraint_authoring` purpose, and no Constraint synchronisation vocabulary (PC-CM-IMP-WP07); `4e9a1c7b2d60` is additive on `c5b71e0a8d43` and normalizes account identity plus one-time digest-backed auth grants targeting the fixed local operator; `c5b71e0a8d43` is additive on `a1c9e4b72f80` and admits the six Constraint Management read capabilities `constraints.read`, `constraints.list`, `constraints.search`, `constraints.history`, `constraints.overview`, and `constraint_categories.list` together with the single `constraint_read` purpose, and no Constraint authoring or synchronisation vocabulary (PC-CM-IMP-WP04); `a1c9e4b72f80` is additive on `2774329487be` and admits `goodnotes.notebooks.list`, `goodnotes.pages.list`, `goodnotes.runs.list`, `goodnotes.read`, `goodnotes.search`, and `goodnotes.correct` together with `goodnotes_browse`, `goodnotes_read`, and `goodnotes_correction`; `2774329487be` is additive on `e8f2a6c9d104` and adds the fourteen-table Constraint-management plane (PC-CM-IMP-WP02); `e8f2a6c9d104` is additive on `d4e8b1c7a902` and adds immutable GoodNotes client lease policy and client-scoped attempt/completion uniqueness; `d4e8b1c7a902` is additive on `a4d8e31b2c90` and adds the Principal-partitioned canvas workspace overlay; `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`; corrected 2026-09-03 from
 eighty-eight at `16f05c46b8c3`, on which `b8e4d1a6c073` is additive and
 backfills one `display`-typed `entity_names` row per active `entities` row --
 `display_value` from `entities.display_name`, `normalized_value` from
@@ -494,7 +494,7 @@ composition and in every MCP publication that composition produces.
   family, and each Meeting capability appears in it only for an authenticated
   client whose grants, purpose, capability version and write gates admit it.
 - **Desired ChatLLM profile.** The repository's ChatLLM data profile is
-  `chatllm-data-v11`. Since `chatllm-data-v3` it has classified the six
+  `chatllm-data-v12`. Since `chatllm-data-v3` it has classified the six
   `meetings.` names as `DATA_REQUIRED`: reads under `meeting_read`, writes under
   `meeting_authoring`; `chatllm-data-v4` adds `record_events.list` under
   `record_event_read`; `chatllm-data-v5` adds `capture.archive` and
@@ -530,9 +530,161 @@ composition and in every MCP publication that composition produces.
   "Record lineage client exposure (P1)"); `chatllm-data-v11` (CPM Workbench S5b-2)
   adds the 6 Schedule reads under `schedule_read` as `DATA_CONDITIONAL` on
   `MY_PA_SCHEDULE_ENABLED` and classifies `schedule_publications.import`
-  (`schedule_import`, operator-only) `CONTROL_PLANE_EXCLUDED`.
+  (`schedule_import`, operator-only) `CONTROL_PLANE_EXCLUDED`; `chatllm-data-v12`
+  (Reports Modernization) adds the 11 standalone Reports names as
+  `DATA_REQUIRED`: `reports.publish` and `reports.update` (write,
+  `report_authoring`), `reports.history` (read, `report_read`),
+  `reports.archive`, `reports.delete` and `reports.restore` (write,
+  `report_lifecycle`), and the 5 `reports.transfer.*` names (`begin`, `append`,
+  `finalize`, `abort`: write, `report_authoring`; `read_chunk`: read,
+  `report_read`), so a client converged on `chatllm-data-v11` plans exactly
+  those 11 adds. Reports took `chatllm-data-v12`; the Schedule scenarios bump
+  (S6-3) takes the next free version when written (operator decision
+  2026-11-05).
   That is repository desire only. Whether any deployed client holds those
   grants is a runtime fact this document does not state.
+- **Reports catalog (Reports Modernization WP04).** `reports.list` and
+  `reports.search` take an optional `plane`: `intelligence` (the default),
+  `standalone` or `all`. Omitted or `intelligence`, they run the legacy
+  intelligence-artifact path unchanged, and the catalog fields below are
+  refused. `standalone` reads the general report plane only; `all` merges it
+  with the caller's current intelligence artifacts in one order, each item
+  marked with its `plane`. These modes accept `type`, `topics`, `tags` (a report
+  must carry all listed), `associated_with`, `lifecycle_states`,
+  `created_from`/`created_to`, `report_date_from`/`report_date_to`, `page_size`
+  and `cursor`. `lifecycle_states` defaults to `active`; archived and trashed
+  reports appear only when listed explicitly, under the same `report_read` grant.
+  `next_cursor` is opaque and bound to the Principal, operation, plane, filters,
+  query and page size; any other use is refused as `invalid_request` (`CURSOR`).
+  Order: `reports.list` is newest first (`created_at` DESC, then report id DESC);
+  `reports.search` is by rank DESC, then `created_at` DESC, then report id DESC,
+  where rank is the integer `floor(ts_rank * 1e6)` over a search document that
+  weights the title A and the body B in both planes, so in `all` the standalone
+  and intelligence pages merge into that one order (ids, compared in code-point
+  order, break ties). The cursor has no TTL: list keyset keys (`created_at`, id)
+  never change, so a list walk neither skips nor repeats; a search page's rank
+  is the head version's, so a report updated (or whose head stops or starts
+  matching the filters) between pages can be skipped or repeated.
+  Search matches the head version only, over its title, summary, topics, tags
+  and text extracted from the decoded content (a body, and JSON string values),
+  truncated to the first 65,536 code points; transport bytes and Base64 are never
+  indexed, and text past that bound is not searchable. Results carry no totals
+  or counts. No capability, purpose or profile changes: the profile is
+  `chatllm-data-v12`.
+- **Report creator attribution (Reports Modernization WP05).** The server
+  derives who wrote a standalone report from the authorization alone, never
+  from a request field: `kind` is `local_principal` (a local transport, keyed
+  by the Principal) or `remote_client` (an authenticated remote client), and
+  `id` is a `gcrt_` pseudonym of 40 lowercase hex characters. It supports
+  equality only and never discloses the OAuth client id. It is an unkeyed
+  SHA-256, so anyone who can guess the subject (a principal id or an OAuth
+  client id) can confirm it; it hides the subject only from observers who
+  cannot enumerate it, and a keyed derivation (which would rename every
+  creator) is deferred. `reports.read` returns
+  `creator` (who published the report) and `author` (who wrote that version);
+  `reports.history` items carry `author`; standalone `reports.list` and
+  `reports.search` items carry `creator`. Both take an optional `created_by`
+  filter (a `gcrt_` id; a malformed one is `invalid_request` naming
+  `created_by`) in the `standalone` and `all` planes only; in the legacy plane
+  its presence is refused. It matches exactly, within the caller's Principal;
+  an unknown or foreign creator yields an empty page, and in `all` no
+  intelligence artifact matches it. A publish or update carrying `creator`,
+  `created_by`, `author`, `authored_by`, `created_by_id` or `creator_id` is
+  refused before anything is written.
+- **gzip+base64 report content (Reports Modernization WP05).** Besides
+  `identity` (`body`/`data`, at most 524,288 decoded bytes),
+  `reports.publish` and `reports.update` accept content
+  `{format, encoding: "gzip+base64", encoded}` with optional declared
+  `original_byte_count`/`original_sha256` (of the gzip bytes) and
+  `uncompressed_byte_count`/`uncompressed_sha256` (of the gunzipped bytes).
+  `encoded` must be strict, canonical, padded standard Base64 with no
+  whitespace, of exactly one gzip member. Its gunzipped bytes are at most
+  16,777,216 and at most 256 times the gzip bytes, and the decoded (canonical)
+  content is at most 16,777,216 bytes; `json`/`mixed` are measured as
+  uploaded, so pretty-printed JSON counts its whitespace against the gunzipped
+  bounds. The text is validated exactly as identity content is (UTF-8 body;
+  for `json`/`mixed` a JSON text, `mixed` being exactly `{body, data}`).
+  `json`/`mixed` data holds at most 262,144 JSON values and nests at most 32
+  deep, both counted in the uploaded text before any parse (values as an
+  upper bound: one, plus every `[`, `{` and `,` outside strings), which keeps
+  a 16 MiB decode to a measured peak under 100 MiB. The whole request stays within the transport's
+  762,288-byte ceiling. Any violation is `invalid_request` naming `content`,
+  with `max_bytes` for the size, expansion and value-count bounds; no refusal
+  echoes a value. With a report content store configured, decoded content
+  above the inline threshold is stored in it; without one, both the gunzipped
+  bytes of a `gzip+base64` upload and the decoded content must be within the
+  inline threshold, else the request is refused the same way
+  ([`managed-document-operations.md`](managed-document-operations.md)
+  section 7). The gunzipped bound is the memory guard: a store-less server
+  never inflates past the threshold, so pretty-printed JSON whose gunzipped
+  text is above it is refused even when its canonical form would fit (send it
+  compact, or as identity content). The server decodes one gzip upload at a
+  time (a single process-wide permit, taken before the request's transaction
+  opens): a concurrent gzip publish or update waits for the one being decoded
+  (at most about two seconds of CPU each), identity content never waits, and
+  the memory a decode needs is that of one request (about 94 MiB at 16 MiB).
+  Known limits: a gzip request waits for the permit before it is authorized,
+  so even a request that will be denied may wait behind one holder; and the
+  wait has no timeout. It is bounded by the one holder's request, whose
+  database statements are capped by `statement_timeout`, but a filesystem
+  store write that hangs is not bounded. A `reports.update` whose `patch.content` has the head's format,
+  encoding and decoded content is a metadata-only change that keeps the head's content, including
+  its original gzip bytes; the new upload's bytes are not stored. A standalone
+  `reports.read` returns `original_sha256` and
+  `original_byte_count` for every version; with the body requested, a gzip
+  version also returns the uploaded `encoded` byte for byte when the gzip
+  bytes are at most 524,288, else `encoded_omitted: "exceeds_response_bound"`,
+  and the body or data are returned only up to 524,288 decoded bytes, else
+  `body_omitted: "exceeds_response_bound"` with every digest still present.
+  Search indexes the decoded text, never Base64. Content above one request,
+  and a body the read omits, move through the chunked transfer below.
+- **Response bound, measured (Reports Modernization WP05).** The 524,288 read
+  bound counts decoded bytes, not the bytes on the wire. Measured once through
+  the compact facade (`my_pa.read`) on synthetic content: a 524,288-byte
+  identity markdown read was 542,955 bytes; a gzip version at 524,288 decoded
+  bytes with a 524,288-byte original, returning both body and `encoded`, was
+  1,241,679 bytes; a 524,288-byte body made of control characters (each
+  JSON-escaped) was about 3.59 MB, about 3.79 MB with `encoded`; a
+  `body_omitted` read was about 2 to 9 KB. A 16,777,216-byte decoded report was
+  published through the facade in a 194,866-byte request (145,935 gzip bytes,
+  ratio 115). A client reading large bodies should allow for responses of that
+  size.
+- **Chunked report transfer (Reports Modernization WP06).** The transfer adds `reports.transfer.*`
+  operations under no new purpose, none operator-only: `reports.transfer.begin`, `append`,
+  `finalize` and `abort` (write, `report_authoring`) and
+  `reports.transfer.read_chunk` (read, `report_read`). `begin` declares the
+  content (`format`, `encoding`, `byte_count`, `sha256`, optional `ttl_seconds`
+  300..86,400, default 3,600) and opens a `grxfr_` session bound to the calling
+  client; a retry of the same keyed declaration while the session is live
+  answers the original session. The content is sent as fixed 262,144-byte
+  (256 KiB) chunks (the last may be shorter), at most 64 per session (16 MiB),
+  each `append` carrying its `sequence`, Base64 `chunk` and `chunk_sha256`; an
+  identical re-append is a replay, other bytes for a staged sequence a
+  conflict. Quotas over live (open or finalized, unexpired) sessions: 4 per
+  client, and 8 holding at most 64 MiB declared per Principal. `finalize` checks the whole digest and returns a one-use
+  `content_token` exactly once; `reports.publish` or `reports.update` then
+  takes `content: {"transfer": {"session_id", "content_token"}}` and consumes
+  the session. `finalize` is not replayable: if its response is lost, `abort`
+  and begin again (the same declaration opens a new session once the old one
+  has ended). `read_chunk` returns a verified range (`offset`, `length`
+  1..262,144) of a standalone version's `decoded` or `original` part with
+  `chunk_sha256`, `eof` and `next_offset`, under the visibility of
+  `reports.read`. Staging lives under `MY_PA_REPORT_CONTENT_ROOT/transfer`;
+  without a report content root the four uploads are not composed (absent from
+  `capabilities.get` and `tools/list`, refused `unsupported`), and
+  `read_chunk` of a `managed_blob` version is `internal_error`. Consume and
+  abort discard their session's staging after the commit, and every `begin`
+  first moves the Principal's expired sessions (any client) to `expired` and
+  discards their staging after its commit, so a Principal's staging stays
+  bounded by its live quota plus the sessions that ended with no later
+  `begin`. Those, and any staging whose discard failed, are collected by
+  `apps/cli/report_content.py transfer-gc` on
+  the operator's own schedule
+  ([`managed-document-operations.md`](managed-document-operations.md)
+  section 7.1). The 5 are part of `chatllm-data-v12`'s Reports delta (see
+  "Desired ChatLLM profile" above), so a client converged on
+  `chatllm-data-v11` plans them among its 11 adds; whether any deployed client
+  holds the grants is a runtime fact this document does not state.
 
 Evidence: `src/my_pa/application/meetings.py`,
 `src/my_pa/contracts/v1/meetings.py`, `tests/contract/test_meeting_mcp.py`,
@@ -614,10 +766,10 @@ python -m alembic heads
 python apps/cli/health.py
 python apps/cli/remote_mcp.py profile-diff \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v11
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12
 python apps/cli/remote_mcp.py profile-plan \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v11
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12
 ```
 
 `apps/cli/health.py` answers `not_at_head` for a database below `c8e4a1b70d35`,

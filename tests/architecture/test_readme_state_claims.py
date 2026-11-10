@@ -34,6 +34,7 @@ from my_pa.application.service import (
     _HANDLERS,
     _LINEAGE_CAPABILITIES,
     _PROGRAM_REPORTING_CAPABILITIES,
+    _REPORT_TRANSFER_UPLOAD_CAPABILITIES,
     _SCHEDULE_CAPABILITIES,
 )
 from my_pa.bootstrap.gateway import build_gateway_runtime
@@ -524,6 +525,14 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     238: "Two hundred and thirty-eight",
     239: "Two hundred and thirty-nine",
     240: "Two hundred and forty",
+    # Reports Modernization WP02: `reports.publish`, 240 -> 241.
+    241: "Two hundred and forty-one",
+    # Reports Modernization WP03: its five additions, 241 -> 246.
+    246: "Two hundred and forty-six",
+    # Reports Modernization WP05b: its four custody additions, 246 -> 250.
+    250: "Two hundred and fifty",
+    # Reports Modernization WP06: its five transfer additions, 250 -> 255.
+    255: "Two hundred and fifty-five",
 }
 
 
@@ -666,11 +675,14 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
         # CPM Workbench S5b-2: the Schedule names, behind `MY_PA_SCHEDULE_ENABLED`
         # (default off), an explicit name set.
         or capability in _SCHEDULE_CAPABILITIES
+        # Reports Modernization WP06: the four transfer uploads, served only with
+        # a report content store and the transfer staging (unset by default).
+        or capability in _REPORT_TRANSFER_UPLOAD_CAPABILITIES
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert implemented == 240
-    assert len(withheld_families) == 127
+    assert implemented == 255
+    assert len(withheld_families) == 131
     assert unwired == set()
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
@@ -722,7 +734,18 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # CPM Workbench S5b-2's seven Schedule names are a seventh withheld family
     # (their own default-off switch): the default is unchanged and the withheld
     # figure grows by seven.
-    assert default == 113 and total == 240 and withheld == 127
+    # Reports Modernization WP02's `reports.publish` is core and in no withheld
+    # family, so the default grows by one and the withheld figure is unchanged.
+    # Reports Modernization WP03's five are core and in no withheld family, so
+    # the default grows by five and the withheld figure is unchanged.
+    # Reports Modernization WP05b's four custody names are operator-only, core
+    # and in no withheld family, so the default grows by four and the withheld
+    # figure is unchanged.
+    # Reports Modernization WP06's `reports.transfer.read_chunk` is core (the
+    # default grows by one); its four uploads are an eighth withheld family
+    # (composed only with the content store and the transfer staging), so the
+    # withheld figure grows by four.
+    assert default == 124 and total == 255 and withheld == 131
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -749,7 +772,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert authenticated_mcp_capabilities == {
         capability.value for capability in application_capabilities
     }
-    assert len(local_mcp_capabilities) == default - 3 == 110
+    assert len(local_mcp_capabilities) == default - 3 == 121
     assert authenticated_mcp_capabilities - local_mcp_capabilities == {
         "goodnotes.pull",
         "goodnotes.complete",

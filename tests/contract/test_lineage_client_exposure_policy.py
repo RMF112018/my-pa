@@ -139,7 +139,7 @@ _FULL: Final = {
 
 
 def test_v10_client_usable_lineage_names_are_data_conditional() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
     assert len(EXPOSED_LINEAGE) == 27
     assert len(EXPOSED_PROGRAM) == 7
     assert len(EXPOSED) == 34
@@ -172,7 +172,10 @@ def test_v10_withheld_lineage_names_are_control_plane_excluded() -> None:
         assert not is_chatllm_data_management(capability)
         # Publication withholds all 7 independently (S3.1 section 7.13).
         assert is_operator_only(capability), capability
-    # Only the GSQS pair remains an operator decision.
+    # Only the GSQS pair remains an operator decision; no lineage name is among
+    # them. Reports Modernization's `reports.publish` and five management names,
+    # held here until their remote registration, left it for `DATA_REQUIRED` in
+    # chatllm-data-v12.
     assert {
         capability
         for capability, policy in CHATLLM_CAPABILITY_POLICY.items()
@@ -273,15 +276,18 @@ def test_an_active_grant_on_a_withheld_lineage_name_is_an_unexpected_control_pla
 
 
 def test_v10_full_plane_targets_with_lineage_and_program_reporting() -> None:
-    assert len(_desired(_planes(**_FULL))) == 164
-    assert len(_desired(_planes(**_FULL, lineage=True))) == 191
+    # chatllm-data-v12 (Reports Modernization): `reports.publish`, the 5 report
+    # management names and the 5 `reports.transfer.*` names (`DATA_REQUIRED`,
+    # every plane) add 11.
+    assert len(_desired(_planes(**_FULL))) == 175
+    assert len(_desired(_planes(**_FULL, lineage=True))) == 202
     both = _desired(_planes(**_FULL, lineage=True, program_reporting=True))
-    assert len(both) == 198
+    assert len(both) == 209
     assert both - _desired(_planes(**_FULL)) == EXPOSED
     # Relationship intelligence off (the default planes): the 2 Program reads
     # need the entity plane.
     default = _desired(_planes(constraints=True, lineage=True, program_reporting=True))
-    assert len(default) == 130
+    assert len(default) == 141
     assert default & EXPOSED == EXPOSED - PROGRAM_READS
 
 

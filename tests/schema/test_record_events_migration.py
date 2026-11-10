@@ -74,7 +74,7 @@ REVISION: Final = "1d9b248e7f83"
 #: The chain head. `0641c354ca85` (CRL-WP-03, Capture lifecycle) is additive on
 #: `REVISION`, so `REVISION` is no longer the head; a database upgraded to head
 #: stands there, and a refused downgrade leaves it there.
-HEAD: Final = "2a90f91dd786"
+HEAD: Final = "4c37731671fc"
 PREVIOUS: Final = "7d9a450dfd07"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20260929_1d9b248e7f83_record_events.py"
@@ -143,7 +143,8 @@ def test_the_revision_is_directly_on_7d9a450dfd07_under_one_later_head() -> None
     script = ScriptDirectory.from_config(_config())
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "621ef6786c64"
+    assert script.get_revision(HEAD).down_revision == "2a90f91dd786"
+    assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
     assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
     assert script.get_revision("6c2306330ceb").down_revision == "023f8f7eb499"
     assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"
@@ -259,6 +260,25 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
         - LINEAGE_S31_CAPABILITIES
         # CPM Workbench S5b-2: admitted by `621ef6786c64`.
         - S5B2_CAPABILITIES
+        # Reports Modernization WP02 and WP03: admitted by `4c37731671fc`.
+        - {
+            "reports.publish",
+            "reports.update",
+            "reports.history",
+            "reports.archive",
+            "reports.delete",
+            "reports.restore",
+            "reports.hold.place",
+            "reports.hold.release",
+            "reports.retention.set",
+            "reports.retention.get",
+            # Reports Modernization WP06: bounded chunked transfer.
+            "reports.transfer.begin",
+            "reports.transfer.append",
+            "reports.transfer.finalize",
+            "reports.transfer.abort",
+            "reports.transfer.read_chunk",
+        }
     )
     purposes = (
         {purpose.value for purpose in Purpose}
@@ -267,6 +287,8 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
         - LINEAGE_S3_PURPOSES
         - LINEAGE_S4_PURPOSES
         - S5B2_PURPOSES
+        # Reports Modernization WP03: admitted by `4c37731671fc`.
+        - {"report_lifecycle", "report_hold", "report_retention"}
     )
     assert declared <= at
     assert purposes <= purposes_at

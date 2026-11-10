@@ -13,8 +13,9 @@ keys, with the switch on and over Commitments that store a `project_id`:
   the basis enum plus `program_reporting_read` (R4-F04, R4-F15);
 * `test_v1_commitment_views_keep_their_keys` -- the 3 v1 Commitment views'
   field lists, exactly;
-* `test_s4_adds_no_gateway_entry` -- the web BFF contract still names 110
-  capabilities and no S4 one (section 7.6).
+* `test_s4_adds_no_gateway_entry` -- the web BFF contract names no S4
+  capability (section 7.6); it names 121 (110 at S4, plus the eleven
+  `reports.*` entries Reports Modernization WP07 admitted).
 
 Every identity here is synthetic.
 """
@@ -50,6 +51,18 @@ GATEWAY_CONTRACT: Final = ROOT / "web" / "src" / "contracts" / "gateway.json"
 #: non-lineage, non-S4 tool's `payload` schema (canonical JSON), measured at the
 #: S2 basis `84ddab37` and unchanged since.
 V1_PAYLOAD_SCHEMA_SHA256: Final = "e87a5186273905f60ae033764f70d6715cb01829a56a19e77409ab2d2de63ebb"
+#: The same measurement without `reports.read`, at the Reports Modernization WP02
+#: base `09a05158c`: WP02 adds `reports.publish` and deliberately extends
+#: `reports.read`, so both are excluded and the other 191 shapes stay pinned.
+V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ: Final = (
+    "f4dc83a1e8e4699dc047d58279d97321fd750c1ecdff521b4cd148bb77fafb71"
+)
+#: The same measurement also without `reports.list` and `reports.search`, at
+#: the Reports Modernization WP04 base `5f395aa36`: WP04 deliberately extends
+#: both, so they are excluded and the other 189 shapes stay pinned.
+V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG: Final = (
+    "4a66657c422eb2c538a3cf7725cca2fab7b71325b883d3a0e724f200a7093459"
+)
 #: SHA-256 of the envelope `$defs.Purpose.enum` at the S4 basis (`3d1593aa`,
 #: the 59 `Purpose` values in declaration order, compact JSON).
 BASIS_PURPOSE_ENUM_SHA256: Final = (
@@ -173,26 +186,58 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
     excluded |= PROGRAM_REPORTING_CAPABILITIES
     # CPM Workbench S5b-2: likewise the 7 Schedule names.
     excluded |= {name for name in (tool.name for tool in TOOLS) if name.startswith("schedule_")}
+    # Reports Modernization WP02: `reports.publish` and the extended `reports.read`.
+    excluded |= {"reports.publish", "reports.read"}
+    # Reports Modernization WP03: its five new additions.
+    excluded |= {
+        "reports.update",
+        "reports.history",
+        "reports.archive",
+        "reports.delete",
+        "reports.restore",
+        # WP05b's four operator custody names, new too.
+        "reports.hold.place",
+        "reports.hold.release",
+        "reports.retention.set",
+        "reports.retention.get",
+        # WP06's five transfer names, new too.
+        "reports.transfer.begin",
+        "reports.transfer.append",
+        "reports.transfer.finalize",
+        "reports.transfer.abort",
+        "reports.transfer.read_chunk",
+    }
+    # Reports Modernization WP04: the extended `reports.list` and `reports.search`.
+    excluded |= {"reports.list", "reports.search"}
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
         if tool.name not in excluded
     }
-    assert len(payloads) == 192
+    assert len(payloads) == 189
     assert set(payloads) >= V1_READS
-    assert _canonical_sha256(payloads) == V1_PAYLOAD_SCHEMA_SHA256
+    assert _canonical_sha256(payloads) == V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG
     # Every tool carries the one envelope purpose enum: the basis enum, then
     # exactly the one S4 purpose -- nothing removed, reordered or added beside it.
     enums = {json.dumps(tool.input_schema["$defs"]["Purpose"]["enum"]) for tool in TOOLS}
     assert len(enums) == 1
     published = json.loads(enums.pop())
-    # CPM Workbench S5b-2 appends its 2 purposes after the S4 one (contract 3.12).
-    assert len(published) == 62
-    basis = published[:-3]
+    # CPM Workbench S5b-2 appends its 2 purposes after the S4 one (contract 3.12),
+    # and Reports Modernization WP03 appends `report_lifecycle` after those, and
+    # WP05b `report_hold` and `report_retention` after that.
+    assert len(published) == 65
+    basis = published[:-6]
     assert hashlib.sha256(json.dumps(basis, separators=(",", ":")).encode("utf-8")).hexdigest() == (
         BASIS_PURPOSE_ENUM_SHA256
     )
-    assert published[-3:] == ["program_reporting_read", "schedule_import", "schedule_read"]
+    assert published[-6:] == [
+        "program_reporting_read",
+        "schedule_import",
+        "schedule_read",
+        "report_lifecycle",
+        "report_hold",
+        "report_retention",
+    ]
     assert "program_reporting_read" not in basis
 
 
@@ -206,7 +251,8 @@ def test_v1_commitment_views_keep_their_keys() -> None:
 def test_s4_adds_no_gateway_entry() -> None:
     contract: dict[str, Any] = json.loads(GATEWAY_CONTRACT.read_text(encoding="utf-8"))
     declared = set(contract["capabilities"])
-    assert len(declared) == 110
+    # 110 at S4; Reports Modernization WP07 admitted eleven standalone `reports.*`.
+    assert len(declared) == 121
     assert not declared & PROGRAM_REPORTING_CAPABILITIES
     # The v1 Commitment reads the web client calls are still the v1 names.
     assert not {name for name in declared if ".v2." in name}

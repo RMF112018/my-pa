@@ -93,6 +93,20 @@ _WRITE_PURPOSES: Final = frozenset(
         Purpose.CONTEXT_PREFERENCE,
         Purpose.GOODNOTES_PROPOSAL,
         Purpose.REPORT_AUTHORING,
+        # Reports Modernization WP03: archive, delete (to Trash) and restore of a
+        # standalone report. Without it the three would be classified remote
+        # reads -- published while writes are disabled and routed to
+        # `my_pa.read`. `report_read` (and so `reports.history`) stays out.
+        Purpose.REPORT_LIFECYCLE,
+        # Reports Modernization WP05b: the operator-only custody purposes, as the
+        # attested lineage confirms' `record_lineage_authoring` and the schedule
+        # import's `schedule_import`. The four are never published remotely; this
+        # keeps the three custody writes writes if a later publication rule ever
+        # reached them. `reports.retention.get` shares `report_retention` but is a
+        # read: `_REMOTE_READS_UNDER_WRITE_PURPOSES` names it (Reports
+        # Modernization WP08), so a new capability under the purpose stays a write.
+        Purpose.REPORT_HOLD,
+        Purpose.REPORT_RETENTION,
         Purpose.RELATIONSHIP_MEMORY_AUTHORING,
         Purpose.ENTITY_OBSERVATION_INGEST,
         Purpose.ENTITY_AUTHORING,
@@ -238,12 +252,24 @@ _REMOTE_OPERATOR_IDENTITY_CAPABILITIES: Final = frozenset(
 )
 
 
+#: Reads whose only permitted purpose is also a write purpose. Each name here is
+#: an explicit exception, so any other capability under that purpose -- including
+#: one added later -- stays write-gated (the safe direction). Reports
+#: Modernization WP08: `reports.retention.get` reads the retention period under
+#: `report_retention`, which `reports.retention.set` writes; it stays operator-only
+#: and so withheld remotely either way.
+_REMOTE_READS_UNDER_WRITE_PURPOSES: Final = frozenset({Capability.REPORTS_RETENTION_GET})
+
+
 def is_remote_write(capability: Capability) -> bool:
     """Whether the current remote profile treats `capability` as a write.
 
     This is the purpose intersection `remote_tool_names` already uses, which is
-    also preserves the write gate for durable operator previews.
+    also preserves the write gate for durable operator previews. The only
+    exceptions are the named reads in `_REMOTE_READS_UNDER_WRITE_PURPOSES`.
     """
+    if capability in _REMOTE_READS_UNDER_WRITE_PURPOSES:
+        return False
     return bool(permitted_purposes(capability) & _WRITE_PURPOSES)
 
 

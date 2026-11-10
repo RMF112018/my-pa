@@ -37,6 +37,7 @@ import json
 import math
 import re
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -46,7 +47,12 @@ from typing import Any, ClassVar, Final, get_type_hints
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from my_pa.application import goodnotes_note_unit_contract as _note_unit
-from my_pa.application.errors import InvalidRequestError, SafeDetail, invalid_choice
+from my_pa.application.errors import (
+    ApplicationError,
+    InvalidRequestError,
+    SafeDetail,
+    invalid_choice,
+)
 from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
 from my_pa.application.identity_correction import ConflictChoice
 from my_pa.application.issue_handoffs import (
@@ -313,6 +319,91 @@ from my_pa.domain.relationship.memory import (
 from my_pa.domain.relationship.proposal_payload import (
     EntityProposalKind,
     discriminated_payload_branches,
+)
+from my_pa.domain.reports.catalog import (
+    DEFAULT_CATALOG_PAGE_SIZE,
+    DEFAULT_LIFECYCLE_STATES,
+    MAX_CATALOG_CURSOR_CHARACTERS,
+    MAX_CATALOG_PAGE_SIZE,
+    AssociationFilter,
+    CatalogFilters,
+    ReportPlane,
+    validate_catalog_page_size,
+)
+from my_pa.domain.reports.content import (
+    INLINE_CONTENT_MAX_BYTES,
+    MAX_CONTENT_DATA_DEPTH,
+    ReportContent,
+    content_of,
+    validate_content,
+    validate_content_structure,
+)
+from my_pa.domain.reports.creator import CREATOR_ID_PATTERN
+from my_pa.domain.reports.custody import (
+    DEFAULT_RETENTION_HISTORY,
+    MAX_RETENTION_DAYS,
+    MAX_RETENTION_HISTORY,
+    MAX_RETENTION_YEARS,
+    HoldOperation,
+    HoldRequest,
+    RetentionPeriod,
+    RetentionSetRequest,
+    RetentionUnit,
+)
+from my_pa.domain.reports.errors import ReportValidationError
+from my_pa.domain.reports.publication import (
+    CLIENT_INTENT_ID_PATTERN,
+    PublicationRequest,
+    RequestedAssociation,
+)
+from my_pa.domain.reports.records import (
+    DEFAULT_HISTORY_PAGE,
+    MAX_HISTORY_PAGE,
+    MAX_HISTORY_PAGE_WITH_MANIFESTS,
+    HistoryEntries,
+)
+from my_pa.domain.reports.revision import (
+    PATCH_FIELDS,
+    ClearableField,
+    CoveragePeriod,
+    LifecycleRequest,
+    ReportPatch,
+    UpdateRequest,
+    validate_clear_fields,
+)
+from my_pa.domain.reports.transfer import (
+    CONTENT_TOKEN_PATTERN,
+    MAX_TRANSFER_BYTE_COUNT,
+    MAX_TRANSFER_CHUNKS,
+    TRANSFER_CHUNK_BYTES,
+    TRANSFER_DECLARED_BYTES_PER_OWNER,
+    TRANSFER_SESSIONS_PER_CLIENT,
+    TRANSFER_SESSIONS_PER_OWNER,
+    TRANSFER_TTL_DEFAULT_SECONDS,
+    TRANSFER_TTL_MAX_SECONDS,
+    TRANSFER_TTL_MIN_SECONDS,
+    TransferContentSource,
+    TransferDeclaration,
+    parse_transfer_reference,
+    transfer_content_source,
+)
+from my_pa.domain.reports.vocabulary import (
+    MAX_ASSOCIATIONS_PER_VERSION,
+    MAX_CONTENT_DATA_VALUES,
+    MAX_DECODED_CONTENT_BYTES,
+    MAX_EXPANSION_RATIO,
+    MAX_ORIGINAL_CONTENT_BYTES,
+    MAX_REASON_CHARACTERS,
+    MAX_SUMMARY_CHARACTERS,
+    MAX_TERM_CHARACTERS,
+    MAX_TERMS,
+    MAX_TITLE_CHARACTERS,
+    READ_INLINE_CONTENT_MAX_BYTES,
+    AssociationTargetKind,
+    ContentEncoding,
+    ContentFormat,
+    LifecycleOperation,
+    LifecycleState,
 )
 from my_pa.domain.schedule import (
     InvalidScheduleSeriesNameError,
@@ -5295,17 +5386,93 @@ RecordIntelligenceRunState.mcp_payload_properties = MappingProxyType(  # type: i
 
 @dataclass(frozen=True, slots=True)
 class ReadIntelligenceArtifact:
-    """`reports.read`: exact immutable artifact by ID, Principal-scoped."""
+    """`reports.read`: exact immutable artifact by ID, Principal-scoped.
+
+    One command for both planes, chosen by the `report_id` prefix, because the
+    capability publishes one tool and one schema. An `rpt_` identifier is the
+    pipeline artifact plane, read exactly as before this extension: the same
+    fields, the same answer, and the four standalone selectors refused as the
+    unknown fields they were (a bare `invalid_request`). A `grpt_` identifier
+    is a standalone report (`reports.publish`): the head version by default,
+    or exactly one of `version_id` (`grver_`) and `version_number` (>= 1);
+    `include_manifest` adds the stored manifest; a report that is not
+    `active` reads as not found unless `include_withdrawn` is true.
+    """
 
     capability: ClassVar[Capability] = Capability.REPORTS_READ
 
     report_id: str
     include_body: bool = True
+    version_id: str | None = None
+    version_number: int | None = None
+    include_manifest: bool = False
+    include_withdrawn: bool = False
 
     def __post_init__(self) -> None:
+        # `object`: a transport hands the identifier in unchecked.
+        named: object = self.report_id
+        if isinstance(named, str) and named.startswith(f"{IdKind.REPORT}_"):
+            _identifier(self.report_id, IdKind.REPORT, SafeDetail.ARTIFACT_ID)
+            if not isinstance(self.include_body, bool):
+                raise InvalidRequestError(SafeDetail.INCLUDE_BODY)
+            if self.version_id is not None and self.version_number is not None:
+                raise InvalidRequestError(SafeDetail.VERSION_ID, SafeDetail.VERSION_NUMBER)
+            if self.version_id is not None:
+                _identifier(self.version_id, IdKind.REPORT_VERSION, SafeDetail.VERSION_ID)
+            if self.version_number is not None and (
+                type(self.version_number) is not int or self.version_number < 1
+            ):
+                raise InvalidRequestError(SafeDetail.VERSION_NUMBER)
+            if not isinstance(self.include_manifest, bool):
+                raise InvalidRequestError(SafeDetail.INCLUDE_MANIFEST)
+            if not isinstance(self.include_withdrawn, bool):
+                raise InvalidRequestError(SafeDetail.INCLUDE_WITHDRAWN)
+            return
         _identifier(self.report_id, IdKind.INTELLIGENCE_ARTIFACT, SafeDetail.ARTIFACT_ID)
         if not isinstance(self.include_body, bool):
             raise InvalidRequestError(SafeDetail.SELECTOR)
+        if (
+            self.version_id is not None
+            or self.version_number is not None
+            or self.include_manifest is not False
+            or self.include_withdrawn is not False
+        ):
+            # The legacy plane never had these fields; refused as it refused them.
+            raise InvalidRequestError()
+
+    @property
+    def standalone(self) -> bool:
+        """Whether this reads the general (standalone) report plane."""
+        return self.report_id.startswith(f"{IdKind.REPORT}_")
+
+
+ReadIntelligenceArtifact.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "report_id": {
+            "pattern": "^(rpt|grpt)_[A-Za-z0-9]{8,64}$",
+            "description": (
+                "rpt_ reads a pipeline artifact (reports.commit); grpt_ reads a "
+                "standalone report (reports.publish)."
+            ),
+        },
+        "version_id": {
+            "pattern": "^grver_[A-Za-z0-9]{8,64}$",
+            "description": "grpt_ only: one exact version. Not with version_number.",
+        },
+        "version_number": {
+            "minimum": 1,
+            "description": "grpt_ only: one version by number. Not with version_id.",
+        },
+        "include_manifest": {
+            "description": "grpt_ only: add the version's stored manifest.",
+        },
+        "include_withdrawn": {
+            "description": (
+                "grpt_ only: also read an archived or trashed report, which is otherwise not found."
+            ),
+        },
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -5341,7 +5508,19 @@ GetLatestIntelligenceArtifact.mcp_payload_properties = MappingProxyType(  # type
 
 @dataclass(frozen=True, slots=True)
 class ListIntelligenceArtifacts:
-    """`reports.list`: bounded, deterministic, Principal-scoped pages."""
+    """`reports.list`: bounded, deterministic, Principal-scoped pages.
+
+    `plane` selects what is listed. `intelligence` (the default) lists the
+    pipeline artifacts exactly as before the selector existed: the same
+    fields, answer and refusals. `standalone` lists your standalone reports
+    (`reports.publish`); `all` lists them merged with your current pipeline
+    artifacts in one order (newest first). Those two planes take the catalog
+    filters (`type`, `topics`, `tags`, `associated_with`, `lifecycle_states`
+    default `["active"]`, `created_from`/`created_to`, `report_date_from`/
+    `report_date_to`, `created_by`), a `page_size` of 1 to 100 (default 20) and an opaque
+    `cursor` bound to the request that issued it, and refuse the pipeline
+    filters. No count is ever returned.
+    """
 
     capability: ClassVar[Capability] = Capability.REPORTS_LIST
 
@@ -5354,8 +5533,25 @@ class ListIntelligenceArtifacts:
     page_size: int | None = None
     cursor: str | None = None
     include_superseded: bool = False
+    plane: ReportPlane = ReportPlane.INTELLIGENCE
+    type: str | None = None
+    topics: tuple[str, ...] | None = None
+    tags: tuple[str, ...] | None = None
+    associated_with: dict[str, object] | None = None
+    lifecycle_states: tuple[str, ...] | None = None
+    created_from: str | None = None
+    created_to: str | None = None
+    report_date_from: str | None = None
+    report_date_to: str | None = None
+    created_by: str | None = None
 
     def __post_init__(self) -> None:
+        if _catalog_plane(self) is not ReportPlane.INTELLIGENCE:
+            _check_catalog_request(self)
+            return
+        if _has_catalog_fields(self):
+            # The pipeline plane never had these fields; refused as it refused them.
+            raise InvalidRequestError()
         if self.cycle_run_id is not None:
             _identifier(self.cycle_run_id, IdKind.INTELLIGENCE_CYCLE_RUN, SafeDetail.CYCLE_RUN_ID)
         if self.artifact_kind is not None:
@@ -5366,15 +5562,29 @@ class ListIntelligenceArtifacts:
         if self.cursor is not None:
             _identifier(self.cursor, IdKind.INTELLIGENCE_ARTIFACT, SafeDetail.CURSOR)
 
+    @property
+    def catalog_page_size(self) -> int:
+        """The standalone/all page size: the caller's (1..100, checked) or 20."""
+        return DEFAULT_CATALOG_PAGE_SIZE if self.page_size is None else self.page_size
 
-ListIntelligenceArtifacts.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
-    {"artifact_kind": _ARTIFACT_KIND_PROPERTY}
-)
+    def catalog_filters(self) -> CatalogFilters:
+        """The standalone/all filters, normalized (refusals as `invalid_request`)."""
+        return _catalog_filters(self)
 
 
 @dataclass(frozen=True, slots=True)
 class SearchIntelligenceArtifacts:
-    """`reports.search`: PostgreSQL lexical search, title weighted above body."""
+    """`reports.search`: PostgreSQL lexical search, title weighted above body.
+
+    `plane` selects what is searched. `intelligence` (the default) is the
+    pipeline artifact search exactly as before the selector existed.
+    `standalone` searches the HEAD version of your standalone reports (title,
+    summary, topics, tags and decoded content); `all` merges them with your
+    current pipeline artifacts in one ranked order. Those two planes take the
+    `reports.list` catalog filters, a `query` of 1 to 512 characters, a
+    `page_size` of 1 to 100 (default 20) and an opaque bound `cursor`, and
+    refuse the pipeline filters. No count is ever returned.
+    """
 
     capability: ClassVar[Capability] = Capability.REPORTS_SEARCH
 
@@ -5385,8 +5595,27 @@ class SearchIntelligenceArtifacts:
     focus_area_id: FocusAreaId | None = None
     source_lane: SourceLaneId | None = None
     page_size: int | None = None
+    plane: ReportPlane = ReportPlane.INTELLIGENCE
+    cursor: str | None = None
+    type: str | None = None
+    topics: tuple[str, ...] | None = None
+    tags: tuple[str, ...] | None = None
+    associated_with: dict[str, object] | None = None
+    lifecycle_states: tuple[str, ...] | None = None
+    created_from: str | None = None
+    created_to: str | None = None
+    report_date_from: str | None = None
+    report_date_to: str | None = None
+    created_by: str | None = None
 
     def __post_init__(self) -> None:
+        if _catalog_plane(self) is not ReportPlane.INTELLIGENCE:
+            self.search_query()
+            _check_catalog_request(self)
+            return
+        if _has_catalog_fields(self) or self.cursor is not None:
+            # The pipeline plane never had these fields; refused as it refused them.
+            raise InvalidRequestError()
         if not isinstance(self.query, str):
             raise InvalidRequestError(SafeDetail.QUERY)
         if self.cycle_run_id is not None:
@@ -5395,10 +5624,24 @@ class SearchIntelligenceArtifacts:
             object.__setattr__(self, "artifact_kind", _report_kind(self.artifact_kind))
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
 
+    @property
+    def catalog_page_size(self) -> int:
+        """The standalone/all page size: the caller's (1..100, checked) or 20."""
+        return DEFAULT_CATALOG_PAGE_SIZE if self.page_size is None else self.page_size
 
-SearchIntelligenceArtifacts.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
-    {"artifact_kind": _ARTIFACT_KIND_PROPERTY}
-)
+    def catalog_filters(self) -> CatalogFilters:
+        """The standalone/all filters, normalized (refusals as `invalid_request`)."""
+        return _catalog_filters(self)
+
+    def search_query(self) -> SearchQuery:
+        """The standalone/all query, normalized, or `invalid_request` on `query`."""
+        query: SearchQuery | None = None
+        with suppress(SearchQueryError):
+            query = SearchQuery(self.query)
+        if query is None:
+            # Raised outside the handler, so the refusal carries no context.
+            raise InvalidRequestError(SafeDetail.QUERY)
+        return query
 
 
 @dataclass(frozen=True, slots=True)
@@ -5523,6 +5766,1882 @@ class ListReportTypes:
     def __post_init__(self) -> None:
         if self.stage is not None and not isinstance(self.stage, IntelligenceStage):
             raise invalid_choice(SafeDetail.STAGE, IntelligenceStage)
+
+
+#: The pipeline plane's fields `reports.publish` refuses by name, each with the
+#: token its refusal carries. A standalone report has no cycle run, stage,
+#: producer, focus area or source lane (spec C section 4.3); naming one is a
+#: request for the pipeline plane sent to the wrong capability.
+REPORT_PUBLISH_PIPELINE_FIELDS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "cycle_run_id": SafeDetail.CYCLE_RUN_ID,
+        "stage": SafeDetail.STAGE,
+        "artifact_kind": SafeDetail.ARTIFACT_KIND,
+        "producer": SafeDetail.SELECTOR,
+        "producer_task_id": SafeDetail.SELECTOR,
+        "producer_task_name": SafeDetail.SELECTOR,
+        "focus_area": SafeDetail.FOCUS_AREA_ID,
+        "focus_area_id": SafeDetail.FOCUS_AREA_ID,
+        "source_lane": SafeDetail.SOURCE_LANE,
+    }
+)
+
+#: The caller fields of one association, the only keys it may carry.
+_ASSOCIATION_KEYS: Final = frozenset(
+    {"target_kind", "target_ref", "relation", "target_version_ref"}
+)
+
+#: Which public token a general-report domain refusal names, by the domain's
+#: field (the part before the first `.`). The domain names fields and rules,
+#: never values, so this reads the field and drops the rule.
+_REPORT_REFUSAL_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "title": SafeDetail.TITLE,
+        "content": SafeDetail.CONTENT,
+        "report_type": SafeDetail.REPORT_TYPE,
+        "type": SafeDetail.REPORT_TYPE,
+        "topics": SafeDetail.TOPICS,
+        "tags": SafeDetail.TAGS,
+        "summary": SafeDetail.SUMMARY,
+        "report_date": SafeDetail.REPORT_DATE,
+        "coverage_start": SafeDetail.COVERAGE_PERIOD,
+        "coverage_end": SafeDetail.COVERAGE_PERIOD,
+        "coverage_period": SafeDetail.COVERAGE_PERIOD,
+        "associations": SafeDetail.ASSOCIATIONS,
+        "target_kind": SafeDetail.ASSOCIATIONS,
+        "target_ref": SafeDetail.ASSOCIATIONS,
+        "target_version_ref": SafeDetail.ASSOCIATIONS,
+        "relation": SafeDetail.ASSOCIATIONS,
+        "verification": SafeDetail.ASSOCIATIONS,
+        "metadata": SafeDetail.METADATA,
+        "client_intent_id": SafeDetail.CLIENT_INTENT_ID,
+        "idempotency_key": SafeDetail.IDEMPOTENCY_KEY,
+        # WP06 T10: a malformed transfer reference (`content` or `patch.content`).
+        "transfer": SafeDetail.TRANSFER,
+    }
+)
+
+
+#: WP05 B3 (and B2 step 8a): the content rules that are a size bound, answered with
+#: `max_bytes`.
+_CONTENT_SIZE_RULES: Final = frozenset({"too_large", "expansion_ratio", "too_many_values"})
+
+
+def report_refusal(error: ReportValidationError) -> ApplicationError:
+    """The public error a general-report domain refusal is.
+
+    A manifest over its bound is caused by the optional fields that fill it,
+    so it names `metadata` and the byte bound. Every `content.*` refusal,
+    `gzip+base64` decoding included (WP05 B3), is `content`; one over a size
+    bound (`too_large`, `expansion_ratio`) also names `max_bytes`. Anything
+    else names its field. No refusal carries the value it refused.
+    """
+    if error.code == "manifest_too_large":
+        return InvalidRequestError(SafeDetail.METADATA, SafeDetail.MAX_BYTES)
+    detail = _REPORT_REFUSAL_DETAILS.get(error.field.split(".", 1)[0])
+    if detail is SafeDetail.CONTENT and error.code in _CONTENT_SIZE_RULES:
+        return InvalidRequestError(SafeDetail.CONTENT, SafeDetail.MAX_BYTES)
+    return InvalidRequestError() if detail is None else InvalidRequestError(detail)
+
+
+def _coverage_moment(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise InvalidRequestError(SafeDetail.COVERAGE_PERIOD)
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        moment = None
+    if moment is None or moment.tzinfo is None or moment.tzinfo.utcoffset(moment) is None:
+        raise InvalidRequestError(SafeDetail.COVERAGE_PERIOD)
+    return moment
+
+
+def _requested_association(value: object) -> RequestedAssociation:
+    if not isinstance(value, dict) or not set(value) <= _ASSOCIATION_KEYS:
+        raise InvalidRequestError(SafeDetail.ASSOCIATIONS)
+    kind = value.get("target_kind")
+    if not isinstance(kind, str):
+        raise invalid_choice(SafeDetail.ASSOCIATIONS, AssociationTargetKind)
+    try:
+        target_kind = AssociationTargetKind(kind)
+    except ValueError:
+        raise invalid_choice(SafeDetail.ASSOCIATIONS, AssociationTargetKind) from None
+    return RequestedAssociation(
+        target_kind=target_kind,
+        target_ref=value.get("target_ref"),  # type: ignore[arg-type]
+        relation=value.get("relation"),  # type: ignore[arg-type]
+        target_version_ref=value.get("target_version_ref"),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PublishGeneralReport:
+    """`reports.publish`: publish a standalone report from a title and a content object.
+
+    Only `title` and `content` are required: `content` is `{"format":
+    "markdown"|"text", "body"}`, `{"format": "json", "data"}` or `{"format":
+    "mixed", "body", "data"}`, at most 512 KiB decoded (the escaped JSON
+    request must also fit `MAX_REQUEST_BYTES`); `encoding` may be
+    omitted or `identity`. With `encoding: "gzip+base64"` the content is
+    `{"format", "encoding", "encoded"}` (Base64 of one gzip member) plus the
+    optional declared `original_byte_count`/`original_sha256` (gzip bytes)
+    and `uncompressed_byte_count`/`uncompressed_sha256` (gunzipped bytes).
+    The gunzipped bytes are bounded by 16 MiB and by 256 times the gzip bytes
+    (JSON measured as uploaded, whitespace included), the decoded (canonical)
+    content by 16 MiB, and JSON data by 262,144 values and a depth of 32;
+    every decoding refusal is `invalid_request` on `content`. Decoded content
+    (either encoding) above the configured inline threshold (default 512 KiB)
+    is held in the report content store when one is configured, else refused
+    `invalid_request` on `content` and `max_bytes`, and without a store a gzip
+    upload's gunzipped bytes must also be within that threshold (WP05 C3/C4).
+    The server
+    derives the owner, the report and version identifiers, version 1, every
+    timestamp and digest, the manifest and the receipt; no cycle run, stage,
+    producer, focus area or source lane is accepted. Optional `type` is an
+    open lower_snake token (no registration).
+    Associations to a project, entity, standalone report or intelligence report
+    must name one you own, else the publish is `not_found`; an
+    `external_source` is stored as asserted. A `target_version_ref` is verified,
+    never trusted: on a `standalone_report` it must be a `grver_` of that report
+    you own, on an `external_source` it is kept as asserted text, and on any
+    other kind (none has a version this plane can check) it is refused, each
+    refusal the same `not_found`. A retry of the same request replays
+    the original receipt; set `client_intent_id` to publish an identical report
+    again deliberately.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_PUBLISH
+
+    title: str
+    content: dict[str, object] = field(repr=False)
+    idempotency_key: str
+    type: str | None = None
+    topics: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
+    summary: str | None = None
+    report_date: str | None = None
+    coverage_period: dict[str, object] | None = None
+    associations: tuple[dict[str, object], ...] = ()
+    metadata: dict[str, object] | None = field(default=None, repr=False)
+    client_intent_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        # Built once here so an invalid request never reaches a handler; the
+        # handler builds the same value again (`publication_request`), and only
+        # it decodes gzip content (WP05 corrective B-4).
+        publication_request(self, max_decoded=None)
+
+
+#: Stands for gzip content whose decoding is deferred to the handler: only
+#: command construction builds a request with it, and that request is discarded.
+_DECODE_DEFERRED: Final = content_of(ContentFormat.TEXT, body="decode deferred", data=None)
+
+#: WP06 T10: stands for a transfer session's content until the handler has
+#: replayed or claimed it. A request carrying it also carries its
+#: `content_source`, which is what its intent digest binds; the handler
+#: replaces it with the decoded session content before any repository sees
+#: the request (`ApplicationService._transfer_sourced`).
+TRANSFER_CONTENT_DEFERRED: Final = content_of(
+    ContentFormat.TEXT, body="transfer content deferred", data=None
+)
+
+
+def _requested_content(value: object, *, max_decoded: int | None) -> ReportContent:
+    """`value` validated: in full, or -- `max_decoded` None -- structurally only.
+
+    WP05 corrective B-4: command construction (`max_decoded=None`) never
+    decodes, inflates or parses a `gzip+base64` upload; it checks its
+    structure (`validate_content_structure`) and identity content in full.
+    The handler passes its decode limit and decodes under the process-wide
+    decode permit. Every refusal either raises is one `validate_content` raises.
+
+    WP06 T10: a transfer reference (`{"transfer": {session_id,
+    content_token}}`) is validated for its shape only (a malformed one is
+    refused on `transfer`) and stands as `TRANSFER_CONTENT_DEFERRED`: its
+    content is the finalized session's, read by the handler after the receipt
+    replay check (`_requested_source` is what the intent digest binds).
+    """
+    if parse_transfer_reference(value) is not None:
+        return TRANSFER_CONTENT_DEFERRED
+    if max_decoded is None:
+        structured = validate_content_structure(value)
+        return _DECODE_DEFERRED if structured is None else structured
+    return validate_content(value, max_decoded=max_decoded)
+
+
+def _requested_source(value: object) -> TransferContentSource | None:
+    """The content source of a transfer-reference `value` (T10), else `None`.
+
+    Called only after `_requested_content` accepted `value`; the source holds
+    the session and the token's digest, never the token.
+    """
+    reference = parse_transfer_reference(value)
+    return None if reference is None else transfer_content_source(reference)
+
+
+def publication_request(
+    command: PublishGeneralReport, *, max_decoded: int | None
+) -> PublicationRequest:
+    """The domain request `command` states, or the public refusal of it.
+
+    `max_decoded` is the handler's gzip decode limit; `None` validates gzip
+    content structurally only (command construction, see `_requested_content`).
+    """
+    if command.report_date is not None:
+        _iso_date(command.report_date, SafeDetail.REPORT_DATE)
+    coverage_start: datetime | None = None
+    coverage_end: datetime | None = None
+    if command.coverage_period is not None:
+        period: object = command.coverage_period
+        if not isinstance(period, dict) or not set(period) <= {"start", "end"} or not period:
+            raise InvalidRequestError(SafeDetail.COVERAGE_PERIOD)
+        if period.get("start") is not None:
+            coverage_start = _coverage_moment(period["start"])
+        if period.get("end") is not None:
+            coverage_end = _coverage_moment(period["end"])
+    associations: object = command.associations
+    if not isinstance(associations, tuple | list):
+        raise InvalidRequestError(SafeDetail.ASSOCIATIONS)
+    if len(associations) > MAX_ASSOCIATIONS_PER_VERSION:
+        raise InvalidRequestError(SafeDetail.ASSOCIATIONS)
+    try:
+        return PublicationRequest(
+            title=command.title,
+            content=_requested_content(command.content, max_decoded=max_decoded),
+            report_type=command.type,
+            topics=command.topics,
+            tags=command.tags,
+            summary=command.summary,
+            report_date=None
+            if command.report_date is None
+            else date.fromisoformat(command.report_date),
+            coverage_start=coverage_start,
+            coverage_end=coverage_end,
+            associations=tuple(_requested_association(item) for item in associations),
+            metadata={} if command.metadata is None else command.metadata,
+            client_intent_id=command.client_intent_id,
+            content_source=_requested_source(command.content),
+        )
+    except ReportValidationError as error:
+        refusal = report_refusal(error)
+    # Raised outside the handler, so the domain refusal is not left in `__context__`.
+    raise refusal
+
+
+#: The transport's whole-request ceiling, `adapters.normalization.MAX_REQUEST_BYTES`,
+#: restated because the application layer does not import an adapter; the
+#: compact-facade contract test pins the stated number to it.
+_WIRE_CEILING_BYTES: Final = 762_288
+
+_SHA256_SCHEMA_PATTERN: Final = "^[0-9a-f]{64}$"
+
+#: WP05 B7/C3/C5: the one sentence stating where decoded content above the
+#: inline threshold goes (the report content store when configured, else a
+#: `content`/`max_bytes` refusal) and how much of a body a read returns.
+_CONTENT_PLACEMENT_SENTENCE: Final = (
+    "With the report content store configured, decoded content above the inline "
+    f"threshold (default {INLINE_CONTENT_MAX_BYTES:,} bytes) is stored in the store; "
+    "without it, both the gunzipped bytes of a gzip+base64 upload and the decoded "
+    "content must be within the inline threshold, else invalid_request content, "
+    f"max_bytes. Reads return the body only up to {READ_INLINE_CONTENT_MAX_BYTES:,} "
+    "decoded bytes, larger bodies are marked body_omitted, and a gzip+base64 "
+    f"upload's encoded only up to {READ_INLINE_CONTENT_MAX_BYTES:,} gzip bytes, else "
+    "encoded_omitted; each omission is paired with body_chunked_read / "
+    "encoded_chunked_read, naming the part, byte count and sha256 to fetch with "
+    "reports.transfer.read_chunk."
+)
+
+#: WP05 (corrective N4): what `patch.content` equal to the head's decoded content does.
+_SAME_CONTENT_SENTENCE: Final = (
+    "A patch.content whose format, encoding and decoded content equal the head's is "
+    "a metadata-only change that keeps the head's content, including its original "
+    "gzip bytes (the new upload's bytes are not stored)."
+)
+
+#: WP06 T10: the one sentence stating the transfer reference variant.
+_TRANSFER_REFERENCE_SENTENCE: Final = (
+    "Or, for content uploaded with reports.transfer.begin/append/finalize (up to "
+    f"{MAX_TRANSFER_BYTE_COUNT:,} staged bytes), exactly {{transfer: {{session_id, "
+    "content_token}} naming your finalized session and its one-use token; format "
+    "and encoding come from the session (restating them is refused), the token is "
+    "consumed by the first successful publish or update, and a retry of that same "
+    "request replays its receipt. This form is usable only where "
+    "reports.transfer.begin is offered; elsewhere it is refused unsupported."
+)
+
+#: WP06 T10: the closed transfer reference a publish/update content may be.
+_TRANSFER_REFERENCE_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
+    {
+        "type": "object",
+        "properties": {
+            "transfer": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "pattern": "^grxfr_[A-Za-z0-9]{8,64}$",
+                        "description": "Your finalized transfer session.",
+                    },
+                    "content_token": {
+                        "type": "string",
+                        "pattern": CONTENT_TOKEN_PATTERN,
+                        "description": "The content_token reports.transfer.finalize returned.",
+                    },
+                },
+                "required": ["session_id", "content_token"],
+                "additionalProperties": False,
+            },
+        },
+        "required": ["transfer"],
+        "additionalProperties": False,
+    }
+)
+
+_INLINE_CONTENT_DESCRIPTION: Final = (
+    "markdown|text: {format, body}; json: {format, data}; mixed: {format, body, "
+    f"data}}. encoding: omit or identity, or gzip+base64 with {{format, encoding, "
+    "encoded} instead of body/data. identity: at most "
+    f"{INLINE_CONTENT_MAX_BYTES:,} decoded UTF-8 bytes. gzip+base64: encoded is the "
+    "standard padded Base64 (no whitespace) of exactly one gzip member whose "
+    "gunzipped bytes are the UTF-8 body (markdown|text), a JSON text of the data "
+    "(json) or a JSON object of exactly {body, data} (mixed). The gunzipped bytes "
+    f"are at most {MAX_DECODED_CONTENT_BYTES:,} and at most {MAX_EXPANSION_RATIO} "
+    "times the gzip bytes, and the decoded (canonical) content is at most "
+    f"{MAX_DECODED_CONTENT_BYTES:,} bytes; json|mixed are measured as uploaded, so "
+    "pretty-printed JSON counts its whitespace. json|mixed data holds at most "
+    f"{MAX_CONTENT_DATA_VALUES:,} JSON values (counted in the uploaded text as 1 plus "
+    f"its [, {{ and , outside strings) and nests at most {MAX_CONTENT_DATA_DEPTH} "
+    f"deep. {_CONTENT_PLACEMENT_SENTENCE} "
+    "The whole JSON request "
+    f"must also fit the {_WIRE_CEILING_BYTES:,}-byte request ceiling, so heavily "
+    "escaped content (quotes, backslashes, control characters, \\u-escaped "
+    "non-ASCII) may need to be smaller, and an encoded string is at most about "
+    "760 KB (about 570 KB of gzip)."
+)
+
+#: The inline content object (WP02/WP05), closed.
+_INLINE_CONTENT_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
+    {
+        "type": "object",
+        "properties": {
+            "format": {"type": "string", "enum": [member.value for member in ContentFormat]},
+            "encoding": {"type": "string", "enum": [member.value for member in ContentEncoding]},
+            "body": {
+                "type": "string",
+                "minLength": 1,
+                "description": f"UTF-8 text, at most {INLINE_CONTENT_MAX_BYTES} bytes.",
+            },
+            "data": {"description": "Any JSON value but null (json, mixed)."},
+            "encoded": {
+                "type": "string",
+                "minLength": 4,
+                "description": "gzip+base64 only: Base64 of one gzip member.",
+            },
+            "original_byte_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": MAX_ORIGINAL_CONTENT_BYTES,
+                "description": "gzip+base64 only, optional: the gzip byte count.",
+            },
+            "original_sha256": {
+                "type": "string",
+                "pattern": _SHA256_SCHEMA_PATTERN,
+                "description": "gzip+base64 only, optional: SHA-256 of the gzip bytes.",
+            },
+            "uncompressed_byte_count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": MAX_DECODED_CONTENT_BYTES,
+                "description": "gzip+base64 only, optional: the gunzipped byte count.",
+            },
+            "uncompressed_sha256": {
+                "type": "string",
+                "pattern": _SHA256_SCHEMA_PATTERN,
+                "description": "gzip+base64 only, optional: SHA-256 of the gunzipped bytes.",
+            },
+        },
+        "required": ["format"],
+        "additionalProperties": False,
+    }
+)
+
+#: A publish `content` / update `patch.content`: exactly one of the inline
+#: object and the transfer reference, each closed.
+_CONTENT_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
+    {
+        "type": "object",
+        "description": f"{_INLINE_CONTENT_DESCRIPTION} {_TRANSFER_REFERENCE_SENTENCE}",
+        "oneOf": [dict(_INLINE_CONTENT_SCHEMA), dict(_TRANSFER_REFERENCE_SCHEMA)],
+    }
+)
+
+_TERM_ARRAY: Final[Mapping[str, Any]] = MappingProxyType(
+    {
+        "maxItems": MAX_TERMS,
+        "items": {"type": "string", "minLength": 1, "maxLength": MAX_TERM_CHARACTERS},
+    }
+)
+
+PublishGeneralReport.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "title": {"minLength": 1, "maxLength": MAX_TITLE_CHARACTERS},
+        "content": dict(_CONTENT_SCHEMA),
+        "type": {
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "description": "An open report type token; no registration needed.",
+        },
+        "topics": dict(_TERM_ARRAY),
+        "tags": dict(_TERM_ARRAY),
+        "summary": {"minLength": 1, "maxLength": MAX_SUMMARY_CHARACTERS},
+        "coverage_period": {
+            "properties": {
+                "start": {"type": "string", "format": "date-time"},
+                "end": {"type": "string", "format": "date-time"},
+            },
+            "additionalProperties": False,
+        },
+        "associations": {
+            "maxItems": MAX_ASSOCIATIONS_PER_VERSION,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "target_kind": {
+                        "type": "string",
+                        "enum": [member.value for member in AssociationTargetKind],
+                    },
+                    "target_ref": {"type": "string", "minLength": 1, "maxLength": 512},
+                    "relation": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+                    "target_version_ref": {"type": "string", "minLength": 1, "maxLength": 512},
+                },
+                "required": ["target_kind", "target_ref", "relation"],
+                "additionalProperties": False,
+            },
+        },
+        "metadata": {"description": "A bounded JSON object of your own keys."},
+        "client_intent_id": {
+            "pattern": CLIENT_INTENT_ID_PATTERN.pattern.replace("\\A", "^").replace("\\Z", "$"),
+            "description": (
+                "Optional. A different value makes an otherwise identical request a new report."
+            ),
+        },
+    }
+)
+
+
+# ---- Reports Modernization WP03: mutable management of a standalone report ----
+
+#: Which public token a WP03 request refusal names, beside the publish fields
+#: `_REPORT_REFUSAL_DETAILS` already maps: the domain's field for the request
+#: shape (`patch`, `clear_fields`, `change_reason`, the two preconditions, the
+#: lifecycle `reason`, the history cursor and page size).
+_REPORT_REVISION_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "report_id": SafeDetail.ARTIFACT_ID,
+        "patch": SafeDetail.PATCH,
+        "clear_fields": SafeDetail.CLEAR_FIELDS,
+        "change_reason": SafeDetail.CHANGE_REASON,
+        "expected_version": SafeDetail.EXPECTED_VERSION,
+        "expected_lifecycle_revision": SafeDetail.EXPECTED_LIFECYCLE_REVISION,
+        "reason": SafeDetail.REASON,
+        "cursor": SafeDetail.CURSOR,
+        "page_size": SafeDetail.PAGE_SIZE,
+    }
+)
+
+
+def report_revision_refusal(error: ReportValidationError) -> ApplicationError:
+    """The public error a WP03 domain refusal is: its request field, else as publish."""
+    detail = _REPORT_REVISION_DETAILS.get(error.field.split(".", 1)[0])
+    return report_refusal(error) if detail is None else InvalidRequestError(detail)
+
+
+#: The token a patched field's own refusal names (its JSON null included).
+_PATCH_FIELD_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "title": SafeDetail.TITLE,
+        "content": SafeDetail.CONTENT,
+        "type": SafeDetail.REPORT_TYPE,
+        "topics": SafeDetail.TOPICS,
+        "tags": SafeDetail.TAGS,
+        "summary": SafeDetail.SUMMARY,
+        "report_date": SafeDetail.REPORT_DATE,
+        "coverage_period": SafeDetail.COVERAGE_PERIOD,
+        "metadata": SafeDetail.METADATA,
+        "associations": SafeDetail.ASSOCIATIONS,
+    }
+)
+
+
+def _patch_terms(value: object, detail: SafeDetail) -> tuple[object, ...]:
+    if not isinstance(value, tuple | list):
+        raise InvalidRequestError(detail)
+    return tuple(value)
+
+
+def _patched_coverage(value: object) -> CoveragePeriod:
+    """A patched coverage period: `{start?, end?}`, at least one bound, no null."""
+    if not isinstance(value, dict) or not value or not set(value) <= {"start", "end"}:
+        raise InvalidRequestError(SafeDetail.COVERAGE_PERIOD)
+    if any(bound is None for bound in value.values()):
+        # A null bound is not "unbounded": clearing is `clear_fields` alone.
+        raise InvalidRequestError(SafeDetail.COVERAGE_PERIOD)
+    start = None if "start" not in value else _coverage_moment(value["start"])
+    end = None if "end" not in value else _coverage_moment(value["end"])
+    try:
+        return CoveragePeriod(start=start, end=end)
+    except ReportValidationError:
+        pass
+    raise InvalidRequestError(SafeDetail.COVERAGE_PERIOD)
+
+
+def report_patch(patch: object, *, max_decoded: int | None) -> ReportPatch:
+    """The domain patch `patch` states, or the field-naming refusal of it.
+
+    `patch` is the caller's JSON object: keys are a subset of the publish
+    caller fields minus `client_intent_id` (`PATCH_FIELDS`); any other key is a
+    bare `invalid_request` as an unknown field is everywhere. A JSON null
+    anywhere a field's value stands -- a patched field, a coverage bound, an
+    association member -- is refused naming the field: a nullable field is
+    cleared only through `clear_fields`, never by null (D4). Every value is
+    validated by the rule publish applies to it; `max_decoded` as in
+    `publication_request`.
+    """
+    if not isinstance(patch, dict):
+        raise InvalidRequestError(SafeDetail.PATCH)
+    if not set(patch) <= set(PATCH_FIELDS):
+        raise InvalidRequestError()
+    for name in PATCH_FIELDS:
+        if name in patch and patch[name] is None:
+            raise InvalidRequestError(_PATCH_FIELD_DETAILS[name])
+    fields: dict[str, Any] = {}
+    refusal: ApplicationError
+    try:
+        if "title" in patch:
+            fields["title"] = patch["title"]
+        if "content" in patch:
+            fields["content"] = _requested_content(patch["content"], max_decoded=max_decoded)
+        if "type" in patch:
+            fields["report_type"] = patch["type"]
+        if "topics" in patch:
+            fields["topics"] = _patch_terms(patch["topics"], SafeDetail.TOPICS)
+        if "tags" in patch:
+            fields["tags"] = _patch_terms(patch["tags"], SafeDetail.TAGS)
+        if "summary" in patch:
+            fields["summary"] = patch["summary"]
+        if "report_date" in patch:
+            fields["report_date"] = date.fromisoformat(
+                _iso_date(patch["report_date"], SafeDetail.REPORT_DATE)
+            )
+        if "coverage_period" in patch:
+            fields["coverage_period"] = _patched_coverage(patch["coverage_period"])
+        if "metadata" in patch:
+            if not isinstance(patch["metadata"], dict):
+                raise InvalidRequestError(SafeDetail.METADATA)
+            fields["metadata"] = patch["metadata"]
+        if "associations" in patch:
+            items = _patch_terms(patch["associations"], SafeDetail.ASSOCIATIONS)
+            if len(items) > MAX_ASSOCIATIONS_PER_VERSION:
+                raise InvalidRequestError(SafeDetail.ASSOCIATIONS)
+            for item in items:
+                if isinstance(item, dict) and any(member is None for member in item.values()):
+                    raise InvalidRequestError(SafeDetail.ASSOCIATIONS)
+            fields["associations"] = tuple(_requested_association(item) for item in items)
+        return ReportPatch(**fields)
+    except ReportValidationError as error:
+        refusal = report_refusal(error)
+    # Raised outside the handler, so the domain refusal is not left in `__context__`.
+    raise refusal
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateGeneralReport:
+    """`reports.update`: append the next version of one of your active standalone reports.
+
+    `expected_version` is the head version number you read (`reports.read`):
+    any other head is `conflict` (`stale_version`) and writes nothing. `patch`
+    names only the fields that change, each replacing the whole value
+    (`topics`, `tags`, `associations` and `metadata` are replaced wholesale;
+    `[]` or `{}` empties them); JSON null is refused -- clear `type`, `summary`,
+    `report_date` or `coverage_period` with `clear_fields` instead, never with
+    a field also in `patch`. `change_reason` is required. Associations not in
+    the patch carry forward unchanged. `patch.content` takes either encoding
+    exactly as `reports.publish` does (`gzip+base64` included, same limits).
+    Content whose decoded bytes equal the head's (by format, encoding and
+    decoded digest) is not new: the head's content object, its original gzip
+    bytes included, is kept and the new upload's bytes are not stored.
+    New content makes a `content` version;
+    otherwise the content object is reused and the version is `metadata`; a
+    patch that changes nothing answers `no_op` and writes no version. An
+    archived or trashed report is refused until `reports.restore`. A retry of
+    the same request replays the original answer.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_UPDATE
+
+    report_id: str
+    expected_version: int
+    patch: dict[str, object] = field(repr=False)
+    change_reason: str = field(repr=False)
+    idempotency_key: str
+    clear_fields: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        # Built once here so an invalid request never reaches a handler; the
+        # handler builds the same value again (`update_request`), and only it
+        # decodes gzip content (WP05 corrective B-4).
+        update_request(self, max_decoded=None)
+
+
+def update_request(command: UpdateGeneralReport, *, max_decoded: int | None) -> UpdateRequest:
+    """The domain request `command` states, or the public refusal of it (`max_decoded`
+    as in `publication_request`)."""
+    _identifier(command.report_id, IdKind.REPORT, SafeDetail.ARTIFACT_ID)
+    if type(command.expected_version) is not int or command.expected_version < 1:
+        raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+    if command.change_reason is None:
+        raise InvalidRequestError(SafeDetail.CHANGE_REASON)
+    patch = report_patch(command.patch, max_decoded=max_decoded)
+    clear_fields: object = command.clear_fields
+    if not isinstance(clear_fields, tuple | list):
+        raise InvalidRequestError(SafeDetail.CLEAR_FIELDS)
+    refusal: ApplicationError
+    try:
+        # `report_patch` accepted the patch, so its content is well formed.
+        patched_content: object = command.patch.get("content")
+        return UpdateRequest(
+            report_id=command.report_id,
+            expected_version=command.expected_version,
+            patch=patch,
+            clear_fields=validate_clear_fields(clear_fields),
+            change_reason=command.change_reason,
+            content_source=_requested_source(patched_content),
+        )
+    except ReportValidationError as error:
+        refusal = report_revision_refusal(error)
+    raise refusal
+
+
+def _lifecycle_command(
+    command: ArchiveGeneralReport | DeleteGeneralReport | RestoreGeneralReport,
+) -> None:
+    """The shared validation of the three lifecycle commands."""
+    _idempotency_key(command.idempotency_key)
+    lifecycle_request(command)
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveGeneralReport:
+    """`reports.archive`: archive one of your standalone reports (active -> archived).
+
+    `expected_lifecycle_revision` is the `lifecycle_revision` you read; any
+    other is `conflict` and writes nothing. Archiving an archived report is a
+    `no_op`. An archived report reads as not found unless `include_withdrawn`,
+    and refuses `reports.update` until restored. Nothing is removed. `reason` is
+    optional (at most 500 characters).
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_ARCHIVE
+
+    report_id: str
+    expected_lifecycle_revision: int
+    idempotency_key: str
+    reason: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        _lifecycle_command(self)
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteGeneralReport:
+    """`reports.delete`: move one of your standalone reports to the recoverable Trash.
+
+    From `active` or `archived`; recorded with the state it left, which
+    `reports.restore` returns to. Never a physical deletion: every version,
+    content object, manifest and association is kept. Deleting a trashed
+    report is `conflict` (`lifecycle_state`). `expected_lifecycle_revision`
+    and `reason` as `reports.archive`.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_DELETE
+
+    report_id: str
+    expected_lifecycle_revision: int
+    idempotency_key: str
+    reason: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        _lifecycle_command(self)
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreGeneralReport:
+    """`reports.restore`: return an archived report to active, or a trashed one to its prior state.
+
+    A report archived and then deleted restores to `archived`. Restoring an
+    active report is `conflict` (`lifecycle_state`).
+    `expected_lifecycle_revision` and `reason` as `reports.archive`.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_RESTORE
+
+    report_id: str
+    expected_lifecycle_revision: int
+    idempotency_key: str
+    reason: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        _lifecycle_command(self)
+
+
+#: The lifecycle operation each of the three lifecycle capabilities requests.
+_LIFECYCLE_OPERATIONS: Final[Mapping[Capability, LifecycleOperation]] = MappingProxyType(
+    {
+        Capability.REPORTS_ARCHIVE: LifecycleOperation.ARCHIVE,
+        Capability.REPORTS_DELETE: LifecycleOperation.DELETE,
+        Capability.REPORTS_RESTORE: LifecycleOperation.RESTORE,
+    }
+)
+
+
+def lifecycle_request(
+    command: ArchiveGeneralReport | DeleteGeneralReport | RestoreGeneralReport,
+) -> LifecycleRequest:
+    """The domain request `command` states, or the public refusal of it."""
+    _identifier(command.report_id, IdKind.REPORT, SafeDetail.ARTIFACT_ID)
+    refusal: ApplicationError
+    try:
+        return LifecycleRequest(
+            operation=_LIFECYCLE_OPERATIONS[command.capability],
+            report_id=command.report_id,
+            expected_lifecycle_revision=command.expected_lifecycle_revision,
+            reason=command.reason,
+        )
+    except ReportValidationError as error:
+        refusal = report_revision_refusal(error)
+    raise refusal
+
+
+@dataclass(frozen=True, slots=True)
+class GetGeneralReportHistory:
+    """`reports.history`: one page of a standalone report's versions or lifecycle events.
+
+    Oldest first. `entries` is `versions` (default) or `lifecycle`.
+    `page_size` is 1..50 (default 20); with `include_manifests` (versions
+    only) at most 10 (default 10). `after` is the `next_cursor` of the previous
+    page: a `grver_` for versions, a `grlev_` for lifecycle, of this report. A
+    version item carries its digests and content descriptor, never the body
+    (`reports.read` returns a body). An archived or trashed report is not found
+    unless `include_withdrawn`.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_HISTORY
+
+    report_id: str
+    entries: HistoryEntries = HistoryEntries.VERSIONS
+    page_size: int | None = None
+    after: str | None = None
+    include_manifests: bool = False
+    include_withdrawn: bool = False
+
+    def __post_init__(self) -> None:
+        _identifier(self.report_id, IdKind.REPORT, SafeDetail.ARTIFACT_ID)
+        if not isinstance(self.entries, HistoryEntries):
+            raise invalid_choice(SafeDetail.ENTRIES, HistoryEntries)
+        if not isinstance(self.include_manifests, bool):
+            raise InvalidRequestError(SafeDetail.INCLUDE_MANIFESTS)
+        if not isinstance(self.include_withdrawn, bool):
+            raise InvalidRequestError(SafeDetail.INCLUDE_WITHDRAWN)
+        if self.include_manifests and self.entries is not HistoryEntries.VERSIONS:
+            # A lifecycle event has no manifest to include.
+            raise InvalidRequestError(SafeDetail.INCLUDE_MANIFESTS)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.page_size is not None and self.page_size > self.maximum_page_size:
+            raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            kind = (
+                IdKind.REPORT_VERSION
+                if self.entries is HistoryEntries.VERSIONS
+                else IdKind.REPORT_LIFECYCLE_EVENT
+            )
+            _identifier(self.after, kind, SafeDetail.CURSOR)
+
+    @property
+    def maximum_page_size(self) -> int:
+        """50 items, or 10 when each carries its manifest (D9)."""
+        return MAX_HISTORY_PAGE_WITH_MANIFESTS if self.include_manifests else MAX_HISTORY_PAGE
+
+    @property
+    def resolved_page_size(self) -> int:
+        """The page size asked for, else 20 (10 with manifests)."""
+        if self.page_size is not None:
+            return self.page_size
+        return min(DEFAULT_HISTORY_PAGE, self.maximum_page_size)
+
+
+_REPORT_ID_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
+    {"pattern": "^grpt_[A-Za-z0-9]{8,64}$", "description": "A standalone report (grpt_)."}
+)
+_LIFECYCLE_REVISION_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
+    {"minimum": 0, "description": "The lifecycle_revision you read; any other is a conflict."}
+)
+_LIFECYCLE_REASON_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
+    {"minLength": 1, "maxLength": MAX_REASON_CHARACTERS, "description": "Optional."}
+)
+
+UpdateGeneralReport.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "report_id": dict(_REPORT_ID_SCHEMA),
+        "expected_version": {
+            "minimum": 1,
+            "description": "The head version_number you read; any other is a conflict.",
+        },
+        "patch": {
+            "type": "object",
+            "description": (
+                "Only the fields that change; each replaces the whole value. Null is "
+                "refused: use clear_fields. At least one of patch and clear_fields."
+            ),
+            "properties": {
+                "title": {
+                    "type": "string",
+                    **PublishGeneralReport.mcp_payload_properties["title"],  # type: ignore[attr-defined]
+                },
+                "content": {
+                    **_CONTENT_SCHEMA,
+                    "description": f"{_CONTENT_SCHEMA['description']} {_SAME_CONTENT_SENTENCE}",
+                },
+                "type": {
+                    "type": "string",
+                    **PublishGeneralReport.mcp_payload_properties["type"],  # type: ignore[attr-defined]
+                },
+                "topics": {"type": "array", **_TERM_ARRAY},
+                "tags": {"type": "array", **_TERM_ARRAY},
+                "summary": {
+                    "type": "string",
+                    **PublishGeneralReport.mcp_payload_properties["summary"],  # type: ignore[attr-defined]
+                },
+                "report_date": {
+                    "type": "string",
+                    "format": "date",
+                    "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                },
+                "coverage_period": {
+                    "type": "object",
+                    "properties": {
+                        "start": {"type": "string", "format": "date-time"},
+                        "end": {"type": "string", "format": "date-time"},
+                    },
+                    "minProperties": 1,
+                    "additionalProperties": False,
+                },
+                "metadata": {
+                    "type": "object",
+                    "description": "Replaces the whole metadata object; {} empties it.",
+                },
+                "associations": {
+                    "type": "array",
+                    **PublishGeneralReport.mcp_payload_properties["associations"],  # type: ignore[attr-defined]
+                },
+            },
+            "additionalProperties": False,
+        },
+        "change_reason": {"minLength": 1, "maxLength": MAX_REASON_CHARACTERS},
+        "clear_fields": {
+            "items": {"type": "string", "enum": [member.value for member in ClearableField]},
+            "uniqueItems": True,
+            "description": "Nullable fields to clear. Not with the same field in patch.",
+        },
+    }
+)
+_LIFECYCLE_PAYLOAD_PROPERTIES: Final[Mapping[str, Any]] = MappingProxyType(
+    {
+        "report_id": dict(_REPORT_ID_SCHEMA),
+        "expected_lifecycle_revision": dict(_LIFECYCLE_REVISION_SCHEMA),
+        "reason": dict(_LIFECYCLE_REASON_SCHEMA),
+    }
+)
+ArchiveGeneralReport.mcp_payload_properties = _LIFECYCLE_PAYLOAD_PROPERTIES  # type: ignore[attr-defined]
+DeleteGeneralReport.mcp_payload_properties = _LIFECYCLE_PAYLOAD_PROPERTIES  # type: ignore[attr-defined]
+RestoreGeneralReport.mcp_payload_properties = _LIFECYCLE_PAYLOAD_PROPERTIES  # type: ignore[attr-defined]
+
+GetGeneralReportHistory.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "report_id": dict(_REPORT_ID_SCHEMA),
+        "page_size": {
+            "minimum": 1,
+            "maximum": MAX_HISTORY_PAGE,
+            "description": "Default 20; at most 10 with include_manifests (default 10).",
+        },
+        "after": {
+            "pattern": "^(grver|grlev)_[A-Za-z0-9]{8,64}$",
+            "description": "The previous page's next_cursor (grver_ versions, grlev_ lifecycle).",
+        },
+        "include_manifests": {"description": "versions only: add each version's manifest."},
+        "include_withdrawn": {
+            "description": "Also page an archived or trashed report, otherwise not found."
+        },
+    }
+)
+
+
+# ---- Reports Modernization WP05b: operator custody (holds and retention) ----
+
+#: Which public token a custody request refusal names (by the domain's field).
+_CUSTODY_REFUSAL_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "report_id": SafeDetail.ARTIFACT_ID,
+        "expected_hold_revision": SafeDetail.EXPECTED_HOLD_REVISION,
+        "expected_policy_revision": SafeDetail.EXPECTED_POLICY_REVISION,
+        "reason": SafeDetail.REASON,
+        "period": SafeDetail.PERIOD,
+    }
+)
+
+
+def custody_refusal(error: ReportValidationError) -> ApplicationError:
+    """The public error a WP05b custody domain refusal is: its request field, or bare."""
+    detail = _CUSTODY_REFUSAL_DETAILS.get(error.field.split(".", 1)[0])
+    return InvalidRequestError() if detail is None else InvalidRequestError(detail)
+
+
+def _custody_revision(value: object, detail: SafeDetail) -> None:
+    if type(value) is not int or value < 0:
+        raise InvalidRequestError(detail)
+
+
+@dataclass(frozen=True, slots=True)
+class PlaceReportHold:
+    """`reports.hold.place`: place a legal hold on one of your standalone reports (operator only).
+
+    Local operator surface only (the CLI or the HTTP gateway's operator
+    surface); every other caller is `denied` before anything is read. Before
+    the hold is recorded, a sealed, digest-verified preservation copy of every
+    version, content object and lifecycle event is written to the report
+    content store; a process without one refuses (`unavailable`,
+    `preservation_store`). `expected_hold_revision` is the `hold_revision` you
+    read (0 for a report never held); any other is `conflict`. A held report
+    cannot be moved to the Trash (`reports.delete` is `denied`, `report_held`);
+    archive, restore, update and every read are unaffected. `reason` is
+    required (at most 500 characters). A retry of the same request replays.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_HOLD_PLACE
+
+    report_id: str
+    expected_hold_revision: int
+    reason: str = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        hold_request(self)
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseReportHold:
+    """`reports.hold.release`: release the legal hold on one of your reports (operator only).
+
+    As `reports.hold.place`: local operator surface only, the same
+    `expected_hold_revision` precondition and required `reason`. Releasing a
+    report that is not held is `conflict` (`hold_state`). The preservation
+    copy is kept. A retry of the same request replays.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_HOLD_RELEASE
+
+    report_id: str
+    expected_hold_revision: int
+    reason: str = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        hold_request(self)
+
+
+#: The hold operation each of the two hold capabilities requests.
+_HOLD_OPERATIONS: Final[Mapping[Capability, HoldOperation]] = MappingProxyType(
+    {
+        Capability.REPORTS_HOLD_PLACE: HoldOperation.PLACE,
+        Capability.REPORTS_HOLD_RELEASE: HoldOperation.RELEASE,
+    }
+)
+
+
+def hold_request(command: PlaceReportHold | ReleaseReportHold) -> HoldRequest:
+    """The domain request `command` states, or the public refusal of it."""
+    _identifier(command.report_id, IdKind.REPORT, SafeDetail.ARTIFACT_ID)
+    _custody_revision(command.expected_hold_revision, SafeDetail.EXPECTED_HOLD_REVISION)
+    if type(command.reason) is not str:
+        raise InvalidRequestError(SafeDetail.REASON)
+    refusal: ApplicationError
+    try:
+        return HoldRequest(
+            operation=_HOLD_OPERATIONS[command.capability],
+            report_id=command.report_id,
+            expected_hold_revision=command.expected_hold_revision,
+            reason=command.reason,
+        )
+    except ReportValidationError as error:
+        refusal = custody_refusal(error)
+    raise refusal
+
+
+#: The keys a retention `period` object takes, both required.
+_RETENTION_PERIOD_KEYS: Final = frozenset({"count", "unit"})
+
+
+def _retention_period(value: object) -> RetentionPeriod:
+    """`{count, unit}` as a `RetentionPeriod`, or `invalid_request` (`period`)."""
+    if not isinstance(value, dict) or set(value) != _RETENTION_PERIOD_KEYS:
+        raise InvalidRequestError(SafeDetail.PERIOD)
+    unit = value["unit"]
+    if not isinstance(unit, str):
+        raise invalid_choice(SafeDetail.PERIOD, RetentionUnit)
+    try:
+        resolved = RetentionUnit(unit)
+    except ValueError:
+        raise invalid_choice(SafeDetail.PERIOD, RetentionUnit) from None
+    count = value["count"]
+    if type(count) is not int:
+        raise InvalidRequestError(SafeDetail.PERIOD)
+    refusal: ApplicationError
+    try:
+        return RetentionPeriod(count=count, unit=resolved)
+    except ReportValidationError:
+        refusal = InvalidRequestError(SafeDetail.PERIOD)
+    raise refusal
+
+
+@dataclass(frozen=True, slots=True)
+class SetReportRetention:
+    """`reports.retention.set`: set or unset your report retention policy (operator only).
+
+    Local operator surface only. Exactly one of `period` (`{count, unit}`:
+    1..36525 `days` or 1..100 `years`) and `unset: true`. Unset by default:
+    no period applies until one is set. `expected_policy_revision` is the
+    `policy_revision` you read (0 before the first change); any other is
+    `conflict`. Every change is appended to the policy history (who, when, old,
+    new); nothing is overwritten. Retention gates only purge eligibility, and
+    purge does not exist: it never blocks an update, archive, restore or
+    Trash. `reason` is required. A retry of the same request replays.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_RETENTION_SET
+
+    expected_policy_revision: int
+    reason: str = field(repr=False)
+    idempotency_key: str
+    period: dict[str, object] | None = None
+    unset: bool = False
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        retention_set_request(self)
+
+
+def retention_set_request(command: SetReportRetention) -> RetentionSetRequest:
+    """The domain request `command` states, or the public refusal of it."""
+    _custody_revision(command.expected_policy_revision, SafeDetail.EXPECTED_POLICY_REVISION)
+    if type(command.unset) is not bool:
+        raise InvalidRequestError(SafeDetail.UNSET)
+    if (command.period is None) != command.unset:
+        # Neither, both, or `unset: false` with no period.
+        raise InvalidRequestError(SafeDetail.PERIOD, SafeDetail.UNSET)
+    period = None if command.period is None else _retention_period(command.period)
+    if type(command.reason) is not str:
+        raise InvalidRequestError(SafeDetail.REASON)
+    refusal: ApplicationError
+    try:
+        return RetentionSetRequest(
+            period=period,
+            expected_policy_revision=command.expected_policy_revision,
+            reason=command.reason,
+        )
+    except ReportValidationError as error:
+        refusal = custody_refusal(error)
+    raise refusal
+
+
+@dataclass(frozen=True, slots=True)
+class GetReportRetention:
+    """`reports.retention.get`: your report retention policy and its history (operator only).
+
+    Local operator surface only. The current policy (`null` when never set or
+    unset), its newest-first change history (`history_limit` 1..50, default
+    20) and, with `report_id`, that report's purge eligibility now: `eligible`
+    and the first reason that applies (`no_policy`, `held`, `not_trashed`,
+    `retention_running`, `eligible`), the clock start (the report's most
+    recent move to the Trash) and `eligible_at`. Informational only: nothing
+    is ever purged.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_RETENTION_GET
+
+    report_id: str | None = None
+    history_limit: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.report_id is not None:
+            _identifier(self.report_id, IdKind.REPORT, SafeDetail.ARTIFACT_ID)
+        _positive(self.history_limit, SafeDetail.HISTORY_LIMIT)
+        if self.history_limit is not None and self.history_limit > MAX_RETENTION_HISTORY:
+            raise InvalidRequestError(SafeDetail.HISTORY_LIMIT)
+
+    @property
+    def resolved_history_limit(self) -> int:
+        """The history page asked for, else 20."""
+        return DEFAULT_RETENTION_HISTORY if self.history_limit is None else self.history_limit
+
+
+_HOLD_PAYLOAD_PROPERTIES: Final[Mapping[str, Any]] = MappingProxyType(
+    {
+        "report_id": dict(_REPORT_ID_SCHEMA),
+        "expected_hold_revision": {
+            "minimum": 0,
+            "description": "The hold_revision you read (0 if never held); any other is a conflict.",
+        },
+        "reason": {"minLength": 1, "maxLength": MAX_REASON_CHARACTERS},
+    }
+)
+PlaceReportHold.mcp_payload_properties = _HOLD_PAYLOAD_PROPERTIES  # type: ignore[attr-defined]
+ReleaseReportHold.mcp_payload_properties = _HOLD_PAYLOAD_PROPERTIES  # type: ignore[attr-defined]
+SetReportRetention.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "expected_policy_revision": {
+            "minimum": 0,
+            "description": "The policy_revision you read (0 if never set); others conflict.",
+        },
+        "reason": {"minLength": 1, "maxLength": MAX_REASON_CHARACTERS},
+        "period": {
+            "type": "object",
+            "description": "The new retention period. Exactly one of period and unset.",
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": max(MAX_RETENTION_DAYS, MAX_RETENTION_YEARS),
+                    "description": (
+                        f"1..{MAX_RETENTION_DAYS} days or 1..{MAX_RETENTION_YEARS} years."
+                    ),
+                },
+                "unit": {"type": "string", "enum": [member.value for member in RetentionUnit]},
+            },
+            "required": ["count", "unit"],
+            "additionalProperties": False,
+        },
+        "unset": {"description": "true to unset the policy. Exactly one of period and unset."},
+    }
+)
+GetReportRetention.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "report_id": {
+            **_REPORT_ID_SCHEMA,
+            "description": "Optional: also that report's purge eligibility.",
+        },
+        "history_limit": {
+            "minimum": 1,
+            "maximum": MAX_RETENTION_HISTORY,
+            "description": f"Default {DEFAULT_RETENTION_HISTORY}.",
+        },
+    }
+)
+
+
+# ---- Reports Modernization WP06: bounded chunked transfer ----
+
+#: The Base64 length of one full chunk: 262,144 raw bytes are 349,528
+#: characters of canonical padded Base64 (T2).
+TRANSFER_CHUNK_MAX_BASE64_CHARACTERS: Final = 4 * -(-TRANSFER_CHUNK_BYTES // 3)
+
+#: The canonical standard-alphabet padded Base64 shape of a chunk. The shape is
+#: all a command checks; decoding (strict, canonical) is the handler's (T8).
+_BASE64_SHAPE: Final = re.compile(
+    r"\A(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?\Z"
+)
+
+#: A chunk digest: SHA-256, lowercase hex.
+_TRANSFER_SHA256: Final = re.compile(r"\A[0-9a-f]{64}\Z")
+
+#: The two parts `reports.transfer.read_chunk` reads (T15), as the store names them.
+TRANSFER_READ_PARTS: Final = ("decoded", "original")
+
+#: Which public token a begin declaration refusal names.
+_TRANSFER_DECLARATION_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "format": SafeDetail.FORMAT,
+        "encoding": SafeDetail.ENCODING,
+        "byte_count": SafeDetail.BYTE_COUNT,
+        "sha256": SafeDetail.SHA256,
+        "ttl_seconds": SafeDetail.TTL_SECONDS,
+    }
+)
+
+#: The protocol, stated once and repeated in each transfer description.
+_TRANSFER_PROTOCOL: Final = (
+    "Upload: reports.transfer.begin declares the staged bytes (identity: the UTF-8 "
+    "body for markdown|text, the JSON text for json, the JSON text of {body, data} for "
+    "mixed; gzip+base64: the raw gzip member), then reports.transfer.append sends them "
+    f"in order as chunks of exactly {TRANSFER_CHUNK_BYTES:,} raw bytes (every chunk "
+    f"but the last full; at most {MAX_TRANSFER_CHUNKS}, sequence 0.."
+    f"{MAX_TRANSFER_CHUNKS - 1}, byte_offset = sequence x {TRANSFER_CHUNK_BYTES:,}), "
+    "each Base64-encoded with its sha256; reports.transfer.finalize verifies the whole "
+    "content and returns a one-use content_token for reports.publish content or "
+    "reports.update patch.content: {transfer: {session_id, content_token}}. A finalize "
+    "response cannot be replayed: if it is lost, abort and begin again."
+)
+
+
+def _transfer_session(value: object) -> str:
+    """A transfer session identifier (`grxfr_`), or `invalid_request` (`session_id`)."""
+    if type(value) is not str:
+        raise InvalidRequestError(SafeDetail.SESSION_ID)
+    return _identifier(value, IdKind.REPORT_TRANSFER_SESSION, SafeDetail.SESSION_ID)
+
+
+def _transfer_integer(value: object, detail: SafeDetail, lower: int, upper: int) -> int:
+    """An integer (never a bool) within `[lower, upper]`, or `invalid_request` (`detail`)."""
+    if type(value) is not int or not lower <= value <= upper:
+        raise InvalidRequestError(detail)
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class BeginReportTransfer:
+    """`reports.transfer.begin`: open a chunked upload of report content too large for one request.
+
+    Declares the content's `format`, its `encoding` (`identity` or
+    `gzip+base64`) and the staged bytes' `byte_count` (1..16,777,216) and
+    `sha256`; `ttl_seconds` (300..86400, default 3600) bounds the session's
+    life. The answer names the session, the fixed chunk size and the chunk
+    count. At most 4 live sessions per client, 8 per owner, and 64 MiB of
+    declared bytes per owner, else `rate_limited`. A retry of the same request
+    replays the original session while it is live; once it was consumed,
+    aborted or expired, the same request begins a new session.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_TRANSFER_BEGIN
+
+    format: str
+    encoding: str
+    byte_count: int
+    sha256: str
+    idempotency_key: str
+    ttl_seconds: int | None = None
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        transfer_declaration(self)
+
+
+def transfer_declaration(command: BeginReportTransfer) -> TransferDeclaration:
+    """The domain declaration `command` states, or the field-naming refusal of it."""
+    for value, detail in (
+        (command.format, SafeDetail.FORMAT),
+        (command.encoding, SafeDetail.ENCODING),
+        (command.sha256, SafeDetail.SHA256),
+    ):
+        if type(value) is not str:
+            raise InvalidRequestError(detail)
+    if command.ttl_seconds is not None and type(command.ttl_seconds) is not int:
+        raise InvalidRequestError(SafeDetail.TTL_SECONDS)
+    refusal: ApplicationError
+    try:
+        return TransferDeclaration(
+            format=command.format,  # type: ignore[arg-type]  # validated by the declaration
+            encoding=command.encoding,  # type: ignore[arg-type]
+            byte_count=command.byte_count,
+            sha256=command.sha256,
+            ttl_seconds=TRANSFER_TTL_DEFAULT_SECONDS
+            if command.ttl_seconds is None
+            else command.ttl_seconds,
+        )
+    except ReportValidationError as error:
+        named = _TRANSFER_DECLARATION_DETAILS.get(error.field)
+        refusal = InvalidRequestError() if named is None else InvalidRequestError(named)
+    raise refusal
+
+
+@dataclass(frozen=True, slots=True)
+class AppendReportTransfer:
+    """`reports.transfer.append`: stage the next chunk of one of your open transfer sessions.
+
+    `sequence` is the chunk's index (0..63); `chunk` is the canonical padded
+    standard Base64 of its raw bytes (exactly 262,144 bytes, 349,528
+    characters, for every chunk but the last) and `chunk_sha256` the SHA-256
+    of those raw bytes. Chunks are accepted in order only. Re-sending a chunk
+    already staged with the same bytes replays (`replayed: true`); different
+    bytes for it are `conflict`.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_TRANSFER_APPEND
+
+    session_id: str
+    sequence: int
+    chunk: str = field(repr=False)
+    chunk_sha256: str
+
+    def __post_init__(self) -> None:
+        _transfer_session(self.session_id)
+        _transfer_integer(self.sequence, SafeDetail.SEQUENCE, 0, MAX_TRANSFER_CHUNKS - 1)
+        chunk: object = self.chunk
+        if (
+            type(chunk) is not str
+            or not chunk
+            or len(chunk) > TRANSFER_CHUNK_MAX_BASE64_CHARACTERS
+            or _BASE64_SHAPE.match(chunk) is None
+        ):
+            # Shape only: the handler decodes strictly and measures the raw bytes.
+            raise InvalidRequestError(SafeDetail.CHUNK)
+        digest: object = self.chunk_sha256
+        if type(digest) is not str or _TRANSFER_SHA256.match(digest) is None:
+            raise InvalidRequestError(SafeDetail.CHUNK_SHA256)
+
+
+@dataclass(frozen=True, slots=True)
+class FinalizeReportTransfer:
+    """`reports.transfer.finalize`: verify one of your complete transfers and get its content token.
+
+    Every staged chunk and the whole content are verified against the
+    declaration, then the content is validated exactly as an inline publish
+    would be (a refusal is `invalid_request` on `transfer`; abort and begin
+    again). The answer carries a one-use `content_token`, returned once and
+    never again: a lost finalize response cannot be replayed (abort and begin
+    again).
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_TRANSFER_FINALIZE
+
+    session_id: str
+
+    def __post_init__(self) -> None:
+        _transfer_session(self.session_id)
+
+
+@dataclass(frozen=True, slots=True)
+class AbortReportTransfer:
+    """`reports.transfer.abort`: end one of your uncommitted transfer sessions.
+
+    An open or finalized (not yet consumed) session is aborted and its staged
+    chunks discarded; its token can no longer be consumed. Aborting it again
+    replays (`replayed: true`). No report or content object is touched.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_TRANSFER_ABORT
+
+    session_id: str
+
+    def __post_init__(self) -> None:
+        _transfer_session(self.session_id)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadReportTransferChunk:
+    """`reports.transfer.read_chunk`: read a verified byte range of one standalone report version.
+
+    Names one version of one of your standalone reports by exactly one of
+    `version_id` and `version_number`, with `reports.read`'s visibility (an
+    archived or trashed report needs `include_withdrawn`). `part` is
+    `decoded` (default: the bytes `decoded_sha256` names) or `original` (the
+    uploaded gzip bytes of a gzip+base64 version, else the decoded bytes);
+    `offset` (default 0) and `length` (1..262,144, default 262,144) select the
+    range. The answer carries the chunk as Base64 with its sha256, the part's
+    total size and sha256, `eof` and `next_offset`.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_TRANSFER_READ_CHUNK
+
+    report_id: str
+    version_id: str | None = None
+    version_number: int | None = None
+    part: str = "decoded"
+    offset: int = 0
+    length: int = TRANSFER_CHUNK_BYTES
+    include_withdrawn: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.report_id, str):
+            raise InvalidRequestError(SafeDetail.ARTIFACT_ID)
+        _identifier(self.report_id, IdKind.REPORT, SafeDetail.ARTIFACT_ID)
+        if (self.version_id is None) == (self.version_number is None):
+            # Exactly one: a range is of one pinned version, never of a moving head.
+            raise InvalidRequestError(SafeDetail.VERSION_ID, SafeDetail.VERSION_NUMBER)
+        if self.version_id is not None:
+            if not isinstance(self.version_id, str):
+                raise InvalidRequestError(SafeDetail.VERSION_ID)
+            _identifier(self.version_id, IdKind.REPORT_VERSION, SafeDetail.VERSION_ID)
+        if self.version_number is not None and (
+            type(self.version_number) is not int or self.version_number < 1
+        ):
+            raise InvalidRequestError(SafeDetail.VERSION_NUMBER)
+        part: object = self.part
+        if not isinstance(part, str) or part not in TRANSFER_READ_PARTS:
+            raise InvalidRequestError(SafeDetail.PART)
+        _transfer_integer(self.offset, SafeDetail.OFFSET, 0, MAX_TRANSFER_BYTE_COUNT)
+        _transfer_integer(self.length, SafeDetail.LENGTH, 1, TRANSFER_CHUNK_BYTES)
+        if not isinstance(self.include_withdrawn, bool):
+            raise InvalidRequestError(SafeDetail.INCLUDE_WITHDRAWN)
+
+
+_TRANSFER_SESSION_SCHEMA: Final[Mapping[str, Any]] = MappingProxyType(
+    {
+        "pattern": "^grxfr_[A-Za-z0-9]{8,64}$",
+        "description": "Your transfer session (grxfr_), from reports.transfer.begin.",
+    }
+)
+
+BeginReportTransfer.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "format": {
+            "enum": [member.value for member in ContentFormat],
+            "description": f"The content's format. {_TRANSFER_PROTOCOL}",
+        },
+        "encoding": {
+            "enum": [member.value for member in ContentEncoding],
+            "description": (
+                "identity: the staged bytes are the content's text; gzip+base64: they "
+                "are one raw gzip member (Base64 is only the per-chunk transport)."
+            ),
+        },
+        "byte_count": {
+            "minimum": 1,
+            "maximum": MAX_TRANSFER_BYTE_COUNT,
+            "description": "The staged (raw) bytes' count.",
+        },
+        "sha256": {
+            "pattern": _SHA256_SCHEMA_PATTERN,
+            "description": "SHA-256 of all the staged bytes, lowercase hex.",
+        },
+        "ttl_seconds": {
+            "minimum": TRANSFER_TTL_MIN_SECONDS,
+            "maximum": TRANSFER_TTL_MAX_SECONDS,
+            "description": (
+                f"Session life, default {TRANSFER_TTL_DEFAULT_SECONDS}. Quotas: at most "
+                f"{TRANSFER_SESSIONS_PER_CLIENT} live sessions per client, "
+                f"{TRANSFER_SESSIONS_PER_OWNER} per owner and "
+                f"{TRANSFER_DECLARED_BYTES_PER_OWNER:,} declared bytes per owner, "
+                "else rate_limited."
+            ),
+        },
+    }
+)
+AppendReportTransfer.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "session_id": dict(_TRANSFER_SESSION_SCHEMA),
+        "sequence": {
+            "minimum": 0,
+            "maximum": MAX_TRANSFER_CHUNKS - 1,
+            "description": (
+                "The chunk's index: 0 first, then each next in order (a gap or a "
+                "chunk ahead is a conflict)."
+            ),
+        },
+        "chunk": {
+            "minLength": 4,
+            "maxLength": TRANSFER_CHUNK_MAX_BASE64_CHARACTERS,
+            "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+            "contentEncoding": "base64",
+            "description": (
+                f"Canonical padded standard Base64 of the chunk's raw bytes: exactly "
+                f"{TRANSFER_CHUNK_BYTES:,} bytes ({TRANSFER_CHUNK_MAX_BASE64_CHARACTERS:,} "
+                "characters) for every chunk but the last, which completes the declaration."
+            ),
+        },
+        "chunk_sha256": {
+            "pattern": _SHA256_SCHEMA_PATTERN,
+            "description": "SHA-256 of the chunk's raw (decoded) bytes, lowercase hex.",
+        },
+    }
+)
+FinalizeReportTransfer.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "session_id": {
+            **_TRANSFER_SESSION_SCHEMA,
+            "description": (
+                "Your complete transfer session. The content_token answered is one-use "
+                "and returned only once; finalize is not replayable (abort and begin again)."
+            ),
+        },
+    }
+)
+AbortReportTransfer.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {"session_id": dict(_TRANSFER_SESSION_SCHEMA)}
+)
+ReadReportTransferChunk.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "report_id": dict(_REPORT_ID_SCHEMA),
+        "version_id": {
+            "pattern": "^grver_[A-Za-z0-9]{8,64}$",
+            "description": "One exact version. Exactly one of version_id and version_number.",
+        },
+        "version_number": {
+            "minimum": 1,
+            "description": "One version by number. Exactly one of version_id and version_number.",
+        },
+        "part": {
+            "enum": list(TRANSFER_READ_PARTS),
+            "description": (
+                "decoded (default): the bytes decoded_sha256 names; original: the "
+                "uploaded gzip bytes of a gzip+base64 version, else the decoded bytes."
+            ),
+        },
+        "offset": {
+            "minimum": 0,
+            "maximum": MAX_TRANSFER_BYTE_COUNT,
+            "description": (
+                "Default 0. Continue from next_offset until eof; an offset past the "
+                "part's end is invalid_request."
+            ),
+        },
+        "length": {
+            "minimum": 1,
+            "maximum": TRANSFER_CHUNK_BYTES,
+            "description": f"Default {TRANSFER_CHUNK_BYTES:,}; the chunk may be shorter at eof.",
+        },
+        "include_withdrawn": {
+            "description": "Also read an archived or trashed report, which is otherwise not found.",
+        },
+        # Exactly one of the two version selectors (JSON Schema `oneOf`: both
+        # present match both branches, neither matches none), as
+        # `ReadReportTransferChunk.__post_init__` enforces.
+        "oneOf": [{"required": ["version_id"]}, {"required": ["version_number"]}],
+    }
+)
+
+
+# ---- Reports Modernization WP04: the catalog on reports.list and reports.search ----
+
+#: The fields only the pipeline (`intelligence`) plane of `reports.list` and
+#: `reports.search` declares. The `standalone` and `all` planes refuse them by
+#: presence, as the unknown fields they are there.
+REPORT_CATALOG_LEGACY_FIELDS: Final = frozenset(
+    {
+        "cycle_run_id",
+        "stage",
+        "artifact_kind",
+        "focus_area_id",
+        "source_lane",
+        "report_date",
+        "include_superseded",
+    }
+)
+
+#: The catalog filters only the `standalone` and `all` planes declare. The
+#: pipeline plane refuses them by presence, as the unknown fields they were.
+#: (`reports.search`'s `cursor` is one too: the pipeline search had none.)
+REPORT_CATALOG_FILTER_FIELDS: Final = frozenset(
+    {
+        "type",
+        "topics",
+        "tags",
+        "associated_with",
+        "lifecycle_states",
+        "created_from",
+        "created_to",
+        "report_date_from",
+        "report_date_to",
+        "created_by",
+    }
+)
+
+#: The two keys of an `associated_with` filter, the only keys it may carry.
+_ASSOCIATED_WITH_KEYS: Final = frozenset({"target_kind", "target_ref"})
+
+#: Which public token a catalog refusal names, by the domain's field.
+_CATALOG_REFUSAL_DETAILS: Final[Mapping[str, tuple[SafeDetail, ...]]] = MappingProxyType(
+    {
+        "type": (SafeDetail.REPORT_TYPE,),
+        "topics": (SafeDetail.TOPICS,),
+        "tags": (SafeDetail.TAGS,),
+        "associated_with": (SafeDetail.ASSOCIATED_WITH,),
+        "lifecycle_states": (SafeDetail.LIFECYCLE_STATES,),
+        "created_from": (SafeDetail.CREATED_FROM,),
+        "created_to": (SafeDetail.CREATED_TO,),
+        "created_range": (SafeDetail.CREATED_FROM, SafeDetail.CREATED_TO),
+        "report_date_from": (SafeDetail.REPORT_DATE_FROM,),
+        "report_date_to": (SafeDetail.REPORT_DATE_TO,),
+        "report_date_range": (SafeDetail.REPORT_DATE_FROM, SafeDetail.REPORT_DATE_TO),
+        "created_by": (SafeDetail.CREATED_BY,),
+        "page_size": (SafeDetail.PAGE_SIZE,),
+        "cursor": (SafeDetail.CURSOR,),
+        "query": (SafeDetail.QUERY,),
+    }
+)
+
+
+def catalog_refusal(error: ReportValidationError) -> InvalidRequestError:
+    """The public error a catalog domain refusal is: the field(s) it names, never the value.
+
+    An unknown lifecycle state lists the vocabulary, as every closed choice does.
+    """
+    field_name = error.field.split(".", 1)[0]
+    if field_name == "lifecycle_states" and error.code == "unknown":
+        return invalid_choice(SafeDetail.LIFECYCLE_STATES, LifecycleState)
+    details = _CATALOG_REFUSAL_DETAILS.get(field_name)
+    return InvalidRequestError() if details is None else InvalidRequestError(*details)
+
+
+_CatalogCommand = ListIntelligenceArtifacts | SearchIntelligenceArtifacts
+
+
+def _catalog_plane(command: _CatalogCommand) -> ReportPlane:
+    """The command's plane as a `ReportPlane` (stored back), or `invalid_request` on `plane`."""
+    value: object = command.plane
+    plane: ReportPlane | None = None
+    if isinstance(value, str):
+        with suppress(ValueError):
+            plane = ReportPlane(value)
+    if plane is None:
+        raise invalid_choice(SafeDetail.PLANE, ReportPlane)
+    object.__setattr__(command, "plane", plane)
+    return plane
+
+
+def _has_catalog_fields(command: _CatalogCommand) -> bool:
+    return any(getattr(command, name) is not None for name in REPORT_CATALOG_FILTER_FIELDS)
+
+
+def _check_catalog_request(command: _CatalogCommand) -> None:
+    """A standalone/all request: no pipeline field, a 1..100 page, a string cursor, filters."""
+    if (
+        any(
+            getattr(command, name, None) is not None
+            for name in REPORT_CATALOG_LEGACY_FIELDS - {"include_superseded"}
+        )
+        or getattr(command, "include_superseded", False) is not False
+    ):
+        # Pipeline-only fields: unknown here, refused as an unknown field is.
+        raise InvalidRequestError()
+    if command.page_size is not None and not _catalog_page_size_ok(command.page_size):
+        raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+    # `object`: a transport hands the token in unchecked.
+    cursor: object = command.cursor
+    if cursor is not None and (
+        not isinstance(cursor, str) or not 1 <= len(cursor) <= MAX_CATALOG_CURSOR_CHARACTERS
+    ):
+        raise InvalidRequestError(SafeDetail.CURSOR)
+    _catalog_filters(command)
+
+
+def _catalog_page_size_ok(value: object) -> bool:
+    try:
+        validate_catalog_page_size(value)
+    except ReportValidationError:
+        return False
+    return True
+
+
+#: RFC 3339 §5.6 `date-time`, exactly: extended `YYYY-MM-DD`, `T`/`t`, `HH:MM:SS`,
+#: at most six fractional digits (a datetime holds microseconds; more digits are
+#: refused, never truncated), then `Z`/`z` or a `±HH:MM` offset. Field ranges
+#: (month 13, day 31 in a 30-day month, hour 24, a leap second (60), which a
+#: datetime cannot hold) are refused by the parse after this shape check.
+_RFC3339_DATE_TIME: Final[re.Pattern[str]] = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?"
+    r"(?:[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])"
+)
+
+
+def _catalog_moment(value: object, detail: SafeDetail) -> datetime:
+    """An RFC 3339 `date-time`, or `invalid_request` on `detail` (WP08 C-WP04 #2).
+
+    Strict for the Reports catalog filters only: the ISO-8601 forms RFC 3339
+    excludes (basic format, week or ordinal dates, reduced precision such as
+    hour-only, `±HH` or `±HHMM` offsets, no offset) are refused, and lower-case
+    `t`/`z` are accepted. The repository-wide `_aware_instant` is unchanged.
+    """
+    moment: datetime | None = None
+    if isinstance(value, str) and _RFC3339_DATE_TIME.fullmatch(value):
+        text = value[:10] + "T" + value[11:]
+        if text[-1] in "Zz":
+            text = text[:-1] + "+00:00"
+        try:
+            moment = datetime.fromisoformat(text)
+        except ValueError:
+            moment = None
+    if moment is None or moment.tzinfo is None or moment.tzinfo.utcoffset(moment) is None:
+        raise InvalidRequestError(detail)
+    return moment
+
+
+def _catalog_day(value: object, detail: SafeDetail) -> date:
+    return date.fromisoformat(_iso_date(value, detail))  # type: ignore[arg-type]
+
+
+def _catalog_association(value: object) -> AssociationFilter:
+    if not isinstance(value, dict):
+        raise InvalidRequestError(SafeDetail.ASSOCIATED_WITH)
+    if not set(value) <= _ASSOCIATED_WITH_KEYS:
+        # A closed object: an undeclared key is an unknown field.
+        raise InvalidRequestError()
+    kind = value.get("target_kind")
+    target_kind: AssociationTargetKind | None = None
+    if isinstance(kind, str):
+        with suppress(ValueError):
+            target_kind = AssociationTargetKind(kind)
+    if target_kind is None:
+        raise invalid_choice(SafeDetail.ASSOCIATED_WITH, AssociationTargetKind)
+    return AssociationFilter(target_kind=target_kind, target_ref=value.get("target_ref"))  # type: ignore[arg-type]
+
+
+def _catalog_filters(command: _CatalogCommand) -> CatalogFilters:
+    """The command's catalog filters through the domain, refusals mapped to `SafeDetail`."""
+    refusal: InvalidRequestError
+    try:
+        for name, value in (("topics", command.topics), ("tags", command.tags)):
+            if value is not None and not isinstance(value, tuple):
+                raise ReportValidationError(name, "type")
+        if command.lifecycle_states is not None and not isinstance(command.lifecycle_states, tuple):
+            raise ReportValidationError("lifecycle_states", "type")
+        return CatalogFilters(
+            report_type=command.type,
+            topics=command.topics,
+            tags=command.tags,
+            associated_with=None
+            if command.associated_with is None
+            else _catalog_association(command.associated_with),
+            lifecycle_states=DEFAULT_LIFECYCLE_STATES
+            if command.lifecycle_states is None
+            else command.lifecycle_states,  # type: ignore[arg-type]
+            created_from=None
+            if command.created_from is None
+            else _catalog_moment(command.created_from, SafeDetail.CREATED_FROM),
+            created_to=None
+            if command.created_to is None
+            else _catalog_moment(command.created_to, SafeDetail.CREATED_TO),
+            report_date_from=None
+            if command.report_date_from is None
+            else _catalog_day(command.report_date_from, SafeDetail.REPORT_DATE_FROM),
+            report_date_to=None
+            if command.report_date_to is None
+            else _catalog_day(command.report_date_to, SafeDetail.REPORT_DATE_TO),
+            created_by=command.created_by,
+        )
+    except ReportValidationError as error:
+        refusal = catalog_refusal(error)
+    # Raised outside the handler: the domain error never becomes `__context__`.
+    raise refusal
+
+
+_CATALOG_ONLY: Final = "standalone/all only: "
+
+#: The schema overlays both catalog capabilities share (contract C10).
+_CATALOG_PAYLOAD_PROPERTIES: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+    {
+        "artifact_kind": _ARTIFACT_KIND_PROPERTY,
+        "plane": {
+            "default": ReportPlane.INTELLIGENCE.value,
+            "description": (
+                "intelligence (default): the pipeline artifacts, exactly as before; "
+                "standalone: your standalone reports (reports.publish); all: both, "
+                "merged in one order. standalone/all refuse cycle_run_id, stage, "
+                "artifact_kind, focus_area_id, source_lane, report_date and "
+                "include_superseded; intelligence refuses every standalone/all field."
+            ),
+        },
+        "page_size": {
+            "minimum": 1,
+            "description": (
+                f"standalone/all: 1 to {MAX_CATALOG_PAGE_SIZE} (default "
+                f"{DEFAULT_CATALOG_PAGE_SIZE}), refused outside it."
+            ),
+        },
+        "type": {
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "description": _CATALOG_ONLY
+            + "one report type (a pipeline artifact's artifact_kind in all).",
+        },
+        "topics": {
+            **_TERM_ARRAY,
+            "minItems": 1,
+            "uniqueItems": True,
+            "description": _CATALOG_ONLY + "the head version carries every listed topic.",
+        },
+        "tags": {
+            **_TERM_ARRAY,
+            "minItems": 1,
+            "uniqueItems": True,
+            "description": _CATALOG_ONLY + "the head version carries every listed tag.",
+        },
+        "associated_with": {
+            "type": "object",
+            "properties": {
+                "target_kind": {
+                    "type": "string",
+                    "enum": [member.value for member in AssociationTargetKind],
+                },
+                "target_ref": {"type": "string", "minLength": 1, "maxLength": 512},
+            },
+            "required": ["target_kind", "target_ref"],
+            "additionalProperties": False,
+            "description": _CATALOG_ONLY + "the head version has an association with this target.",
+        },
+        "lifecycle_states": {
+            "minItems": 1,
+            "maxItems": len(LifecycleState),
+            "uniqueItems": True,
+            "items": {"type": "string", "enum": [member.value for member in LifecycleState]},
+            "description": _CATALOG_ONLY
+            + 'default ["active"]; archived and trashed appear only when listed.',
+        },
+        "created_from": {
+            "format": "date-time",
+            "description": _CATALOG_ONLY + "created at or after (RFC 3339 with offset).",
+        },
+        "created_to": {
+            "format": "date-time",
+            "description": _CATALOG_ONLY + "created before (RFC 3339 with offset).",
+        },
+        "report_date_from": {
+            "format": "date",
+            "pattern": r"^\d{4}-\d{2}-\d{2}$",
+            "description": _CATALOG_ONLY + "report_date on or after.",
+        },
+        "report_date_to": {
+            "format": "date",
+            "pattern": r"^\d{4}-\d{2}-\d{2}$",
+            "description": _CATALOG_ONLY + "report_date on or before.",
+        },
+        "created_by": {
+            "pattern": CREATOR_ID_PATTERN,
+            "description": "standalone/all only; exact creator id from a read/list item",
+        },
+    }
+)
+
+ListIntelligenceArtifacts.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        **_CATALOG_PAYLOAD_PROPERTIES,
+        "cursor": {
+            "description": (
+                "The next_cursor of the previous page: an rpt_ id in intelligence, an "
+                "opaque token bound to the same request in standalone/all."
+            ),
+        },
+    }
+)
+
+SearchIntelligenceArtifacts.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        **_CATALOG_PAYLOAD_PROPERTIES,
+        "query": {
+            "description": (
+                f"standalone/all: 1 to {MAX_QUERY_CHARACTERS} characters, words "
+                "matched against the head version."
+            ),
+        },
+        "cursor": {
+            "maxLength": MAX_CATALOG_CURSOR_CHARACTERS,
+            "description": _CATALOG_ONLY
+            + "the next_cursor of the previous page of the same request.",
+        },
+    }
+)
 
 
 #: Every command there is. A union rather than a base class, so adding a
@@ -15112,6 +17231,21 @@ type Command = (
     | ResolveIntelligenceSet
     | CreateReportType
     | ListReportTypes
+    | PublishGeneralReport
+    | UpdateGeneralReport
+    | GetGeneralReportHistory
+    | ArchiveGeneralReport
+    | DeleteGeneralReport
+    | RestoreGeneralReport
+    | PlaceReportHold
+    | ReleaseReportHold
+    | SetReportRetention
+    | GetReportRetention
+    | BeginReportTransfer
+    | AppendReportTransfer
+    | FinalizeReportTransfer
+    | AbortReportTransfer
+    | ReadReportTransferChunk
     | SearchEntities
     | GetEntity
     | ResolveEntity

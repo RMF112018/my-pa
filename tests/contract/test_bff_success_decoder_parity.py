@@ -15,6 +15,7 @@ Identifiers are synthetic and follow `IdKind` shape only.
 from __future__ import annotations
 
 import ast
+import gzip
 import hashlib
 import json
 import zlib
@@ -28,11 +29,13 @@ from unittest.mock import patch
 from my_pa.application.authorization import Authorization
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.commands import (
+    AbortReportTransfer,
     ListIssues,
     ReadIssue,
     ReadIssueTimeline,
     ReadMeetingNoteVersion,
     ReadRecordLineage,
+    ReadReportTransferChunk,
 )
 from my_pa.application.constraint_management import (
     ConstraintCategoryMutationResult,
@@ -56,10 +59,20 @@ from my_pa.application.service import (
     _HANDLERS,
     ApplicationService,
     _constraint_payload,
+    _general_history_payload,
+    _general_lifecycle_payload,
+    _general_publish_payload,
+    _general_read_payload,
+    _general_update_payload,
+    _intelligence_catalog_item,
     _meeting_series_write_payload,
     _meeting_write_payload,
     _project_controls_configuration_payload,
     _project_controls_status_payload,
+    _standalone_catalog_item,
+    _transfer_append_payload,
+    _transfer_begin_payload,
+    _transfer_finalize_payload,
 )
 from my_pa.contracts.ports import (
     CaptureSearchMatch,
@@ -69,6 +82,8 @@ from my_pa.contracts.ports import (
     KnowledgeReviewDecisionResult,
     MeetingNoteVersionRecord,
     MutationRecordFamily,
+    TransferChunk,
+    TransferSession,
     UnitOfWork,
 )
 from my_pa.contracts.v1.canvas_workspace import (
@@ -134,8 +149,14 @@ from my_pa.domain.documents.managed import DocumentState
 from my_pa.domain.extraction.text import EXTRACTOR, EXTRACTOR_VERSION
 from my_pa.domain.goodnotes.models import GoodNotesPageRaster, GoodNotesPageWork
 from my_pa.domain.identity.operation import Capability
-from my_pa.domain.intelligence.catalog import CycleState, ResolverSetId
-from my_pa.domain.intelligence.models import IntelligenceCycleRun
+from my_pa.domain.intelligence.catalog import (
+    ArtifactState,
+    CycleState,
+    FocusAreaId,
+    IntelligenceStage,
+    ResolverSetId,
+)
+from my_pa.domain.intelligence.models import IntelligenceArtifact, IntelligenceCycleRun
 from my_pa.domain.lineage.vocabulary import (
     AcceptanceBasis,
     EvidenceAvailability,
@@ -201,6 +222,32 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
 from my_pa.domain.record_events import RecordEventKind
 from my_pa.domain.relationship.entity import RelationshipState
+from my_pa.domain.reports.content import ReportContent, content_facts, content_of
+from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
+from my_pa.domain.reports.publication import PublicationReceipt, PublicationResult
+from my_pa.domain.reports.records import (
+    CatalogEntry,
+    HistoryEntries,
+    ReportHistoryPage,
+    ReportRootRecord,
+    ReportVersionRecord,
+    ReportVersionSummary,
+    StoredReportVersion,
+)
+from my_pa.domain.reports.revision import LifecycleResult, UpdateResult
+from my_pa.domain.reports.values import ReportAssociation
+from my_pa.domain.reports.vocabulary import (
+    AssociationTargetKind,
+    AssociationVerification,
+    ChangeKind,
+    ContentEncoding,
+    ContentFormat,
+    LifecycleOperation,
+    LifecycleState,
+    ReceiptOutcome,
+    StorageKind,
+    TransferState,
+)
 from my_pa.domain.search.query import RankCategory, SearchMatch, label_for_media_type
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.situation.situation import Project, ProjectState
@@ -215,6 +262,19 @@ SUCCESS_PATH: Final = FIXTURE_DIR / "success.json"
 #: `parity.test.ts` pin its key set to the gateway's), and `review.decide`
 #: already holds the capture decision, so the Knowledge variants live beside it.
 KNOWLEDGE_REVIEW_PATH: Final = FIXTURE_DIR / "review.knowledge.json"
+#: Reports Modernization WP07 (contract Amendment A1): the standalone-plane variants of
+#: `reports.read`, `reports.list` and `reports.search`, decoded by the separate
+#: `STANDALONE_REPORT_DECODERS` path, never by the legacy `DECODERS` entries.
+REPORTS_STANDALONE_PATH: Final = FIXTURE_DIR / "reports.standalone.json"
+#: The `reports.read.gzip` variant's original bytes, pinned rather than produced by
+#: `gzip.compress(..., mtime=0)`: the gzip header's OS byte varies with the platform's
+#: zlib (0x13 from macOS zlib, which these bytes carry; 0x03 on Linux), and so could the
+#: deflate stream under another zlib build, while the committed fixture pins these exact
+#: bytes through `original_sha256` and `encoded`.
+STANDALONE_GZIP_BODY: Final = b"Synthetic gzip body."
+STANDALONE_GZIP_ORIGINAL: Final = bytes.fromhex(
+    "1f8b08000000000002130baecc2bc9482dc94c5648afca2c5048ca4fa9d40300a6b11f3d14000000"
+)
 SERVICE_PATH: Final = ROOT / "src" / "my_pa" / "application" / "service.py"
 GATEWAY_PATH: Final = ROOT / "web" / "src" / "contracts" / "gateway.json"
 
@@ -2192,11 +2252,487 @@ def _issues_timeline() -> dict[str, Any]:
         return service._issues_timeline(unit_of_work, authorization, command).payload
 
 
+# --- the standalone (general) report plane (Reports Modernization WP07 U2) ------
+#
+# Every payload below is the output of the gateway's own builder -- the
+# `service._general_*_payload` / `_transfer_*_payload` functions, or the
+# handler itself where the payload is built inline (`reports.transfer.abort`,
+# `reports.transfer.read_chunk`) -- over synthetic records. Nothing is a
+# hand-written dict of what the payload is believed to look like.
+
+GR_PRINCIPAL_ID: Final = "prn_aaaaaaaa11111111"
+GR_REPORT_ID: Final = "grpt_aaaaaaaa11111111"
+GR_VERSION_ID: Final = "grver_aaaaaaaa11111111"
+GR_PRIOR_VERSION_ID: Final = "grver_bbbbbbbb22222222"
+GR_CONTENT_ID: Final = "grcnt_aaaaaaaa11111111"
+GR_RECEIPT_ID: Final = "grrc_aaaaaaaa11111111"
+GR_EVENT_ID: Final = "grlev_aaaaaaaa11111111"
+GR_SESSION_ID: Final = "grxfr_aaaaaaaa11111111"
+GR_CORRELATION_ID: Final = "corr_aaaaaaaa11111111"
+GR_AUDIT_ID: Final = "audit_aaaaaaaa11111111"
+#: A synthetic token of the real shape (`^grxtk_[0-9a-f]{64}$`); never a live one.
+GR_CONTENT_TOKEN: Final = "grxtk_" + "0" * 64
+GR_CHUNK_BYTES: Final = b"Synthetic chunk."
+GR_TRANSFER_BYTES: Final = 600_000
+
+
+def _gr_creator() -> ReportCreator:
+    return derive_creator(CreatorKind.LOCAL_PRINCIPAL, GR_PRINCIPAL_ID)
+
+
+def _reports_publish() -> dict[str, Any]:
+    receipt = PublicationReceipt(
+        receipt_id=GR_RECEIPT_ID,
+        report_id=GR_REPORT_ID,
+        version_id=GR_VERSION_ID,
+        version_number=1,
+        idempotency_key="parity-report-publish-1",
+        intent_digest=DIGEST,
+        outcome=ReceiptOutcome.APPLIED,
+        issued_at=AT,
+        correlation_id=GR_CORRELATION_ID,
+        audit_id=GR_AUDIT_ID,
+    )
+    return _general_publish_payload(
+        PublicationResult(
+            receipt=receipt,
+            content_id=GR_CONTENT_ID,
+            format=ContentFormat.MARKDOWN,
+            decoded_sha256=DIGEST,
+            decoded_byte_count=15,
+            canonical_sha256=None,
+            manifest_sha256=DIGEST,
+            recorded_at=AT,
+            replayed=False,
+        )
+    )
+
+
+def _reports_update() -> dict[str, Any]:
+    return _general_update_payload(
+        UpdateResult(
+            receipt_id=GR_RECEIPT_ID,
+            report_id=GR_REPORT_ID,
+            outcome=ReceiptOutcome.APPLIED,
+            expected_version=1,
+            version_id=GR_VERSION_ID,
+            version_number=2,
+            change_kind=ChangeKind.CONTENT,
+            content_id=GR_CONTENT_ID,
+            decoded_sha256=DIGEST,
+            manifest_sha256=DIGEST,
+            idempotency_key="parity-report-update-1",
+            intent_digest=DIGEST,
+            issued_at=AT,
+            correlation_id=GR_CORRELATION_ID,
+            audit_id=GR_AUDIT_ID,
+            replayed=False,
+        )
+    )
+
+
+def _reports_lifecycle(
+    operation: LifecycleOperation, prior: LifecycleState, resulting: LifecycleState
+) -> dict[str, Any]:
+    return _general_lifecycle_payload(
+        LifecycleResult(
+            receipt_id=GR_RECEIPT_ID,
+            report_id=GR_REPORT_ID,
+            operation=operation,
+            outcome=ReceiptOutcome.APPLIED,
+            prior_state=prior,
+            resulting_state=resulting,
+            expected_lifecycle_revision=0,
+            lifecycle_revision=1,
+            event_id=GR_EVENT_ID,
+            idempotency_key=f"parity-report-{operation.value}-1",
+            intent_digest=DIGEST,
+            issued_at=AT,
+            correlation_id=GR_CORRELATION_ID,
+            audit_id=GR_AUDIT_ID,
+            replayed=False,
+        )
+    )
+
+
+def _gr_root(
+    *,
+    head_version_number: int = 2,
+    lifecycle_state: LifecycleState = LifecycleState.ACTIVE,
+    lifecycle_revision: int = 0,
+    held: bool = False,
+) -> ReportRootRecord:
+    return ReportRootRecord(
+        report_id=GR_REPORT_ID,
+        created_at=AT,
+        head_version_id=GR_VERSION_ID,
+        head_version_number=head_version_number,
+        lifecycle_state=lifecycle_state,
+        lifecycle_revision=lifecycle_revision,
+        creator=_gr_creator(),
+        held=held,
+    )
+
+
+def _reports_history() -> dict[str, Any]:
+    """A `versions` page: version 1 (no manifest) and version 2 (with one)."""
+    first = ReportVersionSummary(
+        version_id=GR_PRIOR_VERSION_ID,
+        version_number=1,
+        supersedes_version_id=None,
+        change_kind=ChangeKind.INITIAL,
+        change_reason=None,
+        title="Synthetic report",
+        recorded_at=AT,
+        content_id=GR_CONTENT_ID,
+        format=ContentFormat.MARKDOWN,
+        encoding=ContentEncoding.IDENTITY,
+        storage_kind=StorageKind.INLINE,
+        decoded_sha256=DIGEST,
+        decoded_byte_count=15,
+        canonical_sha256=None,
+        original_sha256=DIGEST,
+        manifest_sha256=DIGEST,
+        manifest=None,
+        author=_gr_creator(),
+    )
+    second = replace(
+        first,
+        version_id=GR_VERSION_ID,
+        version_number=2,
+        supersedes_version_id=GR_PRIOR_VERSION_ID,
+        change_kind=ChangeKind.METADATA,
+        change_reason="Synthetic revision.",
+        manifest={"schema": "synthetic"},
+    )
+    return _general_history_payload(
+        ReportHistoryPage(
+            root=_gr_root(held=True),
+            entries=HistoryEntries.VERSIONS,
+            items=(first, second),
+            next_cursor=None,
+        )
+    )
+
+
+def _gr_session(
+    *, state: TransferState = TransferState.OPEN, received_byte_count: int = 0
+) -> TransferSession:
+    return TransferSession(
+        session_id=GR_SESSION_ID,
+        owner_principal_id=GR_PRINCIPAL_ID,
+        client_ref="local",
+        state=state,
+        format=ContentFormat.TEXT,
+        encoding=ContentEncoding.IDENTITY,
+        declared_byte_count=GR_TRANSFER_BYTES,
+        declared_sha256=DIGEST,
+        chunk_byte_limit=262_144,
+        received_byte_count=received_byte_count,
+        idempotency_key="parity-report-transfer-1",
+        intent_digest=DIGEST,
+        created_at=AT,
+        expires_at=AT.replace(hour=13),
+        finalized_at=None,
+        consumed_content_id=None,
+        consumed_at=None,
+    )
+
+
+def _reports_transfer_begin() -> dict[str, Any]:
+    return _transfer_begin_payload(_gr_session(), replayed=False)
+
+
+def _reports_transfer_append() -> dict[str, Any]:
+    chunk = TransferChunk(
+        session_id=GR_SESSION_ID,
+        sequence=0,
+        byte_offset=0,
+        byte_count=262_144,
+        chunk_sha256=DIGEST,
+        received_at=AT,
+    )
+    return _transfer_append_payload(_gr_session(received_byte_count=262_144), chunk, replayed=False)
+
+
+def _reports_transfer_finalize() -> dict[str, Any]:
+    content = content_of(ContentFormat.TEXT, body="Synthetic transfer.", data=None)
+    return _transfer_finalize_payload(
+        _gr_session(state=TransferState.FINALIZED, received_byte_count=GR_TRANSFER_BYTES),
+        content,
+        content_token=GR_CONTENT_TOKEN,
+    )
+
+
+def _gr_authorization() -> Authorization:
+    return cast(
+        Authorization,
+        SimpleNamespace(at=AT, principal=SimpleNamespace(principal_id=GR_PRINCIPAL_ID)),
+    )
+
+
+def _reports_transfer_abort() -> dict[str, Any]:
+    """The `_reports_transfer_abort` handler's own payload, over a fake repository."""
+    service = object.__new__(ApplicationService)
+    service._report_transfer_staging = cast(Any, SimpleNamespace())
+    service._report_content_store = cast(Any, SimpleNamespace())
+    aborted = _gr_session(state=TransferState.ABORTED)
+    unit_of_work = cast(
+        UnitOfWork,
+        SimpleNamespace(report_transfers=SimpleNamespace(abort=lambda *_, **__: (aborted, False))),
+    )
+    with patch.object(ApplicationService, "_transfer_client_ref", return_value="local"):
+        result = service._reports_transfer_abort(
+            unit_of_work, _gr_authorization(), AbortReportTransfer(session_id=GR_SESSION_ID)
+        )
+    return result.payload
+
+
+def _reports_transfer_read_chunk() -> dict[str, Any]:
+    """The `_reports_transfer_read_chunk` handler over one inline version (first range)."""
+    content = content_of(ContentFormat.TEXT, body=GR_CHUNK_BYTES.decode("ascii"), data=None)
+    stored = StoredReportVersion(
+        root=_gr_root(head_version_number=1),
+        version=ReportVersionRecord(
+            version_id=GR_VERSION_ID,
+            report_id=GR_REPORT_ID,
+            version_number=1,
+            supersedes_version_id=None,
+            change_kind=ChangeKind.INITIAL,
+            title="Synthetic report",
+            report_type=None,
+            topics=(),
+            tags=(),
+            summary=None,
+            report_date=None,
+            coverage_start=None,
+            coverage_end=None,
+            metadata={},
+            change_reason=None,
+            content_id=GR_CONTENT_ID,
+            manifest_sha256=DIGEST,
+            recorded_at=AT,
+            author=_gr_creator(),
+        ),
+        content_id=GR_CONTENT_ID,
+        storage_kind=StorageKind.INLINE,
+        content=content,
+        manifest={},
+        associations=(),
+    )
+    service = object.__new__(ApplicationService)
+    service._report_content_store = None
+    unit_of_work = cast(
+        UnitOfWork,
+        SimpleNamespace(general_reports=SimpleNamespace(read_version=lambda *_, **__: stored)),
+    )
+    result = service._reports_transfer_read_chunk(
+        unit_of_work,
+        _gr_authorization(),
+        ReadReportTransferChunk(report_id=GR_REPORT_ID, version_number=1, length=8),
+    )
+    return result.payload
+
+
+# --- the standalone-plane read and catalog variants (WP07 Amendment A1) --------
+#
+# `reports.read` of a `grpt_` id and `reports.list` / `reports.search` with a
+# `plane` answer the standalone shapes; the legacy `success.json` entries stay
+# the pipeline shapes. Each variant is the output of the gateway's own builder
+# (`_general_read_payload`, `_standalone_catalog_item`,
+# `_intelligence_catalog_item`) inside the catalog handler's page dict.
+
+GR_INTELLIGENCE_REPORT_ID: Final = "rpt_aaaaaaaa11111111"
+
+
+def _gr_version(*, version_number: int = 1) -> ReportVersionRecord:
+    return ReportVersionRecord(
+        version_id=GR_VERSION_ID,
+        report_id=GR_REPORT_ID,
+        version_number=version_number,
+        supersedes_version_id=None if version_number == 1 else GR_PRIOR_VERSION_ID,
+        change_kind=ChangeKind.INITIAL if version_number == 1 else ChangeKind.CONTENT,
+        title="Synthetic report",
+        report_type="weekly_note",
+        topics=("synthetic",),
+        tags=("draft",),
+        summary="A synthetic summary.",
+        report_date=date(2026, 8, 9),
+        coverage_start=AT,
+        coverage_end=None,
+        metadata={"origin": "synthetic"},
+        change_reason=None if version_number == 1 else "Synthetic revision.",
+        content_id=GR_CONTENT_ID,
+        manifest_sha256=DIGEST,
+        recorded_at=AT,
+        author=_gr_creator(),
+    )
+
+
+def _gr_stored(content: ReportContent, *, storage: StorageKind) -> StoredReportVersion:
+    return StoredReportVersion(
+        root=_gr_root(head_version_number=1, held=True),
+        version=_gr_version(),
+        content_id=GR_CONTENT_ID,
+        storage_kind=storage,
+        content=content,
+        manifest={"schema": "synthetic"},
+        associations=(
+            ReportAssociation(
+                target_kind=AssociationTargetKind.EXTERNAL_SOURCE,
+                target_ref="synthetic:source-1",
+                relation="references",
+                verification=AssociationVerification.ASSERTED,
+            ),
+        ),
+    )
+
+
+def _gr_read(
+    content: ReportContent,
+    *,
+    storage: StorageKind = StorageKind.INLINE,
+    include_body: bool = True,
+    include_manifest: bool = False,
+) -> dict[str, Any]:
+    return _general_read_payload(
+        _gr_stored(content, storage=storage),
+        include_body=include_body,
+        include_manifest=include_manifest,
+    )
+
+
+def _gr_catalog_entry() -> CatalogEntry:
+    return CatalogEntry(
+        report_id=GR_REPORT_ID,
+        title="Synthetic report",
+        report_type="weekly_note",
+        topics=("synthetic",),
+        tags=("draft",),
+        summary="A synthetic summary.",
+        report_date=date(2026, 8, 9),
+        lifecycle_state=LifecycleState.ACTIVE,
+        lifecycle_revision=0,
+        head_version_id=GR_VERSION_ID,
+        head_version_number=1,
+        created_at=AT,
+        updated_at=AT,
+        rank=None,
+        snippet="synthetic summary",
+        creator=_gr_creator(),
+        held=True,
+    )
+
+
+def _gr_intelligence_artifact() -> IntelligenceArtifact:
+    return IntelligenceArtifact(
+        artifact_id=GR_INTELLIGENCE_REPORT_ID,
+        principal_id=GR_PRINCIPAL_ID,
+        cycle_run_id="micr_aaaaaaaa11111111",
+        producer_run_id="rrun_aaaaaaaa11111111",
+        stage=IntelligenceStage.COLLECTOR,
+        artifact_kind="collector_candidates",
+        report_date=date(2026, 8, 20),
+        title="E2E morning brief collector",
+        body_markdown="# Synthetic",
+        content_sha256=DIGEST,
+        content_bytes=11,
+        artifact_state=ArtifactState.FINAL,
+        schema_version="1",
+        generated_at=AT,
+        committed_at=AT,
+        version=1,
+        is_current=True,
+        focus_area_id=FocusAreaId.COMMUNICATIONS,
+    )
+
+
+def standalone_report_payloads() -> dict[str, dict[str, Any]]:
+    """Variant name -> gateway `result` the standalone Vitest decoders must accept."""
+    gzip_original = STANDALONE_GZIP_ORIGINAL
+    omitted = content_facts(
+        ContentFormat.TEXT,
+        ContentEncoding.GZIP_BASE64,
+        decoded_sha256=DIGEST,
+        decoded_byte_count=900_000,
+        canonical_sha256=None,
+        original_sha256="b" * 64,
+        original_byte_count=600_000,
+    )
+    entry = _gr_catalog_entry()
+    artifact = _gr_intelligence_artifact()
+    return {
+        "reports.read.markdown": _gr_read(
+            content_of(ContentFormat.MARKDOWN, body="# Synthetic\n\nBody.", data=None)
+        ),
+        "reports.read.json": _gr_read(
+            content_of(ContentFormat.JSON, body=None, data={"rows": [1, 2], "ok": True}),
+            include_manifest=True,
+        ),
+        "reports.read.mixed": _gr_read(
+            content_of(ContentFormat.MIXED, body="Synthetic.", data={"k": "v"})
+        ),
+        "reports.read.gzip": _gr_read(
+            content_of(
+                ContentFormat.TEXT, body="Synthetic gzip body.", data=None, original=gzip_original
+            )
+        ),
+        "reports.read.omitted": _gr_read(omitted, storage=StorageKind.MANAGED_BLOB),
+        "reports.read.no_body": _gr_read(
+            content_of(ContentFormat.TEXT, body="Synthetic.", data=None), include_body=False
+        ),
+        "reports.list.standalone": {
+            "plane": "standalone",
+            "items": [_standalone_catalog_item(entry, search=False)],
+            "next_cursor": None,
+        },
+        "reports.list.all": {
+            "plane": "all",
+            "items": [
+                _standalone_catalog_item(entry, search=False),
+                _intelligence_catalog_item(artifact, None, search=False),
+            ],
+            "next_cursor": "synthetic-cursor",
+        },
+        "reports.search.all": {
+            "plane": "all",
+            "items": [
+                _standalone_catalog_item(entry, search=True),
+                _intelligence_catalog_item(artifact, "morning brief", search=True),
+            ],
+            "next_cursor": None,
+        },
+    }
+
+
+def _general_report_success_payloads() -> dict[str, dict[str, Any]]:
+    return {
+        "reports.publish": _reports_publish(),
+        "reports.update": _reports_update(),
+        "reports.history": _reports_history(),
+        "reports.archive": _reports_lifecycle(
+            LifecycleOperation.ARCHIVE, LifecycleState.ACTIVE, LifecycleState.ARCHIVED
+        ),
+        "reports.delete": _reports_lifecycle(
+            LifecycleOperation.DELETE, LifecycleState.ACTIVE, LifecycleState.TRASHED
+        ),
+        "reports.restore": _reports_lifecycle(
+            LifecycleOperation.RESTORE, LifecycleState.TRASHED, LifecycleState.ACTIVE
+        ),
+        "reports.transfer.begin": _reports_transfer_begin(),
+        "reports.transfer.append": _reports_transfer_append(),
+        "reports.transfer.finalize": _reports_transfer_finalize(),
+        "reports.transfer.abort": _reports_transfer_abort(),
+        "reports.transfer.read_chunk": _reports_transfer_read_chunk(),
+    }
+
+
 def python_success_payloads() -> dict[str, dict[str, Any]]:
     """Capability name → gateway `result` dict the matching Vitest decoder must accept."""
     entity_id = _entity_id()
     return {
         **_wp03b_success_payloads(),
+        **_general_report_success_payloads(),
         "capture.create": _capture_create(),
         "capture.list": _capture_list(),
         "capture.read": _capture_read(),
@@ -3211,3 +3747,40 @@ def test_knowledge_review_wire_shapes_are_the_frozen_ones() -> None:
         else:
             assert payload["assertion_id"].startswith("kasr_"), name
             assert payload["receipt_id"].startswith("kamut_"), name
+
+
+def test_committed_standalone_report_fixtures_match_live_payloads() -> None:
+    """WP07 A1: the standalone read/list/search variants Vitest decodes are the live builders'."""
+    # The pinned gzip original must stay one well-formed gzip member of the body
+    # the variant declares, so pinning it never desynchronises `body` from `encoded`.
+    assert STANDALONE_GZIP_ORIGINAL[:4] == b"\x1f\x8b\x08\x00", "gzip magic, deflate, no flags"
+    assert STANDALONE_GZIP_ORIGINAL[4:8] == b"\x00\x00\x00\x00", "gzip mtime must be zero"
+    member = zlib.decompressobj(wbits=31)
+    assert member.decompress(STANDALONE_GZIP_ORIGINAL) == STANDALONE_GZIP_BODY
+    assert member.eof and member.unused_data == b"", "exactly one gzip member"
+    assert gzip.decompress(STANDALONE_GZIP_ORIGINAL) == STANDALONE_GZIP_BODY
+    assert REPORTS_STANDALONE_PATH.is_file(), (
+        f"standalone report fixtures missing at {REPORTS_STANDALONE_PATH}"
+    )
+    committed = json.loads(REPORTS_STANDALONE_PATH.read_text(encoding="utf-8"))
+    assert committed == standalone_report_payloads()
+
+
+def test_standalone_report_fixtures_carry_the_plane_and_the_pointers() -> None:
+    """Every variant is plane-discriminated; the omitted read carries both read_chunk pointers."""
+    committed = json.loads(REPORTS_STANDALONE_PATH.read_text(encoding="utf-8"))
+    legacy = json.loads(SUCCESS_PATH.read_text(encoding="utf-8"))
+    for name, payload in committed.items():
+        assert payload["plane"] in {"standalone", "all"}, name
+    for capability in ("reports.read", "reports.list", "reports.search"):
+        assert "plane" not in legacy[capability], capability
+    content = committed["reports.read.omitted"]["content"]
+    assert content["body_omitted"] == content["encoded_omitted"] == "exceeds_response_bound"
+    assert content["body_chunked_read"]["capability"] == "reports.transfer.read_chunk"
+    assert content["body_chunked_read"]["part"] == "decoded"
+    assert content["encoded_chunked_read"]["part"] == "original"
+    assert "body" not in content and "encoded" not in content
+    assert {item["plane"] for item in committed["reports.list.all"]["items"]} == {
+        "standalone",
+        "intelligence",
+    }

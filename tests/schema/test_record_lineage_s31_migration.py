@@ -67,7 +67,7 @@ SCHEMA: Final = "knowledge"
 REVISION: Final = "023f8f7eb499"
 PREVIOUS: Final = "c5260943d933"
 #: CPM Workbench S5b-1 (`6c2306330ceb`) is additive on this revision.
-HEAD: Final = "2a90f91dd786"
+HEAD: Final = "4c37731671fc"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261025_023f8f7eb499_record_lineage_s31.py"
 EARLIER: Final = (
@@ -260,14 +260,15 @@ def _left_function_body(name: str) -> str:
 def test_the_revision_is_the_single_head_on_c5260943d933() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "621ef6786c64"
+    assert script.get_revision(HEAD).down_revision == "2a90f91dd786"
+    assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
     assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
     assert script.get_revision("6c2306330ceb").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "6f1476b8da52"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert MIGRATION.name.endswith("_record_lineage_s31.py")
-    assert len(list(MIGRATIONS.glob("*.py"))) == 126
+    assert len(list(MIGRATIONS.glob("*.py"))) == 127
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -392,7 +393,30 @@ def test_at_vocabulary_adds_exactly_the_s31_names() -> None:
     # The head admits every declared name, and the S3.1 schema-ahead gap is
     # exactly the S3.1 names the domain does not declare yet (none). The CPM
     # Workbench S5b-2 names, declared since, are that revision's (621ef6786c64).
-    declared = {capability.value for capability in Capability} - S5B2_CAPABILITIES
+    # Reports Modernization WP02's `reports.publish` is the head's (4c37731671fc).
+    declared = (
+        {capability.value for capability in Capability}
+        - S5B2_CAPABILITIES
+        # And WP03's five, the head's too.
+        - {
+            "reports.publish",
+            "reports.update",
+            "reports.history",
+            "reports.archive",
+            "reports.delete",
+            "reports.restore",
+            "reports.hold.place",
+            "reports.hold.release",
+            "reports.retention.set",
+            "reports.retention.get",
+            # Reports Modernization WP06: bounded chunked transfer.
+            "reports.transfer.begin",
+            "reports.transfer.append",
+            "reports.transfer.finalize",
+            "reports.transfer.abort",
+            "reports.transfer.read_chunk",
+        }
+    )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s31_admitted_ahead("capability")
     assert S31_CAPABILITIES & declared == gap.S31_CAPABILITIES_DECLARED_BY_DOMAIN

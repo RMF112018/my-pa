@@ -81,7 +81,7 @@ REVISION: Final = "264310e0416a"
 PREVIOUS: Final = "b9025e7fb738"
 #: Record lineage S2 (`d020b532ad7d`), S3 (`6f1476b8da52`) and S4 (`c5260943d933`,
 #: ADR-015) are additive on this revision; the S4 revision is the head.
-HEAD: Final = "2a90f91dd786"
+HEAD: Final = "4c37731671fc"
 #: The S2 revision, the S1 suite's head before the S3 revision.
 S2_REVISION: Final = "d020b532ad7d"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`.
@@ -241,7 +241,7 @@ def test_the_revision_is_the_single_head_on_b9025e7fb738() -> None:
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "5c1e7a9b3d42"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 126
+    assert len(list(MIGRATIONS.glob("*.py"))) == 127
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -372,6 +372,26 @@ def test_at_vocabulary_adds_exactly_the_s1_names() -> None:
         - S31_CAPABILITIES
         # The CPM Workbench S5b-2 names too, that revision's (621ef6786c64).
         - S5B2_CAPABILITIES
+        # And Reports Modernization WP02's `reports.publish` and WP03's five, the
+        # head's (4c37731671fc).
+        - {
+            "reports.publish",
+            "reports.update",
+            "reports.history",
+            "reports.archive",
+            "reports.delete",
+            "reports.restore",
+            "reports.hold.place",
+            "reports.hold.release",
+            "reports.retention.set",
+            "reports.retention.get",
+            # Reports Modernization WP06: bounded chunked transfer.
+            "reports.transfer.begin",
+            "reports.transfer.append",
+            "reports.transfer.finalize",
+            "reports.transfer.abort",
+            "reports.transfer.read_chunk",
+        }
     )
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | S1_CAPABILITIES
@@ -383,6 +403,8 @@ def test_at_vocabulary_adds_exactly_the_s1_names() -> None:
             - S3_PURPOSES
             - S4_PURPOSES
             - S5B2_PURPOSES
+            # Reports Modernization WP03's purpose, the head's (4c37731671fc).
+            - {"report_lifecycle", "report_hold", "report_retention"}
         )
         | S1_PURPOSES
     )

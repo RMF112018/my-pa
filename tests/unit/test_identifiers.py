@@ -271,6 +271,20 @@ def test_contract_prefixes_are_stable() -> None:
         "sbl",
         "sbev",
         "sgov",
+        # Reports Modernization WP01: the general report plane
+        # (`domain.reports`), distinct from the Intelligence `rpt`/`rrc`.
+        "grpt",
+        "grver",
+        "grcnt",
+        "grasc",
+        "grlev",
+        "grrc",
+        "grxfr",
+        # Reports Modernization WP05b: hold events, retention policy events
+        # and sealed preservation objects.
+        "grhld",
+        "grrtn",
+        "grprv",
     }
 
 

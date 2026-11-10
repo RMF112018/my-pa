@@ -228,6 +228,47 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_COMMIT,
         Capability.REPORTS_RECORD_RUN_STATE,
+        # Reports Modernization WP02: `reports.publish` requires the key its
+        # receipt ledger arbitrates (`report_receipts (owner, operation,
+        # idempotency_key)`), so the server stamps this set's payload hash. An
+        # identical lost-response retry derives the same key and replays the
+        # original receipt; a distinct optional `client_intent_id` hashes to a
+        # distinct key and publishes a new report even for identical content.
+        # Also client-bound (`_CLIENT_BOUND_KEY_CAPABILITIES`).
+        Capability.REPORTS_PUBLISH,
+        # Reports Modernization WP03: the four management writes require the key
+        # the same receipt ledger arbitrates (operations `update`, `archive`,
+        # `delete`, `restore`). The stamped payload hash covers
+        # `expected_version` / `expected_lifecycle_revision`, so a lost-response
+        # retry of the same move replays its original receipt while the next
+        # deliberate move (a new expected value) derives a new key. Client-bound
+        # too, for the reason `reports.publish` is.
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
+        # Reports Modernization WP06 (contract T7'): `reports.transfer.begin`
+        # requires the key `report_transfer_sessions (owner_principal_id,
+        # client_ref, idempotency_key)` arbitrates among the client's LIVE
+        # sessions. The stamped payload hash covers the whole declaration
+        # (format, encoding, byte_count, sha256, ttl_seconds), so a
+        # lost-response retry replays the original session answer
+        # (`replayed: true`) and never opens a second one; once that session
+        # ended (consumed, aborted, expired) the identical declaration is a new
+        # intent and opens a new session. Client-bound
+        # too: the session is the client's own (T4), so B's identical
+        # declaration opens B's session rather than naming A's.
+        #
+        # The other four transfer names are deliberately NOT here: their
+        # commands have no `idempotency_key` field, and none needs one.
+        # `reports.transfer.append` is idempotent by `(session, sequence)` (an
+        # identical chunk replays as a no-op, a different one conflicts);
+        # `reports.transfer.abort` is idempotent by state (an own aborted
+        # session answers `replayed: true`); `reports.transfer.read_chunk` is a
+        # read; and `reports.transfer.finalize` mints a one-use content token
+        # whose raw value is never stored, so it is deliberately not replayable
+        # (a lost finalize response means abort and begin again).
+        Capability.REPORTS_TRANSFER_BEGIN,
         # The entity plane's eighteen keyed writes (Phase A). Every one of them
         # carries an `idempotency_key` its command validates and its repository
         # arbitrates against
@@ -345,6 +386,15 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.RECORDS_ASSOCIATIONS_CONFIRM,
         Capability.ISSUES_MEMBERSHIPS_CONFIRM,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM,
+        # Reports Modernization WP05b: the 3 operator custody writes, each keyed
+        # (the hold ledger's `(owner, operation, key)` and the retention history's
+        # `(owner, key)`). On the confirms' terms: refused remotely by the
+        # application (attested local operator only) and withheld remotely as
+        # operator-only; here for one replay identity. `reports.retention.get`
+        # is a read and has no key.
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
         # **No keyless proposal or identity-correction write is here, and the reason is this set's
         # mechanism rather than a judgement about how replayable they are.**
         # Membership makes `compose_remote_arguments` derive a key and *insert it
@@ -377,12 +427,42 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 #: writes, whose derived key also binds the authenticated OAuth client. Two
 #: remote clients sending the same payload so derive 2 keys and both reach the
 #: identity rule (`created: false` for the second), while a client's own retry
-#: derives its own key again and replays. Every other capability's derivation
-#: is unchanged.
+#: derives its own key again and replays.
+#:
+#: Reports Modernization WP02: `reports.publish` too. Every remote client acts
+#: for the one operator Principal, so an unbound key would let client B's first
+#: publish of a body client A already published replay A's receipt: not a
+#: cross-Principal leak (the key and the ledger are Principal-scoped), but a
+#: cross-client existence signal (`replayed: true`) and a retry identity the
+#: second client never had. A retry is one client's retry, so the key binds the
+#: client: A's retry still replays, B publishes its own report.
+#:
+#: Reports Modernization WP03: the four management writes (`reports.update`,
+#: `.archive`, `.delete`, `.restore`) too, for the same reason: client B's
+#: identical move must reach the concurrency check on its own key (and so
+#: refuse as stale) rather than replay client A's receipt. Every other
+#: capability's derivation is unchanged.
+#:
+#: Reports Modernization WP06 (contract T4/T7): `reports.transfer.begin` too. A
+#: transfer session belongs to one client (`client_ref`), and its keyed replay is
+#: arbitrated per `(owner, client_ref, key)`; binding the derived key to the
+#: client keeps the remote key and the ledger's identity the same, so client B's
+#: identical declaration opens B's own session and never learns of A's.
+_CLIENT_BOUND_REPORT_WRITES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.REPORTS_PUBLISH,
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
+        Capability.REPORTS_TRANSFER_BEGIN,
+    }
+)
 _CLIENT_BOUND_KEY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability
     for capability in _IDEMPOTENT_REMOTE_CAPABILITIES
     if capability.value in OPEN_LINEAGE_WRITE_CAPABILITIES
+    or capability in _CLIENT_BOUND_REPORT_WRITES
 )
 
 #: When more than one permitted purpose remains after grant intersection, the

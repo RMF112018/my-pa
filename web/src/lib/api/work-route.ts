@@ -24,7 +24,8 @@ export type WorkField = {
     | "mutation-array"
     | "party-ref-array"
     | "integer-array"
-    | "attendee-array";
+    | "attendee-array"
+    | "closed-object";
   readonly required?: boolean;
   readonly nullable?: boolean;
   readonly minLength?: number;
@@ -64,6 +65,16 @@ export type WorkField = {
    * Omitted, the field keeps its previous behaviour of accepting any string.
    */
   readonly values?: readonly string[];
+  /**
+   * The closed parser of a `closed-object` field, and only of one.
+   *
+   * It returns the gateway-spelled value or a message naming what is wrong
+   * (never the value itself). Used where a command takes one nested object
+   * whose own keys are closed, such as a report's `content` or `patch`.
+   */
+  readonly parse?: (value: unknown) =>
+    | { readonly ok: true; readonly value: unknown }
+    | { readonly ok: false; readonly message: string };
 };
 export type FieldMap = Readonly<Record<string, WorkField>>;
 type InputKind = "query" | "body";
@@ -479,6 +490,12 @@ function parseField(browserName: string, value: unknown, field: WorkField, input
     if (input === "query" && value === "false") return { ok: true, gateway, value: false };
     return { ok: false, response: invalidWorkRequest(`${browserName} must be true or false`) };
   }
+  if (type === "closed-object") {
+    const parsed = field.parse?.(value);
+    if (parsed === undefined) return { ok: false, response: invalidWorkRequest(`${browserName} is malformed`) };
+    if (!parsed.ok) return { ok: false, response: invalidWorkRequest(`${browserName} ${parsed.message}`) };
+    return { ok: true, gateway, value: parsed.value };
+  }
   const maximum = field.maxItems ?? (type === "mutation-array" ? 100 : 32);
   if (type === "string-array") {
     if (isStringArray(value, maximum)) {
@@ -630,26 +647,55 @@ export type WorkResultProjection = (
   payload: Readonly<Record<string, unknown>>,
 ) => Record<string, unknown> | null;
 
+/**
+ * The authority path one route's capability is answered through.
+ *
+ * Omitted, it is `invokeGateway`, exactly as before. The only other value is
+ * the standalone-reports path (`lib/api/reports-route.ts`), which shares
+ * `invokeGateway`'s one transport and swaps only the result decoder; every
+ * guard, mapping, serving and refusal step here stays the same for both.
+ */
+export type WorkInvoker = (
+  principal: PrincipalSession,
+  capability: GatewayCapability,
+  payload: Record<string, unknown>,
+) => Promise<GatewayOutcome<unknown>>;
+
+/**
+ * What a `409` from the mutation is answered with besides the refusal itself.
+ *
+ * Consulted only when the gateway answers `409` and the payload names no Task
+ * or Commitment (those keep their own read). A record is attached to the
+ * unchanged refusal as `current`; `null` leaves the plain refusal.
+ */
+export type WorkConflictCurrent = (
+  principal: PrincipalSession,
+  payload: Readonly<Record<string, unknown>>,
+) => Promise<Record<string, unknown> | null>;
+
 export type WorkGetOptions = {
   readonly strictQuery?: boolean;
   readonly validate?: (payload: Readonly<Record<string, unknown>>) => string | null;
   /** null refuses a decoded result that violates this request's projection boundary. */
   readonly project?: WorkResultProjection;
+  readonly invoke?: WorkInvoker;
 };
 
 export type WorkPostOptions = WorkGetOptions & {
   /** Keyless document transitions accept a genuinely empty body or a closed JSON object. */
   readonly bodyOptional?: boolean;
   readonly admit?: (context: AdmissionContext) => Promise<NextResponse | null>;
+  readonly conflictCurrent?: WorkConflictCurrent;
 };
+
+type DispatchHooks = Pick<WorkPostOptions, "admit" | "project" | "invoke" | "conflictCurrent">;
 
 async function dispatch(
   principal: PrincipalSession,
   scope: string,
   capability: GatewayCapability,
   payload: Record<string, unknown>,
-  admit?: WorkPostOptions["admit"],
-  project?: WorkResultProjection,
+  { admit, project, invoke = invokeGateway, conflictCurrent }: DispatchHooks = {},
 ) {
   const serving = resolveServing();
   if (serving.kind === "refused") return serving.response;
@@ -668,7 +714,7 @@ async function dispatch(
     });
     if (refusal) return refusal;
   }
-  const outcome = await invokeGateway(principal, capability, payload);
+  const outcome = await invoke(principal, capability, payload);
   if (!outcome.ok) {
     const identifier = typeof payload.task_id === "string" ? { capability: "tasks.read" as const, payload: { task_id: payload.task_id }, key: "task" }
       : typeof payload.commitment_id === "string" ? { capability: "commitments.read" as const, payload: { commitment_id: payload.commitment_id }, key: "commitment" }
@@ -682,6 +728,13 @@ async function dispatch(
         }
         const refusal = await gatewayRefusal(scope, outcome.status, outcome.error).json();
         return NextResponse.json({ ...refusal, current: publicResult(record) }, { status: 409 });
+      }
+    }
+    if (outcome.status === 409 && !identifier && conflictCurrent) {
+      const current = await conflictCurrent(principal, payload);
+      if (current !== null) {
+        const refusal = await gatewayRefusal(scope, outcome.status, outcome.error).json();
+        return NextResponse.json({ ...refusal, current: publicResult(current) }, { status: 409 });
       }
     }
     return gatewayRefusal(scope, outcome.status, outcome.error);
@@ -710,11 +763,11 @@ async function serve(
   scope: string,
   capability: GatewayCapability,
   payload: Record<string, unknown>,
-  project?: WorkResultProjection,
+  hooks: Pick<WorkGetOptions, "project" | "invoke">,
 ) {
   const guard = await requirePrincipal(request);
   if (!guard.ok) return guard.response;
-  return dispatch(guard.principal, scope, capability, payload, undefined, project);
+  return dispatch(guard.principal, scope, capability, payload, hooks);
 }
 
 export async function workGet(
@@ -737,7 +790,12 @@ export async function workGet(
   const payload = { ...result.payload, ...fixed };
   const refusal = options.validate?.(payload) ?? null;
   if (refusal !== null) return invalidWorkRequest(refusal);
-  return noStore(await serve(request, scope, capability, payload, options.project));
+  return noStore(
+    await serve(request, scope, capability, payload, {
+      project: options.project,
+      invoke: options.invoke,
+    }),
+  );
 }
 
 export async function workPost(
@@ -767,8 +825,12 @@ export async function workPost(
       scope,
       capability,
       payload,
-      options.admit,
-      options.project,
+      {
+        admit: options.admit,
+        project: options.project,
+        invoke: options.invoke,
+        conflictCurrent: options.conflictCurrent,
+      },
     ),
   );
 }

@@ -573,6 +573,29 @@ _ORDINAL_UNITS = (
     "two-hundred-thirty-ninth",
     "two-hundred-fortieth",
     "two-hundred-forty-first",
+    # Reports Modernization WP02 takes it to two hundred and forty-one; dense
+    # through the two-hundred-forty-second.
+    "two-hundred-forty-second",
+    # Reports Modernization WP03 takes it to two hundred and forty-six; dense
+    # through the two-hundred-forty-seventh.
+    "two-hundred-forty-third",
+    "two-hundred-forty-fourth",
+    "two-hundred-forty-fifth",
+    "two-hundred-forty-sixth",
+    "two-hundred-forty-seventh",
+    # Reports Modernization WP05b takes it to two hundred and fifty; dense
+    # through the two-hundred-fifty-first.
+    "two-hundred-forty-eighth",
+    "two-hundred-forty-ninth",
+    "two-hundred-fiftieth",
+    "two-hundred-fifty-first",
+    # Reports Modernization WP06 takes it to two hundred and fifty-five; dense
+    # through the two-hundred-fifty-sixth.
+    "two-hundred-fifty-second",
+    "two-hundred-fifty-third",
+    "two-hundred-fifty-fourth",
+    "two-hundred-fifty-fifth",
+    "two-hundred-fifty-sixth",
 )
 
 

@@ -65,6 +65,11 @@ _COMPOSED_DEPENDENCY_ATTRIBUTES: Final[frozenset[str]] = frozenset(
         # CPM Workbench S5b-2 (contract section 3.1): the Schedule factory,
         # composed by `bootstrap/gateway.py` from the switch below.
         "_schedule_unit_of_work",
+        # Reports Modernization WP06 T14: the report content store and the
+        # transfer staging, both composed by `bootstrap/gateway.py` from
+        # `MY_PA_REPORT_CONTENT_ROOT` (a root, not a switch).
+        "_report_content_store",
+        "_report_transfer_staging",
     }
 )
 

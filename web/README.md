@@ -15,7 +15,7 @@ An explicitly enabled synthetic provider remains available for development and
 is refused when `NODE_ENV=production`. It does not silently replace an
 unconfigured or unavailable backend.
 
-The Python contract contains two hundred and forty capability names. The System route reads
+The Python contract contains two hundred and fifty-five capability names. The System route reads
 the live `capabilities.get` manifest, including each capability's runtime
 availability, instead of restating an availability count in this tier. Six of
 those names are the managed-document lifecycle (`documents.create`,
@@ -65,6 +65,14 @@ All application pages require a verified session. `/sign-in`, `/setup`, and
 | `GET /api/intelligence/:reportId` | `reports.read` | Reads one same-Principal Intelligence artifact |
 | `GET /api/intelligence/latest` | `reports.latest` | Reads the current-head artifact for a cycle run |
 | `GET /api/intelligence/readiness` | `reports.resolve_set` | Returns aggregate and per-member resolver states; members are not flattened to a boolean |
+| `/reports`, `/reports/trash`, `GET /api/reports` | `reports.list`, `reports.search` | Lists (or, with `query`, searches) standalone reports; `plane` is required and is `standalone` or `all` (pipeline items in `all` link to `/intelligence/reports/:reportId`); Trash is `lifecycleStates=trashed`; `held` is shown read-only |
+| `/reports/new`, `POST /api/reports` | `reports.publish` | Publishes one standalone report (inline content, or a finalized transfer reference); metadata, associations and coverage period are not accepted by this route |
+| `/reports/:reportId`, `GET /api/reports/:reportId` | `reports.read` | Reads one `grpt_` report version; large bodies are marked omitted and loaded through the content route |
+| `/reports/:reportId/edit`, `POST /api/reports/:reportId/update` | `reports.update` | Expected-version update with a required change reason; a `409` carries the current head so the UI keeps the draft |
+| `GET /api/reports/:reportId/history` | `reports.history` | Pages versions or lifecycle events |
+| `POST /api/reports/:reportId/archive`, `/delete`, `/restore` | `reports.archive`, `reports.delete`, `reports.restore` | Expected-lifecycle-revision moves; delete moves to Trash and restore returns the prior state; there is no purge, hold or retention route |
+| `GET /api/reports/:reportId/content` | `reports.transfer.read_chunk` | Reads one byte range of a version's content; the browser verifies each chunk and the whole-part digest before rendering |
+| `POST /api/reports/transfers`, `/:sessionId/append`, `/:sessionId/finalize`, `/:sessionId/abort` | `reports.transfer.begin`, `reports.transfer.append`, `reports.transfer.finalize`, `reports.transfer.abort` | Browser-orchestrated staging for content whose inline request would exceed 512 KiB (up to 16 MiB); the content token stays in memory and is never put in a URL |
 | `/people`, `GET /api/people` | `entities.search`, `entities.resolve` | Search or resolve Principal-scoped entities; empty URL is refused rather than listing a directory |
 | `GET /api/people/:entityId` | `entities.get` | Reads one same-Principal entity |
 | `GET /api/people/:entityId/profile` | `entities.profile` | Assembles the record-family profile; this is not merge and not a directory |
@@ -142,6 +150,33 @@ The relationship timeline is therefore implemented, but it is not a separate
 public capability. It is a projection of `relationship_events` already returned
 by `continuity.situations`. Microsoft Graph remains off by default and is not an
 active personal-data source. Browser Entra/MSAL sign-in is retired.
+
+**Standalone Reports (Reports Modernization WP07).** `/reports`, `/reports/new`,
+`/reports/:reportId`, `/reports/:reportId/edit` and `/reports/trash` are the
+manual surface over the standalone report plane. Each `/api/reports` route maps
+to exactly one `reports.*` capability in `src/contracts/gateway.json` and calls it
+through the same `invokeGateway` transport as every other route, so a manual
+action runs the same `ApplicationService` handler as the remote MCP facade's
+`my_pa.write` / `my_pa.read`; `tests/database/test_reports_manual_parity.py`
+drives one scenario through both and asserts the same results, refusals and
+lifecycle walk. Large content goes through the browser-orchestrated
+`reports.transfer.*` routes, one capability per request. The UI narrows what the
+capabilities accept: metadata, associations, coverage period and gzip+base64
+inline content are not exposed (the publish route refuses them). Holds and
+retention are operator-only (`ops/runbooks/managed-document-operations.md`
+section 8): `reports.hold.*` and `reports.retention.*` are not in
+`gateway.json`, no route or control reaches them, there is no purge, and the UI
+shows `held` read-only as "On hold". Intelligence pages are unchanged.
+Known limitation: after an ambiguous publish answer (network failure or
+502/503/504), resubmitting the unchanged draft reuses its idempotency key and is
+replayed safely, but editing the draft first makes it a new intent with a new
+key, so if the first attempt had in fact committed, a second report results (an
+edited update is instead refused as stale, because its expected version moved).
+Known limitation: the edit form locks JSON content holding numbers the browser
+cannot keep exactly; integers beyond 2^53 - 1 are always caught, but excess
+fractional precision is caught only for typed and chunk-loaded content, not for
+inline-loaded content (already parsed by the BFF), whose edit saves the rounded
+value.
 
 ## Worker-plane reporting
 

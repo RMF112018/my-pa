@@ -1026,6 +1026,96 @@
           "operator_only": false
         },
         {
+          "name": "reports.publish",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.update",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.history",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.archive",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.delete",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.restore",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.hold.place",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
+        },
+        {
+          "name": "reports.hold.release",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
+        },
+        {
+          "name": "reports.retention.set",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
+        },
+        {
+          "name": "reports.retention.get",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
+        },
+        {
+          "name": "reports.transfer.begin",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.transfer.append",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.transfer.finalize",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.transfer.abort",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.transfer.read_chunk",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
           "name": "entities.search",
           "version": "v1",
           "availability": "available",
@@ -2016,11 +2106,11 @@
     "readiness": {
       "state": "degraded",
       "contract_version": "v1",
-      "implemented_capabilities": 240,
-      "total_capabilities": 240,
+      "implemented_capabilities": 255,
+      "total_capabilities": 255,
       "limitations": [
         "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
-        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.v2.list, commitments.v2.search, commitments.v2.waiting_on, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.portfolio_list, constraints.portfolio_search, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, issues.handoffs.list, issues.history, issues.list, issues.timeline, knowledge.assertions.list, knowledge.assertions.search, knowledge.search, meetings.list, meetings.notes.versions, meetings.search, record_events.list, records.associations.history, records.backfill.report, records.lineage, records.lineage.related, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, schedule_activities.history, schedule_activities.list, schedule_changes.list, schedule_publications.list, schedule_series.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
+        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.v2.list, commitments.v2.search, commitments.v2.waiting_on, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.portfolio_list, constraints.portfolio_search, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, issues.handoffs.list, issues.history, issues.list, issues.timeline, knowledge.assertions.list, knowledge.assertions.search, knowledge.search, meetings.list, meetings.notes.versions, meetings.search, record_events.list, records.associations.history, records.backfill.report, records.lineage, records.lineage.related, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.history, reports.list, reports.search, reports.transfer.read_chunk, review.list, schedule_activities.history, schedule_activities.list, schedule_changes.list, schedule_publications.list, schedule_series.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
         "Model proposals and semantic retrieval are disabled; deterministic lexical retrieval remains active.",
         "Worker-plane health is unavailable, stale, absent for queued work, or reports dead-lettered work; inspect worker_planes."
       ]
@@ -2419,6 +2509,227 @@
       "watchlist_dependency"
     ],
     "partial_focus_areas": []
+  },
+  "reports.publish": {
+    "plane": "standalone",
+    "report_id": "grpt_aaaaaaaa11111111",
+    "version_id": "grver_aaaaaaaa11111111",
+    "version_number": 1,
+    "lifecycle_state": "active",
+    "lifecycle_revision": 0,
+    "content": {
+      "content_id": "grcnt_aaaaaaaa11111111",
+      "format": "markdown",
+      "decoded_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "decoded_byte_count": 15,
+      "canonical_sha256": null
+    },
+    "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "receipt_id": "grrc_aaaaaaaa11111111",
+    "recorded_at": "2026-08-09T12:00:00.000Z",
+    "replayed": false
+  },
+  "reports.update": {
+    "plane": "standalone",
+    "report_id": "grpt_aaaaaaaa11111111",
+    "outcome": "applied",
+    "version_id": "grver_aaaaaaaa11111111",
+    "version_number": 2,
+    "change_kind": "content",
+    "content_id": "grcnt_aaaaaaaa11111111",
+    "decoded_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "receipt": {
+      "receipt_id": "grrc_aaaaaaaa11111111",
+      "operation": "update",
+      "outcome": "applied",
+      "expected_version": 1,
+      "issued_at": "2026-08-09T12:00:00.000Z",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "audit_id": "audit_aaaaaaaa11111111"
+    },
+    "replayed": false
+  },
+  "reports.history": {
+    "plane": "standalone",
+    "report_id": "grpt_aaaaaaaa11111111",
+    "head_version_id": "grver_aaaaaaaa11111111",
+    "head_version_number": 2,
+    "lifecycle_state": "active",
+    "lifecycle_revision": 0,
+    "held": true,
+    "entries": "versions",
+    "items": [
+      {
+        "version_id": "grver_bbbbbbbb22222222",
+        "version_number": 1,
+        "supersedes_version_id": null,
+        "change_kind": "initial",
+        "change_reason": null,
+        "title": "Synthetic report",
+        "recorded_at": "2026-08-09T12:00:00.000Z",
+        "content": {
+          "content_id": "grcnt_aaaaaaaa11111111",
+          "format": "markdown",
+          "encoding": "identity",
+          "storage_kind": "inline",
+          "decoded_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "decoded_byte_count": 15,
+          "canonical_sha256": null,
+          "original_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "author": {
+          "kind": "local_principal",
+          "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+        }
+      },
+      {
+        "version_id": "grver_aaaaaaaa11111111",
+        "version_number": 2,
+        "supersedes_version_id": "grver_bbbbbbbb22222222",
+        "change_kind": "metadata",
+        "change_reason": "Synthetic revision.",
+        "title": "Synthetic report",
+        "recorded_at": "2026-08-09T12:00:00.000Z",
+        "content": {
+          "content_id": "grcnt_aaaaaaaa11111111",
+          "format": "markdown",
+          "encoding": "identity",
+          "storage_kind": "inline",
+          "decoded_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "decoded_byte_count": 15,
+          "canonical_sha256": null,
+          "original_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "author": {
+          "kind": "local_principal",
+          "id": "gcrt_dfb9bb41bd188fe7b567eab1fcd17377904287f1"
+        },
+        "manifest": {
+          "schema": "synthetic"
+        }
+      }
+    ],
+    "next_cursor": null
+  },
+  "reports.archive": {
+    "plane": "standalone",
+    "report_id": "grpt_aaaaaaaa11111111",
+    "operation": "archive",
+    "outcome": "applied",
+    "prior_state": "active",
+    "lifecycle_state": "archived",
+    "lifecycle_revision": 1,
+    "event_id": "grlev_aaaaaaaa11111111",
+    "receipt": {
+      "receipt_id": "grrc_aaaaaaaa11111111",
+      "operation": "archive",
+      "outcome": "applied",
+      "expected_lifecycle_revision": 0,
+      "issued_at": "2026-08-09T12:00:00.000Z",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "audit_id": "audit_aaaaaaaa11111111"
+    },
+    "replayed": false
+  },
+  "reports.delete": {
+    "plane": "standalone",
+    "report_id": "grpt_aaaaaaaa11111111",
+    "operation": "delete",
+    "outcome": "applied",
+    "prior_state": "active",
+    "lifecycle_state": "trashed",
+    "lifecycle_revision": 1,
+    "event_id": "grlev_aaaaaaaa11111111",
+    "receipt": {
+      "receipt_id": "grrc_aaaaaaaa11111111",
+      "operation": "delete",
+      "outcome": "applied",
+      "expected_lifecycle_revision": 0,
+      "issued_at": "2026-08-09T12:00:00.000Z",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "audit_id": "audit_aaaaaaaa11111111"
+    },
+    "replayed": false
+  },
+  "reports.restore": {
+    "plane": "standalone",
+    "report_id": "grpt_aaaaaaaa11111111",
+    "operation": "restore",
+    "outcome": "applied",
+    "prior_state": "trashed",
+    "lifecycle_state": "active",
+    "lifecycle_revision": 1,
+    "event_id": "grlev_aaaaaaaa11111111",
+    "receipt": {
+      "receipt_id": "grrc_aaaaaaaa11111111",
+      "operation": "restore",
+      "outcome": "applied",
+      "expected_lifecycle_revision": 0,
+      "issued_at": "2026-08-09T12:00:00.000Z",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "audit_id": "audit_aaaaaaaa11111111"
+    },
+    "replayed": false
+  },
+  "reports.transfer.begin": {
+    "session_id": "grxfr_aaaaaaaa11111111",
+    "state": "open",
+    "format": "text",
+    "encoding": "identity",
+    "declared_byte_count": 600000,
+    "declared_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "chunk_byte_limit": 262144,
+    "chunk_count": 3,
+    "expires_at": "2026-08-09T13:00:00.000Z",
+    "replayed": false
+  },
+  "reports.transfer.append": {
+    "session_id": "grxfr_aaaaaaaa11111111",
+    "sequence": 0,
+    "byte_offset": 0,
+    "byte_count": 262144,
+    "chunk_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "received_byte_count": 262144,
+    "declared_byte_count": 600000,
+    "complete": false,
+    "next_sequence": 1,
+    "expires_at": "2026-08-09T13:00:00.000Z",
+    "replayed": false
+  },
+  "reports.transfer.finalize": {
+    "session_id": "grxfr_aaaaaaaa11111111",
+    "state": "finalized",
+    "content_token": "grxtk_0000000000000000000000000000000000000000000000000000000000000000",
+    "expires_at": "2026-08-09T13:00:00.000Z",
+    "byte_count": 600000,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "format": "text",
+    "encoding": "identity",
+    "decoded_byte_count": 19,
+    "decoded_sha256": "4ac237de60349bffb379be77f6412408b50ea76b0b5bde3a38c8b097347ff55b"
+  },
+  "reports.transfer.abort": {
+    "session_id": "grxfr_aaaaaaaa11111111",
+    "state": "aborted",
+    "replayed": false
+  },
+  "reports.transfer.read_chunk": {
+    "plane": "standalone",
+    "report_id": "grpt_aaaaaaaa11111111",
+    "version_id": "grver_aaaaaaaa11111111",
+    "version_number": 1,
+    "part": "decoded",
+    "offset": 0,
+    "byte_count": 8,
+    "chunk": "U3ludGhldGk=",
+    "chunk_sha256": "c73d34d08cb7c0d2b09f5ca15f07183c42b45ae94292144996b277ab45418d2f",
+    "total_byte_count": 16,
+    "part_sha256": "df0d673763daf4be8ed9878fad7552ee133faa41f5c360129efa4fdc430990c6",
+    "eof": false,
+    "next_offset": 8
   },
   "entities.search": {
     "entities": [

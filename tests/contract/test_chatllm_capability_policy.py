@@ -76,8 +76,8 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
-    assert len(CHATLLM_CAPABILITY_POLICY) == 240
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
+    assert len(CHATLLM_CAPABILITY_POLICY) == 255
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
@@ -85,7 +85,10 @@ def test_classification_counts_match_the_approved_plan() -> None:
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
     # chatllm-data-v9: `reports.types.create` and `reports.types.list`, 72 -> 74.
-    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 74
+    # Reports Modernization (chatllm-data-v12): `reports.publish`, the 5
+    # management names (`reports.update`, `.history`, `.archive`, `.delete`,
+    # `.restore`) and the 5 `reports.transfer.*` names, 74 -> 85.
+    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 85
     # KLP-WP-03 (chatllm-data-v6): the six Knowledge Assertion names, 90 -> 96.
     # KLP-WP-05 (chatllm-data-v8): `record_events.provenance`, 96 -> 97.
     # Record lineage P1 (chatllm-data-v10, operator directive 2026-10-26): the
@@ -97,8 +100,9 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # Record lineage S3: the operator-only backfill pair is excluded, 17 -> 19.
     # Record lineage P1: Issue close and reopen and the 3 confirms are withheld
     # from every client, 19 -> 24. CPM Workbench S5b-2 (chatllm-data-v11): the
-    # operator-only schedule import, 24 -> 25.
-    assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 25
+    # operator-only schedule import, 24 -> 25. Reports Modernization WP05b: the 4
+    # operator-only report custody names, 25 -> 29 (no profile version change).
+    assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 29
     # Record lineage S1: the six Issue-plane names are an operator decision
     # (ADR-015, OD-07), 2 -> 8, and the eight remaining S1 names 8 -> 16; no
     # data-class member moves, so no profile bump. Record lineage S2's
@@ -108,7 +112,10 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # profile bump. Record lineage S3.1's 3 confirms and the related read too,
     # 37 -> 41; no profile bump. Record lineage P1 (operator directive
     # 2026-10-26) makes the decision: 34 to data, 5 to excluded, 41 -> 2, and
-    # the profile bumps to v10.
+    # the profile bumps to v10. Reports Modernization held `reports.publish` and
+    # the five management names (`reports.update`, `.history`, `.archive`,
+    # `.delete`, `.restore`) here only until their remote registration; in the
+    # end state (chatllm-data-v12) all six are `DATA_REQUIRED`, back to 2.
     assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
     assert counts[ChatLLMCapabilityClass.RETIRED] == 0
 

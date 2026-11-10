@@ -257,6 +257,43 @@ from my_pa.domain.relationship.reenrichment import (
     ReenrichmentBinding,
     ReenrichmentWork,
 )
+from my_pa.domain.reports.catalog import CatalogCursor, CatalogFilters
+from my_pa.domain.reports.content import INLINE_CONTENT_MAX_BYTES
+from my_pa.domain.reports.creator import ReportCreator
+from my_pa.domain.reports.custody import (
+    DEFAULT_RETENTION_HISTORY,
+    CustodyAuthority,
+    HoldRequest,
+    HoldResult,
+    ReportEligibilityInputs,
+    ReportHoldEventRecord,
+    RetentionPolicyView,
+    RetentionResult,
+    RetentionSetRequest,
+)
+from my_pa.domain.reports.publication import PublicationRequest, PublicationResult
+from my_pa.domain.reports.records import (
+    CatalogEntry,
+    ManagedContentRecord,
+    ReportHistoryPage,
+    ReportLifecycleEventRecord,
+    ReportVersionSummary,
+    StoredReportVersion,
+)
+from my_pa.domain.reports.revision import (
+    LifecycleRequest,
+    LifecycleResult,
+    UpdateRequest,
+    UpdateResult,
+)
+from my_pa.domain.reports.transfer import TransferDeclaration
+from my_pa.domain.reports.transfer import chunk_count as transfer_chunk_count
+from my_pa.domain.reports.vocabulary import (
+    AssociationTargetKind,
+    ContentEncoding,
+    ContentFormat,
+    TransferState,
+)
 from my_pa.domain.schedule import (
     ParsedScheduleRow,
     ScheduleActivityObservation,
@@ -432,6 +469,7 @@ __all__ = [
     "EntityWriteRequest",
     "EvidenceUnavailableError",
     "FrameRepository",
+    "GeneralReportRepository",
     "InitialAlias",
     "InitialIdentifier",
     "IssueCursorError",
@@ -527,6 +565,18 @@ __all__ = [
     "RelationshipEventRepository",
     "RelationshipRepository",
     "RelationshipWriteRequest",
+    "ReportAssociationTargetNotFoundError",
+    "ReportIdempotencyConflictError",
+    "ReportIntegrityError",
+    "ReportNotFoundError",
+    "ReportStaleLifecycleRevisionError",
+    "ReportStaleVersionError",
+    "ReportTransferConflictError",
+    "ReportTransferDigestError",
+    "ReportTransferNotFoundError",
+    "ReportTransferQuotaError",
+    "ReportTransferRepository",
+    "ReportWithdrawnError",
     "RepositoryFailureError",
     "ReviewDecisionRequest",
     "ReviewRepository",
@@ -546,6 +596,9 @@ __all__ = [
     "TimelineNativeEvent",
     "TraceRepository",
     "TransactionConflictError",
+    "TransferBegin",
+    "TransferChunk",
+    "TransferSession",
     "UnitOfWork",
     "UnknownScopeError",
     "WorkerHealthRepository",
@@ -6292,6 +6345,25 @@ class UnitOfWork(ABC):
         """
 
     @property
+    def general_reports(self) -> GeneralReportRepository:
+        """The general report plane, inside this transaction (Reports Modernization WP02).
+
+        Not abstract, for the reason `capture_lifecycle` is not: only the SQL
+        unit of work serves it, and every other implementation refuses rather
+        than silently answering.
+        """
+        raise NotImplementedError
+
+    @property
+    def report_transfers(self) -> ReportTransferRepository:
+        """The transfer sessions and their chunk ledger, inside this transaction (WP06 B3).
+
+        Not abstract, for the reason `general_reports` is not: the SQL unit of
+        work serves it, and every other implementation refuses.
+        """
+        raise NotImplementedError
+
+    @property
     @abstractmethod
     def tasks(self) -> TaskManagementRepository:
         """The task-management rows, inside this transaction (WP-TM-02/03).
@@ -7712,6 +7784,481 @@ class ManagedDocumentRepository(ABC):
         """
 
 
+class ReportIdempotencyConflictError(PortError):
+    """A general report idempotency key is bound to a different intent. Nothing was written."""
+
+
+class ReportIntegrityError(PortError):
+    """A stored general report row no longer matches the digest it was written with.
+
+    Raised by a read that recomputed a decoded content digest or a manifest
+    digest and found it unequal to the stored one: the read refuses rather
+    than return bytes the stored digests do not name.
+    """
+
+
+class ReportAssociationTargetNotFoundError(UnknownScopeError):
+    """An association names a target the caller's Principal cannot see.
+
+    A subclass of `UnknownScopeError`, so it answers exactly what a target that
+    does not exist answers, and names neither the target nor which one failed.
+    """
+
+
+class ReportNotFoundError(UnknownScopeError):
+    """The named general report does not exist in the caller's Principal partition.
+
+    Foreign and missing are one answer, as for every `UnknownScopeError`; the
+    message names neither the report nor why.
+    """
+
+
+class ReportStaleVersionError(PortError):
+    """An update's `expected_version` is not the report's head. Nothing was written."""
+
+
+class ReportStaleLifecycleRevisionError(PortError):
+    """A lifecycle request's `expected_lifecycle_revision` is not current. Nothing was written."""
+
+
+class ReportWithdrawnError(PortError):
+    """An update named an `archived` or `trashed` report (WP03 D3). Nothing was written.
+
+    A withdrawn report is revised only after `reports.restore`; there is no
+    silent unarchive.
+    """
+
+
+# --- Reports Modernization WP05b (B8): holds, retention and preservation ------
+
+
+class ReportHeldError(PortError):
+    """`reports.delete` named a report under a legal hold (H2). Nothing was written.
+
+    Public `denied` (`report_held`): it only ever describes the caller's own
+    root, a foreign or absent one being `ReportNotFoundError` first.
+    """
+
+
+class ReportHoldStateError(PortError):
+    """A placement named a held report, or a release one not held. Nothing was written."""
+
+
+class ReportStaleHoldRevisionError(PortError):
+    """A hold request's `expected_hold_revision` is not current. Nothing was written."""
+
+
+class ReportStalePolicyRevisionError(PortError):
+    """A retention change's `expected_policy_revision` is not current. Nothing was written."""
+
+
+class ReportPreservationUnavailableError(PortError):
+    """No report content store is configured, so no hold can be placed (H4). Nothing written."""
+
+
+class ReportPreservationError(PortError):
+    """The preservation copy could not be written or did not verify. No hold was recorded.
+
+    Objects already put remain in the store (the port has no delete); no hold
+    row or root change commits. Names no object, path, digest or value.
+    """
+
+
+class ReportTrashPreflightError(PortError):
+    """A report's content is not durably present and intact, so it is not trashed (H4)."""
+
+
+class GeneralReportRepository(ABC):
+    """The general report plane (Reports Modernization WP02), inside one transaction.
+
+    Every method is scoped to `principal_id`, the authenticated caller's
+    partition: a report, receipt or target another Principal owns answers
+    exactly what one that does not exist answers. Nothing here writes to a
+    `knowledge.intelligence_*` table.
+    """
+
+    @abstractmethod
+    def publish(
+        self,
+        request: PublicationRequest,
+        *,
+        principal_id: str,
+        creator: ReportCreator,
+        idempotency_key: str,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+        content_store: ReportContentStore | None = None,
+        inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
+    ) -> PublicationResult:
+        """Write a new report at version 1, or replay the key's original result.
+
+        One transaction, in this order: the content object, the root (head
+        version 1, `active`, revision 0), version 1, its manifest, its
+        associations and the `publish`/`applied` receipt. Associations to a
+        project, entity, standalone report or intelligence report must resolve
+        in the caller's scope (`verified`), else `ReportAssociationTargetNotFoundError`
+        and nothing is written; an `external_source` is `asserted`.
+
+        A key already bound to the same intent digest returns the stored result
+        (`replayed=True`) and writes nothing; bound to a different digest it
+        raises `ReportIdempotencyConflictError` and writes nothing. A concurrent
+        writer of the same key is settled the same way at the receipt's unique
+        constraint. A content or manifest bound refuses as `ReportValidationError`.
+
+        `creator` (WP05 A1/A2) is the server-derived caller: the root's
+        `created_by_*` and version 1's `authored_by_*` (and the manifest's
+        `author`) are both it. A replay returns the stored result unchanged.
+
+        Placement (WP05 C4): content of at most `inline_max_bytes` decoded
+        bytes is stored inline; above it, `managed_blob` in `content_store`,
+        whose `put` runs after every refusal the request can meet (the
+        replay/conflict check, association resolution, the manifest and its
+        size bound) and immediately before the first INSERT, so a refusal
+        leaves no object and a `put` failure propagates with nothing written;
+        with no store, `ReportValidationError("content", "too_large")`.
+        """
+
+    @abstractmethod
+    def find_publish_receipt(
+        self, idempotency_key: str, *, principal_id: str
+    ) -> PublicationResult | None:
+        """The stored result this Principal's `publish` key is bound to, or `None`.
+
+        Compares no digest: the caller compares `receipt.intent_digest`.
+
+        Keyed by key and Principal only (review WP06 R1 #7), which is sound
+        because remote keys are server-stamped: `adapters.remote_request` derives
+        a remote write's key from its payload hash and authenticated client, so
+        one client's retry finds only its own receipt. A local caller's key is
+        used as given; there the caller's `intent_digest` comparison is what
+        refuses a key reused under another intent (the key's conflict). For a
+        transfer-sourced request that digest binds the session and the token's
+        digest, never the token.
+        """
+
+    @abstractmethod
+    def find_update_receipt(
+        self, idempotency_key: str, *, principal_id: str
+    ) -> UpdateResult | None:
+        """The stored result this Principal's `update` key is bound to (`replayed=True`), or `None`.
+
+        Compares no digest: the caller compares `intent_digest`. WP06 T10: a
+        transfer-sourced update settles its key with this BEFORE it claims the
+        session, so a retry after the token was consumed replays.
+
+        Keyed by key and Principal only, relying on server-stamped remote keys
+        exactly as `find_publish_receipt` states (review WP06 R1 #7): a local
+        caller reusing a key under another intent is refused by the caller's
+        `intent_digest` comparison.
+        """
+
+    @abstractmethod
+    def read_version(
+        self,
+        report_id: str,
+        *,
+        principal_id: str,
+        version_id: str | None = None,
+        version_number: int | None = None,
+    ) -> StoredReportVersion | None:
+        """One version of a report this Principal owns (the head by default), or `None`.
+
+        At most one of `version_id` and `version_number`. Lifecycle state is
+        returned, not filtered. Recomputes the decoded content digest and the
+        manifest digest and raises `ReportIntegrityError` on a mismatch.
+        """
+
+    @abstractmethod
+    def resolve_association_targets(
+        self,
+        targets: Sequence[tuple[AssociationTargetKind, str]],
+        *,
+        principal_id: str,
+    ) -> frozenset[tuple[AssociationTargetKind, str]]:
+        """The subset of `targets` that exist in this Principal's scope.
+
+        Resolvable kinds only: `project`, `entity`, `standalone_report` (a
+        `grpt_` root) and `intelligence_report` (an `rpt_` artifact). An
+        `external_source` target is never returned.
+        """
+
+    @abstractmethod
+    def update(
+        self,
+        request: UpdateRequest,
+        *,
+        principal_id: str,
+        creator: ReportCreator,
+        idempotency_key: str,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+        content_store: ReportContentStore | None = None,
+        inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
+    ) -> UpdateResult:
+        """Write version N+1 of an active report, or a `no_op` receipt (WP03 D4-D6).
+
+        One transaction, in this order: lock the root `FOR UPDATE` (missing or
+        foreign -> `ReportNotFoundError`); the `update` receipt of this key,
+        if any, replays its original result (`replayed=True`, nothing written)
+        or, bound to another intent digest, raises
+        `ReportIdempotencyConflictError`; an `archived` or `trashed` report
+        raises `ReportWithdrawnError`; a head other than `expected_version`
+        raises `ReportStaleVersionError`. Patched associations resolve as a
+        publish's do (`ReportAssociationTargetNotFoundError`); the rest carry
+        forward verbatim. New content writes a content object (`content`);
+        otherwise the head's object is reused (`metadata`). A patch that
+        changes nothing writes only an `update`/`no_op` receipt naming the head.
+        Every refusal writes nothing. `creator` (WP05 A2) is the server-derived
+        caller, written as version N+1's `authored_by_*` and manifest `author`;
+        the root's creator never changes. New content is placed as `publish`
+        places it (WP05 C4): its `put` follows the lock, the key check and every
+        other refusal, the manifest bound included, and immediately precedes
+        the first INSERT; a metadata-only update reuses the head's content object
+        (inline or `managed_blob`, no new blob) and copies its search text.
+        """
+
+    @abstractmethod
+    def transition(
+        self,
+        request: LifecycleRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+        content_store: ReportContentStore | None = None,
+    ) -> LifecycleResult:
+        """Archive, delete (to the recoverable Trash) or restore a report (WP03 D7).
+
+        Lock the root `FOR UPDATE` (`ReportNotFoundError`), settle the key as
+        `update` does, require `lifecycle_revision == expected_lifecycle_revision`
+        (`ReportStaleLifecycleRevisionError`), then decide with
+        `decide_lifecycle_transition` (an illegal move raises the domain
+        `ReportLifecycleRefusal`). Applied: one event at revision + 1 linked to
+        its predecessor, the root cache moved, an `applied` receipt. Archive on
+        `archived` is a `no_op` receipt at the current revision. No version,
+        content, manifest or association row is ever touched or removed.
+
+        WP05b B4: a `delete` of a report under a legal hold raises
+        `ReportHeldError` after the lock, the key settle and the revision
+        check, before the lifecycle decision; archive and restore are never
+        gated by a hold.
+
+        WP05b B4 trash preflight (H4): an applied `delete`, after the lifecycle
+        decision and before any event, receipt or root write, verifies every
+        content object any version of the report references -- inline rows
+        recomputed from their stored bytes (decoded, and original for gzip,
+        digest and byte count), `managed_blob` parts `verify`-ed through
+        `content_store` (no store is a missing part). Any failure raises
+        `ReportTrashPreflightError` and writes nothing. Archive and restore
+        never preflight.
+        """
+
+    @abstractmethod
+    def place_hold(
+        self,
+        request: HoldRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+        preservation_store: ReportContentStore | None,
+        content_store: ReportContentStore | None,
+    ) -> HoldResult:
+        """Place a legal hold on a report after sealing its preservation copy (WP05b B3/B5).
+
+        One transaction, in this order: lock the root `FOR UPDATE` (missing or
+        foreign -> `ReportNotFoundError`); the `place` event of this key, if
+        any, replays its original result (`replayed=True`, nothing put or
+        written) or, bound to another intent digest, raises
+        `ReportIdempotencyConflictError`; `hold_revision` other than
+        `expected_hold_revision` raises `ReportStaleHoldRevisionError`; an
+        already held report raises `ReportHoldStateError`; no
+        `preservation_store` raises `ReportPreservationUnavailableError`. Then
+        the seal: every version (verified as a read verifies it), every
+        distinct content object (inline recomputed from its row, `managed_blob`
+        read verified from `content_store`), every lifecycle event; one
+        preservation object per distinct content object and the seal are
+        `put`, then every part verified and the seal read back byte-equal.
+        Any failure raises `ReportPreservationError` and writes no row (the
+        objects already put remain). Only then the `place` event and the
+        root's hold cache. Allowed in every lifecycle state. `authority` is
+        the attested operator pair the event records.
+        """
+
+    @abstractmethod
+    def release_hold(
+        self,
+        request: HoldRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> HoldResult:
+        """Release a report's legal hold (WP05b B3), keeping its preservation copy.
+
+        The order of `place_hold` (lock, key, revision), then a report not held
+        raises `ReportHoldStateError`; then the `release` event and the root's
+        hold cache. No preservation object is read, written or removed.
+        """
+
+    @abstractmethod
+    def hold_events(
+        self, report_id: str, *, principal_id: str
+    ) -> tuple[ReportHoldEventRecord, ...] | None:
+        """The report's whole hold ledger, oldest first, or `None` if not found."""
+
+    @abstractmethod
+    def hold_seal_events(self) -> tuple[ReportHoldEventRecord, ...]:
+        """Every `place` hold event (with its seal), across Principals, oldest first.
+
+        **Unpartitioned on purpose**, as `known_managed_content_ids`: the
+        preservation scan's orphan direction subtracts every sealed object of
+        every Principal from the `preservation` namespace, and a partitioned
+        answer would report every other Principal's copy as an orphan. Operator
+        use from the reconciliation path only, never a request: its one caller
+        is `scan_report_preservation`, reached only from the operator command's
+        `preservation-verify` (pinned by a WP08 unit test).
+        """
+
+    @abstractmethod
+    def set_retention(
+        self,
+        request: RetentionSetRequest,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        authority: CustodyAuthority,
+        recorded_at: datetime,
+        correlation_id: str,
+        audit_id: str,
+    ) -> RetentionResult:
+        """Append one retention policy event for this Principal (WP05b B6).
+
+        The key of this Principal, if already bound, replays its original
+        event (`replayed=True`, nothing written) or, bound to another intent
+        digest, raises `ReportIdempotencyConflictError`. Then the newest
+        `policy_revision` (0 when none) must equal `expected_policy_revision`
+        (else `ReportStalePolicyRevisionError`); the event is written at
+        revision + 1 with the newest event's period as its previous period. A
+        concurrent writer of the same revision loses at the unique constraint:
+        a winner of the same key is replayed, any other is stale. Append-only;
+        no row is ever updated or deleted. Nothing is enforced by a policy.
+        """
+
+    @abstractmethod
+    def retention_policy(
+        self, *, principal_id: str, history_limit: int = DEFAULT_RETENTION_HISTORY
+    ) -> RetentionPolicyView:
+        """This Principal's current policy and its newest-first history (limit 1..50)."""
+
+    @abstractmethod
+    def retention_eligibility_inputs(
+        self, report_id: str, *, principal_id: str
+    ) -> ReportEligibilityInputs | None:
+        """One report's lifecycle state, hold cache and lifecycle ledger, or `None`.
+
+        Foreign and missing are the same `None`. Reads only; never locks.
+        """
+
+    @abstractmethod
+    def version_history(
+        self,
+        report_id: str,
+        *,
+        principal_id: str,
+        after_version_id: str | None = None,
+        page_size: int = 20,
+        include_manifests: bool = False,
+    ) -> ReportHistoryPage[ReportVersionSummary] | None:
+        """One page of the report's versions, oldest first, or `None` if not found.
+
+        `after_version_id` is the last item of the previous page; one that is
+        not a version of this report raises `ReportValidationError("cursor")`.
+        `page_size` is 1..50, at most 10 with manifests. Every listed version's
+        manifest is rebuilt and compared (`ReportIntegrityError`). Lifecycle
+        state is returned, not filtered.
+        """
+
+    @abstractmethod
+    def lifecycle_history(
+        self,
+        report_id: str,
+        *,
+        principal_id: str,
+        after_event_id: str | None = None,
+        page_size: int = 20,
+    ) -> ReportHistoryPage[ReportLifecycleEventRecord] | None:
+        """One page of the report's lifecycle events, oldest first, or `None` if not found.
+
+        The cursor and `page_size` rules are `version_history`'s (1..50).
+        """
+
+    @abstractmethod
+    def catalog_page(
+        self,
+        *,
+        principal_id: str,
+        filters: CatalogFilters,
+        query: SearchQuery | None,
+        after: CatalogCursor | None,
+        limit: int,
+    ) -> tuple[CatalogEntry, ...]:
+        """Up to `limit` of this Principal's reports at their HEAD version (WP04 C2-C8).
+
+        `query` `None` is the list: order `(created_at DESC, report_id DESC)`.
+        A `query` is a search: `websearch_to_tsquery('english', query.text)`
+        matched against the HEAD version's `search_document` only, `rank =
+        floor(ts_rank * 1e6)`, order `(rank DESC, created_at DESC, report_id
+        DESC)`, each entry with its headline over `coalesce(summary, title)`.
+        Ids compare in code-point order (`COLLATE "C"`). `after` is the keyset
+        position: only rows strictly after it in that order (no TTL: a list
+        position's keys never change, but a search position's rank is the HEAD
+        version's, so an update between pages can skip or repeat an item, as can
+        a head change that alters a filter match). Its `rank` must be
+        set exactly when `query` is (else `CatalogCursorError`); its id may be
+        any report id, standalone or legacy, since the `all` plane merges both
+        in one order. Filters: `report_type` equality; `topics`/`tags` all-of
+        (`@>`) on the head; `associated_with` an association of the head
+        version; `lifecycle_state` in `lifecycle_states`; `created_*` on the
+        root's `created_at`, half-open; `report_date_*` on the head, inclusive
+        (NULL never matches a bound); `created_by` (WP05 A5) the root's
+        `created_by_id`, exactly. `limit` is 1..101 (a page plus one, so
+        the caller learns whether more follow). No count is computed. A
+        foreign or nonexistent association target or cursor position simply
+        yields no rows / skips none of another Principal's.
+        """
+
+    @abstractmethod
+    def managed_content(self, *, principal_id: str) -> tuple[ManagedContentRecord, ...]:
+        """Every `managed_blob` content row this Principal owns (WP05 C7), by content id.
+
+        The row-to-object direction of the reconciliation scan: the facts each
+        stored object is verified against. Never the content.
+        """
+
+    @abstractmethod
+    def known_managed_content_ids(self) -> frozenset[str]:
+        """Every `managed_blob` content id the database holds, across Principals.
+
+        **The one unpartitioned read of this plane, on purpose**, exactly as
+        `ManagedDocumentRepository.known_version_identifiers`: its subject is
+        the reverse direction -- objects in the report content store that no
+        row claims -- and a partitioned answer would report every other
+        Principal's objects as orphans. Opaque identifiers only; operator use
+        from the reconciliation path, never a request.
+        """
+
+
 class ManagedByteStore(ABC):
     """Durable storage for the bytes of managed document versions.
 
@@ -7759,6 +8306,509 @@ class ManagedByteStore(ABC):
     @abstractmethod
     def read_manifest(self) -> bytes:
         """Return the backup manifest this store holds."""
+
+
+class ReportContentPart(StrEnum):
+    """The parts of one stored report content object (WP05 C1).
+
+    `decoded`: the decoded bytes the content digests name. `original`: the
+    exact uploaded gzip bytes of a `gzip+base64` upload (absent for identity).
+    """
+
+    DECODED = "decoded"
+    ORIGINAL = "original"
+
+
+class ReportContentNamespace(StrEnum):
+    """The closed set of report content store namespaces (WP05 C1).
+
+    Each names one subdirectory of the store's root and admits only the object
+    identifiers of its own kind: `content` admits `grcnt_` report content
+    objects; `preservation` (WP05b B5) admits only `grprv_` preservation
+    objects and seals. `transfer` (WP06 T13) is the directory the transfer
+    staging adapter (`ReportTransferStaging`) keeps its chunks under, in the
+    same root: staging only, NEVER a content-store namespace -- the report
+    content store refuses to be constructed on it, so neither port can be
+    pointed at the other's tree. Nothing else is a namespace.
+    """
+
+    CONTENT = "content"
+    PRESERVATION = "preservation"
+    TRANSFER = "transfer"
+
+
+class ReportContentStoreError(PortError):
+    """A report content store operation could not be performed. Names no path or value."""
+
+
+class ReportContentMissingError(ReportContentStoreError):
+    """A stored report content object or one of its parts is absent or not a readable file."""
+
+
+class ReportContentIntegrityError(ReportContentStoreError):
+    """A stored part's size or SHA-256 is not the one its row names.
+
+    `mismatch` says which, `"size"` or `"digest"`, for the reconciliation
+    scan; neither the stored nor the expected value is carried.
+    """
+
+    def __init__(self, mismatch: str) -> None:
+        super().__init__(f"the stored report content part's {mismatch} is not the recorded one")
+        self.mismatch = mismatch
+
+
+class ReportContentStore(ABC):
+    """Durable storage for report content above the inline threshold (WP05 C1).
+
+    **No method takes a path.** Every operation names an opaque object
+    identifier -- the content object's `grcnt_` id, which is its row's
+    `blob_ref` -- or nothing; where the bytes live is derived by the
+    implementation from that identifier, inside its configured root and
+    namespace, exactly as `ManagedByteStore` derives a managed version's. A
+    location parameter would put the choice of location on the caller, and
+    the caller is where a traversal enters.
+
+    Objects are written once: `put` is an exclusive create, and nothing here
+    overwrites, repairs or deletes one.
+    """
+
+    @abstractmethod
+    def put(self, object_id: str, *, decoded: bytes, original: bytes | None) -> None:
+        """Store one object's parts durably, exactly once.
+
+        `original` is the uploaded gzip bytes, or `None` (identity content has
+        no separate original). Returns only once every part is on the device,
+        re-read and verified against the bytes given, under its final name. An
+        identifier already stored raises `ReportContentStoreError`; so does
+        any write failure, after which nothing of this call remains.
+        """
+
+    @abstractmethod
+    def read(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> bytes:
+        """The verified bytes of one part.
+
+        Absent (or not a plain file) raises `ReportContentMissingError`; a size
+        or digest other than the expected ones `ReportContentIntegrityError`.
+        Bytes that do not match are never returned.
+        """
+
+    @abstractmethod
+    def verify(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> None:
+        """`read`'s checks, streamed, returning nothing. Raises as `read` does."""
+
+    @abstractmethod
+    def read_range(
+        self,
+        object_id: str,
+        part: ReportContentPart,
+        *,
+        offset: int,
+        length: int,
+        expected_sha256: str,
+        expected_byte_count: int,
+    ) -> bytes:
+        """The bytes `[offset, offset + length)` of one part, the WHOLE part verified (WP06 T15).
+
+        Streams the entire part through the size and SHA-256 checks `read`
+        makes and keeps only the requested range, so memory is O(`length`);
+        the range is cut at the part's end (`offset == expected_byte_count`
+        gives `b""`). Bytes of a part that does not verify are never returned:
+        raises as `read` does, wherever in the part the damage is. `offset`
+        (an `int`, `0 <= offset <= expected_byte_count`) and `length` (an
+        `int` >= 1) outside their bounds raise `ReportContentStoreError`.
+        """
+
+    @abstractmethod
+    def has(self, object_id: str) -> bool:
+        """Whether an object of this identifier is present."""
+
+    @abstractmethod
+    def stored_object_ids(self) -> tuple[str, ...]:
+        """Every well-formed object identifier this store holds, sorted."""
+
+    @abstractmethod
+    def unreadable_entries(self) -> tuple[str, ...]:
+        """Store entries that are not well-formed objects or parts, for the operator."""
+
+    def stale_temporaries(self) -> tuple[str, ...]:
+        """The store's own `put` temporaries left by a process killed mid-put, sorted.
+
+        Informational (Reports Modernization WP08, WP05b corrective n2): never an
+        unreadable entry, never removed by the store. A store that writes no
+        temporaries has none, which is this default.
+        """
+        return ()
+
+
+class ReportTransferStagingError(PortError):
+    """A transfer staging operation could not be performed (WP06 T13).
+
+    Names no path, identifier or value; the application answers it as
+    `internal_error`.
+    """
+
+
+class ReportTransferStaging(ABC):
+    """Where a transfer session's chunks wait until the session is consumed (WP06 T13).
+
+    A separate port from `ReportContentStore`, which keeps NO delete: staging
+    is transient by design, and `discard` exists only here. **No method takes
+    a path**: a session is named by its `grxfr_` identifier (only that kind is
+    admitted) and a chunk by its sequence and SHA-256; the location is derived
+    by the implementation under a constant `transfer` directory of its root,
+    so nothing here can name a content or preservation object.
+
+    A chunk is written once (an exclusive create, named by sequence AND
+    digest, so a retry with different bytes never overwrites); an identical
+    chunk already present (a crashed attempt) is verified and accepted.
+    """
+
+    @abstractmethod
+    def put_chunk(self, session_id: str, sequence: int, *, chunk_sha256: str, data: bytes) -> None:
+        """Stage one chunk durably: on the device, re-read and verified, under its final name.
+
+        `chunk_sha256` must be the SHA-256 hex of `data`. Any failure raises
+        `ReportTransferStagingError`.
+        """
+
+    @abstractmethod
+    def read_chunk(
+        self, session_id: str, sequence: int, *, chunk_sha256: str, expected_byte_count: int
+    ) -> bytes:
+        """One staged chunk's bytes, verified (size, digest); else `ReportTransferStagingError`."""
+
+    @abstractmethod
+    def has_session(self, session_id: str) -> bool:
+        """Whether anything is staged for this session."""
+
+    @abstractmethod
+    def staged_session_ids(self) -> tuple[str, ...]:
+        """Every well-formed staged session identifier, sorted (for the GC)."""
+
+    @abstractmethod
+    def unreadable_entries(self) -> tuple[str, ...]:
+        """Staging entries that are not well-formed sessions or chunks, for the operator."""
+
+    @abstractmethod
+    def discard(self, session_id: str) -> bool:
+        """Remove one session's staged chunks and its directory; `True` if anything was removed.
+
+        Idempotent: an absent session is `False`. Removes only well-formed
+        chunk files (and their temporaries) of that session; anything else is
+        left in place and reported by `unreadable_entries`.
+        """
+
+
+# --- Reports Modernization WP06 (B3/B5): the transfer session repository -----
+
+
+class ReportTransferNotFoundError(UnknownScopeError):
+    """The named transfer session is not usable by this caller (WP06 T5).
+
+    ONE answer for every reason: absent, another Principal's, another
+    client's, expired (`expires_at <= now`, whatever its state says), aborted,
+    consumed, a malformed identifier, or a wrong/consumed content token. It
+    carries no attribute that says which, and its message names nothing. A
+    subclass of `UnknownScopeError`, so it answers the bare `not_found`.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("the transfer session was not found")
+
+
+class ReportTransferConflictError(PortError):
+    """An operation on the caller's OWN live session conflicts with its state (WP06 T5/T8/T9).
+
+    `detail` is one of `transfer_chunk_conflict`, `transfer_sequence`,
+    `transfer_state` or `transfer_incomplete`: a stable code, never a value.
+    Nothing was written.
+    """
+
+    DETAILS: ClassVar[frozenset[str]] = frozenset(
+        {"transfer_chunk_conflict", "transfer_sequence", "transfer_state", "transfer_incomplete"}
+    )
+
+    def __init__(self, detail: str) -> None:
+        if detail not in self.DETAILS:  # pragma: no cover - a programming error
+            raise ValueError("unknown transfer conflict detail")
+        super().__init__(f"transfer conflict: {detail}")
+        self.detail: Final = detail
+
+
+class ReportTransferQuotaError(PortError):
+    """A begin would exceed the owner's live-session quotas (WP06 T6). Nothing was written.
+
+    Answered as `rate_limited` (`transfer_quota`). Names no count or session.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("the transfer session quota is exhausted")
+
+
+class ReportTransferDigestError(PortError):
+    """The staged bytes are not the declaration: whole size or SHA-256 differs (WP06 T9).
+
+    Answered as invalid_request `transfer` `digest_mismatch`. Nothing was written.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("the staged transfer bytes are not the declared ones")
+
+
+@dataclass(frozen=True, slots=True)
+class TransferSession:
+    """One transfer session row, as the repository read it (WP06 B3).
+
+    Every declaration fact, the state and its timestamps. The content token's
+    stored digest is kept for the consumption comparison but never in `repr`;
+    the raw token is never stored anywhere.
+    """
+
+    session_id: str
+    owner_principal_id: str
+    client_ref: str
+    state: TransferState
+    format: ContentFormat
+    encoding: ContentEncoding
+    declared_byte_count: int
+    declared_sha256: str
+    chunk_byte_limit: int
+    received_byte_count: int
+    idempotency_key: str
+    intent_digest: str
+    created_at: datetime
+    expires_at: datetime
+    finalized_at: datetime | None
+    consumed_content_id: str | None
+    consumed_at: datetime | None
+    content_token_digest: str | None = field(default=None, repr=False)
+
+    @property
+    def ttl_seconds(self) -> int:
+        """The declared lifetime (`expires_at - created_at`, whole seconds)."""
+        return int((self.expires_at - self.created_at).total_seconds())
+
+    @property
+    def declaration(self) -> TransferDeclaration:
+        """What begin declared, rebuilt (validated) from the row."""
+        return TransferDeclaration(
+            format=self.format,
+            encoding=self.encoding,
+            byte_count=self.declared_byte_count,
+            sha256=self.declared_sha256,
+            ttl_seconds=self.ttl_seconds,
+        )
+
+    @property
+    def chunk_count(self) -> int:
+        """How many chunks complete the declaration (T2)."""
+        return transfer_chunk_count(self.declared_byte_count)
+
+    @property
+    def complete(self) -> bool:
+        """Whether every declared byte has been received."""
+        return self.received_byte_count == self.declared_byte_count
+
+    def usable_at(self, now: datetime) -> bool:
+        """T5: open or finalized and not yet expired at `now`."""
+        return self.state in (TransferState.OPEN, TransferState.FINALIZED) and (
+            self.expires_at > now
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TransferChunk:
+    """One ledger row of a transfer session: a received chunk's facts, never its bytes."""
+
+    session_id: str
+    sequence: int
+    byte_offset: int
+    byte_count: int
+    chunk_sha256: str
+    received_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class TransferBegin:
+    """What one `ReportTransferRepository.begin` did (WP06 T6, T7', review R1 #1).
+
+    `session` is the new or replayed session; `replayed` whether it is the
+    keyed original. `reaped_session_ids` are the owner's sessions this begin
+    moved from open/finalized to `expired` because their time had passed (at
+    most `TRANSFER_BEGIN_REAP_LIMIT`, plus the keyed one): their staging is
+    the caller's to discard, and only AFTER the transaction committed.
+    """
+
+    session: TransferSession
+    replayed: bool
+    reaped_session_ids: tuple[str, ...] = ()
+
+
+class ReportTransferRepository(ABC):
+    """The transfer sessions and their chunk ledger, inside one transaction (WP06 B3).
+
+    **Every method but the three GC queries is scoped by BOTH the
+    authenticated `principal_id` and the caller's `client_ref`** (T4): a
+    session of another Principal or another client answers exactly what an
+    absent one answers, `ReportTransferNotFoundError` (T5). `now` is always
+    passed in, never read from the database clock, so expiry is one decision
+    the caller made. No method deletes a row; nothing here writes
+    `knowledge.intelligence_*`.
+
+    Order of a request (the caller's): `begin`; or `lock_usable` (the row
+    `FOR UPDATE`) and then `append_chunk` / `staged_bytes` + `finalize`; or
+    `claim_for_consumption` (lock + token) and, once the content row exists in
+    the same transaction, `mark_consumed`; or `abort`.
+    """
+
+    @abstractmethod
+    def begin(
+        self,
+        declaration: TransferDeclaration,
+        *,
+        principal_id: str,
+        client_ref: str,
+        idempotency_key: str,
+        now: datetime,
+    ) -> TransferBegin:
+        """Open a session, or replay the one this key opened (a `TransferBegin`).
+
+        Serialized per owner (`pg_advisory_xact_lock`). Under that lock and
+        BEFORE the keyed lookup and the quota count, the owner's sessions (of
+        every client) that are open or finalized but expired by time
+        (`expires_at <= now`) are moved to `expired`, oldest first, at most
+        `TRANSFER_BEGIN_REAP_LIMIT` of them; their ids are returned as
+        `reaped_session_ids` so the caller discards their staging after the
+        commit (a rolled-back begin reaped nothing). Hence an owner's staging
+        on disk is bounded by its live quota (8 sessions, 64 MiB declared)
+        plus the sessions that ended with no later begin of that owner and no
+        transfer GC since (and any whose post-commit discard failed). The key (owner,
+        client_ref, idempotency_key) binds only a live session (T7'): a live,
+        unexpired session under the key with the same `intent_digest` replays
+        (no new row); with another digest is `ReportIdempotencyConflictError`.
+        A session under the key that is open or finalized but expired by time
+        is reaped by the same step (and is moved to `expired`, and reported
+        reaped, even past the reap limit); it, and any consumed, aborted or
+        expired one, leaves the key free, so the begin opens a NEW session. A new
+        session must fit the T6 quotas, else `ReportTransferQuotaError`.
+        """
+
+    @abstractmethod
+    def lock_usable(
+        self, session_id: str, *, principal_id: str, client_ref: str, now: datetime
+    ) -> TransferSession:
+        """Lock the caller's open or finalized, unexpired session `FOR UPDATE`.
+
+        Every other case (absent, foreign owner, other client, expired,
+        aborted, consumed, malformed id) is `ReportTransferNotFoundError`.
+        """
+
+    @abstractmethod
+    def chunks(self, session_id: str, *, principal_id: str) -> tuple[TransferChunk, ...]:
+        """The session's ledger rows, ordered by sequence (Principal-scoped)."""
+
+    @abstractmethod
+    def append_chunk(
+        self,
+        session: TransferSession,
+        *,
+        sequence: int,
+        chunk_sha256: str,
+        data: bytes,
+        staging: ReportTransferStaging,
+        now: datetime,
+    ) -> tuple[TransferChunk, bool]:
+        """Admit chunk `sequence` of a session the caller locked: `(chunk, replayed)`.
+
+        `transfer_state` on a finalized session; the T2 size rules
+        (`ReportValidationError("chunk", "too_large" | "size")`); the digest
+        (`("chunk_sha256", "digest_mismatch")`); a ledger row for the sequence
+        replays when identical, else `transfer_chunk_conflict`; a sequence
+        other than the ledger length is `transfer_sequence`. Then the chunk is
+        staged BEFORE the ledger INSERT, and the session's received count moves.
+        """
+
+    @abstractmethod
+    def staged_bytes(self, session: TransferSession, *, staging: ReportTransferStaging) -> bytes:
+        """Every ledger chunk from staging (each verified), concatenated.
+
+        The whole size and SHA-256 must be the declaration's, else
+        `ReportTransferDigestError`; a staging failure is
+        `ReportTransferStagingError`.
+        """
+
+    @abstractmethod
+    def finalize(
+        self, session: TransferSession, *, token_digest: str, now: datetime
+    ) -> TransferSession:
+        """Move the caller's locked open, complete session to `finalized` with the token digest.
+
+        `transfer_state` if already finalized; `transfer_incomplete` if bytes
+        are missing. The caller validated the content first.
+        """
+
+    @abstractmethod
+    def claim_for_consumption(
+        self,
+        session_id: str,
+        content_token: str,
+        *,
+        principal_id: str,
+        client_ref: str,
+        now: datetime,
+    ) -> TransferSession:
+        """Lock the caller's finalized session whose token digest matches `content_token`.
+
+        Every failure (`lock_usable`'s, not finalized, a malformed or wrong
+        token) is the one `ReportTransferNotFoundError`.
+        """
+
+    @abstractmethod
+    def mark_consumed(
+        self, session: TransferSession, *, content_id: str, now: datetime
+    ) -> TransferSession:
+        """Move a claimed session to `consumed`, naming the content row (already written)."""
+
+    @abstractmethod
+    def abort(
+        self, session_id: str, *, principal_id: str, client_ref: str, now: datetime
+    ) -> tuple[TransferSession, bool]:
+        """Abort the caller's open or finalized session; its own aborted one replays.
+
+        Expired, consumed, foreign or absent is `ReportTransferNotFoundError`.
+        """
+
+    @abstractmethod
+    def expire_due(self, *, now: datetime, limit: int) -> tuple[str, ...]:
+        """GC (T19): move up to `limit` open/finalized sessions due at `now` to `expired`.
+
+        **Not Principal-scoped, on purpose**, as `known_managed_content_ids`:
+        an operator sweep over every owner (`FOR UPDATE SKIP LOCKED`, so a
+        session a request holds is left for the next run), ordered by
+        `expires_at`. Returns the opaque ids moved; operator use only.
+        """
+
+    @abstractmethod
+    def terminal_session_ids(self, session_ids: Iterable[str]) -> frozenset[str]:
+        """GC: which of `session_ids` are consumed, aborted or expired. Not Principal-scoped."""
+
+    @abstractmethod
+    def known_session_ids(self, session_ids: Iterable[str]) -> frozenset[str]:
+        """GC: which of `session_ids` have a row at all (orphan detection). Not Principal-scoped."""
 
 
 # --- WP-TM-02: canonical Task mutation, receipts, idempotency, concurrency --

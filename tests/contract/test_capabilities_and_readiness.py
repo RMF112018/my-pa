@@ -55,7 +55,7 @@ def manifest(implemented: frozenset[Capability] = EVERYTHING) -> CapabilityManif
 
 def test_manifest_lists_every_capability_exactly_once() -> None:
     names = [status.name for status in manifest().capabilities]
-    assert len(names) == len(Capability) == 240
+    assert len(names) == len(Capability) == 255
     assert set(names) == set(Capability)
     assert len(set(names)) == len(names)
 
@@ -158,6 +158,21 @@ def test_capability_names_match_the_published_contract() -> None:
         "reports.resolve_set",
         "reports.types.create",
         "reports.types.list",
+        "reports.publish",
+        "reports.update",
+        "reports.history",
+        "reports.archive",
+        "reports.delete",
+        "reports.restore",
+        "reports.hold.place",
+        "reports.hold.release",
+        "reports.retention.set",
+        "reports.retention.get",
+        "reports.transfer.begin",
+        "reports.transfer.append",
+        "reports.transfer.finalize",
+        "reports.transfer.abort",
+        "reports.transfer.read_chunk",
         "relationship_memory.create",
         "relationship_memory.get",
         "relationship_memory.list",
@@ -380,6 +395,13 @@ def test_the_operator_only_set_is_enrollment_and_governed_identity_correction() 
         # CPM Workbench S5b-2 (contract section 3.12, E-12): the schedule import is
         # attested to the local operator surface on the same D-16 departure.
         Capability.SCHEDULE_PUBLICATIONS_IMPORT,
+        # Reports Modernization WP05b (operator decision 2026-11-05, H1): report
+        # holds and retention are attested to the local operator surface on the
+        # same D-16 departure.
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
+        Capability.REPORTS_RETENTION_GET,
     }
     assert is_operator_only(Capability.SOURCES_ENROLL)
     assert is_operator_only(Capability.ENTITIES_MERGE_PREVIEW)

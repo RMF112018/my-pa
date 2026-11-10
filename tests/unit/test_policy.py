@@ -288,6 +288,13 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.REPORTS_RESOLVE_SET, Purpose.REPORT_READ),
         (Capability.REPORTS_TYPES_CREATE, Purpose.REPORT_AUTHORING),
         (Capability.REPORTS_TYPES_LIST, Purpose.REPORT_READ),
+        (Capability.REPORTS_PUBLISH, Purpose.REPORT_AUTHORING),
+        # Reports Modernization WP03: the lifecycle writes take only their own purpose.
+        (Capability.REPORTS_UPDATE, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_HISTORY, Purpose.REPORT_READ),
+        (Capability.REPORTS_ARCHIVE, Purpose.REPORT_LIFECYCLE),
+        (Capability.REPORTS_DELETE, Purpose.REPORT_LIFECYCLE),
+        (Capability.REPORTS_RESTORE, Purpose.REPORT_LIFECYCLE),
         # The entity plane. Every read on it shares the single `entity_read`
         # purpose, exactly as the task-plane reads share `task_read`. The writes
         # take `entity_authoring`, except `entities.observe`, which takes
@@ -503,6 +510,19 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.SCHEDULE_ACTIVITIES_LIST, Purpose.SCHEDULE_READ),
         (Capability.SCHEDULE_ACTIVITIES_HISTORY, Purpose.SCHEDULE_READ),
         (Capability.SCHEDULE_CHANGES_LIST, Purpose.SCHEDULE_READ),
+        # Reports Modernization WP05b: the operator custody names, the hold pair
+        # under `report_hold` and the retention pair under `report_retention`.
+        (Capability.REPORTS_HOLD_PLACE, Purpose.REPORT_HOLD),
+        (Capability.REPORTS_HOLD_RELEASE, Purpose.REPORT_HOLD),
+        (Capability.REPORTS_RETENTION_SET, Purpose.REPORT_RETENTION),
+        (Capability.REPORTS_RETENTION_GET, Purpose.REPORT_RETENTION),
+        # Reports Modernization WP06: the four upload writes author content, the
+        # chunk read reads a report; no new purpose.
+        (Capability.REPORTS_TRANSFER_BEGIN, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_TRANSFER_APPEND, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_TRANSFER_FINALIZE, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_TRANSFER_ABORT, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_TRANSFER_READ_CHUNK, Purpose.REPORT_READ),
     }
 )
 
@@ -596,8 +616,16 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # existing purpose: 233 capabilities, 60 purposes, 235 pairs.
     # CPM Workbench S5b-2 adds 7 names and 2 purposes, each name mapped to exactly
     # one of the pair: 240 capabilities, 62 purposes, 242 pairs.
-    assert len(PERMITTED_PAIRS) == 242
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 242 == 14638
+    # Reports Modernization WP02 adds `reports.publish` under `report_authoring`
+    # and no purpose: 241 capabilities, 62 purposes, 243 pairs.
+    # Reports Modernization WP03 adds 5 names, each under one purpose, and the
+    # `report_lifecycle` purpose: 246 capabilities, 63 purposes, 248 pairs.
+    # Reports Modernization WP05b adds 4 names and 2 purposes, each name under
+    # exactly one of the pair: 250 capabilities, 65 purposes, 252 pairs.
+    # Reports Modernization WP06 adds 5 names, each under one existing purpose,
+    # and no purpose: 255 capabilities, 65 purposes, 257 pairs.
+    assert len(PERMITTED_PAIRS) == 257
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 257 == 16318
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

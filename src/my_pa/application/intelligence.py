@@ -7,6 +7,7 @@ Principal is always the authenticated partition, never a request field.
 from __future__ import annotations
 
 import json
+import re
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -90,6 +91,15 @@ from my_pa.domain.intelligence.source_manifest import (
     recorded_release_requirement,
     structured_content_sha256,
 )
+from my_pa.domain.reports.catalog import (
+    MAX_CATALOG_PAGE_SIZE,
+    CatalogCursor,
+    CatalogCursorError,
+    CatalogFilters,
+)
+from my_pa.domain.reports.errors import ReportValidationError
+from my_pa.domain.reports.vocabulary import LifecycleState
+from my_pa.domain.search.query import SearchQuery
 from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
@@ -100,6 +110,7 @@ __all__ = [
     "ReportTypeRegistration",
     "begin_cycle",
     "commit_artifact",
+    "in_memory_search_rank",
     "latest_artifact",
     "list_artifacts",
     "read_artifact",
@@ -213,6 +224,25 @@ class IntelligenceStore(Protocol):
         source_lane: SourceLaneId | None,
         limit: int,
     ) -> tuple[tuple[IntelligenceArtifact, str], ...]: ...
+
+    def catalog_page(
+        self,
+        principal_id: str,
+        *,
+        filters: CatalogFilters,
+        query: SearchQuery | None,
+        after: CatalogCursor | None,
+        limit: int,
+    ) -> tuple[tuple[IntelligenceArtifact, int | None, str | None], ...]:
+        """Current artifacts as the `all` catalog plane reads them (WP04), read-only.
+
+        `is_current` only (a list also without `superseded`, as the legacy
+        list's default), any kind; `()` when the filters name topics, tags,
+        an association or a creator, or omit `active`. Order `(rank DESC,) committed_at
+        DESC, artifact_id DESC` (code-point order), strictly after `after`.
+        Each item is `(artifact, rank, snippet)`, rank and snippet `None` in a
+        list.
+        """
 
     def failed_run(
         self,
@@ -1760,6 +1790,31 @@ def resolve_set(
 _IN_MEMORY_REGISTRY_LOCK: Final = threading.Lock()
 
 
+_SEARCH_TOKEN: Final = re.compile(r"[0-9a-z]+")
+
+
+def in_memory_search_rank(query: SearchQuery, title: str, others: Sequence[str]) -> int | None:
+    """The FAST-tier stand-in for full-text search: a deterministic token match.
+
+    Words are runs of `[0-9a-z]` in the case-folded text; no stemming, no stop
+    words, no websearch operators. A document matches when every query word
+    is a word of the title or of one of `others`; its rank is ten per title
+    occurrence of a query word plus one per occurrence elsewhere. `None` is no
+    match (and a query with no words matches nothing). PostgreSQL's
+    `websearch_to_tsquery`/`ts_rank` remain the authority (`database` tier).
+    """
+    wanted = set(_SEARCH_TOKEN.findall(query.text.casefold()))
+    if not wanted:
+        return None
+    title_words = _SEARCH_TOKEN.findall(title.casefold())
+    other_words = [word for text in others for word in _SEARCH_TOKEN.findall(text.casefold())]
+    if not wanted <= set(title_words) | set(other_words):
+        return None
+    return 10 * sum(word in wanted for word in title_words) + sum(
+        word in wanted for word in other_words
+    )
+
+
 @dataclass
 class InMemoryIntelligenceStore:
     """FAST-tier store. Immutability of bodies is a property of this class not writing them."""
@@ -2020,6 +2075,68 @@ class InMemoryIntelligenceStore:
             snippet = excerpt_source[start : start + 120]
             results.append((artifact, snippet))
         return tuple(results)
+
+    def catalog_page(
+        self,
+        principal_id: str,
+        *,
+        filters: CatalogFilters,
+        query: SearchQuery | None,
+        after: CatalogCursor | None,
+        limit: int,
+    ) -> tuple[tuple[IntelligenceArtifact, int | None, str | None], ...]:
+        """The SQL catalog read's filters, order and keyset; search by `in_memory_search_rank`.
+
+        The snippet is the title (PostgreSQL's headline markup is not
+        modelled). The `database` tier is the authority on ranking.
+        """
+        if type(limit) is not int or not 1 <= limit <= MAX_CATALOG_PAGE_SIZE + 1:
+            raise ReportValidationError("limit", "bounds")
+        if after is not None and (after.rank is None) != (query is None):
+            raise CatalogCursorError
+        if (
+            filters.topics is not None
+            or filters.tags is not None
+            or filters.associated_with is not None
+            or filters.created_by is not None
+            or LifecycleState.ACTIVE not in filters.lifecycle_states
+        ):
+            return ()
+        found: list[tuple[tuple[int, datetime, str], IntelligenceArtifact, int | None]] = []
+        for (owner, _artifact_id), artifact in self.artifacts.items():
+            if owner != principal_id or not artifact.is_current:
+                continue
+            if query is None and artifact.artifact_state is ArtifactState.SUPERSEDED:
+                # The legacy list's default; the search keeps `is_current` only.
+                continue
+            if filters.report_type is not None and artifact.artifact_kind != filters.report_type:
+                continue
+            if filters.created_from is not None and artifact.committed_at < filters.created_from:
+                continue
+            if filters.created_to is not None and artifact.committed_at >= filters.created_to:
+                continue
+            if (
+                filters.report_date_from is not None
+                and artifact.report_date < filters.report_date_from
+            ):
+                continue
+            if filters.report_date_to is not None and artifact.report_date > filters.report_date_to:
+                continue
+            rank: int | None = None
+            if query is not None:
+                rank = in_memory_search_rank(query, artifact.title, (artifact.body_markdown,))
+                if rank is None:
+                    continue
+            key = (rank or 0, artifact.committed_at, artifact.artifact_id)
+            found.append((key, artifact, rank))
+        found.sort(key=lambda item: item[0], reverse=True)
+        if after is not None:
+            position = (after.rank or 0, after.sort_time, after.report_id)
+            found = [item for item in found if item[0] < position]
+        return tuple(
+            (artifact, rank, None if rank is None else artifact.title)
+            for _key, artifact, rank in found[:limit]
+        )
 
     def failed_run(
         self,

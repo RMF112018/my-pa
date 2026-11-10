@@ -106,8 +106,11 @@ def test_the_authoring_purpose_exists_and_is_the_only_one_added() -> None:
 def test_the_two_vocabularies_are_the_sizes_this_package_states() -> None:
     """The counts the census documents and the migration are written against."""
     # CPM Workbench S5b-2: the 7 Schedule names and their 2 purposes.
-    assert len(Capability) == 240
-    assert len(Purpose) == 62
+    # Reports Modernization WP02: `reports.publish`, and no purpose. WP03: its 5
+    # names and `report_lifecycle`. WP05b: its 4 custody names, `report_hold` and
+    # `report_retention`. WP06: its 5 transfer names, and no purpose.
+    assert len(Capability) == 255
+    assert len(Purpose) == 65
 
 
 def test_no_public_migration_capability_exists() -> None:

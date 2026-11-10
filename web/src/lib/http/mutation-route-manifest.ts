@@ -58,6 +58,51 @@ export const MUTATION_ROUTE_MANIFEST: readonly MutationRouteManifestEntry[] = [
   },
   {
     method: "POST",
+    path: "src/app/api/reports/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/reports/[reportId]/update/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/reports/[reportId]/archive/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/reports/[reportId]/delete/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/reports/[reportId]/restore/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/reports/transfers/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/reports/transfers/[sessionId]/append/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/reports/transfers/[sessionId]/finalize/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/reports/transfers/[sessionId]/abort/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
     path: "src/app/api/capture/route.ts",
     classification: "AUTHENTICATED_BROWSER_MUTATION",
   },

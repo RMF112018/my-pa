@@ -469,6 +469,30 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         # The report type registry is the acting Principal's own partition too.
         Capability.REPORTS_TYPES_CREATE,
         Capability.REPORTS_TYPES_LIST,
+        # The general report plane: a standalone report is the acting
+        # Principal's own root and carries no `source_id` or `enrollment_id`.
+        # Its associations are verified against the same partition by the
+        # repository, never against a source grant.
+        Capability.REPORTS_PUBLISH,
+        # WP03: revising, paging and moving the lifecycle of that same root.
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_HISTORY,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
+        # WP05b: holding that same root, and the owner's retention policy (no
+        # source at all). Operator-only and attested in the handler.
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
+        Capability.REPORTS_RETENTION_GET,
+        # WP06: an upload session is the acting Principal's own (and its
+        # client's), and a chunk read reads that same root's version.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
+        Capability.REPORTS_TRANSFER_READ_CHUNK,
         # The entity plane's partition, not a source. An entity carries no
         # `enrollment_id` and no grant a requested scope could be compared
         # against -- it is the Principal's own record of a person, not an

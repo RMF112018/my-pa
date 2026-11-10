@@ -583,6 +583,24 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "schedule_scenario_write_refusals",
         }
     ),
+    # Reports Modernization WP01: the general report plane.
+    "4c37731671fc": frozenset(
+        {
+            "report_content_objects",
+            "report_roots",
+            "report_versions",
+            "report_version_manifests",
+            "report_associations",
+            "report_lifecycle_events",
+            "report_receipts",
+            "report_transfer_sessions",
+            # WP06: the transfer chunk ledger.
+            "report_transfer_chunks",
+            # WP05b: the hold ledger and the retention policy history.
+            "report_hold_events",
+            "report_retention_policy_events",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

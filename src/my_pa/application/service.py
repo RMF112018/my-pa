@@ -108,9 +108,11 @@ import binascii
 import hashlib
 import hmac
 import json
+import logging
 import sys
+import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
@@ -127,6 +129,7 @@ from my_pa.application.commands import (
     DEFAULT_ISSUE_PAGE_SIZE,
     MAX_ISSUE_PAGE_SIZE,
     MAX_KNOWLEDGE_PAGE_SIZE,
+    AbortReportTransfer,
     AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
@@ -134,14 +137,17 @@ from my_pa.application.commands import (
     AddEntityName,
     AddIssueMembership,
     AddIssueProjectLink,
+    AppendReportTransfer,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
+    ArchiveGeneralReport,
     ArchiveManagedDocument,
     ArchiveManagedDocumentCommand,
     ArchiveRelationshipMemory,
     AssertRecordAssociation,
     BeginIntelligenceCycle,
+    BeginReportTransfer,
     BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
@@ -189,6 +195,7 @@ from my_pa.application.commands import (
     CreateTaskComment,
     DeactivateConstraintCategory,
     DecideReviewCase,
+    DeleteGeneralReport,
     EndEntityAffiliation,
     EndEntityAssignment,
     EndEntityParticipation,
@@ -198,6 +205,7 @@ from my_pa.application.commands import (
     EndRecordAssociation,
     EnrollSource,
     FetchSource,
+    FinalizeReportTransfer,
     GetCanvasWorkspace,
     GetCapabilities,
     GetCommitmentHistory,
@@ -208,6 +216,7 @@ from my_pa.application.commands import (
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
+    GetGeneralReportHistory,
     GetGoodNotesContent,
     GetGoodNotesPullStatus,
     GetGoodNotesWork,
@@ -218,6 +227,7 @@ from my_pa.application.commands import (
     GetRecordEventProvenance,
     GetRelationshipMemory,
     GetRelationshipMemoryHistory,
+    GetReportRetention,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
@@ -264,6 +274,7 @@ from my_pa.application.commands import (
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
+    PlaceReportHold,
     PlanLineageBackfill,
     PrepareContext,
     PreviewConstraintSync,
@@ -271,6 +282,7 @@ from my_pa.application.commands import (
     PreviewEntitySplit,
     ProposeRelationshipMemory,
     PublishConstraint,
+    PublishGeneralReport,
     PullGoodNotesWork,
     PutCanvasWorkspace,
     ReadCapture,
@@ -301,6 +313,7 @@ from my_pa.application.commands import (
     ReadRecordLineage,
     ReadRelatedRecords,
     ReadReportManifest,
+    ReadReportTransferChunk,
     ReadScheduleActivityHistory,
     ReadSchedulePublication,
     ReadTask,
@@ -309,6 +322,7 @@ from my_pa.application.commands import (
     RecordIssueHandoff,
     RecordTask,
     ReinstateRecordAssociation,
+    ReleaseReportHold,
     ReopenConstraint,
     ReopenIssue,
     ReorderConstraintCategories,
@@ -321,6 +335,7 @@ from my_pa.application.commands import (
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
+    RestoreGeneralReport,
     RestoreManagedDocument,
     RestoreManagedDocumentCommand,
     RestoreRelationshipMemory,
@@ -354,6 +369,7 @@ from my_pa.application.commands import (
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
+    SetReportRetention,
     SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
@@ -367,6 +383,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateGeneralReport,
     UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
@@ -375,6 +392,16 @@ from my_pa.application.commands import (
     VoidConstraint,
     WaitingOn,
     WaitingOnV2,
+    catalog_refusal,
+    custody_refusal,
+    hold_request,
+    lifecycle_request,
+    publication_request,
+    report_refusal,
+    report_revision_refusal,
+    retention_set_request,
+    transfer_declaration,
+    update_request,
 )
 from my_pa.application.commitments import CommitmentManagementService, CommitmentMutationReceipt
 from my_pa.application.commitments_v2 import (
@@ -463,6 +490,7 @@ from my_pa.application.errors import (
     InvalidRequestError,
     NotFoundError,
     QuarantinedError,
+    RateLimitedError,
     SafeDetail,
     UnavailableError,
     UnsupportedError,
@@ -628,6 +656,7 @@ from my_pa.application.relationship_memory import (
     RelationshipMemoryService,
     ReviseMemoryCommand,
 )
+from my_pa.application.report_retention import report_purge_eligibility
 from my_pa.application.schedules import ScheduleApplication
 from my_pa.application.tasks import (
     TaskManagementService,
@@ -650,6 +679,7 @@ from my_pa.contracts.ports import (
     EntityMutationAdmission,
     EntitySummary,
     EvidenceUnavailableError,
+    GeneralReportRepository,
     GoodNotesPullRepositoryConflictError,
     IssueCursorError,
     KnowledgeAssertionRepository,
@@ -678,10 +708,35 @@ from my_pa.contracts.ports import (
     ProgramReadUnavailableError,
     ProgramReadUnitOfWork,
     RelationshipMemoryRepository,
+    ReportAssociationTargetNotFoundError,
+    ReportContentPart,
+    ReportContentStore,
+    ReportContentStoreError,
+    ReportHeldError,
+    ReportHoldStateError,
+    ReportIdempotencyConflictError,
+    ReportIntegrityError,
+    ReportNotFoundError,
+    ReportPreservationError,
+    ReportPreservationUnavailableError,
+    ReportStaleHoldRevisionError,
+    ReportStaleLifecycleRevisionError,
+    ReportStalePolicyRevisionError,
+    ReportStaleVersionError,
+    ReportTransferConflictError,
+    ReportTransferDigestError,
+    ReportTransferNotFoundError,
+    ReportTransferQuotaError,
+    ReportTransferStaging,
+    ReportTransferStagingError,
+    ReportTrashPreflightError,
+    ReportWithdrawnError,
     ReviewDecisionRequest,
     ScheduleUnitOfWork,
     SearchOutcome,
     TransactionConflictError,
+    TransferChunk,
+    TransferSession,
     UnitOfWork,
     UnknownScopeError,
     WorkCursorError,
@@ -791,7 +846,7 @@ from my_pa.domain.identity.operation import Capability, granted_purposes
 from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
-from my_pa.domain.intelligence.models import ReportTypeDefinition
+from my_pa.domain.intelligence.models import IntelligenceArtifact, ReportTypeDefinition
 from my_pa.domain.intelligence.source_manifest import (
     LineageReferenceBlock,
     ProgramReferenceBlock,
@@ -938,6 +993,57 @@ from my_pa.domain.relationship.reenrichment import (
     ReenrichmentTrigger,
 )
 from my_pa.domain.relationship.resolution import EntityResolution
+from my_pa.domain.reports.catalog import (
+    CatalogCursor,
+    CatalogOperation,
+    ReportPlane,
+    binding_digest,
+)
+from my_pa.domain.reports.content import (
+    INLINE_CONTENT_MAX_BYTES,
+    ReportContent,
+    content_from_decoded,
+    content_from_staged,
+    is_gzip_content,
+)
+from my_pa.domain.reports.creator import CreatorKind, ReportCreator, derive_creator
+from my_pa.domain.reports.custody import (
+    CustodyAuthority,
+    HoldOperation,
+    HoldResult,
+    PurgeEligibility,
+    RetentionPeriod,
+    RetentionPolicyEventRecord,
+    RetentionPolicyView,
+    RetentionResult,
+)
+from my_pa.domain.reports.errors import ReportLifecycleRefusal, ReportValidationError
+from my_pa.domain.reports.publication import PublicationRequest, PublicationResult
+from my_pa.domain.reports.records import (
+    CatalogEntry,
+    HistoryEntries,
+    ReportHistoryPage,
+    ReportLifecycleEventRecord,
+    ReportVersionSummary,
+    StoredReportVersion,
+)
+from my_pa.domain.reports.revision import LifecycleResult, UpdateRequest, UpdateResult
+from my_pa.domain.reports.transfer import (
+    TRANSFER_CHUNK_BYTES,
+    client_ref_of,
+    mint_content_token,
+    parse_transfer_reference,
+)
+from my_pa.domain.reports.vocabulary import (
+    MAX_DECODED_CONTENT_BYTES,
+    READ_INLINE_CONTENT_MAX_BYTES,
+    ContentEncoding,
+    ContentFormat,
+    LifecycleState,
+    ReceiptOperation,
+    StorageKind,
+    TransferState,
+)
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
     MAX_PAGE_SIZE,
@@ -946,6 +1052,7 @@ from my_pa.domain.search.query import (
     SearchQuery,
     SearchQueryError,
     SearchRequest,
+    bound_snippet,
     label_for_media_type,
 )
 from my_pa.domain.situation.continuity import CommitmentWorkView
@@ -1011,6 +1118,11 @@ class _Result:
     # never enters the response envelope. Absence means this invocation did not
     # create a new authoritative mutation (including replay and no-op success).
     reenrichment_cause_id: str | None = None
+    # WP06 T13/T17 (review R1 #1): the transfer sessions whose staged chunks
+    # `_run` discards, best effort, only AFTER the unit of work committed (an
+    # aborted or consumed session; the expired ones a begin reaped). Never
+    # enters the response envelope.
+    discard_transfer_session_ids: tuple[str, ...] = ()
 
 
 class _CommitRejectedConflictError(Exception):
@@ -3457,6 +3569,531 @@ def _report_type_payload(definition: ReportTypeDefinition) -> dict[str, Any]:
     }
 
 
+def _report_creator(authorization: Authorization) -> ReportCreator:
+    """The server-derived writer of a general report write (WP05 A1).
+
+    From the Authorization only, never the request: a remote client is its
+    authenticated OAuth client id, a local caller its Principal. A remote
+    authorization without a client id is a composition fault, never a fallback
+    to the Principal.
+    """
+    if authorization.transport is CaptureTransport.REMOTE_CLIENT:
+        client_id = authorization.authenticated_client_id
+        if not client_id:
+            raise InternalError()
+        return derive_creator(CreatorKind.REMOTE_CLIENT, client_id)
+    if authorization.transport is CaptureTransport.LOCAL:
+        return derive_creator(CreatorKind.LOCAL_PRINCIPAL, authorization.principal.principal_id)
+    raise InternalError()
+
+
+def _creator_payload(creator: ReportCreator) -> dict[str, str]:
+    """A creator or author as outputs carry it (WP05 A4): its kind and pseudonym only."""
+    return {"kind": creator.kind.value, "id": creator.creator_id}
+
+
+def _general_publish_payload(result: PublicationResult) -> dict[str, Any]:
+    """What `reports.publish` answers, the first time and on every replay."""
+    return {
+        "plane": "standalone",
+        "report_id": result.receipt.report_id,
+        "version_id": result.receipt.version_id,
+        "version_number": result.receipt.version_number,
+        # A publish creates the root `active` at revision 0; a replay answers
+        # the original publication, not whatever later lifecycle moved it to.
+        "lifecycle_state": LifecycleState.ACTIVE.value,
+        "lifecycle_revision": 0,
+        "content": {
+            "content_id": result.content_id,
+            "format": result.format.value,
+            "decoded_sha256": result.decoded_sha256,
+            "decoded_byte_count": result.decoded_byte_count,
+            "canonical_sha256": result.canonical_sha256,
+        },
+        "manifest_sha256": result.manifest_sha256,
+        "receipt_id": result.receipt.receipt_id,
+        "recorded_at": format_rfc3339(result.recorded_at),
+        "replayed": result.replayed,
+    }
+
+
+def _general_update_payload(result: UpdateResult) -> dict[str, Any]:
+    """What `reports.update` answers, the first time and on every replay (WP03 D)."""
+    return {
+        "plane": "standalone",
+        "report_id": result.report_id,
+        "outcome": result.outcome.value,
+        "version_id": result.version_id,
+        "version_number": result.version_number,
+        "change_kind": None if result.change_kind is None else result.change_kind.value,
+        "content_id": result.content_id,
+        "decoded_sha256": result.decoded_sha256,
+        "manifest_sha256": result.manifest_sha256,
+        "receipt": {
+            "receipt_id": result.receipt_id,
+            "operation": ReceiptOperation.UPDATE.value,
+            "outcome": result.outcome.value,
+            "expected_version": result.expected_version,
+            "issued_at": format_rfc3339(result.issued_at),
+            "correlation_id": result.correlation_id,
+            "audit_id": result.audit_id,
+        },
+        "replayed": result.replayed,
+    }
+
+
+def _general_lifecycle_payload(result: LifecycleResult) -> dict[str, Any]:
+    """What `reports.archive`, `reports.delete` and `reports.restore` answer (WP03 D)."""
+    return {
+        "plane": "standalone",
+        "report_id": result.report_id,
+        "operation": result.operation.value,
+        "outcome": result.outcome.value,
+        "prior_state": result.prior_state.value,
+        "lifecycle_state": result.resulting_state.value,
+        "lifecycle_revision": result.lifecycle_revision,
+        "event_id": result.event_id,
+        "receipt": {
+            "receipt_id": result.receipt_id,
+            "operation": result.operation.value,
+            "outcome": result.outcome.value,
+            "expected_lifecycle_revision": result.expected_lifecycle_revision,
+            "issued_at": format_rfc3339(result.issued_at),
+            "correlation_id": result.correlation_id,
+            "audit_id": result.audit_id,
+        },
+        "replayed": result.replayed,
+    }
+
+
+def _retention_period_payload(period: RetentionPeriod | None) -> dict[str, object] | None:
+    return None if period is None else period.as_dict()
+
+
+def _hold_payload(result: HoldResult) -> dict[str, Any]:
+    """What `reports.hold.place` and `reports.hold.release` answer (WP05b Part C (5)).
+
+    `preservation` only on a placement: the sealed copy's identity and size,
+    never its content or the reason.
+    """
+    payload: dict[str, Any] = {
+        "plane": "standalone",
+        "report_id": result.report_id,
+        "operation": result.operation.value,
+        "held": result.held,
+        "hold_revision": result.hold_revision,
+        "event_id": result.event_id,
+    }
+    if result.operation is HoldOperation.PLACE and result.preservation is not None:
+        payload["preservation"] = {
+            "seal_object_id": result.preservation.seal_object_id,
+            "seal_sha256": result.preservation.seal_sha256,
+            "seal_byte_count": result.preservation.seal_byte_count,
+            "object_count": result.preservation.object_count,
+            "version_count": result.preservation.version_count,
+        }
+    payload["recorded_at"] = format_rfc3339(result.recorded_at)
+    payload["replayed"] = result.replayed
+    return payload
+
+
+def _retention_set_payload(result: RetentionResult) -> dict[str, Any]:
+    """What `reports.retention.set` answers (WP05b Part C (5))."""
+    return {
+        "policy_revision": result.policy_revision,
+        "period": _retention_period_payload(result.period),
+        "previous_period": _retention_period_payload(result.previous_period),
+        "event_id": result.event_id,
+        "recorded_at": format_rfc3339(result.recorded_at),
+        "replayed": result.replayed,
+    }
+
+
+def _retention_history_item(event: RetentionPolicyEventRecord) -> dict[str, Any]:
+    """One policy change: who (the attested pair), when, from what, to what, and why."""
+    return {
+        "event_id": event.event_id,
+        "policy_revision": event.policy_revision,
+        "period": _retention_period_payload(event.period),
+        "previous_period": _retention_period_payload(event.previous_period),
+        "reason": event.reason,
+        "authority_class": event.authority.authority_class,
+        "decision_channel": event.authority.decision_channel,
+        "recorded_at": format_rfc3339(event.recorded_at),
+    }
+
+
+def _retention_get_payload(
+    view: RetentionPolicyView,
+    *,
+    report_id: str | None,
+    eligibility: PurgeEligibility | None,
+) -> dict[str, Any]:
+    """What `reports.retention.get` answers (WP05b Part C (5)).
+
+    `policy` is `null` until the policy is first set; once set (or unset
+    again) it names the newest revision, whose `period` is `null` when unset.
+    """
+    current = view.current
+    payload: dict[str, Any] = {
+        "policy": None
+        if current is None
+        else {
+            "policy_revision": current.policy_revision,
+            "period": _retention_period_payload(current.period),
+            "set_at": format_rfc3339(current.recorded_at),
+            "reason": current.reason,
+        },
+        "history": [_retention_history_item(event) for event in view.history],
+    }
+    if report_id is not None and eligibility is not None:
+        payload["eligibility"] = {
+            "report_id": report_id,
+            "eligible": eligibility.eligible,
+            "reason": eligibility.reason.value,
+            "clock_start": None
+            if eligibility.clock_start is None
+            else format_rfc3339(eligibility.clock_start),
+            "eligible_at": None
+            if eligibility.eligible_at is None
+            else format_rfc3339(eligibility.eligible_at),
+            "clock_start_strategy": eligibility.clock_start_strategy.value,
+        }
+    return payload
+
+
+def _custody_authority(authorization: Authorization) -> CustodyAuthority:
+    """The attested operator pair a custody event records, or `denied` (WP05b H1).
+
+    `attested_lineage_authority` is the lineage confirms' rule: only the local
+    operator surface (CLI or the HTTP gateway's stamped operator surface)
+    passes; every remote and stdio-MCP caller is `denied` here, before any
+    read or write.
+    """
+    derived = attested_lineage_authority(authorization)
+    try:
+        return CustodyAuthority(
+            derived.authority_class.value, derived.decision_channel.value
+        ).validated()
+    except ReportValidationError:
+        raise InternalError() from None
+
+
+def _history_version_item(item: ReportVersionSummary) -> dict[str, Any]:
+    """One version on a `reports.history` page: descriptors and digests, never the body."""
+    payload: dict[str, Any] = {
+        "version_id": item.version_id,
+        "version_number": item.version_number,
+        "supersedes_version_id": item.supersedes_version_id,
+        "change_kind": item.change_kind.value,
+        "change_reason": item.change_reason,
+        "title": item.title,
+        "recorded_at": format_rfc3339(item.recorded_at),
+        "content": {
+            "content_id": item.content_id,
+            "format": item.format.value,
+            "encoding": item.encoding.value,
+            "storage_kind": item.storage_kind.value,
+            "decoded_sha256": item.decoded_sha256,
+            "decoded_byte_count": item.decoded_byte_count,
+            "canonical_sha256": item.canonical_sha256,
+            "original_sha256": item.original_sha256,
+        },
+        "manifest_sha256": item.manifest_sha256,
+        "author": _creator_payload(item.author),
+    }
+    if item.manifest is not None:
+        payload["manifest"] = dict(item.manifest)
+    return payload
+
+
+def _history_lifecycle_item(item: ReportLifecycleEventRecord) -> dict[str, Any]:
+    """One lifecycle event on a `reports.history` page."""
+    return {
+        "event_id": item.event_id,
+        "lifecycle_revision": item.lifecycle_revision,
+        "operation": item.operation.value,
+        "prior_state": item.prior_state.value,
+        "resulting_state": item.resulting_state.value,
+        "reason": item.reason,
+        "transitioned_at": format_rfc3339(item.transitioned_at),
+    }
+
+
+#: One catalog row's place in the WP04 order (contract C6): `(rank, sort_time,
+#: report_id)`, compared descending. A list's rank is 0 for every row, which
+#: reduces it to the list order `(sort_time, report_id)`; ids compare in code
+#: point order, as SQL's `COLLATE "C"` does. The one key for both the
+#: two-plane merge and the next cursor's position.
+type _CatalogKey = tuple[int, datetime, str]
+
+
+def _catalog_order_key(rank: int | None, sort_time: datetime, report_id: str) -> _CatalogKey:
+    return (0 if rank is None else rank, sort_time, report_id)
+
+
+def _catalog_snippet(snippet: str | None) -> str:
+    return bound_snippet(snippet or "")[0]
+
+
+def _standalone_catalog_item(entry: CatalogEntry, *, search: bool) -> dict[str, Any]:
+    """A standalone report as `reports.list`/`reports.search` list it (C4): never content."""
+    item: dict[str, Any] = {
+        "plane": ReportPlane.STANDALONE.value,
+        "report_id": entry.report_id,
+        "title": entry.title,
+        "type": entry.report_type,
+        "topics": list(entry.topics),
+        "tags": list(entry.tags),
+        "summary": entry.summary,
+        "report_date": None if entry.report_date is None else entry.report_date.isoformat(),
+        "lifecycle_state": entry.lifecycle_state.value,
+        "lifecycle_revision": entry.lifecycle_revision,
+        "head_version_id": entry.head_version_id,
+        "head_version_number": entry.head_version_number,
+        "created_at": format_rfc3339(entry.created_at),
+        "updated_at": format_rfc3339(entry.updated_at),
+        "creator": _creator_payload(entry.creator),
+        # WP05b B7: the root's hold cache only (never a reason, actor or seal).
+        "held": entry.held,
+    }
+    if search:
+        item["snippet"] = _catalog_snippet(entry.snippet)
+    return item
+
+
+def _intelligence_catalog_item(
+    artifact: IntelligenceArtifact, snippet: str | None, *, search: bool
+) -> dict[str, Any]:
+    """A current pipeline artifact as the `all` plane lists it (C4): never its body."""
+    item: dict[str, Any] = {
+        "plane": ReportPlane.INTELLIGENCE.value,
+        "report_id": artifact.artifact_id,
+        "title": artifact.title,
+        "type": str(artifact.artifact_kind),
+        "report_date": artifact.report_date.isoformat(),
+        "created_at": format_rfc3339(artifact.committed_at),
+        "cycle_run_id": artifact.cycle_run_id,
+        "stage": artifact.stage.value,
+        "artifact_kind": str(artifact.artifact_kind),
+        "focus_area_id": None if artifact.focus_area_id is None else artifact.focus_area_id.value,
+        "source_lane": None if artifact.source_lane is None else artifact.source_lane.value,
+        "content_sha256": artifact.content_sha256,
+        "artifact_state": artifact.artifact_state.value,
+    }
+    if search:
+        item["snippet"] = _catalog_snippet(snippet)
+    return item
+
+
+def _general_history_payload(
+    page: ReportHistoryPage[ReportVersionSummary] | ReportHistoryPage[ReportLifecycleEventRecord],
+) -> dict[str, Any]:
+    """One `reports.history` page (WP03 D9), oldest first."""
+    root = page.root
+    items: list[dict[str, Any]] = [
+        _history_version_item(item)
+        if isinstance(item, ReportVersionSummary)
+        else _history_lifecycle_item(item)
+        for item in page.items
+    ]
+    return {
+        "plane": "standalone",
+        "report_id": root.report_id,
+        "head_version_id": root.head_version_id,
+        "head_version_number": root.head_version_number,
+        "lifecycle_state": root.lifecycle_state.value,
+        "lifecycle_revision": root.lifecycle_revision,
+        # WP05b B7: the root's hold cache only (never a reason, actor or seal).
+        "held": root.held,
+        "entries": page.entries.value,
+        "items": items,
+        "next_cursor": page.next_cursor,
+    }
+
+
+def _verified_blob_version(
+    store: ReportContentStore, stored: StoredReportVersion, *, include_body: bool
+) -> StoredReportVersion:
+    """A `managed_blob` version with its parts verified through the store (WP05 C5).
+
+    Every part is verified (size and SHA-256) on every read, whether or not
+    the body is returned: the decoded part always, the original too for a
+    gzip upload. With `include_body`, the decoded bytes within
+    `READ_INLINE_CONTENT_MAX_BYTES` are read and rebuilt into the content (its
+    recomputed digests must equal the row's), and gzip bytes within the bound
+    are read for `encoded`; anything above the bound is verified by a
+    streaming hash and left out, so the payload marks it omitted. Raises the
+    store's port errors or `ReportIntegrityError`; never returns bytes that do
+    not match their row.
+    """
+    facts = stored.content
+    object_id = stored.content_id
+    within = facts.decoded_byte_count <= READ_INLINE_CONTENT_MAX_BYTES
+    original: bytes | None = None
+    if facts.encoding is ContentEncoding.GZIP_BASE64:
+        if include_body and facts.original_byte_count <= READ_INLINE_CONTENT_MAX_BYTES:
+            original = store.read(
+                object_id,
+                ReportContentPart.ORIGINAL,
+                expected_sha256=facts.original_sha256,
+                expected_byte_count=facts.original_byte_count,
+            )
+        else:
+            store.verify(
+                object_id,
+                ReportContentPart.ORIGINAL,
+                expected_sha256=facts.original_sha256,
+                expected_byte_count=facts.original_byte_count,
+            )
+    if not (include_body and within):
+        store.verify(
+            object_id,
+            ReportContentPart.DECODED,
+            expected_sha256=facts.decoded_sha256,
+            expected_byte_count=facts.decoded_byte_count,
+        )
+        return replace(stored, content=replace(facts, original=original))
+    decoded = store.read(
+        object_id,
+        ReportContentPart.DECODED,
+        expected_sha256=facts.decoded_sha256,
+        expected_byte_count=facts.decoded_byte_count,
+    )
+    try:
+        rebuilt = content_from_decoded(facts.format, decoded)
+    except ReportValidationError:
+        raise ReportIntegrityError() from None
+    if (
+        rebuilt.decoded_sha256 != facts.decoded_sha256
+        or rebuilt.decoded_byte_count != facts.decoded_byte_count
+        or rebuilt.canonical_sha256 != facts.canonical_sha256
+    ):
+        raise ReportIntegrityError()
+    # The encoding, the original's facts and (when read) its verified bytes
+    # are the row's; the body and data are the rebuilt ones.
+    content = replace(
+        rebuilt,
+        encoding=facts.encoding,
+        original=original,
+        original_sha256=facts.original_sha256,
+        original_byte_count=facts.original_byte_count,
+    )
+    return replace(stored, content=content)
+
+
+def _chunked_read_pointer(part: ReportContentPart, byte_count: int, sha256: str) -> dict[str, Any]:
+    """WP06 T16: the `reports.transfer.read_chunk` pointer beside an omitted body or `encoded`."""
+    return {
+        "capability": Capability.REPORTS_TRANSFER_READ_CHUNK.value,
+        "part": part.value,
+        "byte_count": byte_count,
+        "sha256": sha256,
+    }
+
+
+def _general_read_payload(
+    stored: StoredReportVersion, *, include_body: bool, include_manifest: bool
+) -> dict[str, Any]:
+    """One standalone report version as `reports.read` answers a `grpt_` identifier."""
+    root, version, content = stored.root, stored.version, stored.content
+    content_payload: dict[str, Any] = {
+        "content_id": stored.content_id,
+        "format": content.format.value,
+        "encoding": content.encoding.value,
+        "storage_kind": stored.storage_kind.value,
+        "decoded_sha256": content.decoded_sha256,
+        "decoded_byte_count": content.decoded_byte_count,
+        "canonical_sha256": content.canonical_sha256,
+        # WP05 B5: the uploaded bytes' digest and size (the decoded ones under identity).
+        "original_sha256": content.original_sha256,
+        "original_byte_count": content.original_byte_count,
+    }
+    if include_body:
+        if not content.materialized:
+            # WP05 C5: a `managed_blob` body above the response bound. Its
+            # facts and digests above are still returned, verified.
+            content_payload["body_omitted"] = "exceeds_response_bound"
+            # WP06 T16: where the omitted bytes are read, verified, in ranges.
+            content_payload["body_chunked_read"] = _chunked_read_pointer(
+                ReportContentPart.DECODED, content.decoded_byte_count, content.decoded_sha256
+            )
+        else:
+            if content.format is not ContentFormat.JSON:
+                content_payload["body"] = content.body
+            if content.format in (ContentFormat.JSON, ContentFormat.MIXED):
+                content_payload["data"] = content.data
+        if content.encoding is ContentEncoding.GZIP_BASE64:
+            # The exact `encoded` the caller uploaded: canonical Base64 of the
+            # verified gzip bytes, while they fit the response bound.
+            if (
+                content.original is not None
+                and content.original_byte_count <= READ_INLINE_CONTENT_MAX_BYTES
+            ):
+                content_payload["encoded"] = base64.b64encode(content.original).decode("ascii")
+            else:
+                content_payload["encoded_omitted"] = "exceeds_response_bound"
+                content_payload["encoded_chunked_read"] = _chunked_read_pointer(
+                    ReportContentPart.ORIGINAL,
+                    content.original_byte_count,
+                    content.original_sha256,
+                )
+    coverage = (
+        None
+        if version.coverage_start is None and version.coverage_end is None
+        else {
+            "start": None
+            if version.coverage_start is None
+            else format_rfc3339(version.coverage_start),
+            "end": None if version.coverage_end is None else format_rfc3339(version.coverage_end),
+        }
+    )
+    payload: dict[str, Any] = {
+        "plane": "standalone",
+        "report_id": root.report_id,
+        "created_at": format_rfc3339(root.created_at),
+        "creator": _creator_payload(root.creator),
+        "head_version_id": root.head_version_id,
+        "head_version_number": root.head_version_number,
+        "lifecycle_state": root.lifecycle_state.value,
+        "lifecycle_revision": root.lifecycle_revision,
+        # WP05b B7: the root's hold cache only (never a reason, actor or seal).
+        "held": root.held,
+        "version_id": version.version_id,
+        "version_number": version.version_number,
+        "supersedes_version_id": version.supersedes_version_id,
+        "change_kind": version.change_kind.value,
+        # WP03 D11: why this version was written (`null` for version 1).
+        "change_reason": version.change_reason,
+        "title": version.title,
+        "type": version.report_type,
+        "topics": list(version.topics),
+        "tags": list(version.tags),
+        "summary": version.summary,
+        "report_date": None if version.report_date is None else version.report_date.isoformat(),
+        "coverage_period": coverage,
+        "metadata": dict(version.metadata),
+        "recorded_at": format_rfc3339(version.recorded_at),
+        "author": _creator_payload(version.author),
+        "content": content_payload,
+        "manifest_sha256": version.manifest_sha256,
+        "associations": [
+            {
+                "ordinal": ordinal,
+                "target_kind": association.target_kind.value,
+                "target_ref": association.target_ref,
+                "target_version_ref": association.target_version_ref,
+                "relation": association.relation,
+                "verification": association.verification.value,
+            }
+            for ordinal, association in enumerate(stored.associations)
+        ],
+    }
+    if include_manifest:
+        payload["manifest"] = dict(stored.manifest)
+    return payload
+
+
 def _meeting_write_payload(
     unit_of_work: UnitOfWork, principal_id: str, written: MeetingWriteResult
 ) -> dict[str, Any]:
@@ -4067,6 +4704,177 @@ _DIRECT_REENRICHMENT_CAPABILITIES = frozenset(
 )
 
 
+#: WP05 corrective B-4: how many `gzip+base64` report contents this process
+#: decodes at once. One request decodes up to 16 MiB, parses it, serializes it
+#: canonically, digests it, projects its search text and stores it: about
+#: 85-100 MiB at its peak. The remote MCP server runs up to eight calls at
+#: once, so without a bound eight such requests would need ~0.9 GiB, beyond
+#: the remote container's 768 MiB. With one permit the decode share of the
+#: memory budget is one request's peak, whatever the concurrency. Identity
+#: content (bounded by the request ceiling) never takes the permit.
+REPORT_CONTENT_DECODE_PERMITS: Final = 1
+#: Process-wide. Acquired in `ApplicationService._run` BEFORE the unit of work
+#: opens (so no request waits for it holding a connection, a transaction or a
+#: lock) and released after that unit of work has committed or rolled back,
+#: so the decode, the parse, the manifest, the search text, the store put and
+#: the INSERTs all happen under it. A waiter waits only for the current
+#: holder's request (each about two seconds of CPU at worst); there is no
+#: other lock taken while it is held that a holder could wait on in turn.
+#: Known limits (recorded, not fixed): the permit is taken before
+#: authorization, so a request that will be denied may still wait behind one
+#: holder; and the wait has no timeout. It is bounded by the holder's request,
+#: whose database statements are capped by `statement_timeout`, but a
+#: filesystem store write that hangs is not.
+_REPORT_CONTENT_DECODE_PERMIT: Final = threading.BoundedSemaphore(REPORT_CONTENT_DECODE_PERMITS)
+
+
+def _names_a_transfer(content: object) -> bool:
+    """Whether a publish/update `content` is a transfer reference (WP06 T12); never raises.
+
+    A malformed reference (which command construction already refuses) still
+    counts: when in doubt the permit is taken, never skipped.
+    """
+    try:
+        return parse_transfer_reference(content) is not None
+    except ReportValidationError:
+        return True
+
+
+def _report_content_decode_permit(command: object) -> AbstractContextManager[object]:
+    """The decode permit, or nothing to hold.
+
+    WP05 corrective B-4: a `gzip+base64` publish or update. WP06 T12: also a
+    `reports.transfer.finalize` (an identity transfer's staged bytes can be
+    16 MiB) and a publish or update whose content is a transfer reference
+    (it reads and decodes the staged bytes again). Inline identity content,
+    and the transfer begin, append, abort and read_chunk (each bounded to one
+    256 KiB chunk), never take it.
+    """
+    if isinstance(command, FinalizeReportTransfer):
+        decodes = True
+    elif isinstance(command, PublishGeneralReport):
+        decodes = is_gzip_content(command.content) or _names_a_transfer(command.content)
+    elif isinstance(command, UpdateGeneralReport):
+        patch: object = command.patch
+        content = patch.get("content") if isinstance(patch, dict) else None
+        decodes = is_gzip_content(content) or _names_a_transfer(content)
+    else:
+        decodes = False
+    return _REPORT_CONTENT_DECODE_PERMIT if decodes else nullcontext()
+
+
+# ---- Reports Modernization WP06: the bounded chunked transfer -------------
+
+#: The post-commit staging discard is best effort; a failure is logged with no
+#: identifier, path or value and left to the transfer GC (T13/T19).
+_TRANSFER_LOGGER: Final = logging.getLogger("my_pa.application.report_transfer")
+
+#: The domain rules a transfer refusal also answers `max_bytes` for, exactly as
+#: `report_refusal` does for `content`.
+_TRANSFER_SIZE_RULES: Final = frozenset({"too_large", "expansion_ratio", "too_many_values"})
+
+#: Which public token a transfer domain refusal names, by its field.
+_TRANSFER_REFUSAL_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "transfer": SafeDetail.TRANSFER,
+        "chunk": SafeDetail.CHUNK,
+        "chunk_sha256": SafeDetail.CHUNK_SHA256,
+        "sequence": SafeDetail.SEQUENCE,
+    }
+)
+
+
+def _transfer_refusal(error: ReportValidationError) -> InvalidRequestError:
+    """The `invalid_request` a transfer domain refusal is; never the value."""
+    detail = _TRANSFER_REFUSAL_DETAILS.get(error.field.split(".", 1)[0])
+    if detail is None:
+        return InvalidRequestError()
+    if detail in (SafeDetail.TRANSFER, SafeDetail.CHUNK) and error.code in _TRANSFER_SIZE_RULES:
+        return InvalidRequestError(detail, SafeDetail.MAX_BYTES)
+    return InvalidRequestError(detail)
+
+
+def _transfer_conflict(error: ReportTransferConflictError) -> ConflictError:
+    """The `conflict` on the caller's own session: the error's stable code is the detail."""
+    return ConflictError(SafeDetail(error.detail))
+
+
+def _transfer_chunk_bytes(chunk: str) -> bytes:
+    """T8: the raw bytes of a chunk's canonical standard Base64, else `invalid_request` `chunk`.
+
+    Strict (no whitespace, no other alphabet, correct padding) and canonical
+    (non-zero pad bits refused), the WP05 `_base64_bytes` discipline. The
+    command already bounded the length (at most 349,528 characters).
+    """
+    try:
+        ascii_text = chunk.encode("ascii")
+        raw = binascii.a2b_base64(ascii_text, strict_mode=True)
+    except (binascii.Error, UnicodeEncodeError, AttributeError):
+        raise InvalidRequestError(SafeDetail.CHUNK) from None
+    if not raw or binascii.b2a_base64(raw, newline=False) != ascii_text:
+        raise InvalidRequestError(SafeDetail.CHUNK)
+    return raw
+
+
+def _transfer_begin_payload(session: TransferSession, *, replayed: bool) -> dict[str, Any]:
+    """T18: what `reports.transfer.begin` answers, the first time and on every replay.
+
+    `state` is the begin's own answer, `open`, on a replay too: a replay
+    returns the original answer, never the session's later state.
+    """
+    return {
+        "session_id": session.session_id,
+        "state": TransferState.OPEN.value,
+        "format": session.format.value,
+        "encoding": session.encoding.value,
+        "declared_byte_count": session.declared_byte_count,
+        "declared_sha256": session.declared_sha256,
+        "chunk_byte_limit": session.chunk_byte_limit,
+        "chunk_count": session.chunk_count,
+        "expires_at": format_rfc3339(session.expires_at),
+        "replayed": replayed,
+    }
+
+
+def _transfer_append_payload(
+    session: TransferSession, chunk: TransferChunk, *, replayed: bool
+) -> dict[str, Any]:
+    """T8: what `reports.transfer.append` answers (`session` is re-read after the append)."""
+    complete = session.received_byte_count == session.declared_byte_count
+    return {
+        "session_id": session.session_id,
+        "sequence": chunk.sequence,
+        "byte_offset": chunk.byte_offset,
+        "byte_count": chunk.byte_count,
+        "chunk_sha256": chunk.chunk_sha256,
+        "received_byte_count": session.received_byte_count,
+        "declared_byte_count": session.declared_byte_count,
+        "complete": complete,
+        # Every chunk but the last is full, so the received count names the next one.
+        "next_sequence": None if complete else session.received_byte_count // TRANSFER_CHUNK_BYTES,
+        "expires_at": format_rfc3339(session.expires_at),
+        "replayed": replayed,
+    }
+
+
+def _transfer_finalize_payload(
+    session: TransferSession, content: ReportContent, *, content_token: str
+) -> dict[str, Any]:
+    """T9: what `reports.transfer.finalize` answers, once; the token is never stored raw."""
+    return {
+        "session_id": session.session_id,
+        "state": TransferState.FINALIZED.value,
+        "content_token": content_token,
+        "expires_at": format_rfc3339(session.expires_at),
+        "byte_count": session.declared_byte_count,
+        "sha256": session.declared_sha256,
+        "format": session.format.value,
+        "encoding": session.encoding.value,
+        "decoded_byte_count": content.decoded_byte_count,
+        "decoded_sha256": content.decoded_sha256,
+    }
+
+
 class ApplicationService:
     """Every capability this build can execute, behind one entry point."""
 
@@ -4106,8 +4914,47 @@ class ApplicationService:
         goodnotes_canonical_semantic_writes_enabled: bool = False,
         goodnotes_pull_cursor_signing_key: bytes | None = None,
         goodnotes_pull_assignment_lease_seconds: int = 900,
+        report_content_store: ReportContentStore | None = None,
+        report_content_inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
+        report_preservation_store: ReportContentStore | None = None,
+        report_transfer_staging: ReportTransferStaging | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
+        #: WP05 C3: the report content store and the inline threshold. `None`
+        #: -- what an unset `MY_PA_REPORT_CONTENT_ROOT` composes -- keeps every
+        #: report content inline and refuses decoded content above the
+        #: threshold, and a gzip upload whose gunzipped bytes are above it
+        #: (`invalid_request` `content`, `max_bytes`); a composed
+        #: store holds it as `managed_blob`. Both reach the repository as
+        #: explicit arguments of `publish`/`update` (C4) and the store the
+        #: standalone read's verification (C5); nothing else reads them.
+        if (
+            type(report_content_inline_max_bytes) is not int
+            or not 1 <= report_content_inline_max_bytes <= INLINE_CONTENT_MAX_BYTES
+        ):
+            raise ValueError("the report content inline threshold is out of bounds")
+        self._report_content_store = report_content_store
+        #: WP05b H4: the report content store over the `preservation` namespace,
+        #: where a hold placement writes its sealed copy. `None` (no
+        #: `MY_PA_REPORT_CONTENT_ROOT`) refuses every placement (`unavailable`,
+        #: `preservation_store`); nothing else reads it.
+        self._report_preservation_store = report_preservation_store
+        #: WP06 T13/T14: the transfer staging over the `transfer` namespace.
+        #: `None` (no `MY_PA_REPORT_CONTENT_ROOT`) withholds the four upload
+        #: capabilities; `reports.transfer.read_chunk` needs no staging.
+        self._report_transfer_staging = report_transfer_staging
+        self._report_content_inline_max_bytes = report_content_inline_max_bytes
+        #: WP05 corrective B-4: how far a gzip upload is inflated. Without a
+        #: store nothing above the inline threshold can be placed, so nothing
+        #: above it is ever inflated: the bound applies to the gunzipped bytes
+        #: (the memory guard), so a store-less server refuses (`too_large`)
+        #: pretty-printed JSON whose gunzipped text exceeds the threshold even
+        #: when its canonical form would fit; the describe text says so.
+        self._report_content_decode_limit: int = (
+            MAX_DECODED_CONTENT_BYTES
+            if report_content_store is not None
+            else report_content_inline_max_bytes
+        )
         self._limits = _effective_limits(limits)
         self._clock = clock
         #: The managed-document byte store, or `None` in a process that was never
@@ -4336,6 +5183,11 @@ class ApplicationService:
         served = frozenset(_HANDLERS)
         if self._managed_store_or_none is None:
             served -= _MANAGED_CAPABILITIES
+        # WP06 T14: an upload is served only where it can complete -- with a
+        # report content store (a transfer may exceed the inline threshold) AND
+        # the transfer staging it stages chunks in.
+        if self._report_content_store is None or self._report_transfer_staging is None:
+            served -= _REPORT_TRANSFER_UPLOAD_CAPABILITIES
         if not self._relationship_intelligence_enabled:
             served -= _ENTITY_CAPABILITIES
         # The write half, narrowed separately. Subtracted after the line above
@@ -4575,7 +5427,10 @@ class ApplicationService:
         """
         mismatch = metadata.capability is not command.capability
         committed_conflict: ConflictError | None = None
-        with self._unit_of_work() as unit_of_work:
+        served: _Result | None = None
+        # WP05 corrective B-4: a gzip report content is decoded under the
+        # process-wide permit, taken before the unit of work opens.
+        with _report_content_decode_permit(command), self._unit_of_work() as unit_of_work:
             if mismatch:
                 unit_of_work.audit.record(
                     AuditEvent(
@@ -4631,7 +5486,9 @@ class ApplicationService:
                                 policy_version=POLICY_VERSION,
                                 at=authorization.at,
                             )
-                        return result
+                        # Leaving the block normally commits; the result is
+                        # returned only after that (WP06: the post-commit hook).
+                        served = result
                     except _CommitRejectedConflictError as conflict:
                         # The handler raises this marker only after verifying a
                         # REJECTED receipt whose before/after/current versions
@@ -4643,6 +5500,10 @@ class ApplicationService:
                         # raising rolls the whole transaction back.
                         if unit_of_work.record_events.pending_count:
                             raise InternalError() from None
+        if served is not None:
+            for session_id in served.discard_transfer_session_ids:
+                self._discard_staged_transfer(session_id)
+            return served
         # Reached only after the transaction committed, which is what preserves
         # the audit event recording the refusal.
         if mismatch:
@@ -16025,12 +16886,1049 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at),
         )
 
+    def _reports_publish(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PublishGeneralReport,
+    ) -> _Result:
+        """`reports.publish`: one new standalone report, or the replay of its key.
+
+        Every server field comes from the authorization: the owner is the
+        authenticated Principal, the time is the request clock, and the
+        correlation and audit identifiers are the ones this decision was
+        recorded under, so the receipt names the audit event that admitted it.
+        The repository mints the identifiers. Nothing of the body is logged.
+        A transfer reference is consumed by `_reports_publish_transfer` (T10).
+        """
+        # Decoded here, under the permit `_run` holds (WP05 corrective B-4).
+        request = publication_request(command, max_decoded=self._report_content_decode_limit)
+        if request.content_source is not None:
+            return self._reports_publish_transfer(unit_of_work, authorization, command, request)
+        return _Result(
+            payload=_general_publish_payload(
+                self._publish_report(unit_of_work, authorization, command, request)
+            ),
+            disclosure=unenrolled_disclosure(authorization.at),
+        )
+
+    def _publish_report(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PublishGeneralReport,
+        request: PublicationRequest,
+    ) -> PublicationResult:
+        """The repository publish of `request`, its refusals mapped (the one publish path)."""
+        creator = _report_creator(authorization)
+        refusal: ApplicationError
+        try:
+            return unit_of_work.general_reports.publish(
+                request,
+                principal_id=authorization.principal.principal_id,
+                creator=creator,
+                idempotency_key=command.idempotency_key,
+                recorded_at=authorization.at,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+                content_store=self._report_content_store,
+                inline_max_bytes=self._report_content_inline_max_bytes,
+            )
+        except ReportValidationError as error:
+            refusal = report_refusal(error)
+        except ReportIdempotencyConflictError:
+            refusal = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        except ReportAssociationTargetNotFoundError:
+            # Names neither the target nor which one: a foreign target and a
+            # nonexistent one answer alike.
+            refusal = NotFoundError(SafeDetail.ASSOCIATIONS)
+        raise refusal
+
+    def _reports_publish_transfer(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PublishGeneralReport,
+        request: PublicationRequest,
+    ) -> _Result:
+        """T10: a publish whose content is a finalized transfer session's, in one transaction.
+
+        Under the decode permit `_run` holds (T12): (1) the key's stored
+        receipt replays (or conflicts) FIRST, so a retry whose first attempt
+        consumed the token answers the original receipt; (2)-(4) the session
+        is claimed and its staged bytes read, verified and decoded
+        (`_claim_transfer_content`); (5) the one publish path with that
+        content; (6) the session is consumed, naming the content row the new
+        version references; the commit is `_run`'s, and the staging is
+        discarded after it, best effort. The token is in no receipt, row or
+        log: the intent digest binds the session and the token's digest.
+
+        Step (1) finds the receipt by key and Principal only (review WP06 R1
+        #7). That relies on server-stamped keys: a remote client's key is the
+        server's derived hash of its payload and client, so it can only meet
+        its own receipt. A local caller's key is used as given, and the intent
+        digest comparison is what turns a key reused under another intent
+        (another title, an inline first use, another session) into the key's
+        `conflict`, before any session is claimed.
+        """
+        repository = unit_of_work.general_reports
+        principal_id = authorization.principal.principal_id
+        stored = repository.find_publish_receipt(command.idempotency_key, principal_id=principal_id)
+        claimed: tuple[ReportContent, TransferSession] | None = None
+        if stored is None:
+            try:
+                claimed = self._claim_transfer_content(unit_of_work, authorization, command.content)
+            except NotFoundError:
+                # A concurrent retry of this request may have consumed the
+                # token while this one waited on the session's lock.
+                stored = repository.find_publish_receipt(
+                    command.idempotency_key, principal_id=principal_id
+                )
+                if stored is None:
+                    raise
+        if claimed is None:
+            if stored is None:  # pragma: no cover - one of the two is always set
+                raise InternalError()
+            if stored.receipt.intent_digest != request.intent_digest:
+                raise ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+            return _Result(
+                payload=_general_publish_payload(replace(stored, replayed=True)),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        content, session = claimed
+        result = self._publish_report(
+            unit_of_work, authorization, command, replace(request, content=content)
+        )
+        del content, claimed
+        return self._consumed(
+            unit_of_work,
+            authorization,
+            session,
+            content_id=result.content_id,
+            replayed=result.replayed,
+            payload=_general_publish_payload(result),
+        )
+
+    def _claim_transfer_content(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, value: object
+    ) -> tuple[ReportContent, TransferSession]:
+        """T10 (2)-(4): lock the caller's finalized session for its token and decode its bytes.
+
+        Every T5 case -- unknown, another Principal's or client's, expired,
+        aborted, consumed, not finalized, a wrong token -- is the one bare
+        `not_found`. The staged bytes are read and verified (each chunk and
+        the whole declaration digest) and run through the one content
+        pipeline at the store-aware decode limit; it accepted them at
+        finalize and is deterministic, so a refusal here (as a staging or
+        integrity failure) is `internal_error`, naming nothing. Writes nothing.
+        """
+        reference = parse_transfer_reference(value)
+        if reference is None:  # pragma: no cover - the request said it was one
+            raise InternalError()
+        staging = self._transfer_staging()
+        transfers = unit_of_work.report_transfers
+        refusal: ApplicationError
+        try:
+            session = transfers.claim_for_consumption(
+                reference.session_id,
+                reference.content_token,
+                principal_id=authorization.principal.principal_id,
+                client_ref=self._transfer_client_ref(authorization),
+                now=authorization.at,
+            )
+            staged = transfers.staged_bytes(session, staging=staging)
+            content = content_from_staged(
+                session.format,
+                session.encoding,
+                staged,
+                max_decoded=self._report_content_decode_limit,
+            )
+            del staged
+        except ReportTransferNotFoundError:
+            refusal = NotFoundError()
+        except (ReportTransferDigestError, ReportTransferStagingError, ReportValidationError):
+            refusal = InternalError()
+        else:
+            return content, session
+        raise refusal
+
+    @staticmethod
+    def _consumed(
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        session: TransferSession,
+        *,
+        content_id: str,
+        replayed: bool,
+        payload: dict[str, Any],
+    ) -> _Result:
+        """T10 (6): consume the claimed session, naming the content the version references.
+
+        `replayed` (a concurrent writer settled the key at its unique
+        constraint, which the held session lock makes unreachable) consumes
+        nothing. The staging is discarded only after the commit (`_run`).
+        """
+        disclosure = unenrolled_disclosure(authorization.at)
+        if replayed:
+            return _Result(payload=payload, disclosure=disclosure)
+        try:
+            unit_of_work.report_transfers.mark_consumed(
+                session, content_id=content_id, now=authorization.at
+            )
+        except (ReportTransferNotFoundError, ReportValidationError):
+            raise InternalError() from None
+        return _Result(
+            payload=payload,
+            disclosure=disclosure,
+            discard_transfer_session_ids=(session.session_id,),
+        )
+
+    def _reports_update(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: UpdateGeneralReport,
+    ) -> _Result:
+        """`reports.update`: version N+1 of an active report, a no-op, or the replay of its key.
+
+        Every server field comes from the authorization, exactly as
+        `_reports_publish`. Foreign and missing are one `not_found` on
+        `artifact_id`, the standalone read's token; a withdrawn report is the
+        caller's own, so it is `denied` (`report_withdrawn`), the
+        `capture_withdrawn` shape. Nothing of the patch is logged. A transfer
+        reference in `patch.content` is consumed by `_reports_update_transfer`.
+        """
+        request = update_request(command, max_decoded=self._report_content_decode_limit)
+        if request.content_source is not None:
+            return self._reports_update_transfer(unit_of_work, authorization, command, request)
+        return _Result(
+            payload=_general_update_payload(
+                self._update_report(unit_of_work, authorization, command, request)
+            ),
+            disclosure=unenrolled_disclosure(authorization.at),
+        )
+
+    def _update_report(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: UpdateGeneralReport,
+        request: UpdateRequest,
+    ) -> UpdateResult:
+        """The repository update of `request`, its refusals mapped (the one update path)."""
+        creator = _report_creator(authorization)
+        refusal: ApplicationError
+        try:
+            return unit_of_work.general_reports.update(
+                request,
+                principal_id=authorization.principal.principal_id,
+                creator=creator,
+                idempotency_key=command.idempotency_key,
+                recorded_at=authorization.at,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+                content_store=self._report_content_store,
+                inline_max_bytes=self._report_content_inline_max_bytes,
+            )
+        except ReportValidationError as error:
+            refusal = report_revision_refusal(error)
+        except ReportNotFoundError:
+            refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
+        except ReportIdempotencyConflictError:
+            refusal = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        except ReportWithdrawnError:
+            refusal = DeniedError(SafeDetail.REPORT_WITHDRAWN)
+        except ReportStaleVersionError:
+            refusal = ConflictError(SafeDetail.STALE_VERSION)
+        except ReportAssociationTargetNotFoundError:
+            refusal = NotFoundError(SafeDetail.ASSOCIATIONS)
+        except ReportIntegrityError:
+            refusal = InternalError()
+        raise refusal
+
+    def _reports_update_transfer(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: UpdateGeneralReport,
+        request: UpdateRequest,
+    ) -> _Result:
+        """T10: an update whose `patch.content` is a finalized transfer session's.
+
+        The order of `_reports_publish_transfer`: the key's stored receipt
+        replays (or conflicts) first; then the claim, the verified decode and
+        the one update path (lock, withdrawn, stale, ... unchanged; content
+        equal to the head's keeps the head's object); then the session is
+        consumed naming the content the new version references -- the new
+        object, or the head's reused one (also for a `no_op`, which names the
+        head). A refusal of the update path writes nothing and leaves the
+        session finalized. The keyed lookup relies on server-stamped keys as
+        `_reports_publish_transfer`'s does: a local caller reusing a key under
+        another intent is the key's `conflict`, by the intent digest.
+        """
+        repository = unit_of_work.general_reports
+        principal_id = authorization.principal.principal_id
+        stored = repository.find_update_receipt(command.idempotency_key, principal_id=principal_id)
+        patch: object = command.patch
+        value = patch.get("content") if isinstance(patch, dict) else None
+        claimed: tuple[ReportContent, TransferSession] | None = None
+        if stored is None:
+            try:
+                claimed = self._claim_transfer_content(unit_of_work, authorization, value)
+            except NotFoundError:
+                stored = repository.find_update_receipt(
+                    command.idempotency_key, principal_id=principal_id
+                )
+                if stored is None:
+                    raise
+        if claimed is None:
+            if stored is None:  # pragma: no cover - one of the two is always set
+                raise InternalError()
+            if stored.intent_digest != request.intent_digest:
+                raise ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+            return _Result(
+                payload=_general_update_payload(replace(stored, replayed=True)),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        content, session = claimed
+        sourced = replace(request, patch=replace(request.patch, content=content))
+        result = self._update_report(unit_of_work, authorization, command, sourced)
+        del content, claimed, sourced
+        return self._consumed(
+            unit_of_work,
+            authorization,
+            session,
+            content_id=result.content_id,
+            replayed=result.replayed,
+            payload=_general_update_payload(result),
+        )
+
+    def _reports_transition(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ArchiveGeneralReport | DeleteGeneralReport | RestoreGeneralReport,
+    ) -> _Result:
+        """`reports.archive`, `reports.delete` and `reports.restore`: one lifecycle move.
+
+        A stale revision is `conflict` on `expected_lifecycle_revision`, as
+        `capture.archive`; a move the current state does not admit is
+        `conflict` on `lifecycle_state`. No version, content, manifest or
+        association is touched; a delete is the recoverable Trash. A delete of
+        a report under a legal hold is `denied` (`report_held`, WP05b B4). A
+        delete whose content is not durably present and intact (the trash
+        preflight, H4) is `internal_error`, as any integrity fault: a server
+        fault the caller cannot correct, naming nothing of the content.
+        """
+        request = lifecycle_request(command)
+        refusal: ApplicationError
+        try:
+            result = unit_of_work.general_reports.transition(
+                request,
+                principal_id=authorization.principal.principal_id,
+                idempotency_key=command.idempotency_key,
+                recorded_at=authorization.at,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+                content_store=self._report_content_store,
+            )
+        except ReportValidationError as error:
+            refusal = report_revision_refusal(error)
+        except ReportNotFoundError:
+            refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
+        except ReportIdempotencyConflictError:
+            refusal = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        except ReportStaleLifecycleRevisionError:
+            refusal = ConflictError(SafeDetail.EXPECTED_LIFECYCLE_REVISION)
+        except ReportHeldError:
+            # WP05b B4 / H2: a legal hold blocks trashing; archive/restore never.
+            refusal = DeniedError(SafeDetail.REPORT_HELD)
+        except ReportLifecycleRefusal:
+            refusal = ConflictError(SafeDetail.LIFECYCLE_STATE)
+        except (ReportIntegrityError, ReportTrashPreflightError):
+            # WP05b B4: no detail token -- `internal_error` carries none anywhere.
+            refusal = InternalError()
+        else:
+            return _Result(
+                payload=_general_lifecycle_payload(result),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        raise refusal
+
+    def _reports_archive(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ArchiveGeneralReport,
+    ) -> _Result:
+        return self._reports_transition(unit_of_work, authorization, command)
+
+    def _reports_delete(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: DeleteGeneralReport,
+    ) -> _Result:
+        return self._reports_transition(unit_of_work, authorization, command)
+
+    def _reports_restore(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: RestoreGeneralReport,
+    ) -> _Result:
+        return self._reports_transition(unit_of_work, authorization, command)
+
+    # ---- Reports Modernization WP05b: operator custody ----------------------
+    # Every handler first derives the attested operator authority (`denied` for
+    # every remote and stdio-MCP caller before any read or write), as the
+    # lineage confirms do; the four are also operator-only and withheld from
+    # every remote publication.
+
+    def _reports_hold(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PlaceReportHold | ReleaseReportHold,
+    ) -> _Result:
+        """`reports.hold.place` and `reports.hold.release`: one hold ledger event.
+
+        A report not found and a foreign one are one `not_found` on
+        `artifact_id`; a stale `expected_hold_revision` is `conflict` on it; a
+        placement on a held report or a release of one not held is `conflict`
+        (`hold_state`). A placement in a process without a report content store
+        is `unavailable` (`preservation_store`) and writes nothing; a seal that
+        cannot be written and verified is `internal_error`, and no hold row is
+        written. Nothing of the reason is logged.
+        """
+        authority = _custody_authority(authorization)
+        request = hold_request(command)
+        place = request.operation is HoldOperation.PLACE
+        if place and self._report_preservation_store is None:
+            raise UnavailableError(SafeDetail.PRESERVATION_STORE)
+        repository = unit_of_work.general_reports
+        refusal: ApplicationError
+        try:
+            if place:
+                result = repository.place_hold(
+                    request,
+                    principal_id=authorization.principal.principal_id,
+                    idempotency_key=command.idempotency_key,
+                    authority=authority,
+                    recorded_at=authorization.at,
+                    correlation_id=authorization.correlation_id,
+                    audit_id=authorization.audit_id,
+                    preservation_store=self._report_preservation_store,
+                    content_store=self._report_content_store,
+                )
+            else:
+                result = repository.release_hold(
+                    request,
+                    principal_id=authorization.principal.principal_id,
+                    idempotency_key=command.idempotency_key,
+                    authority=authority,
+                    recorded_at=authorization.at,
+                    correlation_id=authorization.correlation_id,
+                    audit_id=authorization.audit_id,
+                )
+        except ReportValidationError as error:
+            refusal = custody_refusal(error)
+        except ReportNotFoundError:
+            refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
+        except ReportIdempotencyConflictError:
+            refusal = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        except ReportStaleHoldRevisionError:
+            refusal = ConflictError(SafeDetail.EXPECTED_HOLD_REVISION)
+        except ReportHoldStateError:
+            refusal = ConflictError(SafeDetail.HOLD_STATE)
+        except ReportPreservationUnavailableError:
+            refusal = UnavailableError(SafeDetail.PRESERVATION_STORE)
+        except (ReportPreservationError, ReportIntegrityError):
+            refusal = InternalError()
+        else:
+            return _Result(
+                payload=_hold_payload(result),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        raise refusal
+
+    def _reports_hold_place(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PlaceReportHold,
+    ) -> _Result:
+        return self._reports_hold(unit_of_work, authorization, command)
+
+    def _reports_hold_release(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReleaseReportHold,
+    ) -> _Result:
+        return self._reports_hold(unit_of_work, authorization, command)
+
+    def _reports_retention_set(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SetReportRetention,
+    ) -> _Result:
+        """`reports.retention.set`: append the next revision of the owner's retention policy.
+
+        A stale `expected_policy_revision` (a concurrent change included) is
+        `conflict` on it; a key bound to another request is `conflict`
+        (`idempotency_key`). Retention gates only purge eligibility.
+        """
+        authority = _custody_authority(authorization)
+        request = retention_set_request(command)
+        refusal: ApplicationError
+        try:
+            result = unit_of_work.general_reports.set_retention(
+                request,
+                principal_id=authorization.principal.principal_id,
+                idempotency_key=command.idempotency_key,
+                authority=authority,
+                recorded_at=authorization.at,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+            )
+        except ReportValidationError as error:
+            refusal = custody_refusal(error)
+        except ReportIdempotencyConflictError:
+            refusal = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        except ReportStalePolicyRevisionError:
+            refusal = ConflictError(SafeDetail.EXPECTED_POLICY_REVISION)
+        except ReportIntegrityError:
+            refusal = InternalError()
+        else:
+            return _Result(
+                payload=_retention_set_payload(result),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        raise refusal
+
+    # ---- Reports Modernization WP06: the bounded chunked transfer -----------
+    # Every session operation is scoped by the authenticated Principal AND the
+    # caller's client (T4): a session that is unknown, another Principal's,
+    # another client's, expired, aborted or consumed is the ONE bare
+    # `not_found` (no detail), on every operation (T5). Only the caller's own
+    # live session answers a `conflict`. `now` is the request clock.
+
+    def _transfer_staging(self) -> ReportTransferStaging:
+        """The staging, or `unsupported` unless BOTH it and the content store are composed (T14).
+
+        The four uploads are withheld from `available_capabilities` then, but a
+        transport that dispatches straight through `_HANDLERS` must meet the
+        same refusal here, before anything is read or written.
+        """
+        staging = self._report_transfer_staging
+        if staging is None or self._report_content_store is None:
+            raise UnsupportedError()
+        return staging
+
+    @staticmethod
+    def _transfer_client_ref(authorization: Authorization) -> str:
+        """T4: the caller's client binding, from the authorization only."""
+        return client_ref_of(_report_creator(authorization))
+
+    def _discard_staged_transfer(self, session_id: str) -> None:
+        """T13: best-effort discard of a terminal session's staged chunks, after the commit.
+
+        Never raises: a failure is logged without the identifier and the
+        staging is left to the transfer GC, which discards or reports it.
+        """
+        staging = self._report_transfer_staging
+        if staging is None:
+            return
+        try:
+            staging.discard(session_id)
+        except Exception:
+            _TRANSFER_LOGGER.warning(
+                "a terminal transfer session's staging was not discarded; left to the transfer GC"
+            )
+
+    def _reports_transfer_begin(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: BeginReportTransfer,
+    ) -> _Result:
+        """`reports.transfer.begin` (T3, T6, T7', T18): open a session, or replay its key.
+
+        The key binds only a live session (T7'): one live and unexpired under
+        the same declaration replays the original answer (`replayed: true`, no
+        new row); under another declaration it is `conflict`
+        (`idempotency_key`). A keyed session that was consumed, aborted or has
+        expired (an expired-by-time one is moved to `expired`) frees the key, so
+        the same request opens a new session. A new session past the T6
+        quotas is `rate_limited` (`transfer_quota`).
+
+        Review R1 #1: before the key and the quota, the repository reaps the
+        owner's (every client's) time-expired open/finalized sessions (at most
+        `TRANSFER_BEGIN_REAP_LIMIT`, plus the keyed one) to `expired`; their
+        staging is discarded best effort only AFTER the commit (`_run`; a
+        refused begin rolls back and discards nothing). So an owner's staging
+        on disk is bounded by its live quota (8 sessions, 64 MiB declared)
+        plus the sessions that ended with no later begin of that owner and no
+        transfer GC since, and any whose post-commit discard failed; the
+        operator's `transfer-gc` still collects those.
+        """
+        self._transfer_staging()
+        declaration = transfer_declaration(command)
+        client_ref = self._transfer_client_ref(authorization)
+        refusal: ApplicationError
+        try:
+            begun = unit_of_work.report_transfers.begin(
+                declaration,
+                principal_id=authorization.principal.principal_id,
+                client_ref=client_ref,
+                idempotency_key=command.idempotency_key,
+                now=authorization.at,
+            )
+        except ReportIdempotencyConflictError:
+            refusal = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        except ReportTransferQuotaError:
+            refusal = RateLimitedError(SafeDetail.TRANSFER_QUOTA)
+        except ReportValidationError:
+            # Every caller field was validated by the command: a server fault.
+            refusal = InternalError()
+        else:
+            return _Result(
+                payload=_transfer_begin_payload(begun.session, replayed=begun.replayed),
+                disclosure=unenrolled_disclosure(authorization.at),
+                discard_transfer_session_ids=begun.reaped_session_ids,
+            )
+        raise refusal
+
+    def _reports_transfer_append(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: AppendReportTransfer,
+    ) -> _Result:
+        """`reports.transfer.append` (T8): stage chunk `sequence` of the caller's open session.
+
+        Lock (T5) -> strict Base64 decode (`chunk`) -> the repository's order
+        (finalized `transfer_state`, size `chunk` [`max_bytes` past 262,144
+        bytes], digest `chunk_sha256`, ledger replay or
+        `transfer_chunk_conflict`, `transfer_sequence`, stage, INSERT, count)
+        -> the session re-read in the same transaction for its received count.
+        A refusal writes nothing.
+        """
+        staging = self._transfer_staging()
+        principal_id = authorization.principal.principal_id
+        client_ref = self._transfer_client_ref(authorization)
+        transfers = unit_of_work.report_transfers
+        refusal: ApplicationError
+        try:
+            session = transfers.lock_usable(
+                command.session_id,
+                principal_id=principal_id,
+                client_ref=client_ref,
+                now=authorization.at,
+            )
+            data = _transfer_chunk_bytes(command.chunk)
+            chunk, replayed = transfers.append_chunk(
+                session,
+                sequence=command.sequence,
+                chunk_sha256=command.chunk_sha256,
+                data=data,
+                staging=staging,
+                now=authorization.at,
+            )
+            after = transfers.lock_usable(
+                command.session_id,
+                principal_id=principal_id,
+                client_ref=client_ref,
+                now=authorization.at,
+            )
+        except ReportTransferNotFoundError:
+            refusal = NotFoundError()
+        except ReportTransferConflictError as error:
+            refusal = _transfer_conflict(error)
+        except ReportValidationError as error:
+            refusal = _transfer_refusal(error)
+        except ReportTransferStagingError:
+            refusal = InternalError()
+        else:
+            return _Result(
+                payload=_transfer_append_payload(after, chunk, replayed=replayed),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        raise refusal
+
+    def _reports_transfer_finalize(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: FinalizeReportTransfer,
+    ) -> _Result:
+        """`reports.transfer.finalize` (T9, T11): verify a complete session, mint its token.
+
+        Under the decode permit `_run` holds (T12). Lock (T5) -> finalized
+        `transfer_state` -> incomplete `transfer_incomplete` -> every staged
+        chunk read and verified, the whole size and digest the declaration's
+        (else `transfer`) -> the one content pipeline (a refusal is `transfer`,
+        `max_bytes` for a size rule) -> a fresh one-use token whose digest
+        alone is stored. A refusal writes nothing; a staging failure is
+        `internal_error`. The token is in this answer only, never again.
+        """
+        staging = self._transfer_staging()
+        transfers = unit_of_work.report_transfers
+        refusal: ApplicationError
+        try:
+            session = transfers.lock_usable(
+                command.session_id,
+                principal_id=authorization.principal.principal_id,
+                client_ref=self._transfer_client_ref(authorization),
+                now=authorization.at,
+            )
+            if session.state is TransferState.FINALIZED:
+                raise ReportTransferConflictError("transfer_state")
+            if not session.complete:
+                raise ReportTransferConflictError("transfer_incomplete")
+            staged = transfers.staged_bytes(session, staging=staging)
+            content = content_from_staged(
+                session.format,
+                session.encoding,
+                staged,
+                max_decoded=self._report_content_decode_limit,
+            )
+            del staged
+            content_token, token_digest = mint_content_token()
+            finalized = transfers.finalize(session, token_digest=token_digest, now=authorization.at)
+        except ReportTransferNotFoundError:
+            refusal = NotFoundError()
+        except ReportTransferConflictError as error:
+            refusal = _transfer_conflict(error)
+        except ReportTransferDigestError:
+            refusal = InvalidRequestError(SafeDetail.TRANSFER)
+        except ReportValidationError as error:
+            refusal = _transfer_refusal(error)
+        except ReportTransferStagingError:
+            refusal = InternalError()
+        else:
+            return _Result(
+                payload=_transfer_finalize_payload(finalized, content, content_token=content_token),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        raise refusal
+
+    def _reports_transfer_abort(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: AbortReportTransfer,
+    ) -> _Result:
+        """`reports.transfer.abort` (T17): end the caller's open or finalized session.
+
+        The caller's own aborted session replays (`replayed: true`); expired,
+        consumed, foreign or unknown is `not_found`. After the commit its
+        staged chunks are discarded, best effort (`_run`).
+        """
+        self._transfer_staging()
+        try:
+            session, replayed = unit_of_work.report_transfers.abort(
+                command.session_id,
+                principal_id=authorization.principal.principal_id,
+                client_ref=self._transfer_client_ref(authorization),
+                now=authorization.at,
+            )
+        except ReportTransferNotFoundError:
+            raise NotFoundError() from None
+        return _Result(
+            payload={
+                "session_id": session.session_id,
+                "state": TransferState.ABORTED.value,
+                "replayed": replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at),
+            discard_transfer_session_ids=(session.session_id,),
+        )
+
+    def _reports_transfer_read_chunk(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadReportTransferChunk,
+    ) -> _Result:
+        """`reports.transfer.read_chunk` (T15): a verified byte range of one standalone version.
+
+        Visibility exactly as `reports.read` (`_reports_read_standalone`):
+        foreign, nonexistent and (without `include_withdrawn`) withdrawn are the
+        one `not_found` on `artifact_id`. `decoded` is the bytes
+        `decoded_sha256` names; `original` the gzip bytes of a `gzip+base64`
+        version, else the decoded bytes. Inline bytes are re-digested whole on
+        every call; a `managed_blob` part is streamed whole through its checks
+        by the store, keeping only the range. A part that does not verify (or a
+        blob without a store) is `internal_error`, no bytes; an `offset` at or
+        past the part's end is `invalid_request` (`offset`).
+        """
+        refusal: ApplicationError
+        try:
+            stored = unit_of_work.general_reports.read_version(
+                command.report_id,
+                principal_id=authorization.principal.principal_id,
+                version_id=command.version_id,
+                version_number=command.version_number,
+            )
+        except ReportIntegrityError:
+            refusal = InternalError()
+        else:
+            if stored is not None and (
+                command.include_withdrawn or stored.root.lifecycle_state is LifecycleState.ACTIVE
+            ):
+                return _Result(
+                    payload=self._transfer_read_range(stored, command),
+                    disclosure=unenrolled_disclosure(authorization.at),
+                )
+            refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
+        raise refusal
+
+    def _transfer_read_range(
+        self, stored: StoredReportVersion, command: ReadReportTransferChunk
+    ) -> dict[str, Any]:
+        facts = stored.content
+        original = command.part == ReportContentPart.ORIGINAL.value and (
+            facts.encoding is ContentEncoding.GZIP_BASE64
+        )
+        if original:
+            part, total, digest = (
+                ReportContentPart.ORIGINAL,
+                facts.original_byte_count,
+                facts.original_sha256,
+            )
+        else:
+            # Identity: the original IS the decoded bytes (one stored part).
+            part, total, digest = (
+                ReportContentPart.DECODED,
+                facts.decoded_byte_count,
+                facts.decoded_sha256,
+            )
+        if command.offset >= total:
+            raise InvalidRequestError(SafeDetail.OFFSET)
+        if stored.storage_kind is StorageKind.MANAGED_BLOB:
+            store = self._report_content_store
+            if store is None:
+                raise InternalError()
+            try:
+                chunk = store.read_range(
+                    stored.content_id,
+                    part,
+                    offset=command.offset,
+                    length=command.length,
+                    expected_sha256=digest,
+                    expected_byte_count=total,
+                )
+            except (ReportContentStoreError, ReportIntegrityError):
+                raise InternalError() from None
+        else:
+            whole = facts.original if original else facts.decoded
+            if whole is None or len(whole) != total or hashlib.sha256(whole).hexdigest() != digest:
+                raise InternalError()
+            chunk = whole[command.offset : command.offset + command.length]
+        end = command.offset + len(chunk)
+        eof = end == total
+        return {
+            "plane": "standalone",
+            "report_id": stored.root.report_id,
+            "version_id": stored.version.version_id,
+            "version_number": stored.version.version_number,
+            "part": command.part,
+            "offset": command.offset,
+            "byte_count": len(chunk),
+            "chunk": base64.b64encode(chunk).decode("ascii"),
+            "chunk_sha256": hashlib.sha256(chunk).hexdigest(),
+            "total_byte_count": total,
+            "part_sha256": digest,
+            "eof": eof,
+            "next_offset": None if eof else end,
+        }
+
+    def _reports_retention_get(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetReportRetention,
+    ) -> _Result:
+        """`reports.retention.get`: the policy, its history and one report's eligibility.
+
+        Eligibility is evaluated at the request clock (`authorization.at`); a
+        foreign or missing `report_id` is `not_found` on `artifact_id`.
+        """
+        _custody_authority(authorization)
+        principal_id = authorization.principal.principal_id
+        repository = unit_of_work.general_reports
+        refusal: ApplicationError
+        try:
+            view = repository.retention_policy(
+                principal_id=principal_id, history_limit=command.resolved_history_limit
+            )
+            eligibility = (
+                None
+                if command.report_id is None
+                else report_purge_eligibility(
+                    repository, command.report_id, principal_id=principal_id, now=authorization.at
+                )
+            )
+        except (ReportValidationError, ReportIntegrityError):
+            # A stored ledger the pure evaluation refuses is a server fault, and
+            # so is an `eligible_at` past year 9999 (`ReportRetentionOverflowError`
+            # is a `ReportValidationError`; WP08).
+            refusal = InternalError()
+        else:
+            if command.report_id is not None and eligibility is None:
+                raise NotFoundError(SafeDetail.ARTIFACT_ID)
+            return _Result(
+                payload=_retention_get_payload(
+                    view, report_id=command.report_id, eligibility=eligibility
+                ),
+                disclosure=unenrolled_disclosure(authorization.at),
+            )
+        raise refusal
+
+    def _reports_history(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetGeneralReportHistory,
+    ) -> _Result:
+        """`reports.history`: one oldest-first page of versions or lifecycle events (D9).
+
+        A report that is not `active` answers `not_found` unless
+        `include_withdrawn`, exactly as the standalone read; foreign and
+        missing are the same `not_found`. A manifest that no longer matches its
+        rows is `internal_error`, never returned.
+        """
+        principal_id = authorization.principal.principal_id
+        reports = unit_of_work.general_reports
+        refusal: ApplicationError
+        page: (
+            ReportHistoryPage[ReportVersionSummary]
+            | ReportHistoryPage[ReportLifecycleEventRecord]
+            | None
+        )
+        try:
+            if command.entries is HistoryEntries.VERSIONS:
+                page = reports.version_history(
+                    command.report_id,
+                    principal_id=principal_id,
+                    after_version_id=command.after,
+                    page_size=command.resolved_page_size,
+                    include_manifests=command.include_manifests,
+                )
+            else:
+                page = reports.lifecycle_history(
+                    command.report_id,
+                    principal_id=principal_id,
+                    after_event_id=command.after,
+                    page_size=command.resolved_page_size,
+                )
+        except ReportValidationError as error:
+            refusal = report_revision_refusal(error)
+            if error.field == "cursor" and not self._history_root_visible(
+                reports, command, principal_id
+            ):
+                # Root visibility outranks the cursor (WP04 C11(1)): a withdrawn
+                # report the caller did not ask for, or a missing or foreign one,
+                # is `not_found` whatever cursor was sent, so a cursor refusal
+                # never says the report is there.
+                refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
+        except ReportIntegrityError:
+            refusal = InternalError()
+        else:
+            if page is not None and (
+                command.include_withdrawn or page.root.lifecycle_state is LifecycleState.ACTIVE
+            ):
+                return _Result(
+                    payload=_general_history_payload(page),
+                    disclosure=unenrolled_disclosure(authorization.at),
+                )
+            refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
+        raise refusal
+
+    @staticmethod
+    def _history_root_visible(
+        reports: GeneralReportRepository, command: GetGeneralReportHistory, principal_id: str
+    ) -> bool:
+        """Whether `reports.history` may answer about the root at all (WP04 C11(1)).
+
+        The root, read without a cursor through the same Principal-scoped
+        lifecycle ledger (one event at most): visible when it is the caller's
+        and `active`, or withdrawn and `include_withdrawn` was asked for.
+        """
+        probe = reports.lifecycle_history(command.report_id, principal_id=principal_id, page_size=1)
+        return probe is not None and (
+            command.include_withdrawn or probe.root.lifecycle_state is LifecycleState.ACTIVE
+        )
+
+    def _reports_read_standalone(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadIntelligenceArtifact,
+    ) -> _Result:
+        refusal: ApplicationError
+        try:
+            stored = unit_of_work.general_reports.read_version(
+                command.report_id,
+                principal_id=authorization.principal.principal_id,
+                version_id=command.version_id,
+                version_number=command.version_number,
+            )
+        except ReportIntegrityError:
+            # The stored bytes no longer match their digests: refused, never
+            # returned. A server fault, not something the caller can correct.
+            refusal = InternalError()
+        else:
+            if stored is not None and (
+                command.include_withdrawn or stored.root.lifecycle_state is LifecycleState.ACTIVE
+            ):
+                try:
+                    readable = self._readable_report_version(
+                        stored, include_body=command.include_body
+                    )
+                except (ReportContentStoreError, ReportIntegrityError):
+                    # WP05 C5: a stored object that is missing or no longer
+                    # matches its row is a server fault; nothing of it -- no
+                    # body, path or digest -- is returned or named.
+                    raise InternalError() from None
+                return _Result(
+                    payload=_general_read_payload(
+                        readable,
+                        include_body=command.include_body,
+                        include_manifest=command.include_manifest,
+                    ),
+                    disclosure=unenrolled_disclosure(authorization.at),
+                )
+            # Foreign, nonexistent and (without `include_withdrawn`) withdrawn
+            # all answer exactly as a missing pipeline artifact does.
+            refusal = NotFoundError(SafeDetail.ARTIFACT_ID)
+        raise refusal
+
+    def _readable_report_version(
+        self, stored: StoredReportVersion, *, include_body: bool
+    ) -> StoredReportVersion:
+        """An inline version as read; a `managed_blob` one verified through the store (C5).
+
+        A `managed_blob` version in a process composed without a store cannot
+        be verified, so it is refused as a missing object would be.
+        """
+        if stored.storage_kind is not StorageKind.MANAGED_BLOB:
+            return stored
+        if self._report_content_store is None:
+            raise ReportIntegrityError()
+        return _verified_blob_version(self._report_content_store, stored, include_body=include_body)
+
     def _reports_read(
         self,
         unit_of_work: UnitOfWork,
         authorization: Authorization,
         command: ReadIntelligenceArtifact,
     ) -> _Result:
+        if command.standalone:
+            return self._reports_read_standalone(unit_of_work, authorization, command)
         artifact = read_artifact(
             self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
             principal_id=authorization.principal.principal_id,
@@ -16113,6 +18011,8 @@ class ApplicationService:
         authorization: Authorization,
         command: ListIntelligenceArtifacts,
     ) -> _Result:
+        if command.plane is not ReportPlane.INTELLIGENCE:
+            return self._reports_catalog(unit_of_work, authorization, command)
         page_size = self._page_size(command.page_size)
         after_committed_at = None
         after_artifact_id = None
@@ -16183,6 +18083,8 @@ class ApplicationService:
         authorization: Authorization,
         command: SearchIntelligenceArtifacts,
     ) -> _Result:
+        if command.plane is not ReportPlane.INTELLIGENCE:
+            return self._reports_catalog(unit_of_work, authorization, command)
         page_size = self._page_size(command.page_size)
         found = search_artifacts(
             self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
@@ -16210,6 +18112,101 @@ class ApplicationService:
                 ]
             },
             disclosure=unenrolled_disclosure(authorization.at),
+        )
+
+    def _reports_catalog(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListIntelligenceArtifacts | SearchIntelligenceArtifacts,
+    ) -> _Result:
+        """`reports.list`/`reports.search` in the `standalone` or `all` plane (WP04 C2-C6).
+
+        The cursor is decoded against the digest of this very request (the
+        authorized Principal included), so a token from another request,
+        Principal, plane, filter set, query or page size is `invalid_request`
+        on `cursor`. Each plane is read with `page_size + 1` rows strictly
+        after the same position; `all` merges the two by the one order key and
+        keeps `page_size`. A next cursor is issued iff a row remains. No count.
+        """
+        principal_id = authorization.principal.principal_id
+        search = isinstance(command, SearchIntelligenceArtifacts)
+        operation = CatalogOperation.SEARCH if search else CatalogOperation.LIST
+        plane = command.plane
+        filters = command.catalog_filters()
+        query = command.search_query() if isinstance(command, SearchIntelligenceArtifacts) else None
+        page_size = command.catalog_page_size
+        binding = binding_digest(
+            operation=operation,
+            principal_id=principal_id,
+            plane=plane,
+            filters=filters,
+            query=query,
+            page_size=page_size,
+        )
+        after: CatalogCursor | None = None
+        refusal: InvalidRequestError | None = None
+        if command.cursor is not None:
+            try:
+                after = CatalogCursor.decode(
+                    command.cursor, operation=operation, plane=plane, binding=binding
+                )
+            except ReportValidationError as error:
+                refusal = catalog_refusal(error)
+        if refusal is not None:
+            # Raised outside the handler: the token never rides along as context.
+            raise refusal
+        limit = page_size + 1
+        rows: list[tuple[_CatalogKey, dict[str, Any]]] = [
+            (
+                _catalog_order_key(entry.rank, entry.created_at, entry.report_id),
+                _standalone_catalog_item(entry, search=search),
+            )
+            for entry in unit_of_work.general_reports.catalog_page(
+                principal_id=principal_id,
+                filters=filters,
+                query=query,
+                after=after,
+                limit=limit,
+            )
+        ]
+        if plane is ReportPlane.ALL:
+            store = cast(IntelligenceStore, self._intelligence_store(unit_of_work, authorization))
+            rows.extend(
+                (
+                    _catalog_order_key(rank, artifact.committed_at, artifact.artifact_id),
+                    _intelligence_catalog_item(artifact, snippet, search=search),
+                )
+                for artifact, rank, snippet in store.catalog_page(
+                    principal_id, filters=filters, query=query, after=after, limit=limit
+                )
+            )
+            rows.sort(key=lambda row: row[0], reverse=True)
+        truncated = len(rows) > page_size
+        page = rows[:page_size]
+        next_cursor: str | None = None
+        if truncated and page:
+            rank, sort_time, report_id = page[-1][0]
+            next_cursor = CatalogCursor(
+                binding=binding,
+                sort_time=sort_time,
+                report_id=report_id,
+                rank=rank if search else None,
+            ).encode()
+        return _Result(
+            payload={
+                "plane": plane.value,
+                "items": [item for _key, item in page],
+                "next_cursor": next_cursor,
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=next_cursor,
+                ),
+            ),
         )
 
     def _reports_resolve_set(
@@ -17153,6 +19150,22 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.REPORTS_RESOLVE_SET: ApplicationService._reports_resolve_set,
         Capability.REPORTS_TYPES_CREATE: ApplicationService._reports_types_create,
         Capability.REPORTS_TYPES_LIST: ApplicationService._reports_types_list,
+        Capability.REPORTS_PUBLISH: ApplicationService._reports_publish,
+        Capability.REPORTS_UPDATE: ApplicationService._reports_update,
+        Capability.REPORTS_HISTORY: ApplicationService._reports_history,
+        Capability.REPORTS_ARCHIVE: ApplicationService._reports_archive,
+        Capability.REPORTS_DELETE: ApplicationService._reports_delete,
+        Capability.REPORTS_RESTORE: ApplicationService._reports_restore,
+        Capability.REPORTS_HOLD_PLACE: ApplicationService._reports_hold_place,
+        Capability.REPORTS_HOLD_RELEASE: ApplicationService._reports_hold_release,
+        Capability.REPORTS_RETENTION_SET: ApplicationService._reports_retention_set,
+        Capability.REPORTS_RETENTION_GET: ApplicationService._reports_retention_get,
+        # WP06 W3a interim placeholders (W3b replaces each with its handler).
+        Capability.REPORTS_TRANSFER_BEGIN: ApplicationService._reports_transfer_begin,
+        Capability.REPORTS_TRANSFER_APPEND: ApplicationService._reports_transfer_append,
+        Capability.REPORTS_TRANSFER_FINALIZE: ApplicationService._reports_transfer_finalize,
+        Capability.REPORTS_TRANSFER_ABORT: ApplicationService._reports_transfer_abort,
+        Capability.REPORTS_TRANSFER_READ_CHUNK: ApplicationService._reports_transfer_read_chunk,
         Capability.ENTITIES_SEARCH: ApplicationService._entities_search,
         Capability.ENTITIES_GET: ApplicationService._entities_get,
         Capability.ENTITIES_RESOLVE: ApplicationService._entities_resolve,
@@ -18011,6 +20024,18 @@ _CONSTRAINT_SYNC_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
+
+#: WP06 T14: the four upload writes, served only with both a report content
+#: store and the transfer staging composed. `reports.transfer.read_chunk` is not
+#: here: it reads inline content without a store, as `reports.read` does.
+_REPORT_TRANSFER_UPLOAD_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
+    }
+)
 
 _MANAGED_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {

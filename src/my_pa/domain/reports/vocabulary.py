@@ -1,0 +1,189 @@
+"""Frozen bounds and enumerations of the general report plane.
+
+Every value here is also a database literal: the WP01 migration restates these
+bounds in CHECK constraints, so changing one is a schema change, never a
+silent reinterpretation of stored rows.
+"""
+
+from __future__ import annotations
+
+import re
+from datetime import timedelta
+from enum import StrEnum
+from typing import Final
+
+__all__ = [
+    "DECODE_CHUNK_BYTES",
+    "MANIFEST_SCHEMA",
+    "MAX_ASSOCIATIONS_PER_VERSION",
+    "MAX_ASSOCIATION_REF_CHARACTERS",
+    "MAX_CONTENT_DATA_VALUES",
+    "MAX_DECODED_CONTENT_BYTES",
+    "MAX_EXPANSION_RATIO",
+    "MAX_MANIFEST_BYTES",
+    "MAX_METADATA_BYTES",
+    "MAX_METADATA_DEPTH",
+    "MAX_METADATA_FLOAT_MAGNITUDE",
+    "MAX_METADATA_KEYS",
+    "MAX_METADATA_KEY_CHARACTERS",
+    "MAX_ORIGINAL_CONTENT_BYTES",
+    "MAX_REASON_CHARACTERS",
+    "MAX_SEARCH_TEXT_CHARACTERS",
+    "MAX_SUMMARY_CHARACTERS",
+    "MAX_TERMS",
+    "MAX_TERM_CHARACTERS",
+    "MAX_TITLE_CHARACTERS",
+    "MIN_METADATA_FLOAT_MAGNITUDE",
+    "READ_INLINE_CONTENT_MAX_BYTES",
+    "RESERVED_METADATA_KEY_PREFIXES",
+    "RESERVED_TYPE_PREFIXES",
+    "TRANSFER_CHUNK_MAX_BYTES",
+    "TRANSFER_MAX_TTL",
+    "TYPE_TOKEN_PATTERN",
+    "AssociationTargetKind",
+    "AssociationVerification",
+    "ChangeKind",
+    "ContentEncoding",
+    "ContentFormat",
+    "LifecycleOperation",
+    "LifecycleState",
+    "ReceiptOperation",
+    "ReceiptOutcome",
+    "StorageKind",
+    "TransferState",
+]
+
+#: A report type and an association relation token (`^[a-z][a-z0-9_]{0,63}$`).
+TYPE_TOKEN_PATTERN: Final = re.compile(r"\A[a-z][a-z0-9_]{0,63}\Z")
+#: Type namespaces the product keeps for itself; a caller type may not use one.
+RESERVED_TYPE_PREFIXES: Final = ("my_pa_", "system_", "internal_")
+
+#: Code points after NFC.
+MAX_TITLE_CHARACTERS: Final = 256
+MAX_SUMMARY_CHARACTERS: Final = 2000
+MAX_REASON_CHARACTERS: Final = 500
+
+#: Topics and tags are separate tuples bounded alike.
+MAX_TERMS: Final = 24
+MAX_TERM_CHARACTERS: Final = 64
+
+MAX_METADATA_KEYS: Final = 32
+#: The top-level object is depth 1; every nested object or array adds one.
+MAX_METADATA_DEPTH: Final = 4
+#: Canonical UTF-8 serialization: sorted keys, `(",", ":")`, `ensure_ascii=False`.
+MAX_METADATA_BYTES: Final = 16384
+MAX_METADATA_KEY_CHARACTERS: Final = 64
+#: A non-zero metadata float has `MIN <= abs(x) < MAX`. In that range Python's
+#: shortest `repr` has no exponent, and PostgreSQL's jsonb text prints the same
+#: digits; outside it, jsonb text spells `1e308` with 309 digits, so a
+#: canonically small object could exceed the stored text bound (32768).
+MIN_METADATA_FLOAT_MAGNITUDE: Final = 1e-4
+MAX_METADATA_FLOAT_MAGNITUDE: Final = 1e16
+RESERVED_METADATA_KEY_PREFIXES: Final = ("_", "my_pa", "system")
+
+#: WP05: the most bytes a gzip+base64 upload's gunzipped text may have (as
+#: uploaded: pretty-printed JSON counts its whitespace) and, separately, the
+#: most bytes its decoded (canonical) content may have.
+MAX_DECODED_CONTENT_BYTES: Final = 16_777_216
+MAX_ORIGINAL_CONTENT_BYTES: Final = 16_777_216
+
+#: WP05 B2: gunzipped bytes may be at most this many times the gzip bytes, so a
+#: small upload cannot inflate into a large decode ("expansion_ratio").
+MAX_EXPANSION_RATIO: Final = 256
+#: WP05 B2 step 8a: the most JSON values (2^18) one gzip json/mixed content's
+#: data may hold, counted by the linear pre-scan before any parse, so a small
+#: upload cannot become a parse tree of millions of objects. Identity content
+#: needs no check: its canonical JSON is at most `INLINE_CONTENT_MAX_BYTES`
+#: (2^19) bytes and every value but the first costs at least two (`,0`).
+MAX_CONTENT_DATA_VALUES: Final = 262144
+#: WP05 B2: the gzip bytes are fed to the inflater in slices of this size, and
+#: each inflate call may produce at most this many bytes before the bounds are
+#: checked again.
+DECODE_CHUNK_BYTES: Final = 65536
+#: WP05 B5/C5: the largest gzip original (`encoded`) or decoded body a read
+#: returns inline; above it the read names the omission instead.
+READ_INLINE_CONTENT_MAX_BYTES: Final = 524288
+
+MANIFEST_SCHEMA: Final = "report_version_manifest_v1"
+MAX_MANIFEST_BYTES: Final = 65536
+
+#: Code points of a version's search projection (`search_text`): the decoded
+#: content's searchable text is cut here (WP04 C7), so text beyond it is not
+#: searchable. The schema restates it as `char_length(search_text) <= 65536`.
+MAX_SEARCH_TEXT_CHARACTERS: Final = 65536
+
+MAX_ASSOCIATIONS_PER_VERSION: Final = 64
+#: Bound on an association's `target_ref` and `target_version_ref`.
+MAX_ASSOCIATION_REF_CHARACTERS: Final = 512
+
+TRANSFER_CHUNK_MAX_BYTES: Final = 262144
+TRANSFER_MAX_TTL: Final = timedelta(hours=24)
+
+
+class ContentFormat(StrEnum):
+    MARKDOWN = "markdown"
+    TEXT = "text"
+    JSON = "json"
+    MIXED = "mixed"
+
+
+class ContentEncoding(StrEnum):
+    IDENTITY = "identity"
+    GZIP_BASE64 = "gzip+base64"
+
+
+class StorageKind(StrEnum):
+    INLINE = "inline"
+    MANAGED_BLOB = "managed_blob"
+
+
+class LifecycleState(StrEnum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+    TRASHED = "trashed"
+
+
+class LifecycleOperation(StrEnum):
+    ARCHIVE = "archive"
+    DELETE = "delete"
+    RESTORE = "restore"
+
+
+class ChangeKind(StrEnum):
+    INITIAL = "initial"
+    CONTENT = "content"
+    METADATA = "metadata"
+
+
+class ReceiptOperation(StrEnum):
+    PUBLISH = "publish"
+    UPDATE = "update"
+    ARCHIVE = "archive"
+    DELETE = "delete"
+    RESTORE = "restore"
+
+
+class ReceiptOutcome(StrEnum):
+    APPLIED = "applied"
+    NO_OP = "no_op"
+
+
+class AssociationTargetKind(StrEnum):
+    PROJECT = "project"
+    ENTITY = "entity"
+    STANDALONE_REPORT = "standalone_report"
+    INTELLIGENCE_REPORT = "intelligence_report"
+    EXTERNAL_SOURCE = "external_source"
+
+
+class AssociationVerification(StrEnum):
+    ASSERTED = "asserted"
+    VERIFIED = "verified"
+
+
+class TransferState(StrEnum):
+    OPEN = "open"
+    FINALIZED = "finalized"
+    CONSUMED = "consumed"
+    ABORTED = "aborted"
+    EXPIRED = "expired"

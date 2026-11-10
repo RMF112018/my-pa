@@ -35,16 +35,24 @@ jobs:
   #   `database-tier`: it fails unless every needed result is exactly `success`
   #   (failure, cancelled and skipped all fail).
   #
-  # Per-shard budget: measured locally on 2026-10-20 (S2 head), each of the
-  # three FAST shards took 9.9-10.4 minutes including its roughly 2-minute
-  # collection. One file alone
-  # (`test_every_capability_reaching_a_memory_row_is_declared.py`, about 7
-  # minutes) bounds any file-level shard from below. CI has run 1.5-1.8x
-  # local, so about 16-19 minutes of pytest per leg is expected against a
-  # 35-minute timeout. Measurement headroom, not a performance SLA.
+  # Per-shard budget, measured on CI (ubuntu-latest). The `fast` weights in
+  # `tests/ci_shard_weights.json` are CI per-file averages over the five
+  # complete FAST legs of PR head 922db4ab (validate-fast 2,3;
+  # dependency-floor-fast 1,2,3); their plan puts
+  # `test_every_capability_reaching_a_memory_row_is_declared.py` alone in
+  # shard 1. That file took 934-1549 s on complete legs and >1715 s on the
+  # PR run 42623232044 leg cancelled at the old 35 minutes (job 2116 s); main
+  # 3a1bdea7 shard 1 took 1991 s. Collection adds 210-350 s per leg. The file
+  # bounds shard 1 from below, so rebalancing cannot shorten it; making the
+  # file cheaper is the remedy, a follow-up. At 55 minutes (3300 s): 1991 s
+  # is 60%, 2116 s 64%, a ~1900 s walk + 350 s collection + setup (~2285 s)
+  # 69%. Measurement headroom, not a performance SLA.
   validate-static:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The partition proof alone took 27 minutes on CI; the job took 1684 s on
+    # the PR (94% of the old 30 minutes) and 1555 s on main. 1684 s of 45
+    # minutes (2700 s) is 62%. Measurement headroom, not an SLA.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -228,7 +236,7 @@ jobs:
     # exactly as the single job did) and the install. The failure-annotation
     # ledger and `--durations=50` evidence are per leg.
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       matrix:
@@ -455,10 +463,11 @@ jobs:
     # green. `src/my_pa/contracts/v1/envelope.py` avoids that form for this
     # reason, and this job is what keeps that reason true.
     runs-on: ubuntu-latest
-    # Per-shard budget, as for `validate-fast`: the heaviest FAST shard is
-    # expected at about 16-19 minutes of pytest on CI (S1 ran this job whole in
-    # 41 minutes). Measurement headroom, not an SLA.
-    timeout-minutes: 35
+    # Per-shard budget, as for `validate-fast` (see the comment above
+    # `validate-static`): shard 1 holds only the walk file, which bounds it
+    # from below; a ~2285 s worst case is about 69% of 55 minutes (3300 s).
+    # Measurement headroom, not an SLA.
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       matrix:
@@ -748,7 +757,13 @@ jobs:
   database-current-head:
     # Ordinary current-schema tests. One Alembic upgrade per worker, then clones.
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Main took 3071 s (pytest 2971 s); the PR's pytest ran 3555 s and was
+    # cancelled at the old 60 minutes with ~97% of tests done, so pytest
+    # projects to ~3665 s (3555/0.97) and the job to ~3780 s with main's
+    # ~100 s of setup and profile-proof overhead (3071 - 2971).
+    # Of 90 minutes (5400 s): ~70% projected, main 57%.
+    # Measurement headroom, not an SLA.
+    timeout-minutes: 90
     services:
       postgres:
         image: postgres:17

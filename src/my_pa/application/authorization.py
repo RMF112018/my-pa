@@ -49,6 +49,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from my_pa.application.commands import (
+    AbortReportTransfer,
     AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
@@ -56,13 +57,16 @@ from my_pa.application.commands import (
     AddEntityName,
     AddIssueMembership,
     AddIssueProjectLink,
+    AppendReportTransfer,
     ApplyConstraintSync,
     ArchiveCapture,
     ArchiveEntity,
+    ArchiveGeneralReport,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
     AssertRecordAssociation,
     BeginIntelligenceCycle,
+    BeginReportTransfer,
     BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
@@ -109,6 +113,7 @@ from my_pa.application.commands import (
     CreateTaskComment,
     DeactivateConstraintCategory,
     DecideReviewCase,
+    DeleteGeneralReport,
     EndEntityAffiliation,
     EndEntityAssignment,
     EndEntityParticipation,
@@ -118,6 +123,7 @@ from my_pa.application.commands import (
     EndRecordAssociation,
     EnrollSource,
     FetchSource,
+    FinalizeReportTransfer,
     GetCanvasWorkspace,
     GetCapabilities,
     GetCommitmentHistory,
@@ -128,6 +134,7 @@ from my_pa.application.commands import (
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
+    GetGeneralReportHistory,
     GetGoodNotesContent,
     GetGoodNotesPullStatus,
     GetGoodNotesWork,
@@ -138,6 +145,7 @@ from my_pa.application.commands import (
     GetRecordEventProvenance,
     GetRelationshipMemory,
     GetRelationshipMemoryHistory,
+    GetReportRetention,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
@@ -183,6 +191,7 @@ from my_pa.application.commands import (
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
+    PlaceReportHold,
     PlanLineageBackfill,
     PrepareContext,
     PreviewConstraintSync,
@@ -190,6 +199,7 @@ from my_pa.application.commands import (
     PreviewEntitySplit,
     ProposeRelationshipMemory,
     PublishConstraint,
+    PublishGeneralReport,
     PullGoodNotesWork,
     PutCanvasWorkspace,
     ReadCapture,
@@ -219,6 +229,7 @@ from my_pa.application.commands import (
     ReadRecordLineage,
     ReadRelatedRecords,
     ReadReportManifest,
+    ReadReportTransferChunk,
     ReadScheduleActivityHistory,
     ReadSchedulePublication,
     ReadTask,
@@ -227,6 +238,7 @@ from my_pa.application.commands import (
     RecordIssueHandoff,
     RecordTask,
     ReinstateRecordAssociation,
+    ReleaseReportHold,
     ReopenConstraint,
     ReopenIssue,
     ReorderConstraintCategories,
@@ -238,6 +250,7 @@ from my_pa.application.commands import (
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
+    RestoreGeneralReport,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
     RetireEntityAddress,
@@ -269,6 +282,7 @@ from my_pa.application.commands import (
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
+    SetReportRetention,
     SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
@@ -282,6 +296,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateGeneralReport,
     UpdateIssue,
     UpdateMeeting,
     UpdateMeetingSeries,
@@ -577,6 +592,28 @@ def _requested_scope(
             # The report type registry is the acting Principal's own rows.
             | CreateReportType()
             | ListReportTypes()
+            # A standalone report is the acting Principal's own root; its
+            # association targets are verified in that partition by the
+            # repository, never against a source grant.
+            | PublishGeneralReport()
+            # WP03: revising, paging and moving the lifecycle of that same root.
+            | UpdateGeneralReport()
+            | GetGeneralReportHistory()
+            | ArchiveGeneralReport()
+            | DeleteGeneralReport()
+            | RestoreGeneralReport()
+            # WP05b: holding that same root, and the owner's retention policy.
+            | PlaceReportHold()
+            | ReleaseReportHold()
+            | SetReportRetention()
+            | GetReportRetention()
+            # WP06: the caller's own (and its client's) upload sessions, and a
+            # chunk of one of its own reports' versions.
+            | BeginReportTransfer()
+            | AppendReportTransfer()
+            | FinalizeReportTransfer()
+            | AbortReportTransfer()
+            | ReadReportTransferChunk()
             # The entity plane names a person, not a source, for the reason
             # `domain.policy.decision._SCOPELESS` states beside the same five.
             | SearchEntities()

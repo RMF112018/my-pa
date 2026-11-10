@@ -192,6 +192,108 @@ def test_the_disposition_translation_lands_on_real_domain_members(
 #: the argument break because the routes wrap the call over several lines.
 _CALL_SITE: Final = re.compile(r"callGateway<?[^(]*\(\s*[^,]+,\s*\"([a-z_.]+)\"", re.MULTILINE)
 
+#: The same call through either authority path built on it -- `invokeGateway`
+#: or (Reports Modernization WP07 Amendment A1) `invokeStandaloneReports` --
+#: in a production module (`.ts`/`.tsx`, tests excluded: their mocks name
+#: stand-in strings, not capabilities).
+_AUTHORITY_CALL_SITE: Final = re.compile(
+    r"\b(?:invokeGateway|invokeStandaloneReports)\s*\(\s*[^,()]+,\s*\"([a-z_.]+)\"", re.MULTILINE
+)
+
+
+#: The route helpers that address a capability on a route's behalf, with the
+#: zero-based position of their capability argument: `workPost` / `workGet`
+#: (`request, scope, capability, ...`) and the Reports helpers built on them
+#: (`request, capability, ...`). Reports Modernization WP07 C1: a route that
+#: reached an undeclared capability through one of them was invisible to the
+#: lock (the call sites above never name the capability themselves).
+_ROUTE_HELPER_CAPABILITY_ARGUMENT: Final = {
+    "workPost": 2,
+    "workGet": 2,
+    "reportsMutation": 1,
+    "reportsRead": 1,
+}
+_ROUTE_HELPER_CALL: Final = re.compile(
+    r"(?<!function )\b(" + "|".join(_ROUTE_HELPER_CAPABILITY_ARGUMENT) + r")\s*\("
+)
+#: A dotted capability literal inside the capability argument (a ternary of two
+#: literals yields both; a bare `"q"` in a condition is not a capability).
+_CAPABILITY_LITERAL: Final = re.compile(r"\"([a-z_]+(?:\.[a-z_]+)+)\"")
+
+
+def _call_arguments(text: str, start: int) -> list[str]:
+    """The top-level arguments of the call whose `(` ends just before `start`.
+
+    Strings (including template literals) and nested brackets are skipped, so a
+    `new NextRequest(url, request)` first argument or an object literal is one
+    argument. An unterminated call yields the arguments read so far.
+    """
+    arguments: list[str] = []
+    current: list[str] = []
+    depth = 0
+    quote: str | None = None
+    index = start
+    while index < len(text):
+        char = text[index]
+        current.append(char)
+        if quote is not None:
+            if char == "\\" and index + 1 < len(text):
+                current.append(text[index + 1])
+                index += 1
+            elif char == quote:
+                quote = None
+        elif char in "\"'`":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            if depth == 0:
+                current.pop()
+                arguments.append("".join(current))
+                return arguments
+            depth -= 1
+        elif char == "," and depth == 0:
+            current.pop()
+            arguments.append("".join(current))
+            current = []
+        index += 1
+    arguments.append("".join(current))
+    return arguments
+
+
+def _route_helper_capabilities(text: str) -> list[str]:
+    """Capability literals passed as the capability argument of a route helper."""
+    found: list[str] = []
+    for match in _ROUTE_HELPER_CALL.finditer(text):
+        position = _ROUTE_HELPER_CAPABILITY_ARGUMENT[match.group(1)]
+        arguments = _call_arguments(text, match.end())
+        if len(arguments) > position:
+            found.extend(_CAPABILITY_LITERAL.findall(arguments[position]))
+    return found
+
+
+#: The Reports route helpers, whose capability argument must be exactly one
+#: string literal (Reports Modernization WP08 C-WP07): a variable, a ternary or
+#: any other expression there is refused, because the literal is what this lock
+#: reads and a computed capability would be invisible to it.
+_LITERAL_ONLY_ROUTE_HELPERS: Final = frozenset({"reportsMutation", "reportsRead"})
+_ONE_CAPABILITY_LITERAL: Final = re.compile(r"\s*\"[a-z_]+(?:\.[a-z_]+)+\"\s*")
+
+
+def _non_literal_reports_helper_arguments(text: str) -> list[str]:
+    """The capability argument of every Reports route-helper call that is not one literal."""
+    offending: list[str] = []
+    for match in _ROUTE_HELPER_CALL.finditer(text):
+        helper = match.group(1)
+        if helper not in _LITERAL_ONLY_ROUTE_HELPERS:
+            continue
+        position = _ROUTE_HELPER_CAPABILITY_ARGUMENT[helper]
+        arguments = _call_arguments(text, match.end())
+        argument = arguments[position] if len(arguments) > position else ""
+        if not _ONE_CAPABILITY_LITERAL.fullmatch(argument):
+            offending.append(f"{helper}: {argument.strip()!r}")
+    return offending
+
 
 def test_no_web_module_addresses_a_capability_the_contract_does_not_declare(
     declared: dict[str, dict[str, Any]],
@@ -206,10 +308,90 @@ def test_no_web_module_addresses_a_capability_the_contract_does_not_declare(
     """
     assert WEB_SOURCE.is_dir(), "the web source tree is missing"
     called: set[str] = set()
+    helper_called: set[str] = set()
+    non_literal: list[str] = []
     for path in sorted(WEB_SOURCE.rglob("*.ts")):
         called.update(_CALL_SITE.findall(path.read_text(encoding="utf-8")))
+    for path in sorted([*WEB_SOURCE.rglob("*.ts"), *WEB_SOURCE.rglob("*.tsx")]):
+        if ".test." not in path.name:
+            text = path.read_text(encoding="utf-8")
+            called.update(_AUTHORITY_CALL_SITE.findall(text))
+            helper_called.update(_route_helper_capabilities(text))
+            non_literal.extend(
+                f"{path.relative_to(WEB_SOURCE)}: {offence}"
+                for offence in _non_literal_reports_helper_arguments(text)
+            )
+    assert not non_literal, (
+        f"a Reports route helper is called with a non-literal capability: {non_literal}"
+    )
     assert called, "no callGateway site was found, so this rule is describing nothing"
+    assert helper_called, "no route helper call site was found, so that half describes nothing"
+    called |= helper_called
     undeclared = called - set(declared)
     assert not undeclared, (
         f"web modules call capabilities the shared contract does not declare: {undeclared}"
+    )
+
+
+def test_the_authority_call_site_lock_sees_both_paths() -> None:
+    """WP07 Amendment A1: a call through either authority path is one the lock reads."""
+    sample = (
+        'await invokeGateway(principal, "reports.read", {});\n'
+        "const outcome = await invokeStandaloneReports(\n"
+        '  guard.principal,\n  "reports.list",\n  { plane: "standalone" },\n);\n'
+    )
+    assert _AUTHORITY_CALL_SITE.findall(sample) == ["reports.read", "reports.list"]
+    # Not a call: a name in prose followed later by an unrelated argument list.
+    assert _AUTHORITY_CALL_SITE.findall('see invokeGateway. f(x, "worker_stale")') == []
+
+
+def test_the_route_helper_lock_reads_each_helper_capability_argument() -> None:
+    """WP07 C1: every route helper's capability argument is read, and only that one."""
+    sample = (
+        'return workPost(request, "task-update", "tasks.update", FIELDS, { task_id: id });\n'
+        "return workGet(\n  new NextRequest(url, request),\n  `meeting:${id}`,\n"
+        '  q ? "meetings.search" : "meetings.list",\n  { q: { gateway: "query" } },\n);\n'
+        'return reportsMutation(request, "reports.archive", LIFECYCLE_FIELDS, { report_id: id });\n'
+        'return reportsRead(request, "reports.history", { "a.b": 1 });\n'
+        'workGet(request, "x", get("q") ? "commitments.search" : "commitments.list", F);\n'
+    )
+    assert _route_helper_capabilities(sample) == [
+        "tasks.update",
+        "meetings.search",
+        "meetings.list",
+        "reports.archive",
+        "reports.history",
+        "commitments.search",
+        "commitments.list",
+    ]
+    # The scope (`workPost`'s second argument) and the definitions are not read.
+    assert _route_helper_capabilities('workPost(request, "a.b", capability, F)') == []
+    assert (
+        _route_helper_capabilities(
+            'export function reportsRead(\n  request: NextRequest,\n  capability: "x.y",\n'
+        )
+        == []
+    )
+    # WP08 C-WP07: a Reports helper's capability is one literal; anything else is refused.
+    assert _non_literal_reports_helper_arguments(sample) == []
+    assert _non_literal_reports_helper_arguments(
+        "reportsRead(request, capability, CATALOG_FIELDS);\n"
+        'reportsRead(request, q ? "reports.search" : "reports.list", F);\n'
+        "reportsMutation(request, `reports.${op}`, F);\n"
+        'reportsMutation(request, "reports.archive" as ReportMutation, F);\n'
+        "reportsMutation(request);\n"
+    ) == [
+        "reportsRead: 'capability'",
+        'reportsRead: \'q ? "reports.search" : "reports.list"\'',
+        "reportsMutation: '`reports.${op}`'",
+        "reportsMutation: '\"reports.archive\" as ReportMutation'",
+        "reportsMutation: ''",
+    ]
+    # workPost/workGet keep their ternaries (not Reports helpers); definitions are not calls.
+    assert (
+        _non_literal_reports_helper_arguments(
+            'workGet(request, "x", q ? "meetings.search" : "meetings.list", F);\n'
+            "export function reportsRead(\n  request: NextRequest,\n  capability: X,\n"
+        )
+        == []
     )

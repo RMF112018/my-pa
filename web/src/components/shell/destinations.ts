@@ -2,6 +2,7 @@ import {
   BookOpen,
   Brain,
   ClipboardCheck,
+  FileText,
   Home,
   Map,
   Settings,
@@ -36,6 +37,12 @@ const INTELLIGENCE: Destination = {
   icon: Brain,
   group: "workspace",
 };
+const REPORTS: Destination = {
+  href: "/reports",
+  label: "Reports",
+  icon: FileText,
+  group: "workspace",
+};
 const MAP: Destination = { href: canvasHome(), label: "Map", icon: Map, group: "workspace" };
 const REVIEW: Destination = {
   href: "/review",
@@ -52,6 +59,7 @@ export const DESKTOP_PRIMARY: readonly Destination[] = [
   PEOPLE,
   KNOWLEDGE,
   INTELLIGENCE,
+  REPORTS,
 ] as const;
 
 export const DESKTOP_GLOBAL: readonly Destination[] = [REVIEW, MAP] as const;
@@ -64,6 +72,7 @@ export const MOBILE_PRIMARY: readonly Destination[] = [TODAY, WORK, PEOPLE] as c
 /** Mobile More sheet: workspaces, then global, then utilities. */
 export const MOBILE_MORE: readonly Destination[] = [
   INTELLIGENCE,
+  REPORTS,
   KNOWLEDGE,
   MAP,
   REVIEW,
@@ -77,6 +86,7 @@ export const DESTINATIONS: readonly Destination[] = [
   PEOPLE,
   KNOWLEDGE,
   INTELLIGENCE,
+  REPORTS,
   MAP,
   REVIEW,
 ] as const;

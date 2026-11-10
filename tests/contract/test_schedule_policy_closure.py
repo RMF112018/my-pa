@@ -227,17 +227,22 @@ def _capability_enum(scene: Scene) -> None:
     assert [(member.name, member.value) for member in members[-7:]] == [
         (name, value) for name, value, _, _ in _TABLE
     ]
-    assert len(members) == 240
+    # Reports Modernization WP03 declares its five beside `reports.publish`, and
+    # WP05b its four custody names after them, and WP06 its five transfer names.
+    assert len(members) == 255
 
 
 def _purpose_enum(scene: Scene) -> None:
     del scene
     members = list(Purpose)
-    assert [(member.name, member.value) for member in members[-2:]] == [
+    # Reports Modernization WP03 appends `report_lifecycle` after the two, and
+    # WP05b `report_hold` and `report_retention` after it.
+    assert [(member.name, member.value) for member in members[-5:-3]] == [
         ("SCHEDULE_IMPORT", "schedule_import"),
         ("SCHEDULE_READ", "schedule_read"),
     ]
-    assert len(members) == 62
+    assert members[-3:] == [Purpose.REPORT_LIFECYCLE, Purpose.REPORT_HOLD, Purpose.REPORT_RETENTION]
+    assert len(members) == 65
 
 
 def _operator_only(scene: Scene) -> None:
@@ -323,7 +328,7 @@ def _remote_write(scene: Scene) -> None:
 
 def _chatllm_policy(scene: Scene) -> None:
     del scene
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
     for capability in READS:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL, capability
@@ -502,19 +507,22 @@ def test_import_is_control_plane_excluded() -> None:
 
 
 def test_v11_targets() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
-    assert len(CHATLLM_CAPABILITY_POLICY) == 240
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert len(CHATLLM_CAPABILITY_POLICY) == 255
+    # chatllm-data-v12 (Reports Modernization): `reports.publish`, the 5 report
+    # management names and the 5 `reports.transfer.*` names (`DATA_REQUIRED`)
+    # add 11 everywhere.
     full = _desired(_planes(**_FULL))
-    assert len(full) == 164
-    assert len(_desired(_planes(constraints=True))) == 98
+    assert len(full) == 175
+    assert len(_desired(_planes(constraints=True))) == 109
     with_schedule = _desired(_planes(**_FULL, schedule=True))
-    assert len(with_schedule) == 170
+    assert len(with_schedule) == 181
     assert with_schedule - full == READS
     assert len(_desired(_planes(**_FULL, lineage=True, program_reporting=True, schedule=True))) == (
-        204
+        215
     )
     default_all = _planes(constraints=True, lineage=True, program_reporting=True, schedule=True)
-    assert len(_desired(default_all)) == 136
+    assert len(_desired(default_all)) == 147
     assert len(_every_composition()) == 512
 
 

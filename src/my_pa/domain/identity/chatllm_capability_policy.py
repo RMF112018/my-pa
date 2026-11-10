@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v11"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v12"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -119,6 +119,32 @@ _DATA_REQUIRED: Final[frozenset[Capability]] = frozenset(
         # to register it and to list the kinds it may use.
         Capability.REPORTS_TYPES_CREATE,
         Capability.REPORTS_TYPES_LIST,
+        # Reports Modernization (chatllm-data-v12): standalone report
+        # publication, an additive Principal-scoped write under
+        # `report_authoring`, needing no plane switch (the service composes it
+        # unconditionally, as it does `reports.read`). The ordinary profile
+        # carries it with the rest of `reports.*`; a later `reports.purge` is not
+        # data management and stays out.
+        Capability.REPORTS_PUBLISH,
+        # Reports Modernization (chatllm-data-v12): standalone report
+        # management. `reports.update` (write, `report_authoring`) and
+        # `reports.history` (read, `report_read`) ride the purposes the profile
+        # already grants; `reports.archive` / `.delete` (recoverable Trash, never
+        # physical removal) / `.restore` need their own `report_lifecycle` grant,
+        # which `report_authoring` never implies. No plane switch, as publish.
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_HISTORY,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
+        # Reports Modernization (chatllm-data-v12): bounded chunked transfer,
+        # classified as `reports.publish` / `reports.read` are (client-usable,
+        # under the purposes the profile already grants).
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
+        Capability.REPORTS_TRANSFER_READ_CHUNK,
         Capability.REVIEW_DECIDE,
         Capability.REVIEW_LIST,
         Capability.SOURCES_FETCH,
@@ -359,6 +385,14 @@ _CONTROL_PLANE_EXCLUDED: Final[frozenset[Capability]] = frozenset(
         # schedule import admits a source PDF for the contained parser; an active
         # grant on it is `UNEXPECTED_CONTROL_PLANE_GRANT`.
         Capability.SCHEDULE_PUBLICATIONS_IMPORT,
+        # Reports Modernization WP05b (operator decision 2026-11-05, H1): report
+        # holds and the retention policy are operator-only and attested to the
+        # local operator surface. Excluded, so an active grant on one is
+        # `UNEXPECTED_CONTROL_PLANE_GRANT`; no profile version or grant change.
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
+        Capability.REPORTS_RETENTION_GET,
     }
 )
 
@@ -482,6 +516,11 @@ _LINEAGE_ATTESTED_EXCLUSION: Final = (
     "attested to the local operator surface; withheld from every client "
     "(operator directive 2026-10-26)"
 )
+#: Reports Modernization WP05b's four custody capabilities.
+_REPORT_CUSTODY_EXCLUSION: Final = (
+    "operator-only report holds and retention; attested to the local operator surface "
+    "(operator decision 2026-11-05)"
+)
 
 _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
     {
@@ -514,6 +553,10 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.ISSUES_MEMBERSHIPS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
         Capability.ISSUES_PROJECT_LINKS_CONFIRM: _LINEAGE_ATTESTED_EXCLUSION,
         Capability.SCHEDULE_PUBLICATIONS_IMPORT: _SCHEDULE_IMPORT_EXCLUSION,
+        Capability.REPORTS_HOLD_PLACE: _REPORT_CUSTODY_EXCLUSION,
+        Capability.REPORTS_HOLD_RELEASE: _REPORT_CUSTODY_EXCLUSION,
+        Capability.REPORTS_RETENTION_SET: _REPORT_CUSTODY_EXCLUSION,
+        Capability.REPORTS_RETENTION_GET: _REPORT_CUSTODY_EXCLUSION,
     }
 )
 

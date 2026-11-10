@@ -28,8 +28,8 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with two hundred and forty capabilities and
-sixty-two purposes now declared in the domain. If this reddens, the freeze has been undone
+emits what it emitted on the day it merged, with two hundred and fifty-five capabilities and
+sixty-five purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -191,6 +191,20 @@ _S62_APPEND_ONLY: Final = (
     "schedule_scenario_write_refusals",
 )
 
+#: Reports Modernization WP01's eight append-only general report tables (WP05b: +2).
+_GENERAL_REPORT_APPEND_ONLY: Final = (
+    "report_content_objects",
+    "report_versions",
+    "report_version_manifests",
+    "report_associations",
+    "report_lifecycle_events",
+    "report_receipts",
+    "report_hold_events",
+    "report_retention_policy_events",
+    # WP06: the transfer chunk ledger.
+    "report_transfer_chunks",
+)
+
 #: Exact delta between the frozen capture revision and the current head. This is
 #: historical migration evidence, so it is intentionally literal rather than
 #: derived from either live domain enum.
@@ -318,6 +332,24 @@ LINEAGE_TRIGGERS: Final[frozenset[str]] = frozenset(
         "a_plane_write_request_completes_once",
         "a_plane_write_request_is_never_left_reserved",
         "a_schedule_intake_series_admits_no_other_publication",
+        # Reports Modernization WP01.
+        *(f"{table}_are_append_only" for table in _GENERAL_REPORT_APPEND_ONLY),
+        *(
+            f"{table}_refuse_truncate"
+            for table in (*_GENERAL_REPORT_APPEND_ONLY, "report_roots", "report_transfer_sessions")
+        ),
+        "a_report_root_moves_only_its_caches",
+        "a_report_transfer_session_moves_forward",
+        "a_report_manifest_is_written_with_its_version",
+        "a_report_association_is_written_with_its_version",
+        "a_report_version_has_its_manifest",
+        "a_report_head_is_its_newest_version",
+        "a_report_lifecycle_cache_is_its_newest_event",
+        # WP05b.
+        "a_report_hold_cache_is_its_newest_event",
+        "a_report_retention_event_continues_its_predecessor",
+        # WP06.
+        "a_report_transfer_chunk_continues_its_session",
     }
 )
 
@@ -662,6 +694,26 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "schedule_activities.list",
         "schedule_activities.history",
         "schedule_changes.list",
+        # Reports Modernization WP02. `4c37731671fc` restates `capability_is_known`
+        # in place and admits it; the domain declares it in the WP02 application
+        # change.
+        "reports.publish",
+        # Reports Modernization WP03, admitted by the same restatement.
+        "reports.update",
+        "reports.history",
+        "reports.archive",
+        "reports.delete",
+        "reports.restore",
+        "reports.hold.place",
+        "reports.hold.release",
+        "reports.retention.set",
+        "reports.retention.get",
+        # Reports Modernization WP06: bounded chunked transfer.
+        "reports.transfer.begin",
+        "reports.transfer.append",
+        "reports.transfer.finalize",
+        "reports.transfer.abort",
+        "reports.transfer.read_chunk",
     }
 )
 

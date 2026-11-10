@@ -60,6 +60,7 @@ from tests.conftest import (
     staged_capture,
     staged_commitment,
     staged_continuity_project,
+    staged_general_report,
     staged_goodnotes_raster,
     staged_goodnotes_work,
     staged_managed_document,
@@ -262,6 +263,12 @@ def _service(marked: Scene) -> ApplicationService:
 #: authenticated-client-bound GoodNotes pull plane.
 UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
     {
+        # Reports Modernization WP06 T14: the 4 transfer uploads need a report
+        # content store and the transfer staging; this harness composes neither.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT_PREVIEW,
@@ -770,6 +777,77 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "description": "A synthetic report type.",
         },
         Capability.REPORTS_TYPES_LIST: {},
+        Capability.REPORTS_PUBLISH: {
+            "title": "Negative standalone report",
+            "content": {"format": "markdown", "body": "# Negative\n\nSynthetic body."},
+            "idempotency_key": "negative-publish",
+        },
+        # Reports Modernization WP03: a staged active report, and a staged
+        # archived one for `reports.restore` (`staged_general_report`).
+        Capability.REPORTS_UPDATE: {
+            "report_id": staged_general_report(marked),
+            "expected_version": 1,
+            "patch": {"title": "Revised"},
+            "change_reason": "Synthetic revision.",
+            "idempotency_key": "negative-update",
+        },
+        Capability.REPORTS_HISTORY: {"report_id": staged_general_report(marked)},
+        Capability.REPORTS_ARCHIVE: {
+            "report_id": staged_general_report(marked, label="archive"),
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "negative-archive",
+        },
+        Capability.REPORTS_DELETE: {
+            "report_id": staged_general_report(marked, label="trash"),
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "negative-delete",
+        },
+        Capability.REPORTS_RESTORE: {
+            "report_id": staged_general_report(marked, archived=True),
+            "expected_lifecycle_revision": 1,
+            "idempotency_key": "negative-restore",
+        },
+        # Reports Modernization WP05b: the operator custody names on a staged report.
+        Capability.REPORTS_HOLD_PLACE: {
+            "report_id": staged_general_report(marked, label="hold"),
+            "expected_hold_revision": 0,
+            "reason": "Synthetic hold.",
+            "idempotency_key": "negative-hold-place",
+        },
+        Capability.REPORTS_HOLD_RELEASE: {
+            "report_id": staged_general_report(marked, held=True, label="release"),
+            "expected_hold_revision": 1,
+            "reason": "Synthetic release.",
+            "idempotency_key": "negative-hold-release",
+        },
+        Capability.REPORTS_RETENTION_SET: {
+            "expected_policy_revision": 0,
+            "reason": "Synthetic retention.",
+            "idempotency_key": "negative-retention-set",
+            "period": {"count": 5, "unit": "years"},
+        },
+        Capability.REPORTS_RETENTION_GET: {},
+        # Reports Modernization WP06: the bounded chunked transfer (the uploads
+        # are uncomposed without a content store and staging; read_chunk answers).
+        Capability.REPORTS_TRANSFER_BEGIN: {
+            "format": "markdown",
+            "encoding": "identity",
+            "byte_count": 16,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "idempotency_key": "negative-transfer-begin",
+        },
+        Capability.REPORTS_TRANSFER_APPEND: {
+            "session_id": "grxfr_negativesession01",
+            "sequence": 0,
+            "chunk": "c3ludGhldGlj",
+            "chunk_sha256": "b3cc0475bb78a5026098858e9889acf666d31062d513d303314eca31d36e72f2",
+        },
+        Capability.REPORTS_TRANSFER_FINALIZE: {"session_id": "grxfr_negativesession01"},
+        Capability.REPORTS_TRANSFER_ABORT: {"session_id": "grxfr_negativesession01"},
+        Capability.REPORTS_TRANSFER_READ_CHUNK: {
+            "report_id": staged_general_report(marked),
+            "version_number": 1,
+        },
         # The relationship-intelligence entity plane (WP-RI-05), and its payloads
         # carry no marker, deliberately. Every one of the five is a read whose
         # input is an identifier or a name the *request* supplies and the answer
@@ -2161,6 +2239,23 @@ SCOPED_CAPABILITIES = [
         Capability.REPORTS_RESOLVE_SET,
         Capability.REPORTS_TYPES_CREATE,
         Capability.REPORTS_TYPES_LIST,
+        Capability.REPORTS_PUBLISH,
+        Capability.REPORTS_UPDATE,
+        Capability.REPORTS_HISTORY,
+        Capability.REPORTS_ARCHIVE,
+        Capability.REPORTS_DELETE,
+        Capability.REPORTS_RESTORE,
+        # Reports Modernization WP05b: the owner's root and retention policy.
+        Capability.REPORTS_HOLD_PLACE,
+        Capability.REPORTS_HOLD_RELEASE,
+        Capability.REPORTS_RETENTION_SET,
+        Capability.REPORTS_RETENTION_GET,
+        # Reports Modernization WP06: the owner's (and its client's) transfer sessions.
+        Capability.REPORTS_TRANSFER_BEGIN,
+        Capability.REPORTS_TRANSFER_APPEND,
+        Capability.REPORTS_TRANSFER_FINALIZE,
+        Capability.REPORTS_TRANSFER_ABORT,
+        Capability.REPORTS_TRANSFER_READ_CHUNK,
         # The relationship-intelligence entity plane (WP-RI-05) is scopeless for
         # the reason the two planes above are: an entity belongs to no `src_…`
         # and no `enr_…`, so there is no scope for a request to name and none to
@@ -2692,6 +2787,15 @@ KNOWLEDGE_AUTHORING_EXEMPTION = frozenset({Capability.KNOWLEDGE_ASSERTIONS_CREAT
 #: and no enrollment.
 REPORT_TYPE_AUTHORING_EXEMPTION = frozenset({Capability.REPORTS_TYPES_CREATE})
 
+#: Reports Modernization WP03's two writes the substring proxy refuses --
+#: `reports.update` and `reports.delete` -- on the same reading: they append a
+#: version to, or move to the recoverable Trash, the acting Principal's own
+#: standalone report, remove no row, and reach no source provider and no
+#: enrollment.
+GENERAL_REPORT_MANAGEMENT_EXEMPTION = frozenset(
+    {Capability.REPORTS_UPDATE, Capability.REPORTS_DELETE}
+)
+
 #: Record lineage S1's two Issue writes the substring proxy refuses --
 #: `issues.create` and `issues.update` -- on the same reading: they write the
 #: acting Principal's own Issue rows and revisions and reach no source provider
@@ -2757,6 +2861,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | MEETING_AUTHORING_EXEMPTION
         | KNOWLEDGE_AUTHORING_EXEMPTION
         | REPORT_TYPE_AUTHORING_EXEMPTION
+        | GENERAL_REPORT_MANAGEMENT_EXEMPTION
         | ISSUE_AUTHORING_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]

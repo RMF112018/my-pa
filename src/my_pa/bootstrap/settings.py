@@ -356,6 +356,39 @@ class Settings(StrictModel):
     #: one. Adding an unused credential field today would be the speculative
     #: configuration `AGENTS.md` section 2 rules out.
     managed_document_root: str = ""
+    #: Where the report content store holds report content above the inline
+    #: threshold (Reports Modernization WP05 C3).
+    #:
+    #: **Empty by default, and empty means there is no report content store.**
+    #: An unset or blank value composes none, which is exactly the WP04
+    #: behaviour plus inline `gzip+base64`: every report content object is
+    #: stored inline, and decoded content above
+    #: `report_content_inline_max_bytes` -- or a `gzip+base64` upload whose
+    #: gunzipped bytes are above it -- is refused (`invalid_request`,
+    #: `content`, `max_bytes`). There is no default location, for the reason
+    #: `managed_document_root` has none: choosing where a user's report bytes
+    #: live is an operator decision.
+    #:
+    #: **Validated where the store is built, not here.** The composition root
+    #: (`bootstrap.gateway.report_content_store`) hands it to
+    #: `infrastructure.report_content_stores.filesystem`, whose constructor
+    #: resolves it and refuses to start when it is missing, not a directory,
+    #: itself a symbolic link, or the same tree as, inside, or containing a
+    #: configured source root or the managed document root.
+    #:
+    #: **Not a secret, and it holds no credential**: a local filesystem reached
+    #: with the process's own identity. Backward compatible: a deployment that
+    #: never sets it behaves as before. `ops/runbooks/managed-document-operations.md`
+    #: covers the scan, backup and restore (`apps/cli/report_content.py`).
+    report_content_root: str = ""
+    #: The decoded size up to which report content is stored inline (WP05 C3/C4).
+    #:
+    #: Default 524,288 bytes (512 KiB, the identity inline maximum), valid
+    #: 1..524,288: settings validation refuses anything else, so the threshold
+    #: can only lower the inline bound, never raise it. Content above it is
+    #: stored in the report content store when one is configured, else refused.
+    #: Not a secret. Backward compatible: the default is the WP04 bound.
+    report_content_inline_max_bytes: int = Field(default=524288, ge=1, le=524288)
     #: The Frontier MCP surface's kill switch (WP-28).
     #:
     #: **The switch is off by default and the surface serves**, which is the

@@ -835,9 +835,10 @@ def test_the_chain_is_readable_and_non_empty() -> None:
     # decision 15) as 123, and `6c2306330ceb` (CPM Workbench S5b-1, the
     # Schedule foundation) as 124, and `621ef6786c64` (CPM Workbench S5b-2, the
     # Schedule audit and worker-plane vocabulary) as 125, and `2a90f91dd786`
-    # (Schedule Scenarios S6-2, the scenario and baseline plane) as 126.
-    assert len(revisions) == 126
-    assert len({revision for revision, _ in revisions}) == 126
+    # (Schedule Scenarios S6-2, the scenario and baseline plane) as 126, and
+    # `4c37731671fc` (Reports Modernization WP01, the general report plane) as 127.
+    assert len(revisions) == 127
+    assert len({revision for revision, _ in revisions}) == 127
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

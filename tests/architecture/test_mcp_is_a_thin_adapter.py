@@ -333,6 +333,29 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
             )
         ),
         ("context.feedback", "target_id"),
+        # Reports Modernization WP02 (contract D): an association names what a
+        # standalone report is about, not where a file lives. `target_kind` is a
+        # closed enum; a resolvable `target_ref` must name a record the caller's
+        # Principal owns or the publish is refused, and an `external_source`
+        # reference is stored as inert asserted text and never dereferenced --
+        # nothing on this plane reads, opens or fetches through any of the three.
+        ("reports.publish", "target_kind"),
+        ("reports.publish", "target_ref"),
+        ("reports.publish", "target_version_ref"),
+        # Reports Modernization WP03: the same association members, nested in
+        # `reports.update`'s `patch`, resolved and verified exactly as publish's.
+        ("reports.update", "target_kind"),
+        ("reports.update", "target_ref"),
+        ("reports.update", "target_version_ref"),
+        # Reports Modernization WP04: the catalog's `associated_with` filter on
+        # `reports.list` and `reports.search`. A shape-checked reference matched
+        # against stored association rows of the caller's own HEAD versions; it
+        # is never resolved, opened or fetched, and a foreign or missing target
+        # simply matches nothing.
+        ("reports.list", "target_kind"),
+        ("reports.list", "target_ref"),
+        ("reports.search", "target_kind"),
+        ("reports.search", "target_ref"),
         # KLP-WP-04: a provisioned Knowledge discovery source profile, not where a
         # file lives. It trips the scan on the substring "file" inside "profile",
         # it is an opaque `kdsp_` identifier the command validates by kind, and it
@@ -340,6 +363,14 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("knowledge.assertions.submit", "source_profile_id"),
         ("knowledge.discovery.checkpoint", "source_profile_id"),
         ("goodnotes.propose", "uncertainty"),
+        # Reports WP05: the optional declared byte count and SHA-256 of the gunzipped
+        # bytes of a gzip+base64 content value. Matched only because "unc" is the
+        # UNC-path token inside "uncompressed"; an integer and a hex digest, never
+        # a location, and the names are the published contract's.
+        ("reports.publish", "uncompressed_byte_count"),
+        ("reports.publish", "uncompressed_sha256"),
+        ("reports.update", "uncompressed_byte_count"),
+        ("reports.update", "uncompressed_sha256"),
         # The version of the record a proposal asks to change, not where a file
         # lives. Exempt on the `direction` precedent above: it trips the scan on
         # the substring "target", and it is an `integer` -- a positive record
@@ -722,8 +753,13 @@ def test_the_location_scan_would_catch_one() -> None:
     # `commitments.create` `direction`. Plus the S3 anchor-bearing writes. Plus
     # the S4 v2 list and search siblings' `direction`. Plus record lineage
     # S3.1's 14 open writes' boolean `user_directed` claim. Plus CPM Workbench
-    # S5b-2's `hierarchy_prefix` (schedule WBS labels).
-    assert len(EXEMPT_PROPERTIES) == 54
+    # S5b-2's `hierarchy_prefix` (schedule WBS labels). Plus Reports
+    # Modernization WP02's three association reference fields on `reports.publish`,
+    # and WP03's same three nested in `reports.update`'s `patch`. Plus WP04's
+    # `associated_with` filter members on `reports.list` and `reports.search`.
+    # Plus WP05's declared `uncompressed_byte_count` / `uncompressed_sha256` on
+    # `reports.publish` content and `reports.update` patch content ("unc").
+    assert len(EXEMPT_PROPERTIES) == 68
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

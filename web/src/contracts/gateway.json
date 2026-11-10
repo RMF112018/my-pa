@@ -216,7 +216,7 @@
     },
     "reports.read": {
       "purpose": "report_read",
-      "payloadFields": ["report_id", "include_body"],
+      "payloadFields": ["report_id", "include_body", "version_id", "version_number", "include_manifest", "include_withdrawn"],
       "probe": { "report_id": "rpt_aaaaaaaa11111111" }
     },
     "reports.latest": {
@@ -226,18 +226,107 @@
     },
     "reports.list": {
       "purpose": "report_read",
-      "payloadFields": ["cycle_run_id", "stage", "artifact_kind", "focus_area_id", "source_lane", "report_date", "page_size", "cursor", "include_superseded"],
+      "payloadFields": ["cycle_run_id", "stage", "artifact_kind", "focus_area_id", "source_lane", "report_date", "page_size", "cursor", "include_superseded", "plane", "type", "topics", "tags", "associated_with", "lifecycle_states", "created_from", "created_to", "report_date_from", "report_date_to", "created_by"],
       "probe": { "cycle_run_id": "micr_aaaaaaaa11111111", "page_size": 25 }
     },
     "reports.search": {
       "purpose": "report_read",
-      "payloadFields": ["query", "cycle_run_id", "stage", "artifact_kind", "focus_area_id", "source_lane", "page_size"],
+      "payloadFields": ["query", "cycle_run_id", "stage", "artifact_kind", "focus_area_id", "source_lane", "page_size", "plane", "cursor", "type", "topics", "tags", "associated_with", "lifecycle_states", "created_from", "created_to", "report_date_from", "report_date_to", "created_by"],
       "probe": { "query": "morning brief", "page_size": 25 }
     },
     "reports.resolve_set": {
       "purpose": "report_read",
       "payloadFields": ["cycle_run_id", "set_id", "focus_area_id"],
       "probe": { "cycle_run_id": "micr_aaaaaaaa11111111", "set_id": "morning_brief_inputs" }
+    },
+    "reports.publish": {
+      "purpose": "report_authoring",
+      "payloadFields": [
+        "title",
+        "content",
+        "idempotency_key",
+        "type",
+        "topics",
+        "tags",
+        "summary",
+        "report_date",
+        "coverage_period",
+        "associations",
+        "metadata",
+        "client_intent_id"
+      ],
+      "probe": {
+        "title": "Synthetic report",
+        "content": { "format": "markdown", "body": "Synthetic body." },
+        "idempotency_key": "idem-probe-0001"
+      }
+    },
+    "reports.update": {
+      "purpose": "report_authoring",
+      "payloadFields": ["report_id", "expected_version", "patch", "change_reason", "idempotency_key", "clear_fields"],
+      "probe": {
+        "report_id": "grpt_aaaaaaaa11111111",
+        "expected_version": 1,
+        "patch": { "title": "Synthetic report, revised" },
+        "change_reason": "Synthetic revision.",
+        "idempotency_key": "idem-probe-0001"
+      }
+    },
+    "reports.history": {
+      "purpose": "report_read",
+      "payloadFields": ["report_id", "entries", "page_size", "after", "include_manifests", "include_withdrawn"],
+      "probe": { "report_id": "grpt_aaaaaaaa11111111" }
+    },
+    "reports.archive": {
+      "purpose": "report_lifecycle",
+      "payloadFields": ["report_id", "expected_lifecycle_revision", "idempotency_key", "reason"],
+      "probe": { "report_id": "grpt_aaaaaaaa11111111", "expected_lifecycle_revision": 0, "idempotency_key": "idem-probe-0001" }
+    },
+    "reports.delete": {
+      "purpose": "report_lifecycle",
+      "payloadFields": ["report_id", "expected_lifecycle_revision", "idempotency_key", "reason"],
+      "probe": { "report_id": "grpt_aaaaaaaa11111111", "expected_lifecycle_revision": 0, "idempotency_key": "idem-probe-0001" }
+    },
+    "reports.restore": {
+      "purpose": "report_lifecycle",
+      "payloadFields": ["report_id", "expected_lifecycle_revision", "idempotency_key", "reason"],
+      "probe": { "report_id": "grpt_aaaaaaaa11111111", "expected_lifecycle_revision": 1, "idempotency_key": "idem-probe-0001" }
+    },
+    "reports.transfer.begin": {
+      "purpose": "report_authoring",
+      "payloadFields": ["format", "encoding", "byte_count", "sha256", "idempotency_key", "ttl_seconds"],
+      "probe": {
+        "format": "text",
+        "encoding": "identity",
+        "byte_count": 600000,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "idempotency_key": "idem-probe-0001"
+      }
+    },
+    "reports.transfer.append": {
+      "purpose": "report_authoring",
+      "payloadFields": ["session_id", "sequence", "chunk", "chunk_sha256"],
+      "probe": {
+        "session_id": "grxfr_aaaaaaaa11111111",
+        "sequence": 0,
+        "chunk": "U3ludGhldGlj",
+        "chunk_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    "reports.transfer.finalize": {
+      "purpose": "report_authoring",
+      "payloadFields": ["session_id"],
+      "probe": { "session_id": "grxfr_aaaaaaaa11111111" }
+    },
+    "reports.transfer.abort": {
+      "purpose": "report_authoring",
+      "payloadFields": ["session_id"],
+      "probe": { "session_id": "grxfr_aaaaaaaa11111111" }
+    },
+    "reports.transfer.read_chunk": {
+      "purpose": "report_read",
+      "payloadFields": ["report_id", "version_id", "version_number", "part", "offset", "length", "include_withdrawn"],
+      "probe": { "report_id": "grpt_aaaaaaaa11111111", "version_number": 1 }
     },
     "entities.search": {
       "purpose": "entity_read",

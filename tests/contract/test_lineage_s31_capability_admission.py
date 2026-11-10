@@ -43,7 +43,7 @@ from tests.contract.test_lineage_s3_capability_admission import (
     _BASE_PAYLOADS as _S3_PAYLOADS,
 )
 from tests.contract.test_lineage_s3_capability_admission import (
-    _V1_PAYLOAD_SCHEMA_SHA256,
+    _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG,
     _V1_VIEW_FIELDS_SHA256,
     _V1_VIEW_MODULES,
 )
@@ -289,11 +289,13 @@ def test_s31_capabilities_are_operator_decision_required() -> None:
     counts = dict.fromkeys(ChatLLMCapabilityClass, 0)
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
-    # P1: only the GSQS pair remains an operator decision.
+    # P1: only the GSQS pair remains an operator decision (Reports
+    # Modernization's `reports.publish` and five management names are
+    # `DATA_REQUIRED` since chatllm-data-v12).
     assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
-    assert len(Capability) == 240
+    assert len(Capability) == 255
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
 
 
 def test_switch_off_withholds_every_s31_capability(scene: Scene) -> None:
@@ -516,7 +518,7 @@ def test_no_s31_capability_is_in_the_chatllm_data_profile() -> None:
             desired_effective_capabilities(composed_off, knowledge_manager=knowledge_manager)
             & lineage_plane
         )
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v11"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
 
 
 # ---- client guidance (section 7.12) ----------------------------------------------
@@ -702,13 +704,46 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
     lineage |= {
         capability.value for capability in Capability if capability.value.startswith("schedule_")
     }
+    # Reports Modernization WP02: `reports.publish` is new and `reports.read`
+    # is deliberately extended (the `grpt_` selectors; its legacy `rpt_` answers
+    # are pinned by `tests/unit/test_reports_legacy_read_golden.py`). Both are
+    # excluded, so the remaining 191 shapes stay pinned byte for byte.
+    lineage |= {Capability.REPORTS_PUBLISH.value, Capability.REPORTS_READ.value}
+    # Reports Modernization WP03: its five additions, each excluded as new.
+    lineage |= {
+        Capability.REPORTS_UPDATE.value,
+        Capability.REPORTS_HISTORY.value,
+        Capability.REPORTS_ARCHIVE.value,
+        Capability.REPORTS_DELETE.value,
+        Capability.REPORTS_RESTORE.value,
+    }
+    # Reports Modernization WP05b: its four operator custody names, new too.
+    lineage |= {
+        Capability.REPORTS_HOLD_PLACE.value,
+        Capability.REPORTS_HOLD_RELEASE.value,
+        Capability.REPORTS_RETENTION_SET.value,
+        Capability.REPORTS_RETENTION_GET.value,
+    }
+    # Reports Modernization WP04: `reports.list` and `reports.search` are
+    # deliberately extended (the `plane` selector and catalog filters; their
+    # legacy answers are pinned by
+    # `tests/unit/test_reports_legacy_list_search_golden.py`), so both are
+    # excluded and the remaining 189 shapes stay pinned.
+    lineage |= {Capability.REPORTS_LIST.value, Capability.REPORTS_SEARCH.value}
+    # Reports Modernization WP06: its five transfer names, new too (pinned by
+    # `tests/contract/test_reports_transfer_compact_facade.py`).
+    lineage |= {
+        capability.value
+        for capability in Capability
+        if capability.value.startswith("reports.transfer.")
+    }
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
         if tool.name not in lineage
     }
-    assert len(payloads) == 192
-    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256
+    assert len(payloads) == 189
+    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG
     views: dict[str, list[str]] = {}
     for name in _V1_VIEW_MODULES:
         module = importlib.import_module(f"my_pa.contracts.v1.{name}")
@@ -722,13 +757,18 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
     assert _canonical_sha256(views) == _V1_VIEW_FIELDS_SHA256
     # S3.1 adds no purpose: the envelope's purpose enum is the S4 one.
     published = TOOLS[0].input_schema["$defs"]["Purpose"]["enum"]
-    # CPM Workbench S5b-2 appends its 2 purposes after them (contract 3.12).
-    assert len(published) == len(Purpose) == 62
-    assert published[-4:] == [
+    # CPM Workbench S5b-2 appends its 2 purposes after them (contract 3.12),
+    # and Reports Modernization WP03 its `report_lifecycle` after those, and
+    # WP05b `report_hold` and `report_retention` after that.
+    assert len(published) == len(Purpose) == 65
+    assert published[-7:] == [
         "lineage_backfill",
         "program_reporting_read",
         "schedule_import",
         "schedule_read",
+        "report_lifecycle",
+        "report_hold",
+        "report_retention",
     ]
     # Every non-lineage tool's annotations are untouched by the S3.1 hint.
     for tool in TOOLS:

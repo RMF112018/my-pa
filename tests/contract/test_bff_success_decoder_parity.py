@@ -1846,6 +1846,11 @@ LINEAGE_NOTE_BODY: Final = "Synthetic note: pour the north slab after the inspec
 def _lineage_service() -> tuple[ApplicationService, Authorization]:
     service = object.__new__(ApplicationService)
     service._lineage_enabled = True
+    # Schedule Scenarios S6-3 lockstep (schedule scenarios contract section
+    # 15.11.4): a lineage read asks whether the plane is effective to withhold
+    # its 6 families; this stub composes no Schedule plane, so they are withheld.
+    service._schedule_enabled = False
+    service._schedule_unit_of_work = None
     # S3 section 6.1 lockstep: a lineage read re-checks the caller's grant set
     # (`None`: the local caller, which sees every family).
     authorization = cast(

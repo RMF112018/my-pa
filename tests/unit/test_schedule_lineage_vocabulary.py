@@ -297,7 +297,11 @@ def test_virtual_edge_endpoint_table_is_exact() -> None:
     for edge, pair in _ENDPOINTS.items():
         for source in families:
             for target in families:
-                document = {"edge_type": edge, "from_ref": _ref_document(source), "to_ref": _ref_document(target)}
+                document = {
+                    "edge_type": edge,
+                    "from_ref": _ref_document(source),
+                    "to_ref": _ref_document(target),
+                }
                 if (source, target) == pair:
                     view = VirtualEdgeView.model_validate(document)
                     assert view.to_canonical_dict()["from"]["family"] == source

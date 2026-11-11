@@ -571,6 +571,12 @@ _S31_VIEW_ADDITIONS: Final[dict[str, frozenset[str]]] = {
     "ProjectLinkView": _S31_LABELS,
     "HandoffView": _S31_LABELS,
 }
+#: Schedule Scenarios S6-3 (schedule scenarios contract section 15.11.3a item 1, an
+#: admitted lockstep edit): the optional `schedule` node summary, serialized only
+#: on a node of one of the 6 Schedule families; every existing key is unchanged.
+_S63_VIEW_ADDITIONS: Final[dict[str, frozenset[str]]] = {
+    "LineageNodeView": frozenset({"schedule"}),
+}
 
 
 def test_s1_and_s2_views_keep_every_key() -> None:
@@ -589,8 +595,10 @@ def test_s1_and_s2_views_keep_every_key() -> None:
     for name, basis in _S2_BASIS_VIEW_KEYS.items():
         keys = frozenset(views[name].model_fields)
         assert basis <= keys, f"{name} lost {sorted(basis - keys)}"
-        assert keys - basis == _S3_VIEW_ADDITIONS.get(name, frozenset()) | _S31_VIEW_ADDITIONS.get(
-            name, frozenset()
+        assert keys - basis == (
+            _S3_VIEW_ADDITIONS.get(name, frozenset())
+            | _S31_VIEW_ADDITIONS.get(name, frozenset())
+            | _S63_VIEW_ADDITIONS.get(name, frozenset())
         ), name
 
 

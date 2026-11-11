@@ -74,7 +74,9 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and ninety-four Python modules under `src/my_pa` and nine hundred and fifty test modules —
+Four hundred and ninety-four Python modules under `src/my_pa` and nine hundred and fifty-two test modules —
+
+**Current-tree remeasurement (Schedule Scenarios S6-3 package I10-B, branch `feat/schedule-scenarios-capabilities`, 2026-11-11):** the two commands below count 494 source modules and 952 test modules: the I10-A 494/950 below plus the two test modules `tests/unit/test_schedule_lineage_vocabulary.py` and `tests/database/test_schedule_scenario_lineage.py`; I10-B adds no source module under `src/my_pa`. Previously four hundred and ninety-four and nine hundred and fifty.
 
 **Current-tree remeasurement (Schedule Scenarios S6-3 package I10-A, branch `feat/schedule-scenarios-capabilities`, 2026-11-11):** the two commands below count 494 source modules and 950 test modules: the WP07 493/945 below plus the one source module `src/my_pa/application/schedule_scenarios.py` and the five test modules `tests/unit/test_schedule_scenario_commands.py`, `tests/contract/test_schedule_scenarios_policy_closure.py`, `tests/architecture/test_schedule_scenarios_capability_scope.py`, `tests/schema/test_schedule_scenarios_vocabulary_migration.py` and `tests/database/test_schedule_scenario_capabilities.py`. Previously four hundred and ninety-three and nine hundred and forty-five.
 

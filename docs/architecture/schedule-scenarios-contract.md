@@ -4026,6 +4026,22 @@ rule); the lock is `ACCESS EXCLUSIVE` on `audit_events` for the whole window, so
 authorized request pauses for it. Package I10-A's commands, counts and prove-red outcomes are in
 its handoff report; packages I10-B and I10-C add theirs here.
 
+**Package I10-B (lineage; same branch, 2026-11-11, not merged, migrated, granted or deployed).**
+The public lineage vocabulary is widened by exactly the S6-2 storage vocabulary (`RecordFamily`
+13, `RelationType` 11, `NativeVirtualEdge` 9, `LINEAGE_FAMILY_READS` 13 keys,
+`CONTESTABLE_RELATIONS` 10, `LINEAGE_READ_GENERATION` 2); the stored maps are now derived from the
+public ones and are byte-for-byte the S6-2 values, so the `record_links` CHECK texts and revision
+B are unchanged. **The 15.11.2 precondition holds:** `test_share_endpoint_needs_only_select_on_the_schedule_tables`
+shares each of the 6 families (and a proposal and an intake publication) as a role holding exactly
+the P-check ∪ Q8 privileges and schema usage (no `UPDATE` on the 5 tables other than
+`schedule_publications`, asserted by `test_the_probe_role_holds_no_update_on_the_five_tables`);
+no grant was added. Not implemented, stopped with a proposed amendment (S6-3-B01 in the I10-B
+handoff): the 15.11.3 per-family summaries, their labels and the emission of the 8 native virtual
+edges, whose public shapes (`LineageNodeView`, `VirtualEdgeView`, `LineagePathEdgeView` in
+`src/my_pa/contracts/v1/record_lineage.py`) this note does not design; Schedule nodes are read,
+emitted and paged as bare `{family, record_id}` nodes. Commands, counts and prove-red outcomes
+are in the I10-B handoff report.
+
 ### 15.20 R10 findings → fixes (revision R10-1)
 
 Design review R10 (PASS_WITH_REQUIRED_CHANGES at `de81d3d8`); Orchestrator dispositions applied.

@@ -40,7 +40,7 @@ import my_pa.application.service as service_module
 import my_pa.infrastructure.persistence.record_lineage as lineage_store
 from my_pa.application.commands import ReadRelatedRecords, ReadReportManifest
 from my_pa.domain.intelligence.catalog import IntelligenceStage
-from my_pa.domain.intelligence.source_manifest import manifest_digest
+from my_pa.domain.intelligence.source_manifest import MANIFEST_LINEAGE_FAMILIES, manifest_digest
 from my_pa.domain.lineage.vocabulary import LINEAGE_CONTEXT_BLOCK_KEY, RecordFamily
 from tests.database.lineage_record_harness import NOTE_BODY, note_anchor
 from tests.database.lineage_s2_harness import assertion
@@ -51,8 +51,10 @@ pytestmark = pytest.mark.database
 
 SYNTH: Final = IntelligenceStage.SYNTHESIZER
 REPORTER: Final = IntelligenceStage.REPORTER
-#: Every S3 section 6.4 family, as a local committer sees them.
-ALL_FAMILIES: Final = sorted(family.value for family in RecordFamily)
+#: Every S3 section 6.4 family, as a local committer sees them, that a manifest
+#: may name: Schedule Scenarios S6-3 (schedule scenarios contract section
+#: 15.11.6, OD-08) pins a manifest's lineage section to the 7 pre-S6 families.
+ALL_FAMILIES: Final = sorted(family.value for family in MANIFEST_LINEAGE_FAMILIES)
 #: A remote client that reads related records and commits reports, seeing every family.
 FULL: Final[Grants] = grant("records.lineage.related", "reports.commit", *READS)
 #: The same client without the Meeting reads: Meetings and note versions are hidden.

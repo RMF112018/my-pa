@@ -3,10 +3,11 @@
 Contract `docs/architecture/schedule-scenarios-contract.md` sections 9.2,
 14.8, 14.9 and 14.11.2 (FAST, by AST and by import):
 
-* no plane lineage family or relation is public before S6-3 package I10-B (the
-  plane capabilities and purposes are public since package I10-A, whose pins
-  live in `test_schedule_scenarios_capability_scope.py`, as do the composition
-  root rule and the worker wiring that replaced the S6-2 pins here, R3-28);
+* (the S6-2 pins that kept the plane names private were replaced in lockstep
+  by S6-3, R3-28: the capabilities, purposes, composition-root rule and worker
+  wiring by package I10-A in `test_schedule_scenarios_capability_scope.py`, the
+  lineage families, relations and generation by package I10-B in
+  `tests/unit/test_schedule_lineage_vocabulary.py`);
 * `ScenarioUnitOfWork` is not on the general `UnitOfWork`;
 * the plane modules write no S5 table except through the S5 admission;
 * the pre-deploy module's `QUARANTINED` registration cannot widen (RR2-F01).
@@ -21,13 +22,6 @@ from pathlib import Path
 from typing import Final
 
 from my_pa.contracts import ports
-from my_pa.domain.lineage.vocabulary import (
-    LINEAGE_READ_GENERATION,
-    SCHEDULE_LINEAGE_FAMILY_ID_KINDS,
-    SCHEDULE_LINEAGE_RELATIONS,
-    RecordFamily,
-    RelationType,
-)
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 PACKAGE: Final = ROOT / "src" / "my_pa"
@@ -90,14 +84,6 @@ def _reaches_the_plane(tree: ast.AST) -> list[str]:
         for name in _imported(tree)
         if any(name == plane or name.startswith(plane + ".") for plane in PLANE_IMPORTS)
     )
-
-
-def test_no_plane_lineage_name_is_public_before_i10b() -> None:
-    """Section 15.15: the lineage families and relations are package I10-B's."""
-    families = {member.value for member in RecordFamily}
-    assert not families & set(SCHEDULE_LINEAGE_FAMILY_ID_KINDS)
-    assert not {member.value for member in RelationType} & set(SCHEDULE_LINEAGE_RELATIONS)
-    assert LINEAGE_READ_GENERATION == 1
 
 
 def _class_mentions(tree: ast.Module, class_name: str, token: str) -> bool:

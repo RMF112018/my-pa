@@ -4,8 +4,9 @@ Contract `docs/architecture/schedule-scenarios-contract.md` sections 14.2,
 14.7 and 14.11.1: the 8 identifier kinds against S6-1's patterns, the enum
 lockstep, the import request's 4 added fields and invariants, the `v1`/`v2`
 digest golden vectors, the intake Series name, the second-admission key, the
-writer bucket, the provenance sets against the lineage vocabulary, and the
-lineage storage vocabulary against the public one. Every value is synthetic.
+writer bucket and the provenance sets against the lineage vocabulary (the
+lineage storage vocabulary's pin moved to S6-3, section 15.11.1). Every value
+is synthetic.
 """
 
 from __future__ import annotations
@@ -370,70 +371,7 @@ def test_plane_provenance_follows_the_creator_rule(
 
 
 # ---- the lineage storage vocabulary (section 14.7.4) ---------------------------------
-
-_S6_FAMILIES: Final = {
-    "schedule_publication": IdKind.SCHEDULE_PUBLICATION,
-    "schedule_activity": IdKind.SCHEDULE_ACTIVITY,
-    "schedule_baseline": IdKind.SCHEDULE_BASELINE,
-    "scenario": IdKind.SCHEDULE_SCENARIO,
-    "scenario_version": IdKind.SCHEDULE_SCENARIO_VERSION,
-    "scenario_output": IdKind.SCHEDULE_SCENARIO_OUTPUT,
-}
-
-
-def test_storage_vocabulary_is_the_public_vocabulary_plus_the_pending_s6_additions() -> None:
-    """S6-2-D01: stored contains public, and stored minus public is exactly section 5.2's additions.
-
-    S6-3 replaces this by equality when it widens the public enums and bumps
-    the read generation to 2.
-    """
-    public_families = {
-        family.value: kind for family, kind in lineage.RECORD_FAMILY_ID_KINDS.items()
-    }
-    stored_families = dict(lineage.STORED_RECORD_FAMILY_ID_KINDS)
-    assert {k: stored_families[k] for k in public_families} == public_families
-    assert {k: v for k, v in stored_families.items() if k not in public_families} == _S6_FAMILIES
-    assert set(public_families) == {family.value for family in lineage.RecordFamily}
-    public = {
-        relation.value: (kind.value, {f.value for f in sources}, {f.value for f in targets})
-        for relation, (kind, sources, targets) in lineage.RELATION_MATRIX.items()
-    }
-    stored = {
-        relation: (kind, set(sources), set(targets))
-        for relation, (kind, sources, targets) in lineage.STORED_RELATION_MATRIX.items()
-    }
-    assert set(stored) - set(public) == set(lineage.SCHEDULE_LINEAGE_RELATIONS)
-    assert set(public) == {relation.value for relation in lineage.RelationType}
-    widened = {"discusses", "originated_from"}
-    for relation, (kind, sources, targets) in public.items():
-        stored_kind, stored_sources, stored_targets = stored[relation]
-        assert stored_kind == kind and sources <= stored_sources and targets <= stored_targets
-        if relation not in widened:
-            assert (stored_sources, stored_targets) == (sources, targets), relation
-    assert stored["discusses"][2] - public["discusses"][2] == {
-        "schedule_publication",
-        "schedule_activity",
-        "schedule_baseline",
-        "scenario",
-        "scenario_output",
-    }
-    assert stored["discusses"][1] == public["discusses"][1]
-    assert stored["originated_from"][1] - public["originated_from"][1] == {
-        "scenario_version",
-        "schedule_baseline",
-    }
-    assert stored["originated_from"][2] == public["originated_from"][2]
-    assert stored["concerns"] == (
-        "semantic",
-        {"scenario", "scenario_version", "scenario_output"},
-        {"situation", "constraint", "task", "commitment", "schedule_activity", "schedule_baseline"},
-    )
-    assert stored["delays"] == ("semantic", {"constraint", "situation"}, {"schedule_activity"})
-    assert stored["mitigates"] == (
-        "semantic",
-        {"task", "commitment", "scenario_version"},
-        {"constraint", "situation"},
-    )
-    # The public read surface does not move in S6-2 (S6-2-D02).
-    assert lineage.LINEAGE_READ_GENERATION == 1
-    assert set(lineage.LINEAGE_FAMILY_READS) == set(lineage.RecordFamily)
+#
+# S6-3 package I10-B widened the public lineage enums by exactly the S6-2 storage
+# additions; the equality and the generation pins live in
+# `tests/unit/test_schedule_lineage_vocabulary.py` (section 15.11.1).

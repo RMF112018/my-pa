@@ -1,6 +1,8 @@
 """Per-family lineage visibility for remote readers (record lineage S3 section 6.4).
 
-A **local** caller holds no capability grants and sees every family. A
+A **local** caller holds no capability grants and sees every family (but a
+withheld one: Schedule Scenarios S6-3 withholds the 6 Schedule families while
+the plane is not effective, from every caller). A
 **remote** caller sees a record family only while it holds a grant, for one of
 that read's permitted purposes, on one of the family's reads
 (`LINEAGE_FAMILY_READS`, precedent `RECORD_EVENT_FAMILY_READS`); an evidence
@@ -126,12 +128,29 @@ def _pairs(grants: Iterable[tuple[Capability, Purpose | None]]) -> list[tuple[st
     ]
 
 
-def lineage_visibility(grants: Grants | None, capability: Capability) -> LineageVisibility:
-    """The caller's visible families and grant digest for a read of `capability`."""
+def lineage_visibility(
+    grants: Grants | None,
+    capability: Capability,
+    *,
+    withheld_families: frozenset[RecordFamily] = frozenset(),
+) -> LineageVisibility:
+    """The caller's visible families and grant digest for a read of `capability`.
+
+    Schedule Scenarios S6-3 (schedule scenarios contract section 15.11.4):
+    `withheld_families` are invisible to every caller, local or remote -- the
+    service passes the 6 Schedule families while the plane is not effective --
+    so a withheld family behaves exactly as an unreadable one (section 6.4).
+    """
     if grants is None:
-        return LineageVisibility(families=frozenset(RecordFamily), remote=False, grant_digest=None)
+        return LineageVisibility(
+            families=frozenset(RecordFamily) - withheld_families, remote=False, grant_digest=None
+        )
     return LineageVisibility(
-        families=frozenset(family for family in RecordFamily if _family_visible(family, grants)),
+        families=frozenset(
+            family
+            for family in RecordFamily
+            if family not in withheld_families and _family_visible(family, grants)
+        ),
         remote=True,
         grant_digest=grant_digest(_pairs(grants), capability.value),
     )

@@ -11848,6 +11848,14 @@ class LineageEndpoint:
     #: `project_id`, read under the same `FOR SHARE`.
     created_at: datetime | None = None
     project_id: str | None = None
+    #: Schedule Scenarios S6-3 (schedule scenarios contract section 15.11.2),
+    #: read with a plain `SELECT` (no row lock, S6-3-D21): whether a Schedule
+    #: family row is linkable now (a terminal `complete`/`partial`, non-intake
+    #: publication; a visible activity of a non-intake Series; an existing
+    #: Baseline or plane row), and whether a Baseline is approved and not
+    #: revoked (an `originated_from` from it needs that).
+    schedule_linkable: bool = False
+    baseline_approved: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -12021,7 +12029,10 @@ class RecordLineageRepository(ABC):
 
         A Situation of either kind answers (the application refuses a context
         one as not linkable); a Capture version's root is shared first by the
-        caller (`IssueRepository.share_capture_root`).
+        caller (`IssueRepository.share_capture_root`). The 6 Schedule
+        families are read with a plain `SELECT` and no row lock (schedule
+        scenarios contract section 15.11.2, S6-3-D21): each fact they carry is
+        fixed once linkable or moves only toward linkable.
         """
 
     @abstractmethod

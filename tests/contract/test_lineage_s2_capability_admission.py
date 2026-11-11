@@ -313,15 +313,18 @@ def test_assert_admits_exactly_the_s2_relations_it_writes() -> None:
     """
     schema = AssertRecordAssociation.mcp_payload_properties["relation_type"]
     # S3 lockstep (S3 contract section 3.1): the assert also publishes
-    # `related_context`; the S2 subset of the widened enum is unchanged.
+    # `related_context`; Schedule Scenarios S6-3 lockstep (schedule scenarios
+    # contract section 15.11.1): and `concerns`, `delays`, `mitigates`. The S2
+    # subset of the widened enum is unchanged.
+    later = {"related_context", "concerns", "delays", "mitigates"}
     published = [
         relation
         for relation in schema["enum"]  # type: ignore[index]
-        if relation != "related_context"
+        if relation not in later
     ]
     assert published == ["blocks", "discusses", "escalated_from", "originated_from"]
-    assert "related_context" in schema["enum"]  # type: ignore[index]
-    semantic = {relation.value for relation in RelationType} - {"issue_member", "related_context"}
+    assert later <= set(schema["enum"])  # type: ignore[arg-type]
+    semantic = {relation.value for relation in RelationType} - {"issue_member"} - later
     assert set(published) == semantic - {relation.value for relation in COMPOSITE_ONLY_RELATIONS}
     anchor = {**_ANCHOR, "role": "corroborates"}
     payloads = {

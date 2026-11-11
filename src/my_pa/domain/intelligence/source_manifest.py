@@ -79,6 +79,7 @@ __all__ = [
     "LINEAGE_MANIFEST_SCHEMA_VERSION",
     "LINEAGE_REFERENCE_STAGES",
     "MANIFEST_DIGEST_PREFIX",
+    "MANIFEST_LINEAGE_FAMILIES",
     "PROGRAM_REFERENCE_STAGES",
     "STRUCTURED_CONTENT_DIGEST_PREFIX",
     "BuiltManifest",
@@ -108,6 +109,24 @@ __all__ = [
     "server_state",
     "structured_content_sha256",
 ]
+
+#: Schedule Scenarios S6-3 (schedule scenarios contract section 15.11.6,
+#: OD-08, S6-D13, S6-U04): the record families a report's lineage section may
+#: name -- the 7 pre-S6 families, spelled, never `RecordFamily` wholesale, so
+#: no Schedule family (and no scenario data) ever enters a manifest. A seed, a
+#: `families_seen` entry or a counted link outside it is refused.
+MANIFEST_LINEAGE_FAMILIES: Final[frozenset[RecordFamily]] = frozenset(
+    {
+        RecordFamily.SITUATION,
+        RecordFamily.MEETING,
+        RecordFamily.MEETING_NOTE_VERSION,
+        RecordFamily.TASK,
+        RecordFamily.COMMITMENT,
+        RecordFamily.CONSTRAINT,
+        RecordFamily.CAPTURE_VERSION,
+    }
+)
+_MANIFEST_FAMILY_TOKENS: Final = frozenset(family.value for family in MANIFEST_LINEAGE_FAMILIES)
 
 #: Section 5.2: the domain separator of the structured-content digest.
 STRUCTURED_CONTENT_DIGEST_PREFIX: Final = b"report-structured-content-v1\n"
@@ -659,7 +678,7 @@ def _block_seeds(value: object) -> tuple[RecordRef, ...]:
         if not isinstance(item, Mapping) or set(item) != _RECORD_REF_KEYS:
             raise LineageReferenceError("a seed is exactly a family and a record id")
         family, record_id = item["family"], item["record_id"]
-        if not isinstance(family, str) or family not in {member.value for member in RecordFamily}:
+        if not isinstance(family, str) or family not in _MANIFEST_FAMILY_TOKENS:
             raise LineageReferenceError("a seed names a record family")
         try:
             seeds.append(RecordRef(family=RecordFamily(family), record_id=cast(str, record_id)))
@@ -729,12 +748,21 @@ def lineage_reference_block(
 def lineage_server_counts(links: Sequence[Mapping[str, object]]) -> dict[str, object]:
     """Section 7.9 `server`'s provenance counts over the recomputed result's links.
 
+    Every link joins 2 of the `MANIFEST_LINEAGE_FAMILIES` (OD-08); the
+    recompute withholds the Schedule families, so any other is a defect.
+
     `user_directed_claims` counts the links whose client said the user
     directed them -- a count of claims, never a verified fact. The one place
     the manifest reads the claim, and only to count it.
     """
     by_basis = {basis.value: 0 for basis in AcceptanceBasis}
     for link in links:
+        for end in ("from", "to"):
+            endpoint = link.get(end)
+            if not isinstance(endpoint, Mapping) or endpoint.get("family") not in (
+                _MANIFEST_FAMILY_TOKENS
+            ):
+                raise ValueError("a manifest counts links between its 7 families only")
         by_basis[str(link["acceptance_basis"])] += 1
     return {
         "link_count": len(links),
@@ -769,6 +797,8 @@ def lineage_section(
     """
     if (server is None) != (families_seen is None):
         raise ValueError("a server state is bound together with the families it was read with")
+    if families_seen is not None and not set(families_seen) <= MANIFEST_LINEAGE_FAMILIES:
+        raise ValueError("a manifest's lineage section names its 7 families only")
     if server is not None and failure is not None:
         raise ValueError("a recompute either produced a server state or failed")
     if server is None:

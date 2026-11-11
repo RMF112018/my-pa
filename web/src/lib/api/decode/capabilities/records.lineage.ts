@@ -28,20 +28,30 @@ import { strictObject, nullable, arrayOf, checked, text, boolean, integer, enume
  */
 const invalid = () => closed("upstream_contract_invalid", "Invalid capability success contract");
 
-export const RECORD_FAMILIES = ["situation", "meeting", "meeting_note_version", "task", "commitment", "constraint", "capture_version"] as const;
+/** Python `RecordFamily`: S1's 7 and the 6 Schedule Scenarios S6-3 families (contract section 5.1). */
+export const RECORD_FAMILIES = [
+  "situation", "meeting", "meeting_note_version", "task", "commitment", "constraint", "capture_version",
+  "schedule_publication", "schedule_activity", "schedule_baseline", "scenario", "scenario_version", "scenario_output",
+] as const;
 export type RecordFamily = (typeof RECORD_FAMILIES)[number];
 /** `RECORD_FAMILY_ID_KINDS`: the identifier prefix each family's root carries. */
 const FAMILY_PREFIX: Readonly<Record<RecordFamily, string>> = {
   situation: "sit", meeting: "mtg", meeting_note_version: "mnote", task: "tsk",
   commitment: "cmt", constraint: "cst", capture_version: "capver",
+  schedule_publication: "spub", schedule_activity: "sact", schedule_baseline: "sbl",
+  scenario: "sscn", scenario_version: "sscv", scenario_output: "ssco",
 };
 /** Python `domain/lineage/vocabulary.py` `ISSUE_STATES` (S2 admits `closed`). */
 export const ISSUE_STATES = ["open", "active", "suspended", "closed"] as const;
-/** Python `RelationType`: the 3 S1 relations, the 4 S2 adds (S2 section 3.1) and S3's 1 (S3 section 3.1). */
+/**
+ * Python `RelationType`: the 3 S1 relations, the 4 S2 adds (S2 section 3.1), S3's 1 (S3 section 3.1)
+ * and the 3 Schedule Scenarios S6-3 adds (schedule scenarios contract section 5.2).
+ */
 export const RELATION_TYPES = [
   "issue_member", "originated_from", "discusses",
   "delegated_from", "escalated_from", "blocks", "created_to_resolve",
   "related_context",
+  "concerns", "delays", "mitigates",
 ] as const;
 /** Python `LinkLifecycleState` (S3 adds `contested`, S3 section 3). */
 export const LINK_LIFECYCLE_STATES = ["active", "ended", "contested"] as const;

@@ -54,6 +54,7 @@ from my_pa.domain.lineage.vocabulary import (
     ATTESTED_LINEAGE_WRITE_CAPABILITIES,
     LINEAGE_BACKFILL_CAPABILITIES,
     LINEAGE_FAMILY_READS,
+    SCHEDULE_RECORD_FAMILIES,
     RecordFamily,
 )
 
@@ -278,6 +279,11 @@ def _expected_companions() -> dict[Capability, tuple[str, bool]]:
     for family, reads in LINEAGE_FAMILY_READS.items():
         if family is RecordFamily.SITUATION:
             continue  # issues.read / issues.list are among the 34
+        if family in SCHEDULE_RECORD_FAMILIES:
+            # Schedule Scenarios S6-3 (schedule scenarios contract section
+            # 15.11.1): the 6 Schedule families' reads are the Schedule plane's
+            # own names, granted with that plane (its runbook), not P1 companions.
+            continue
         for name in reads:
             capability = Capability(name)
             expected[capability] = (chatllm_grant_purpose(capability).value, False)

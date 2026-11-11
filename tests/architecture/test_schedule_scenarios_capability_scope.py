@@ -12,14 +12,17 @@ Contract `docs/architecture/schedule-scenarios-contract.md` sections 7, 15.8,
   switches (it replaces S6-2's `test_worker_passes_no_effective_plane`);
 * the S6-1/S6-2 plane write sets equal their `Capability` members.
 
-The manifest's lineage pin is package I10-B's. Each detector is run over a
-planted violation as its own control.
+Package I10-B adds the manifest's lineage pin to 7 families and widens the
+OD-08 guard to the whole Schedule domain package and the Program families and
+metrics (section 15.11.6). Each detector is run over a planted violation as its
+own control.
 """
 
 from __future__ import annotations
 
 import ast
 import os
+from collections.abc import Iterable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Final
@@ -28,6 +31,22 @@ import pytest
 from tests.architecture.test_cpm_workbench_worker_scope import test_no_baseline_is_derived
 
 from my_pa.domain.identity.operation import Capability, is_operator_only, is_write_capability
+from my_pa.domain.intelligence.catalog import IntelligenceStage
+from my_pa.domain.intelligence.source_manifest import (
+    MANIFEST_LINEAGE_FAMILIES,
+    LineageReferenceError,
+    lineage_reference_block,
+    lineage_section,
+    lineage_server_counts,
+)
+from my_pa.domain.lineage.vocabulary import (
+    LINEAGE_CONTEXT_BLOCK_KEY,
+    RECORD_FAMILY_ID_KINDS,
+    SCHEDULE_RECORD_FAMILIES,
+    RecordFamily,
+)
+from my_pa.domain.program.reportability import METRIC_CATALOGUE
+from my_pa.domain.program.vocabulary import ProgramFamily
 from my_pa.domain.schedule.plane import (
     PLANE_CLIENT_WRITE_CAPABILITIES,
     PLANE_OPERATOR_WRITE_CAPABILITIES,
@@ -121,8 +140,22 @@ def _names_a_plane_table(tree: ast.AST) -> list[str]:
     return sorted(found & PLANE_TABLES)
 
 
+#: Section 15.11.6 (package I10-B): the whole Schedule domain package, beside
+#: the plane modules, is out of a Program surface's reach.
+SCHEDULE_DOMAIN: Final = "my_pa.domain.schedule"
+#: Section 15.11.6: a Program family or metric naming one of these is scenario data.
+SCHEDULE_TOKENS: Final = ("schedule", "scenario", "baseline", "cpm")
+
+
 def _od08_violations(tree: ast.AST) -> list[str]:
-    return _reaches(tree, PLANE_MODULES) + _names_a_plane_table(tree)
+    return sorted(
+        set(_reaches(tree, (*PLANE_MODULES, SCHEDULE_DOMAIN))) | set(_names_a_plane_table(tree))
+    )
+
+
+def _schedule_tokens(names: Iterable[str]) -> list[str]:
+    """The names holding a Schedule token as a whole `_`-separated word (`unscheduled` is not)."""
+    return sorted(name for name in names if set(name.lower().split("_")) & set(SCHEDULE_TOKENS))
 
 
 def test_scenario_data_reaches_no_program_surface() -> None:
@@ -138,6 +171,77 @@ def test_scenario_data_reaches_no_program_surface() -> None:
     assert _od08_violations(planted) == ["my_pa.application.schedule_scenarios"]
     planted_table = ast.parse("rows = select(schedule_cpm_runs)\n")
     assert _od08_violations(planted_table) == ["schedule_cpm_runs"]
+    planted_domain = ast.parse("from my_pa.domain.schedule.compare import compare\n")
+    assert _od08_violations(planted_domain) == [
+        "my_pa.domain.schedule.compare",
+        "my_pa.domain.schedule.compare.compare",
+    ]
+    # No Program family or catalogue metric names a Schedule or scenario token.
+    families = [member.value for member in ProgramFamily]
+    metrics = [row.metric_id.value for row in METRIC_CATALOGUE]
+    assert _schedule_tokens(families) == []
+    assert _schedule_tokens(metrics) == []
+    assert _schedule_tokens(["scenario_open", "baseline_variance", "commitment_unscheduled"]) == [
+        "baseline_variance",
+        "scenario_open",
+    ]
+
+
+_STAGE: Final = IntelligenceStage.SYNTHESIZER
+
+
+def test_manifest_lineage_section_is_pinned_to_seven_families() -> None:
+    """Section 15.11.6 (OD-08, S6-U04): a report's lineage section names the 7 pre-S6 families.
+
+    The seeds of a reference block, the families a recompute saw and the links
+    it counts are each refused outside them; the pin is spelled, never
+    `RecordFamily` wholesale.
+    """
+    assert {family.value for family in MANIFEST_LINEAGE_FAMILIES} == {
+        "situation",
+        "meeting",
+        "meeting_note_version",
+        "task",
+        "commitment",
+        "constraint",
+        "capture_version",
+    }
+    assert not MANIFEST_LINEAGE_FAMILIES & SCHEDULE_RECORD_FAMILIES
+    assert frozenset(RecordFamily) == MANIFEST_LINEAGE_FAMILIES | SCHEDULE_RECORD_FAMILIES
+    block = {
+        "block_schema_version": 1,
+        "seeds": [{"family": "situation", "record_id": "sit_scopemanifest0001"}],
+        "max_depth": 2,
+        "acceptance_bases": ["user_confirmed"],
+        "relation_types": ["discusses"],
+        "known_at": "2026-11-11T12:00:00.000000Z",
+        "related_sha256": "0" * 64,
+    }
+    parsed = lineage_reference_block({LINEAGE_CONTEXT_BLOCK_KEY: block}, stage=_STAGE)
+    assert parsed is not None
+    seven = [RecordFamily(family) for family in sorted(f.value for f in MANIFEST_LINEAGE_FAMILIES)]
+    server = {"related_sha256": "0" * 64}
+    assert lineage_section(parsed, server=server, families_seen=seven)["families_seen"] == [
+        family.value for family in seven
+    ]
+    link = {
+        "from": {"family": "situation", "record_id": "sit_scopemanifest0001"},
+        "to": {"family": "task", "record_id": "tsk_scopemanifest0001"},
+        "acceptance_basis": "user_confirmed",
+        "user_directed_claim": None,
+    }
+    assert lineage_server_counts([link])["link_count"] == 1
+    for family in sorted(SCHEDULE_RECORD_FAMILIES):
+        kind = RECORD_FAMILY_ID_KINDS[family].value
+        seed = {"family": family.value, "record_id": f"{kind}_scopemanifest0001"}
+        with pytest.raises(LineageReferenceError):
+            lineage_reference_block(
+                {LINEAGE_CONTEXT_BLOCK_KEY: {**block, "seeds": [seed]}}, stage=_STAGE
+            )
+        with pytest.raises(ValueError, match="7 families"):
+            lineage_section(parsed, server=server, families_seen=[*seven, family])
+        with pytest.raises(ValueError, match="7 families"):
+            lineage_server_counts([{**link, "to": seed}])
 
 
 def test_only_the_composition_root_imports_the_plane() -> None:

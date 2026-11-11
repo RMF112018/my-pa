@@ -77,11 +77,13 @@ describe("records.lineage strict canonical success", () => {
   it("decodes the S2 relation types and a closed Issue", () => {
     // The closed sets are exactly the server vocabulary (S2 section 7.4); the
     // Python side of the equality is `test_record_lineage_s2_scope.py`. S3 widens
-    // the server vocabulary by `related_context` (S3 section 3.1), in lockstep.
+    // the server vocabulary by `related_context` (S3 section 3.1), and Schedule
+    // Scenarios S6-3 by `concerns`, `delays` and `mitigates`, in lockstep.
     expect([...RELATION_TYPES]).toEqual([
       "issue_member", "originated_from", "discusses",
       "delegated_from", "escalated_from", "blocks", "created_to_resolve",
       "related_context",
+      "concerns", "delays", "mitigates",
     ]);
     expect([...ISSUE_STATES]).toEqual(["open", "active", "suspended", "closed"]);
     for (const [relation, from, to] of [

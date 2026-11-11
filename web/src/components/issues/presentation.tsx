@@ -49,6 +49,12 @@ export const FAMILY_WORDS: Readonly<Record<RecordRefView["family"], string>> = {
   commitment: "a Commitment",
   constraint: "a Constraint",
   capture_version: "a Capture version",
+  schedule_publication: "a schedule publication",
+  schedule_activity: "a schedule activity",
+  schedule_baseline: "a schedule baseline",
+  scenario: "a schedule scenario",
+  scenario_version: "a schedule scenario version",
+  scenario_output: "a schedule scenario output",
 };
 
 const FAMILY_NAMES: Readonly<Record<RecordRefView["family"], string>> = {
@@ -59,6 +65,12 @@ const FAMILY_NAMES: Readonly<Record<RecordRefView["family"], string>> = {
   commitment: "Commitment",
   constraint: "Constraint",
   capture_version: "Capture version",
+  schedule_publication: "Schedule publication",
+  schedule_activity: "Schedule activity",
+  schedule_baseline: "Schedule baseline",
+  scenario: "Schedule scenario",
+  scenario_version: "Schedule scenario version",
+  scenario_output: "Schedule scenario output",
 };
 
 export function familyName(family: RecordRefView["family"]): string {

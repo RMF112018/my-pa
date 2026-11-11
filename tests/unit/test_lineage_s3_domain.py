@@ -503,19 +503,21 @@ _CURSOR_REQUEST: Final = {
 }
 #: Golden tokens: a `records.lineage` cursor and an `issues.timeline` one (`n`
 #: null, a Record Event watermark, an array position). Recomputing them from the
-#: section 5 formula below must give these exact bytes.
+#: section 5 formula below must give these exact bytes. Their `s` is the local
+#: scope at read generation 2 (Schedule Scenarios S6-3 bumped it from 1, which
+#: changes only that digest).
 _GOLDEN_LINEAGE: Final = (
     "eyJiIjoiMTlhODlmOTdkMDE4YzUzZDdjZGU4Yjg1ZjlmYTNmZGFkY2Y4Yzk4YmE5YWUyYTU1MjM0OGMxZjQzODg3"
     "NmMwMiIsImsiOiIyMDI2LTEwLTE5VDEyOjAwOjAwLjEyMzQ1NloiLCJuIjoiMjAyNi0xMC0xOVQxMjowNTowMC4w"
-    "MDAwMDBaIiwicCI6ImU6aXJsX2N1cnNvcmdvbGRlbjAxIiwiciI6bnVsbCwicyI6ImUwMjUyZmY4ZjRhNjg5Yzdm"
-    "MWZhOTg5OGJjMDgwZTZlZTQzMDE3YTFjODFhY2YyYTdhMzNmMzc3YzM0MDRlY2UiLCJ0IjoiMjAyNi0xMC0xOVQx"
+    "MDAwMDBaIiwicCI6ImU6aXJsX2N1cnNvcmdvbGRlbjAxIiwiciI6bnVsbCwicyI6IjMzNTllZjc5ZjYyY2FmMTYx"
+    "YzI2YWJiZTAzMDkzNGU5MDAwOThhY2ZiZDA1MmNiYjVhYTdlOGNjOTNmMDEwNmEiLCJ0IjoiMjAyNi0xMC0xOVQx"
     "MjowMDowMC4xMjM0NTZaIiwidiI6MX0"
 )
 _GOLDEN_TIMELINE: Final = (
     "eyJiIjoiMTlhODlmOTdkMDE4YzUzZDdjZGU4Yjg1ZjlmYTNmZGFkY2Y4Yzk4YmE5YWUyYTU1MjM0OGMxZjQzODg3"
     "NmMwMiIsImsiOm51bGwsIm4iOm51bGwsInAiOlsiMjAyNi0xMC0xOVQxMjowMDowMC4wMDAwMDBaIiwxLDYsInJj"
-    "ZXZfY3Vyc29yZ29sZGVuMDEiXSwiciI6InJjZXZfY3Vyc29yZ29sZGVuMDEiLCJzIjoiZTAyNTJmZjhmNGE2ODlj"
-    "N2YxZmE5ODk4YmMwODBlNmVlNDMwMTdhMWM4MWFjZjJhN2EzM2YzNzdjMzQwNGVjZSIsInQiOm51bGwsInYiOjF9"
+    "ZXZfY3Vyc29yZ29sZGVuMDEiXSwiciI6InJjZXZfY3Vyc29yZ29sZGVuMDEiLCJzIjoiMzM1OWVmNzlmNjJjYWYx"
+    "NjFjMjZhYmJlMDMwOTM0ZTkwMDA5OGFjZmJkMDUyY2JiNWFhN2U4Y2M5M2YwMTA2YSIsInQiOm51bGwsInYiOjF9"
 )
 
 
@@ -696,7 +698,7 @@ def test_the_scope_digest_changes_with_family_grants_and_generation() -> None:
     assert len(scopes) == len(digests) + 1
     # The read generation is bound too.
     assert scope_digest(base, generation=LINEAGE_READ_GENERATION + 1) != scope_digest(base)
-    assert scope_digest(None, generation=2) != local
+    assert scope_digest(None, generation=1) != local
 
 
 # ---- section 8.3 (worker L5): the backfill classification table ----------------------

@@ -90,6 +90,7 @@ from my_pa.application.lineage_endpoints import (
     require_linkable,
     require_open_issues,
     require_relation_evidence,
+    require_schedule_relation,
 )
 from my_pa.application.lineage_rate import require_client_write_budget
 from my_pa.application.lineage_visibility import (
@@ -805,6 +806,9 @@ class RecordLineageApplication:
         require_open_issues(locked)
         for ref in (request.from_ref, request.to_ref):
             require_linkable(issues, principal_id, locked.endpoints[ref])
+        # Schedule Scenarios S6-3 (section 15.11.2): approval evidence from an
+        # approved Baseline only.
+        require_schedule_relation(request.relation_type, locked.endpoints[request.from_ref])
         anchors = admit_evidence_set(issues, principal_id, locked.evidence)
         require_relation_evidence(request.relation_type, request.from_ref, request.to_ref, anchors)
         blocks: tuple[RecordRef, RecordRef] | None = None

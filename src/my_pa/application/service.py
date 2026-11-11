@@ -893,6 +893,7 @@ from my_pa.domain.knowledge_assertion.vocabulary import (
 from my_pa.domain.lineage.model import RecordRef
 from my_pa.domain.lineage.vocabulary import (
     LINEAGE_BACKFILL_CAPABILITIES,
+    SCHEDULE_RECORD_FAMILIES,
     EvidenceAvailability,
     EvidenceSourceFamily,
     RecordFamily,
@@ -14397,7 +14398,11 @@ class ApplicationService:
         """
         self._lineage_plane()
         require_read_grant(authorization.capability_grants, capability)
-        return lineage_visibility(authorization.capability_grants, capability)
+        return lineage_visibility(
+            authorization.capability_grants,
+            capability,
+            withheld_families=self._withheld_lineage_families(),
+        )
 
     def _schedule_plane(self) -> None:
         """Refuse unless the Schedule plane is composed (contract section 3.1).
@@ -14462,6 +14467,7 @@ class ApplicationService:
         """
         provenance = lineage_write_provenance(authorization, user_directed=command.user_directed)
         grants = authorization.capability_grants
+        withheld = self._withheld_lineage_families()
         if grants is not None:
             capability = command.capability
             require_write_grant(grants, capability)
@@ -14474,10 +14480,22 @@ class ApplicationService:
                 unit_of_work,
                 authorization.principal.principal_id,
                 command,
-                lineage_visibility(grants, capability),
+                lineage_visibility(grants, capability, withheld_families=withheld),
                 project_visible=ProgramFamily.PROJECT in program_families(grants),
             )
+        elif withheld:
+            # Schedule Scenarios S6-3 (schedule scenarios contract section
+            # 15.11.4): a new assertion naming a withheld family answers as an
+            # absent one for a local caller too; a revision of an existing link
+            # acts on its identity and head and is never refused for it.
+            _require_unwithheld_new_subjects(
+                command, lineage_visibility(None, command.capability, withheld_families=withheld)
+            )
         return provenance
+
+    def _withheld_lineage_families(self) -> frozenset[RecordFamily]:
+        """Schedule Scenarios S6-3 (section 15.11.4): the 6 Schedule families unless effective."""
+        return frozenset() if self._scenario_plane_is_composed() else SCHEDULE_RECORD_FAMILIES
 
     def _issues_create(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateIssue
@@ -15658,7 +15676,9 @@ class ApplicationService:
                 and lineage_released(
                     manifest,
                     families=lineage_visibility(
-                        grants, Capability.RECORDS_LINEAGE_RELATED
+                        grants,
+                        Capability.RECORDS_LINEAGE_RELATED,
+                        withheld_families=self._withheld_lineage_families(),
                     ).families,
                     holds_related_grant=Purpose.RECORD_LINEAGE_READ
                     in granted_purposes(Capability.RECORDS_LINEAGE_RELATED, grants),
@@ -16230,7 +16250,14 @@ class ApplicationService:
         grants = authorization.capability_grants
         principal_id = authorization.principal.principal_id
         visibility = (
-            lineage_visibility(grants, Capability.RECORDS_LINEAGE_RELATED)
+            lineage_visibility(
+                grants,
+                Capability.RECORDS_LINEAGE_RELATED,
+                # OD-08 (schedule scenarios contract section 15.11.6): a
+                # manifest's lineage section never reaches a Schedule family,
+                # whether or not the plane is effective.
+                withheld_families=SCHEDULE_RECORD_FAMILIES,
+            )
             if grants is None or bool(granted_purposes(Capability.RECORDS_LINEAGE_RELATED, grants))
             else None
         )
@@ -19977,6 +20004,42 @@ def _require_visible_in_lock_order(
     ):
         if not visibility.sees_family(family):
             raise NotFoundError(detail)
+
+
+def _require_unwithheld_new_subjects(
+    command: _OpenLineageWrite, visibility: LineageVisibility
+) -> None:
+    """Schedule Scenarios S6-3 (section 15.11.4): a local new assertion of a withheld family.
+
+    Only the writes that create a link name a new endpoint; the first subject
+    of a withheld family, in validation's lock order, answers `not_found` with
+    the detail an absent one gets. Lock-free, before the reservation.
+    """
+    match command:
+        case AssertRecordAssociation():
+            request = command.lineage_request()
+            _require_visible_in_lock_order(
+                visibility,
+                endpoints=(
+                    (request.from_ref, SafeDetail.FROM_RECORD),
+                    (request.to_ref, SafeDetail.TO_RECORD),
+                ),
+            )
+        case AddIssueMembership():
+            membership = command.lineage_request()
+            _require_visible_in_lock_order(
+                visibility, endpoints=((membership.member, SafeDetail.MEMBER),)
+            )
+        case CreateIssueWorkTask() | CreateIssueWorkCommitment():
+            work = command.work_request()
+            _require_visible_in_lock_order(
+                visibility,
+                endpoints=tuple(
+                    (intent.to_ref, SafeDetail.TO_RECORD) for intent in work.association_intents
+                ),
+            )
+        case _:
+            pass
 
 
 def _require_visible_subjects(

@@ -99,6 +99,7 @@ __all__ = [
     "S2_LINEAGE_WRITE_CAPABILITIES",
     "SCHEDULE_LINEAGE_FAMILY_ID_KINDS",
     "SCHEDULE_LINEAGE_RELATIONS",
+    "SCHEDULE_RECORD_FAMILIES",
     "STORED_RECORD_FAMILY_ID_KINDS",
     "STORED_RELATION_MATRIX",
     "AcceptanceBasis",
@@ -173,7 +174,12 @@ class IssueProjectMembershipState(StrEnum):
 
 
 class RecordFamily(StrEnum):
-    """An endpoint family a record link may name in S1."""
+    """An endpoint family a record link may name.
+
+    S1's seven, then the 6 Schedule Scenarios families (schedule scenarios
+    contract sections 5.1 and 15.11.1), linkable only while the plane is
+    effective (section 15.11.4).
+    """
 
     SITUATION = "situation"
     MEETING = "meeting"
@@ -182,6 +188,12 @@ class RecordFamily(StrEnum):
     COMMITMENT = "commitment"
     CONSTRAINT = "constraint"
     CAPTURE_VERSION = "capture_version"
+    SCHEDULE_PUBLICATION = "schedule_publication"
+    SCHEDULE_ACTIVITY = "schedule_activity"
+    SCHEDULE_BASELINE = "schedule_baseline"
+    SCENARIO = "scenario"
+    SCENARIO_VERSION = "scenario_version"
+    SCENARIO_OUTPUT = "scenario_output"
 
 
 class RecordLinkKind(StrEnum):
@@ -195,7 +207,9 @@ class RelationType(StrEnum):
     """The S1 relation types (S1 section 3.1), the four S2 adds (S2 section 3.1) and S3's one.
 
     S3 (section 3.1) adds `related_context`: symmetric, stored once in canonical
-    order, and always Issue-scoped.
+    order, and always Issue-scoped. Schedule Scenarios S6-3 (schedule scenarios
+    contract sections 5.2 and 15.11.1) adds `concerns`, `delays` and
+    `mitigates`: semantic, contestable, not composite-only, not symmetric.
     """
 
     ISSUE_MEMBER = "issue_member"
@@ -206,6 +220,9 @@ class RelationType(StrEnum):
     BLOCKS = "blocks"
     CREATED_TO_RESOLVE = "created_to_resolve"
     RELATED_CONTEXT = "related_context"
+    CONCERNS = "concerns"
+    DELAYS = "delays"
+    MITIGATES = "mitigates"
 
 
 class MemberRole(StrEnum):
@@ -314,9 +331,22 @@ class LineageCompleteness(StrEnum):
 
 
 class NativeVirtualEdge(StrEnum):
-    """Read-only: an edge derived from native rows rather than stored."""
+    """Read-only: an edge derived from native rows rather than stored.
+
+    Schedule Scenarios S6-3 (schedule scenarios contract sections 5.2 and
+    14.5) adds the 8 plane edges, each a column of a plane row; a client can
+    never assert one.
+    """
 
     MEETING_NOTE_VERSION_OF = "meeting_note_version_of"
+    SCENARIO_VERSION_OF = "scenario_version_of"
+    SCENARIO_VERSION_PARENT = "scenario_version_parent"
+    SCENARIO_BASED_ON_PUBLICATION = "scenario_based_on_publication"
+    SCENARIO_BASED_ON_BASELINE = "scenario_based_on_baseline"
+    SCENARIO_FORKED_FROM_VERSION = "scenario_forked_from_version"
+    SCENARIO_OUTPUT_OF = "scenario_output_of"
+    SCHEDULE_BASELINE_DESIGNATES = "schedule_baseline_designates"
+    SCHEDULE_BASELINE_SUPERSEDES = "schedule_baseline_supersedes"
 
 
 class HandoffHolderKind(StrEnum):
@@ -503,9 +533,11 @@ LINEAGE_BACKFILL_CAPABILITIES: Final[frozenset[str]] = frozenset(
 )
 
 #: S3 section 3: bumped by any change to traversal, visibility, ordering or
-#: paging rules, and bound in every lineage cursor (section 5). S3.1 changes no
-#: such rule of an existing read, so it stays 1.
-LINEAGE_READ_GENERATION: Final = 1
+#: paging rules, and bound in every lineage cursor (section 5). S3.1 changed no
+#: such rule of an existing read; Schedule Scenarios S6-3 (schedule scenarios
+#: contract sections 5.4 and 15.11.1, S6-2-D02) adds 6 families and their
+#: visibility, so a generation-1 cursor is refused.
+LINEAGE_READ_GENERATION: Final = 2
 
 # --- Record lineage S3.1 (S3.1 contract section 4) --------------------------
 
@@ -601,6 +633,13 @@ RECORD_FAMILY_ID_KINDS: Final[MappingProxyType[RecordFamily, IdKind]] = MappingP
         RecordFamily.COMMITMENT: IdKind.COMMITMENT,
         RecordFamily.CONSTRAINT: IdKind.PROJECT_CONSTRAINT,
         RecordFamily.CAPTURE_VERSION: IdKind.CAPTURE_VERSION,
+        # Schedule Scenarios S6-3 (schedule scenarios contract section 5.1).
+        RecordFamily.SCHEDULE_PUBLICATION: IdKind.SCHEDULE_PUBLICATION,
+        RecordFamily.SCHEDULE_ACTIVITY: IdKind.SCHEDULE_ACTIVITY,
+        RecordFamily.SCHEDULE_BASELINE: IdKind.SCHEDULE_BASELINE,
+        RecordFamily.SCENARIO: IdKind.SCHEDULE_SCENARIO,
+        RecordFamily.SCENARIO_VERSION: IdKind.SCHEDULE_SCENARIO_VERSION,
+        RecordFamily.SCENARIO_OUTPUT: IdKind.SCHEDULE_SCENARIO_OUTPUT,
     }
 )
 
@@ -615,6 +654,36 @@ LINEAGE_FAMILY_READS: Final[MappingProxyType[RecordFamily, frozenset[str]]] = Ma
         RecordFamily.COMMITMENT: frozenset({"commitments.read", "commitments.list"}),
         RecordFamily.CONSTRAINT: frozenset({"constraints.read", "constraints.list"}),
         RecordFamily.CAPTURE_VERSION: frozenset({"capture.read", "capture.list"}),
+        # Schedule Scenarios S6-3 (schedule scenarios contract section 5.1).
+        RecordFamily.SCHEDULE_PUBLICATION: frozenset(
+            {"schedule_publications.read", "schedule_publications.list"}
+        ),
+        RecordFamily.SCHEDULE_ACTIVITY: frozenset(
+            {"schedule_activities.history", "schedule_activities.list"}
+        ),
+        RecordFamily.SCHEDULE_BASELINE: frozenset(
+            {"schedule_baselines.read", "schedule_baselines.list"}
+        ),
+        RecordFamily.SCENARIO: frozenset({"schedule_scenarios.read", "schedule_scenarios.list"}),
+        RecordFamily.SCENARIO_VERSION: frozenset({"schedule_scenario_versions.read"}),
+        RecordFamily.SCENARIO_OUTPUT: frozenset(
+            {"schedule_scenario_outputs.read", "schedule_scenario_outputs.list"}
+        ),
+    }
+)
+
+#: Schedule Scenarios S6-3 (schedule scenarios contract sections 5.1 and
+#: 15.11.4): the 6 families withheld while the plane is not effective -- a new
+#: assertion naming one answers as absent and reads drop its endpoints, as for
+#: an unreadable family (S3 section 6.4).
+SCHEDULE_RECORD_FAMILIES: Final[frozenset[RecordFamily]] = frozenset(
+    {
+        RecordFamily.SCHEDULE_PUBLICATION,
+        RecordFamily.SCHEDULE_ACTIVITY,
+        RecordFamily.SCHEDULE_BASELINE,
+        RecordFamily.SCENARIO,
+        RecordFamily.SCENARIO_VERSION,
+        RecordFamily.SCENARIO_OUTPUT,
     }
 )
 
@@ -674,11 +743,23 @@ RELATION_MATRIX: Final[
                 }
             ),
         ),
+        # Schedule Scenarios S6-3 (section 5.2) widens the `from` families by a
+        # Scenario Version and a Baseline (admitted from a Baseline only while
+        # it is approved, `lineage_endpoints.require_schedule_relation`).
         RelationType.ORIGINATED_FROM: (
             RecordLinkKind.SEMANTIC,
-            frozenset({RecordFamily.COMMITMENT, RecordFamily.TASK, RecordFamily.CONSTRAINT}),
+            frozenset(
+                {
+                    RecordFamily.COMMITMENT,
+                    RecordFamily.TASK,
+                    RecordFamily.CONSTRAINT,
+                    RecordFamily.SCENARIO_VERSION,
+                    RecordFamily.SCHEDULE_BASELINE,
+                }
+            ),
             frozenset({RecordFamily.MEETING_NOTE_VERSION, RecordFamily.CAPTURE_VERSION}),
         ),
+        # Schedule Scenarios S6-3 (section 5.2) widens the `to` families by 5.
         RelationType.DISCUSSES: (
             RecordLinkKind.SEMANTIC,
             frozenset({RecordFamily.MEETING, RecordFamily.MEETING_NOTE_VERSION}),
@@ -688,6 +769,11 @@ RELATION_MATRIX: Final[
                     RecordFamily.TASK,
                     RecordFamily.COMMITMENT,
                     RecordFamily.CONSTRAINT,
+                    RecordFamily.SCHEDULE_PUBLICATION,
+                    RecordFamily.SCHEDULE_ACTIVITY,
+                    RecordFamily.SCHEDULE_BASELINE,
+                    RecordFamily.SCENARIO,
+                    RecordFamily.SCENARIO_OUTPUT,
                 }
             ),
         ),
@@ -718,101 +804,72 @@ RELATION_MATRIX: Final[
             _RELATED_CONTEXT_FAMILIES,
             _RELATED_CONTEXT_FAMILIES,
         ),
+        # Schedule Scenarios S6-3 (schedule scenarios contract section 5.2).
+        RelationType.CONCERNS: (
+            RecordLinkKind.SEMANTIC,
+            frozenset(
+                {RecordFamily.SCENARIO, RecordFamily.SCENARIO_VERSION, RecordFamily.SCENARIO_OUTPUT}
+            ),
+            frozenset(
+                {
+                    RecordFamily.SITUATION,
+                    RecordFamily.CONSTRAINT,
+                    RecordFamily.TASK,
+                    RecordFamily.COMMITMENT,
+                    RecordFamily.SCHEDULE_ACTIVITY,
+                    RecordFamily.SCHEDULE_BASELINE,
+                }
+            ),
+        ),
+        RelationType.DELAYS: (
+            RecordLinkKind.SEMANTIC,
+            frozenset({RecordFamily.CONSTRAINT, RecordFamily.SITUATION}),
+            frozenset({RecordFamily.SCHEDULE_ACTIVITY}),
+        ),
+        RelationType.MITIGATES: (
+            RecordLinkKind.SEMANTIC,
+            frozenset({RecordFamily.TASK, RecordFamily.COMMITMENT, RecordFamily.SCENARIO_VERSION}),
+            frozenset({RecordFamily.CONSTRAINT, RecordFamily.SITUATION}),
+        ),
     }
 )
 
 
-# --- Schedule Scenarios S6-2 storage vocabulary (schedule scenarios contract
-# section 14.7.4, amendment S6-2-D01) ------------------------------------------
+# --- Schedule Scenarios storage vocabulary (schedule scenarios contract
+# sections 14.7.4 and 15.11.1) ---------------------------------------------------
 #
-# The `record_links` CHECKs are widened by the S6-2 revision from these
-# string-keyed maps, not from the public enums: `RecordFamily`, `RelationType`,
-# `RELATION_MATRIX`, `RECORD_FAMILY_ID_KINDS`, `LINEAGE_FAMILY_READS` and
-# `LINEAGE_READ_GENERATION` move in S6-3 with the validators and resolvers
-# (S6-2-D01, S6-2-D02). Until then the database admits the section 5.2 Schedule
-# families and relations that no public surface can name.
+# The `record_links` CHECKs are built from these string-keyed maps, not from the
+# public enums (S6-2-D01). S6-2 stored the 6 Schedule families and 3 relations
+# before any public surface could name them; S6-3 widened the public enums by
+# exactly those, so the stored maps are now the public maps as string tokens
+# (`test_storage_vocabulary_equals_the_public_vocabulary`) and the CHECK texts
+# are unchanged -- no revision.
 
 #: The 6 Schedule endpoint families and the identifier kind each carries.
 SCHEDULE_LINEAGE_FAMILY_ID_KINDS: Final[MappingProxyType[str, IdKind]] = MappingProxyType(
-    {
-        "schedule_publication": IdKind.SCHEDULE_PUBLICATION,
-        "schedule_activity": IdKind.SCHEDULE_ACTIVITY,
-        "schedule_baseline": IdKind.SCHEDULE_BASELINE,
-        "scenario": IdKind.SCHEDULE_SCENARIO,
-        "scenario_version": IdKind.SCHEDULE_SCENARIO_VERSION,
-        "scenario_output": IdKind.SCHEDULE_SCENARIO_OUTPUT,
-    }
+    {family.value: RECORD_FAMILY_ID_KINDS[family] for family in SCHEDULE_RECORD_FAMILIES}
 )
 
-#: Every family `record_links` stores (13): the public 7 and the Schedule 6.
+#: Every family `record_links` stores (13): the public families as tokens.
 STORED_RECORD_FAMILY_ID_KINDS: Final[MappingProxyType[str, IdKind]] = MappingProxyType(
     {family.value: kind for family, kind in RECORD_FAMILY_ID_KINDS.items()}
-    | dict(SCHEDULE_LINEAGE_FAMILY_ID_KINDS)
 )
 
 #: The 3 section 5.2 relations S6 adds (semantic, contestable, not composite-only).
-SCHEDULE_LINEAGE_RELATIONS: Final[frozenset[str]] = frozenset({"concerns", "delays", "mitigates"})
+SCHEDULE_LINEAGE_RELATIONS: Final[frozenset[str]] = frozenset(
+    {RelationType.CONCERNS.value, RelationType.DELAYS.value, RelationType.MITIGATES.value}
+)
 
-
-def _stored_relation_matrix() -> dict[str, tuple[str, frozenset[str], frozenset[str]]]:
-    stored = {
-        relation.value: (
-            kind.value,
-            frozenset(family.value for family in sources),
-            frozenset(family.value for family in targets),
-        )
-        for relation, (kind, sources, targets) in RELATION_MATRIX.items()
-    }
-    semantic = RecordLinkKind.SEMANTIC.value
-    kind, sources, targets = stored[RelationType.DISCUSSES.value]
-    stored[RelationType.DISCUSSES.value] = (
-        kind,
-        sources,
-        targets
-        | {
-            "schedule_publication",
-            "schedule_activity",
-            "schedule_baseline",
-            "scenario",
-            "scenario_output",
-        },
-    )
-    kind, sources, targets = stored[RelationType.ORIGINATED_FROM.value]
-    stored[RelationType.ORIGINATED_FROM.value] = (
-        kind,
-        sources | {"scenario_version", "schedule_baseline"},
-        targets,
-    )
-    stored["concerns"] = (
-        semantic,
-        frozenset({"scenario", "scenario_version", "scenario_output"}),
-        frozenset(
-            {
-                "situation",
-                "constraint",
-                "task",
-                "commitment",
-                "schedule_activity",
-                "schedule_baseline",
-            }
-        ),
-    )
-    stored["delays"] = (
-        semantic,
-        frozenset({"constraint", "situation"}),
-        frozenset({"schedule_activity"}),
-    )
-    stored["mitigates"] = (
-        semantic,
-        frozenset({"task", "commitment", "scenario_version"}),
-        frozenset({"constraint", "situation"}),
-    )
-    return stored
-
-
-#: The relation matrix `record_links` stores: `RELATION_MATRIX` as string
-#: tokens, `discusses` and `originated_from` widened and the 3 new relations
-#: added (section 5.2 exactly).
+#: The relation matrix `record_links` stores: `RELATION_MATRIX` as string tokens.
 STORED_RELATION_MATRIX: Final[MappingProxyType[str, tuple[str, frozenset[str], frozenset[str]]]] = (
-    MappingProxyType(_stored_relation_matrix())
+    MappingProxyType(
+        {
+            relation.value: (
+                kind.value,
+                frozenset(family.value for family in sources),
+                frozenset(family.value for family in targets),
+            )
+            for relation, (kind, sources, targets) in RELATION_MATRIX.items()
+        }
+    )
 )

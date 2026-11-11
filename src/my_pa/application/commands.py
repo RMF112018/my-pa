@@ -14799,10 +14799,15 @@ class AssertRecordAssociation:
             "to_record": _RECORD_REF_SCHEMA,
             "relation_type": {
                 "type": "string",
+                # Schedule Scenarios S6-3 (schedule scenarios contract section
+                # 15.11.1) adds `concerns`, `delays` and `mitigates`.
                 "enum": [
                     "blocks",
+                    "concerns",
+                    "delays",
                     "discusses",
                     "escalated_from",
+                    "mitigates",
                     "originated_from",
                     "related_context",
                 ],

@@ -3372,6 +3372,7 @@ repository read (`intake_publication_ids`, 15.14).
 | CPM run | `{data_class: "schedule_cpm_run", authority: "server_computed", authoritative: false, reportable: false}` | `("schedule_scenario", "client_authored", "schedule_cpm", "my-pa-cpm-v1", "server_computed")` |
 | output | `{data_class: "schedule_scenario_output", authority: "client_asserted", authoritative: false, reportable: false}` | `("schedule_scenario", "client_authored", "schedule_scenario_output", "client_asserted")` |
 | baseline | `{data_class: "schedule_baseline", authority: "operator_approved" \| "proposed", authoritative: <effective>, reportable: false}`; `authoritative` is `true` only on an effective (approved, not revoked, eligible) Baseline | `("schedule_baseline", "operator_approved" \| "proposed")` |
+| lineage node only (15.11.3a): publication, activity | `{data_class: "schedule_publication" \| "schedule_activity", authority: "source_bound_derived", authoritative: false, reportable: false}` | `trust: "source_bound_derived"` on the node |
 | current, match decision | `{data_class: "schedule_series_current" \| "schedule_match_decision", authority: "server_computed", authoritative: false, reportable: false}` | `("schedule_series", "series-match-v1" \| "currency-v1", "server_computed")` |
 
 Classification `PRIVATE_LOCAL`. Disclosure `scope`/`source_references`: the enrollment and source
@@ -3658,16 +3659,20 @@ content, no name, no client-authored text, no identifier of another record, no p
 | all 6 | `data_class`, `authority`, `authoritative` (bool), `reportable` (always `false`), `trust` (`TrustLevel` value) |
 | `schedule_publication` | + `data_date` (ISO date), `status` (effective `SchedulePublicationStatus`), `series_kind` (`standard` \| `intake`) |
 | `schedule_activity` | + `published_activity_id` (the exact published Activity ID, the activity's identity key) |
-| `schedule_baseline` | + `status` (`BaselineStatus` as of the read, item 6), `label` (`BL-<n>` or `null`), `effective_type` (`contract` \| `approved_update` or `null` unless approved) |
+| `schedule_baseline` | + `status` (`BaselineStatus` as of N, item 6), `label` (`BL-<n>` or `null`), `effective_type` (`contract` \| `approved_update` or `null`), both the `BaselineView` fields as of N (`null` only while never approved) |
 | `scenario` | + `origin_kind` (`publication` \| `version`) |
 | `scenario_version` | + `version_no`, `version_label` (`VersionLabel`) |
 | `scenario_output` | + `kind` (`OutputKind`), `iterations` |
 
 Label values: `schedule_publication` and `schedule_activity` → `data_class` = the family token,
 `authority: "source_bound_derived"`, `authoritative: false`, `trust: "source_bound_derived"`;
-`schedule_baseline` → `data_class: "schedule_baseline"`, `authority: "operator_approved"` when
-effective else `"proposed"` (also for rejected, withdrawn, revoked and ineligible), `authoritative`
-= effective, `trust: "model_proposed"`; `scenario`, `scenario_version` → `data_class:
+`schedule_baseline` → exactly the implemented plane read `_baseline_labels`
+(`src/my_pa/application/schedule_scenarios.py`; amended by R10-S02): `data_class:
+"schedule_baseline"`, `authority: "operator_approved"` iff the S6-1 `BaselineView.effective_type`
+as of N is not `null` (approved, ineligible or revoked), else `"proposed"` (proposed, rejected,
+withdrawn), `authoritative` = `BaselineView.effective` (status `approved`), `trust:
+"model_proposed"`; `effective_type` and `label` are the `BaselineView` fields as of N, so a
+revoked or ineligible Baseline keeps its type and `BL-<n>`; `scenario`, `scenario_version` → `data_class:
 "schedule_scenario"`, `authority: "client_authored"`; `scenario_output` → `data_class:
 "schedule_scenario_output"`, `authority: "client_asserted"`; these 3 `authoritative: false`,
 `trust: "model_proposed"`. `reportable` is `false` everywhere (OD-08). Labels sit **on the node**
@@ -3675,6 +3680,12 @@ effective else `"proposed"` (also for rejected, withdrawn, revoked and ineligibl
 Client ids: none is carried (no provenance on a node), so the I10-A D-9 remote withholding has
 nothing to withhold here; provenance stays on the plane reads. Names are not carried: a client
 reads them with the family's own read grant (`LINEAGE_FAMILY_READS`).
+**Serialization (R10-S03):** `schedule` is a union of 6 strict per-family models
+(`StrictModel`, `extra="forbid"`, one per family, validated against the node's family); the base
+node dump keeps `exclude_none=True` but excludes `schedule`, and `to_canonical_dict` inserts
+`schedule` from its own dump with `exclude_none=False` (as `reached_from`/`reached_via` are
+inserted), so every key in the table is always present, `null` included (for example a proposed
+Baseline's `label: null`, `effective_type: null`).
 
 **2. Virtual edge endpoints.** New `NATIVE_VIRTUAL_EDGE_ENDPOINTS: Final[Mapping[NativeVirtualEdge,
 tuple[RecordFamily, RecordFamily]]]` in `src/my_pa/domain/lineage/vocabulary.py` (9 entries,
@@ -3708,18 +3719,28 @@ to.record_id)`.
 **5. Budgets and paging.** Each schedule edge is admitted through the same whole-query budget as
 a note edge (`budget.admit(edges=1, size=256)`, counted in `MAX_LINEAGE_EDGES` and the 400-edge
 answer cap); when the budget refuses, emission stops and the answer carries the existing
-budget-exhausted completeness qualifier. A node's `schedule` object is admitted with its node
-(`size` + 192, within `MAX_LINEAGE_BYTES`); it never adds a node. In `records.lineage.related` the
-edges join the bounded item sequence after the note edges and page with it exactly as note edges
-do.
+budget-exhausted completeness qualifier. A node's `schedule` object is admitted with its node, its
+size measured as `_size(<the schedule document>)` (`src/my_pa/application/record_lineage.py`),
+within `MAX_LINEAGE_BYTES` (R10-S06: a `published_activity_id` may be 256 characters); it never
+adds a node. **Paging key (R10-S01):** `_item_key` keys a schedule virtual edge
+`v:<edge_type>:<from.family>:<from.record_id>:<to.family>:<to.record_id>` (about 120 characters,
+within the cursor bound), because a schedule edge's source is not unique (a version has
+`scenario_version_of` and `scenario_version_parent`; a Baseline-seeded Scenario has both
+`scenario_based_on_*`; a Baseline may designate and supersede); the `meeting_note_version_of` key
+stays `v:<from.record_id>`, so every existing cursor is byte-identical. In `records.lineage` and
+`records.lineage.related` the edges join the bounded item sequence after the note edges and page
+with it under that key.
 
-**6. As of.** Plane rows are append-only: a schedule node exists in an answer read at native cut
-`N` iff its row's `created_at ≤ N` (rows created later are absent, as any native record). A
+**6. As of (amended by R10-S04).** Schedule nodes are cut exactly like the other native families:
+no creation-time filter applies to a node (a schedule node is reached only through a typed link
+asserted while its endpoint was linkable; `schedule_publications` has no `created_at`). A
 Baseline's `status`, `label`, `effective_type` and its `schedule_baseline_supersedes` edge are
 derived by S6-1 `baseline_status` over the Project's events with `recorded_at ≤ N` (section 12.1
-"as recorded"); a `scenario_based_on_baseline` edge is a fixed column. A publication's `status`
-is its effective status at read time (terminal statuses never change; residual S6-3-U09 for a
-non-terminal one).
+"as recorded"), with `eligible_publication_ids` as of N: a publication counts as eligible iff its
+status is `complete`/`partial` **and** its `completed_at ≤ N`, so a fixed `known_at` reproduces
+the same answer and `related_sha256`; a `scenario_based_on_baseline` edge is a fixed column. A
+publication node's `status` is its effective status at read time, equal to its status at N
+(S6-3-U09).
 
 **7. `related_sha256`.** The digest covers the new key and edges (it is computed over the whole
 bounded result; the prefix stays `lineage-related-v1`). Consequence (I10-B B-06 extended): a
@@ -3730,16 +3751,23 @@ related claim stored before this change whose result holds a schedule node or ed
 (which no pre-S6-3 client has seen) and 8 new `edge_type` values on edges between them. Every
 existing node, edge, key and order is byte-identical, so an old JSON client and the remote/ChatLLM
 façade are unaffected. The web decoders are closed, so they move in lockstep (I10-C):
-`web/src/lib/api/decode/capabilities/records.lineage.ts` (and the related decoder) accepts
-`schedule` with exactly the 15.11.3a keys per family and the 9-entry endpoint table; the UI label
-maps gain the 8 edge types; `web/src/lib/api/decode/fixtures/python/success.json` and the decoder
+`web/src/lib/api/decode/capabilities/records.lineage.ts` (the only closed lineage decoder; no
+web decoder exists for `records.lineage.related`) accepts `schedule` with exactly the 15.11.3a keys
+per family and the 9-entry endpoint table; the UI label maps gain the 8 edge types and the label
+enumeration gains `source_bound_derived`, `schedule_publication` and `schedule_activity`
+(R10-S06); `web/src/lib/api/decode/fixtures/python/success.json` and the decoder
 tests are regenerated; vitest and `tsc` run.
 
 **9. Tests (I10-C).** Database tier (`tests/database/test_schedule_scenario_lineage.py`):
 `test_schedule_nodes_carry_exactly_their_summary[<family>]` (6), `test_schedule_virtual_edges_are_emitted_between_reached_nodes[<edge>]` (8),
 `test_schedule_virtual_edge_to_an_unreached_node_is_not_emitted`,
+`test_schedule_virtual_edges_page_without_repeat` (page size 1 over a version with 2 edges and a
+Baseline-seeded Scenario: every item exactly once), the `[schedule_baseline]` summary case
+parametrized over `proposed`, `approved`, `ineligible`, `rejected`, `withdrawn`, `revoked`
+(asserting the null keys of a proposal are present),
 `test_schedule_virtual_edges_are_never_traversed`,
-`test_schedule_baseline_node_is_as_of_the_native_cut`,
+`test_schedule_baseline_node_is_as_of_the_native_cut` (including an import-time approval whose
+publication completes after N: `ineligible` at N),
 `test_withheld_schedule_family_emits_no_node_or_edge`,
 `test_related_sha256_covers_schedule_summaries_and_edges`; FAST
 (`tests/unit/test_schedule_lineage_vocabulary.py`, contract model tests):
@@ -3747,8 +3775,8 @@ tests are regenerated; vitest and `tsc` run.
 `test_virtual_path_step_admits_only_the_note_edge`; web: the decoder tests above.
 
 **10. Ownership.** I10-C (15.15) owns `src/my_pa/contracts/v1/record_lineage.py`, the read paths of
-`src/my_pa/application/record_lineage.py` (node rendering, `_virtual_edges`, related digest
-inputs), the summary columns read in `src/my_pa/infrastructure/persistence/record_lineage.py`
+`src/my_pa/application/record_lineage.py` (node rendering, `_virtual_edges`, `_item_key`, related
+digest inputs), the summary columns read in `src/my_pa/infrastructure/persistence/record_lineage.py`
 (read-only, Principal-partitioned, plain `SELECT` per S6-3-D21), the endpoint table in
 `src/my_pa/domain/lineage/vocabulary.py`, the web decoders, labels and fixture, and these tests.
 
@@ -3840,7 +3868,10 @@ but a `client_identified` link holds an Issue's close until confirmed; never pre
 CPM and output data are non-authoritative and never reportable (`reportable: false`); a baseline
 proposal is not a baseline; only the operator approves, rejects, revokes or sets governing;
 revocation is final for its publication; use `schedule_series.current` (not `latest_update`)
-for the current standard update (S6-U11); a request is limited to 762,288 bytes in all
+for the current standard update (S6-U11); a lineage or related read never expands through a schedule
+virtual edge (they are emitted only between records already in the answer), unlike
+`meeting_note_version_of`, which is traversed and emitted when either endpoint is reached — reach
+a Scenario's versions or a Baseline's publication through the plane reads (S6-3-U08, R10 ruling); a request is limited to 762,288 bytes in all
 (`MAX_REQUEST_BYTES`), so a change set is split across versions and an output document must stay
 under about 740 KiB (a criticality or Monte Carlo output of a network above roughly 10,000
 activities may not fit; S6-3-U01). The `schedule_scenario_versions.create` and
@@ -3907,7 +3938,7 @@ persistence (`test_only_the_composition_root_imports_the_plane`).
 |---|---|
 | **I10-A** capabilities | `operation.py` (26 names, purposes map, `_OPERATOR_ONLY`, `_WRITE_CAPABILITIES`, `_ADDITIVE_WRITE_CAPABILITIES`), `purpose.py` (3), `decision.py` (`_SCOPELESS`), `authorization.py` (`_requested_scope`), `errors.py` (37 `SafeDetail`), `commands.py` (26 commands; import fields 15.9), `normalization.py` (`_BUILDERS`), `service.py` (switch, composition parameters, 26 thin handlers, the `scenario_plane_effective` hand-off), `src/my_pa/application/schedules.py` (the import gates and `operator_channel` hand-off of 15.9; the 15.6.2 S5 read fields and the intake delta refusal; R10-F01), `src/my_pa/domain/schedule/compare.py` only if the intake refusal cannot live in `schedules.py`, the `MAX_REQUEST_BYTES` docstring sentence of `src/my_pa/adapters/normalization.py` (R10-F09), NEW `src/my_pa/application/schedule_scenarios.py`, `src/my_pa/domain/schedule/cursor.py` (6 orders), `src/my_pa/domain/schedule/plane.py` (`OPERATOR_PROPOSAL_BUCKET`), `settings.py`, `gateway.py`, `apps/worker.py`, `ports.py` + `schedule_scenarios.py` + `schedule.py` + `schedule_cpm_lease.py` (15.14), `src/my_pa/infrastructure/database/schedule_scenarios_predeploy.py` (Q10, Q11), revision B, `src/my_pa/adapters/mcp/remote.py` (`_WRITE_PURPOSES`), `src/my_pa/adapters/remote_request.py` (keys), `src/my_pa/domain/identity/chatllm_capability_policy.py` with a **v12 holding classification** — the 26 as `CONTROL_PLANE_EXCLUDED` with rationale "Schedule Scenarios S6-3 pending exposure (I10-C)" and no version bump, so I10-A's head is green with ChatLLM unchanged (the Reports WP03 → `OPERATOR_DECISION_REQUIRED` holding precedent, but excluded so no planner change) — `src/my_pa/adapters/mcp/chatllm_gateway.py` (`_FEATURE_BY_FAMILY`), the web fixture, the tests of section 15.16 for these, every lockstep pin of 15.2 except ChatLLM |
 | **I10-B** lineage | `vocabulary.py` (public enums, maps, generation 2, `CONTESTABLE_RELATIONS`, `NativeVirtualEdge`), `lineage_endpoints.py`, `lineage_visibility.py`, `src/my_pa/application/record_lineage.py` (summaries, virtual edges), `src/my_pa/infrastructure/persistence/record_lineage.py` (`_NATIVE`, `share_endpoint`), `ports.py` (`LineageEndpoint` fields), `source_manifest.py` (pin), `service.py` (withheld families wiring only), the lineage and OD-08 tests, the partition-guard registry if its accounting moves, lineage lockstep pins |
-| **I10-C** exposure | the section 15.11.3a lineage read shapes (S6-3-B01): `src/my_pa/contracts/v1/record_lineage.py`, the read paths of `src/my_pa/application/record_lineage.py`, the summary reads of `src/my_pa/infrastructure/persistence/record_lineage.py`, `NATIVE_VIRTUAL_EDGE_ENDPOINTS` in `src/my_pa/domain/lineage/vocabulary.py`, `web/src/lib/api/decode/capabilities/records.lineage.ts` (and the related decoder, label maps, fixture), and the 15.11.3a tests; `chatllm_capability_policy.py` (v13, `SCHEDULE_SCENARIOS`, the 22 `DATA_CONDITIONAL`, the 4 excluded with their final rationale), `chatllm_data_profile.py` (`schedule_scenarios` flag, prerequisite), `apps/cli/remote_mcp.py` (`_planes_from_settings`), the ChatLLM/remote/façade tests and pins, the v12 → v13 sweep (R10-F03): every live `--profile-version chatllm-data-v12` command moved to v13, keeping v12 as history, in `ops/runbooks/managed-knowledge-context.md`, `ops/runbooks/mcp-and-cli-operations.md`, `ops/runbooks/remote-mcp-cloudflare.md`, `ops/runbooks/managed-document-operations.md`, and the current-version statements in `ops/runbooks/gateway-operations.md`, `docs/operations/mcv-limitations.md`, `docs/operations/record-lineage-client-guidance.md`, `docs/decisions/ADR-017-schedule-scenarios-and-baselines.md` and `docs/plans/relationship-intelligence-implementation-plan.md`, with `_CURRENT` in `tests/contract/test_lineage_client_exposure_runbook.py` → v13 and the sentence "v13 with `MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires exactly the v12 set, so a pending Reports commissioning uses v13 after this build" in each runbook that carries a profile command, `docs/operations/record-lineage-client-guidance.md`, `ops/runbooks/cpm-workbench.md` section 9, `docs/decisions/ADR-017-schedule-scenarios-and-baselines.md` and ADR-015 decision 17 status notes, this contract's executed-results subsection, `docs/architecture/cpm-workbench.md`, the index rows, the doc and plan pins, `tests/ci_shard_weights.json` |
+| **I10-C** exposure | the section 15.11.3a lineage read shapes (S6-3-B01): `src/my_pa/contracts/v1/record_lineage.py`, the read paths of `src/my_pa/application/record_lineage.py`, the summary reads of `src/my_pa/infrastructure/persistence/record_lineage.py`, `NATIVE_VIRTUAL_EDGE_ENDPOINTS` in `src/my_pa/domain/lineage/vocabulary.py`, `web/src/lib/api/decode/capabilities/records.lineage.ts` (with the label maps and fixture; no related-read web decoder exists), and the 15.11.3a tests; `chatllm_capability_policy.py` (v13, `SCHEDULE_SCENARIOS`, the 22 `DATA_CONDITIONAL`, the 4 excluded with their final rationale), `chatllm_data_profile.py` (`schedule_scenarios` flag, prerequisite), `apps/cli/remote_mcp.py` (`_planes_from_settings`), the ChatLLM/remote/façade tests and pins, the v12 → v13 sweep (R10-F03): every live `--profile-version chatllm-data-v12` command moved to v13, keeping v12 as history, in `ops/runbooks/managed-knowledge-context.md`, `ops/runbooks/mcp-and-cli-operations.md`, `ops/runbooks/remote-mcp-cloudflare.md`, `ops/runbooks/managed-document-operations.md`, and the current-version statements in `ops/runbooks/gateway-operations.md`, `docs/operations/mcv-limitations.md`, `docs/operations/record-lineage-client-guidance.md`, `docs/decisions/ADR-017-schedule-scenarios-and-baselines.md` and `docs/plans/relationship-intelligence-implementation-plan.md`, with `_CURRENT` in `tests/contract/test_lineage_client_exposure_runbook.py` → v13 and the sentence "v13 with `MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires exactly the v12 set, so a pending Reports commissioning uses v13 after this build" in each runbook that carries a profile command, `docs/operations/record-lineage-client-guidance.md`, `ops/runbooks/cpm-workbench.md` section 9, `docs/decisions/ADR-017-schedule-scenarios-and-baselines.md` and ADR-015 decision 17 status notes, this contract's executed-results subsection, `docs/architecture/cpm-workbench.md`, the index rows, the doc and plan pins, `tests/ci_shard_weights.json` |
 
 Every package runs FAST, the full `tests/architecture` directory (the memory-row guard alone),
 the database tiers it touches by marker (`database`, `migration_edge`,
@@ -4008,9 +4039,11 @@ head admits the lineage families; I10-C's head is the whole slice.
 | P3-50 | a schedule virtual edge is followed by the traversal | `test_schedule_virtual_edges_are_never_traversed` |
 | P3-51 | a summary carries one extra key (for example the Scenario name) | `test_schedule_nodes_carry_exactly_their_summary[scenario]` |
 | P3-52 | baseline status read from the whole chain instead of `recorded_at ≤ N` | `test_schedule_baseline_node_is_as_of_the_native_cut` |
-| P3-53 | the withheld-family filter skipped for virtual edges | `test_withheld_schedule_family_emits_no_node_or_edge` |
-| P3-54 | `related_digest` omits the schedule edges | `test_related_sha256_covers_schedule_summaries_and_edges` |
+| P3-53 | the service passes no `withheld_families` to the lineage reads (R10-S05; layered on I10-B's own withheld-family prove-red, declared in advance) | `test_withheld_schedule_family_emits_no_node_or_edge` |
+| P3-54 | the digest input filters the schedule edges out (`related_digest` itself is generic) | `test_related_sha256_covers_schedule_summaries_and_edges` |
 | P3-55 | `VirtualEdgeView` admits a wrong endpoint pair; a virtual path step admits a schedule edge type (2 runs) | `test_virtual_edge_endpoint_table_is_exact`; `test_virtual_path_step_admits_only_the_note_edge` |
+| P3-56 | the schedule edge key left as `v:<from.record_id>` (R10-S01) | `test_schedule_virtual_edges_page_without_repeat` |
+| P3-57 | the node derives `authority` from `effective` instead of `effective_type` (R10-S02) | `test_schedule_nodes_carry_exactly_their_summary[schedule_baseline-revoked]` (and `[ineligible]`) |
 | P3-42 | withdraw passes `None` for a client channel (bucket taken from anything but `PlaneProvenance`) (R10-F06) | `test_operator_may_propose_and_only_the_operator_withdraws_it[client_withdraws_other_bucket]` and `[local_unattested]` |
 | P3-43 | the import plane gate placed before E-10/E-12 (R10-F01) | `test_baseline_import_refused_while_plane_off` (the remote case answers `invalid_request`) |
 | P3-44 | `share_endpoint` takes `FOR SHARE` on the `schedule_activity` family (a table without `UPDATE` under the test role; R10-F12, R10-N04) | `test_share_endpoint_needs_only_select_on_the_schedule_tables[schedule_activity]` (`insufficient_privilege`, SQLSTATE `42501`, under the role holding exactly P-check ∪ Q8); a mutation on the publication family would stay green (the role holds `UPDATE` there) and is not a valid prove-red |
@@ -4113,9 +4146,9 @@ commissioning simply uses v13 after this build (R10-F03). The 22:
 | S6-3-U04 | a refused client write is recorded in a separate transaction; a crash between the 2 loses one count (soft bound) | accepted (R9-F13) |
 | S6-3-U05 | an operator proposal can fill the 50-per-Project cap and block client proposals | operator |
 | S6-3-U06 | a CPM compute refused only by the step-5 re-check (a race with a concurrent write of the same bucket after the step-1 pre-check) is computed but never stored, so it is not counted in `cpm_units_since` (R10-F02) | accepted: bounded by the lease and the race window |
-| S6-3-U08 | schedule virtual edges are emitted between reached nodes only and never traversed (15.11.3a item 3); a client reaches a Scenario's versions or a Baseline's publication by the plane reads, not by lineage expansion — proposed deferral for R10 to rule | later slice |
-| S6-3-U09 | a schedule publication node's `status` is read at read time, not as of the native cut (terminal statuses never change; only a non-terminal, never-linkable publication reached through another path could differ) | accepted |
-| S6-3-U10 | `related_sha256` now covers schedule summaries and edges; a claim stored before I10-C over such a result reads `changed_since_read` (none exists: nothing of S6-3 is deployed) | accepted |
+| S6-3-U08 | schedule virtual edges are emitted between reached nodes only and never traversed (15.11.3a item 3); a client reaches a Scenario's versions or a Baseline's publication by the plane reads, not by lineage expansion — **accepted by R10 re-review 3** on condition that the 15.12.5 guidance states the difference from the note edge (done) | later slice |
+| S6-3-U09 | a schedule publication node's `status` is read at read time, not as of the native cut; it equals the status at N for every reachable publication, because a publication becomes a node only through a typed link admitted while it was terminal, and terminal statuses never change (no other path exists: U08 forbids traversal) — reason corrected by R10 re-review 3 | accepted (R10 re-review 3) |
+| S6-3-U10 | `related_sha256` now covers schedule summaries and edges; a claim stored before I10-C over such a result reads `changed_since_read` (none exists: nothing of S6-3 is deployed) | accepted (R10 re-review 3) |
 | S6-3-U07 | heavy attested-operator CPM use counts toward the Principal's hourly units and can exhaust client headroom (R10-F04) | operator's own choice |
 
 #### 15.18.2a I10-B divergences (as reported by I10-B at `bb6bbe8d`; not ruled here)
@@ -4141,7 +4174,7 @@ the R10 re-review:
 1. (Answered by R10 re-review 1: D21 accepted.) S6-3-D21 removes `FOR SHARE` for the 6 schedule families instead of requiring `UPDATE` on
    them (R10-F12's stop rule). Is the immutability argument of 15.11.2 accepted, or should I10-B
    keep `FOR SHARE` and stop if the runtime role lacks `UPDATE`?
-2. S6-3-U08 (15.11.3a item 3): is emitting schedule virtual edges only between nodes already
+2. (Answered by R10 re-review 3: U08 accepted, with the guidance condition.) S6-3-U08 (15.11.3a item 3): is emitting schedule virtual edges only between nodes already
    reached, never traversing them, acceptable for S6-3, or must lineage expansion follow them?
 
 ### 15.19 Executed results (S6-3)
@@ -4221,3 +4254,16 @@ Design review R10 (PASS_WITH_REQUIRED_CHANGES at `de81d3d8`); Orchestrator dispo
 | Item | Fix (section) |
 |---|---|
 | S6-3-B01 (I10-B stop) | section 15.11.3a: the `schedule` node key and its exact per-family keys and labels; the 9-entry endpoint table; emission between reached nodes only, never traversed; order, budgets, paging, as-of, `related_sha256` coverage, additive compatibility and web lockstep; tests and P3-48–P3-55; ownership to I10-C (15.15); residuals S6-3-U08 (deferral of traversal, for the reviewer), U09, U10; I10-B divergences B-02–B-08 recorded unruled (15.18.2a) |
+
+**R10 re-review 3 (PASS_WITH_REQUIRED_CHANGES at `d61a7290`) → fixes (revision R10-4).**
+
+| Finding | Fix (section) |
+|---|---|
+| R10-S01 | schedule virtual-edge paging key `v:<edge_type>:<from.family>:<from.record_id>:<to.family>:<to.record_id>` in `_item_key` (note-edge key unchanged); `test_schedule_virtual_edges_page_without_repeat`; P3-56; `_item_key` in the ownership (15.11.3a items 5, 9, 10) |
+| R10-S02 | Baseline node labels mirror `_baseline_labels` exactly (`authority` by `effective_type`, `authoritative` = effective; `effective_type` and `label` as of N); summary test over all 6 statuses; P3-57 (15.11.3a items 1, 9) |
+| R10-S03 | `schedule` is a union of strict per-family models, inserted from its own `exclude_none=False` dump; null keys asserted (15.11.3a item 1) |
+| R10-S04 | no node creation-time filter; eligibility as of N = `complete`/`partial` with `completed_at ≤ N`; as-of test case added (15.11.3a items 6, 9) |
+| R10-S05 | P3-53 restated as "the service passes no `withheld_families`", declared layered on I10-B (15.16.3) |
+| R10-S06 | node-only label row (`source_bound_derived`, `schedule_publication`, `schedule_activity`) in 15.6.3 and the web label enumeration; measured `_size` instead of + 192 (15.6.3, 15.11.3a items 5, 8) |
+| R10-S07 | "the related decoder" dropped: no related-read web decoder exists (15.11.3a item 8, 15.15) |
+| Rulings | U08 accepted with the guidance condition (15.12.5 states it); U09 accepted, reason corrected; U10 accepted; P3-54 mutation clarified (15.12.5, 15.16.3, 15.18.2) |

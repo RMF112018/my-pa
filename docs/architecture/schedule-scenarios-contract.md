@@ -4225,6 +4225,36 @@ edges, whose public shapes (`LineageNodeView`, `VirtualEdgeView`, `LineagePathEd
 emitted and paged as bare `{family, record_id}` nodes. Commands, counts and prove-red outcomes
 are in the I10-B handoff report.
 
+**Package I10-C (exposure; same branch, 2026-11-11, not merged, migrated, granted or deployed).**
+ChatLLM is `chatllm-data-v13`: policy 281, `DATA_REQUIRED` 85, `DATA_CONDITIONAL` 159 (the 22
+client-usable names on the new `SCHEDULE_SCENARIOS` prerequisite, desired iff `schedule and
+schedule_scenarios`), `CONTROL_PLANE_EXCLUDED` 33 (the 4 operator decisions with
+`_SCHEDULE_BASELINE_APPROVAL_EXCLUSION`), `COMPATIBILITY_ONLY` 2, `OPERATOR_DECISION_REQUIRED`
+2. `test_v13_targets` **executed** the planner: full 175, default 109, full + schedule 181, full
++ schedule + scenarios 203, full + lineage + program + schedule 215 (+ scenarios 237), default +
+lineage + program + schedule 147 (+ scenarios 169), the scenario switch alone composing nothing,
+1,024 compositions. A client provisioned at v10, v11 or v12 stays healthy while the plane is off;
+with it on `profile-diff` adds exactly 22, 28, 33 or 39 names from the section 15.17 set, never
+a removal (`test_old_client_stays_healthy_while_the_plane_is_off`); no MCP database profile
+ceiling or opt-in names a plane capability (DV-01). The section 15.11.3a read shapes are
+implemented: the strict per-family `schedule` node key (Baseline labels as of `N` exactly as
+`_baseline_labels`), `NATIVE_VIRTUAL_EDGE_ENDPOINTS`, emission of the 8 Schedule edges between
+nodes of an answer only and never traversed, the schedule edge item key and cursor position,
+and `related_sha256` over both. The web `records.lineage` decoder, its tests, the committed
+Python fixture (now carrying 3 Schedule nodes and a `scenario_version_of` edge) and the lineage
+table test move in lockstep. The compact facade end to end, the client guidance section (with
+the U08 sentence), runbook section 9 and the v12 → v13 sweep are in place. Local tiers at the
+package head (scratch Homebrew PostgreSQL 15.15, `initdb --auth=trust`, `PGTZ=UTC`): FAST
+45,837 passed, 138 skipped (the memory-row guard, 115, run alone in 792 s); database tier
+(`(database_clone or database_transactional)` minus the recovery, e2e and migration markers)
+4,983 passed, 15 skipped and the 2 `tests/contract/test_health_probe.py` failures that fail
+identically at `59f333d7` on this server (they require PostgreSQL 17); recovery 86 passed;
+`migration_empty_to_head` 22 passed; `migration_edge or migration` 2,178 passed; the frontend
+typecheck, lint, 5,004 vitest cases, the 1,171 contract cases and the build pass. Prove-red
+P3-30 to P3-34 and P3-48 to P3-58 each reddened its named test; P3-56 with the key alone
+reddens through the position validator (P3-58's guard, layered), and P3-51 and P3-57 are also
+held by the strict summary models; commands and outcomes are in the I10-C handoff report.
+
 ### 15.20 R10 findings → fixes (revision R10-1)
 
 Design review R10 (PASS_WITH_REQUIRED_CHANGES at `de81d3d8`); Orchestrator dispositions applied.

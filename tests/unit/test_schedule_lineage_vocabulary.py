@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Final, cast
 
 import pytest
+from pydantic import ValidationError
 
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.application.lineage_endpoints import (
@@ -21,8 +22,15 @@ from my_pa.application.lineage_endpoints import (
     require_relation_evidence,
     require_schedule_relation,
 )
+from my_pa.application.record_lineage import _lineage_position
 from my_pa.contracts.ports import IssueRepository, LineageEndpoint
-from my_pa.domain.common.identifiers import IdKind
+from my_pa.contracts.v1.record_lineage import (
+    LineageNodeView,
+    LineagePathEdgeView,
+    ScheduleBaselineNodeSummary,
+    VirtualEdgeView,
+)
+from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.lineage import vocabulary as lineage
 from my_pa.domain.lineage.cursor import scope_digest
 from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
@@ -251,3 +259,216 @@ def test_concerns_needs_no_evidence_and_refuses_an_unadmitted_pair() -> None:
     with pytest.raises(InvalidRequestError) as refused:
         relation_kind(RelationType.CONCERNS, activity, scenario)
     assert refused.value.safe_details == (SafeDetail.RELATION_TYPE,)
+
+
+# ---- read shapes (section 15.11.3a; package I10-C) ----------------------------------------
+
+#: Section 15.11.3a item 2: the 9 endpoint pairs, exact.
+_ENDPOINTS: Final = {
+    "meeting_note_version_of": ("meeting_note_version", "meeting"),
+    "scenario_version_of": ("scenario_version", "scenario"),
+    "scenario_version_parent": ("scenario_version", "scenario_version"),
+    "scenario_based_on_publication": ("scenario", "schedule_publication"),
+    "scenario_based_on_baseline": ("scenario", "schedule_baseline"),
+    "scenario_forked_from_version": ("scenario", "scenario_version"),
+    "scenario_output_of": ("scenario_output", "scenario_version"),
+    "schedule_baseline_designates": ("schedule_baseline", "schedule_publication"),
+    "schedule_baseline_supersedes": ("schedule_baseline", "schedule_baseline"),
+}
+
+
+def _identifier(family: str) -> str:
+    """A synthetic, well-formed identifier of `family`."""
+    kind = lineage.RECORD_FAMILY_ID_KINDS[RecordFamily(family)]
+    return validate_identifier(f"{kind.value}_s63fast0001", kind)
+
+
+def _ref_document(family: str) -> dict[str, str]:
+    return {"family": family, "record_id": _identifier(family)}
+
+
+def test_virtual_edge_endpoint_table_is_exact() -> None:
+    """Item 2 (P3-55 run 1): the table, and `VirtualEdgeView` admits exactly its pairs."""
+    assert {
+        edge.value: (pair[0].value, pair[1].value)
+        for edge, pair in lineage.NATIVE_VIRTUAL_EDGE_ENDPOINTS.items()
+    } == _ENDPOINTS
+    families = [family.value for family in RecordFamily]
+    for edge, pair in _ENDPOINTS.items():
+        for source in families:
+            for target in families:
+                document = {"edge_type": edge, "from_ref": _ref_document(source), "to_ref": _ref_document(target)}
+                if (source, target) == pair:
+                    view = VirtualEdgeView.model_validate(document)
+                    assert view.to_canonical_dict()["from"]["family"] == source
+                else:
+                    with pytest.raises(ValidationError):
+                        VirtualEdgeView.model_validate(document)
+
+
+def test_virtual_path_step_admits_only_the_note_edge() -> None:
+    """Item 3 (P3-55 run 2): a Schedule edge is never a path step."""
+    for edge in lineage.NativeVirtualEdge:
+        document = {"edge": "virtual", "edge_type": edge.value}
+        if edge is lineage.NativeVirtualEdge.MEETING_NOTE_VERSION_OF:
+            assert LineagePathEdgeView.model_validate(document).to_canonical_dict() == document
+        else:
+            with pytest.raises(ValidationError):
+                LineagePathEdgeView.model_validate(document)
+
+
+_SUMMARIES: Final[dict[str, dict[str, object]]] = {
+    "schedule_publication": {
+        "data_class": "schedule_publication",
+        "authority": "source_bound_derived",
+        "authoritative": False,
+        "reportable": False,
+        "trust": "source_bound_derived",
+        "data_date": "2026-05-04",
+        "status": "complete",
+        "series_kind": "standard",
+    },
+    "schedule_activity": {
+        "data_class": "schedule_activity",
+        "authority": "source_bound_derived",
+        "authoritative": False,
+        "reportable": False,
+        "trust": "source_bound_derived",
+        "published_activity_id": "A100",
+    },
+    "schedule_baseline": {
+        "data_class": "schedule_baseline",
+        "authority": "proposed",
+        "authoritative": False,
+        "reportable": False,
+        "trust": "model_proposed",
+        "status": "proposed",
+        "label": None,
+        "effective_type": None,
+    },
+    "scenario": {
+        "data_class": "schedule_scenario",
+        "authority": "client_authored",
+        "authoritative": False,
+        "reportable": False,
+        "trust": "model_proposed",
+        "origin_kind": "publication",
+    },
+    "scenario_version": {
+        "data_class": "schedule_scenario",
+        "authority": "client_authored",
+        "authoritative": False,
+        "reportable": False,
+        "trust": "model_proposed",
+        "version_no": 2,
+        "version_label": "what_if",
+    },
+    "scenario_output": {
+        "data_class": "schedule_scenario_output",
+        "authority": "client_asserted",
+        "authoritative": False,
+        "reportable": False,
+        "trust": "model_proposed",
+        "kind": "monte_carlo",
+        "iterations": 1000,
+    },
+}
+
+
+def _node(family: str, schedule: dict[str, object] | None) -> dict[str, object]:
+    document: dict[str, object] = {
+        "family": family,
+        "record_id": _identifier(family),
+        "depth": 0,
+    }
+    if family == "meeting_note_version":
+        document["meeting_id"] = _identifier("meeting")
+    if family == "situation":
+        document |= {"title": "Synthetic", "state": "open"}
+    if family == "capture_version":
+        document["availability"] = "available"
+    if schedule is not None:
+        document["schedule"] = schedule
+    return document
+
+
+@pytest.mark.parametrize("family", [family.value for family in RecordFamily])
+def test_node_schedule_key_is_present_iff_schedule_family(family: str) -> None:
+    """Item 1 (R10-S03): the key iff a Schedule family, its exact model, `null`s kept."""
+    summary = _SUMMARIES.get(family)
+    if summary is None:
+        node = LineageNodeView.model_validate(_node(family, None))
+        assert "schedule" not in node.to_canonical_dict()
+        with pytest.raises(ValidationError):
+            LineageNodeView.model_validate(_node(family, _SUMMARIES["scenario"]))
+        return
+    node = LineageNodeView.model_validate(_node(family, summary))
+    assert node.to_canonical_dict()["schedule"] == summary
+    # Missing, extra, a wrong label, or another family's summary are refused.
+    with pytest.raises(ValidationError):
+        LineageNodeView.model_validate(_node(family, None))
+    for broken in (
+        {**summary, "name": "Synthetic"},
+        {key: value for key, value in summary.items() if key != "trust"},
+        {**summary, "reportable": True},
+    ):
+        with pytest.raises(ValidationError):
+            LineageNodeView.model_validate(_node(family, broken))
+    for other, other_summary in _SUMMARIES.items():
+        if other != family and set(other_summary) != set(summary):
+            with pytest.raises(ValidationError):
+                LineageNodeView.model_validate(_node(family, other_summary))
+
+
+def test_a_baseline_summary_labels_by_its_effective_type() -> None:
+    """Item 1 (R10-S02): `operator_approved` iff an effective type; authoritative iff approved."""
+    revoked = {
+        **_SUMMARIES["schedule_baseline"],
+        "authority": "operator_approved",
+        "status": "revoked",
+        "label": "BL-1",
+        "effective_type": "contract",
+    }
+    assert ScheduleBaselineNodeSummary.model_validate(revoked).authoritative is False
+    for broken in (
+        {**revoked, "authority": "proposed"},
+        {**revoked, "authoritative": True},
+        {**_SUMMARIES["schedule_baseline"], "authority": "operator_approved"},
+    ):
+        with pytest.raises(ValidationError):
+            ScheduleBaselineNodeSummary.model_validate(broken)
+
+
+@pytest.mark.parametrize(
+    ("position", "admitted"),
+    [
+        ("v:" + _identifier("meeting_note_version"), True),
+        (
+            "v:scenario_version_of:scenario_version:"
+            + _identifier("scenario_version")
+            + ":scenario:"
+            + _identifier("scenario"),
+            True,
+        ),
+        # A mismatched family pair, the note edge in the long form, a bad id.
+        (
+            "v:scenario_version_of:scenario:"
+            + _identifier("scenario")
+            + ":scenario_version:"
+            + _identifier("scenario_version"),
+            False,
+        ),
+        (
+            "v:meeting_note_version_of:meeting_note_version:"
+            + _identifier("meeting_note_version")
+            + ":meeting:"
+            + _identifier("meeting"),
+            False,
+        ),
+        ("v:scenario_version_of:scenario_version:sscv_x:scenario:sscn_x", False),
+        ("v:scenario_version_of:scenario_version", False),
+    ],
+)
+def test_lineage_position_admits_the_schedule_edge_key(position: str, admitted: bool) -> None:
+    """Item 5 (R10-T01): the cursor position grammar, amended for Schedule edges."""
+    assert _lineage_position(position) is admitted

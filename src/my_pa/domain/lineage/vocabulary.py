@@ -687,6 +687,52 @@ SCHEDULE_RECORD_FAMILIES: Final[frozenset[RecordFamily]] = frozenset(
     }
 )
 
+#: Schedule Scenarios S6-3 (schedule scenarios contract section 15.11.3a item 2):
+#: each native virtual edge's `(from family, to family)`, exact. Read by the
+#: public `VirtualEdgeView` and by the lineage cursor's schedule edge position.
+NATIVE_VIRTUAL_EDGE_ENDPOINTS: Final[
+    MappingProxyType[NativeVirtualEdge, tuple[RecordFamily, RecordFamily]]
+] = MappingProxyType(
+    {
+        NativeVirtualEdge.MEETING_NOTE_VERSION_OF: (
+            RecordFamily.MEETING_NOTE_VERSION,
+            RecordFamily.MEETING,
+        ),
+        NativeVirtualEdge.SCENARIO_VERSION_OF: (
+            RecordFamily.SCENARIO_VERSION,
+            RecordFamily.SCENARIO,
+        ),
+        NativeVirtualEdge.SCENARIO_VERSION_PARENT: (
+            RecordFamily.SCENARIO_VERSION,
+            RecordFamily.SCENARIO_VERSION,
+        ),
+        NativeVirtualEdge.SCENARIO_BASED_ON_PUBLICATION: (
+            RecordFamily.SCENARIO,
+            RecordFamily.SCHEDULE_PUBLICATION,
+        ),
+        NativeVirtualEdge.SCENARIO_BASED_ON_BASELINE: (
+            RecordFamily.SCENARIO,
+            RecordFamily.SCHEDULE_BASELINE,
+        ),
+        NativeVirtualEdge.SCENARIO_FORKED_FROM_VERSION: (
+            RecordFamily.SCENARIO,
+            RecordFamily.SCENARIO_VERSION,
+        ),
+        NativeVirtualEdge.SCENARIO_OUTPUT_OF: (
+            RecordFamily.SCENARIO_OUTPUT,
+            RecordFamily.SCENARIO_VERSION,
+        ),
+        NativeVirtualEdge.SCHEDULE_BASELINE_DESIGNATES: (
+            RecordFamily.SCHEDULE_BASELINE,
+            RecordFamily.SCHEDULE_PUBLICATION,
+        ),
+        NativeVirtualEdge.SCHEDULE_BASELINE_SUPERSEDES: (
+            RecordFamily.SCHEDULE_BASELINE,
+            RecordFamily.SCHEDULE_BASELINE,
+        ),
+    }
+)
+
 #: The membership roles the closure gate evaluates (S2 section 3.3).
 MANDATORY_MEMBER_ROLES: Final[frozenset[MemberRole]] = frozenset(
     {MemberRole.WORK, MemberRole.CONSTRAINT}

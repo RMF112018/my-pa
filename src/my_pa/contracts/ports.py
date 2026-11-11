@@ -522,6 +522,7 @@ __all__ = [
     "LineageNoteVersionRef",
     "LineageReadTimeoutError",
     "LineageResolvedRecord",
+    "LineageScheduleFacts",
     "LineageSourceVersion",
     "LineageWriteRequestRecord",
     "LineageWriterBudget",
@@ -12006,6 +12007,43 @@ class LineageResolvedRecord:
         return self.meeting_id if self.meeting_id is not None else self.capture_id
 
 
+@dataclass(frozen=True, slots=True)
+class LineageScheduleFacts:
+    """The read-only facts of one Schedule-family lineage node (schedule scenarios
+    contract section 15.11.3a, items 1, 2 and 6).
+
+    The node summary (`data_date`, `publication_status`, `intake` for a
+    publication; `published_activity_id` for an activity; `baseline_status`,
+    `baseline_label`, `baseline_effective_type` for a Baseline as of the native
+    cut; `origin_kind` for a Scenario; `version_no`, `version_label` for a
+    version; `output_kind`, `iterations` for an output) and the far endpoints of
+    its native virtual edges (never serialized on the node). Values are the
+    stored tokens; the application renders and labels them.
+    """
+
+    ref: RecordRef
+    data_date: date | None = None
+    publication_status: str | None = None
+    intake: bool = False
+    published_activity_id: str | None = None
+    baseline_status: str | None = None
+    baseline_label: str | None = None
+    baseline_effective_type: str | None = None
+    baseline_publication_id: str | None = None
+    supersedes_baseline_id: str | None = None
+    origin_kind: str | None = None
+    origin_publication_id: str | None = None
+    origin_baseline_id: str | None = None
+    origin_version_id: str | None = None
+    scenario_id: str | None = None
+    version_no: int | None = None
+    version_label: str | None = None
+    parent_version_id: str | None = None
+    output_kind: str | None = None
+    iterations: int | None = None
+    output_version_id: str | None = None
+
+
 class RecordLineageRepository(ABC):
     """Record links, their revisions, evidence and heads, and the reverse read.
 
@@ -12175,6 +12213,24 @@ class RecordLineageRepository(ABC):
         self, principal_id: str, meeting_ids: Collection[str]
     ) -> Mapping[str, tuple[LineageNoteVersionRef, ...]]:
         """Each named Meeting's note versions, `version_number` ascending."""
+
+    def schedule_node_facts(
+        self,
+        principal_id: str,
+        refs: Collection[RecordRef],
+        native_cut_at: datetime | None,
+    ) -> Mapping[RecordRef, LineageScheduleFacts]:
+        """Each named owned Schedule-family record's node facts (section 15.11.3a).
+
+        Plain `SELECT`s, Principal-partitioned, no lock. A Baseline's status,
+        label, effective type and superseded Baseline are folded from its
+        Project's events recorded at or before `native_cut_at` (all of them
+        when `None`), with a publication eligible iff `complete`/`partial`, not
+        intake and completed at or before the cut. A source with no Schedule
+        family answers nothing (the default).
+        """
+        del principal_id, refs, native_cut_at
+        return {}
 
     # --- the knowledge clock (S3 contract sections 3.4, 4.2 and 6.2) -------------
 

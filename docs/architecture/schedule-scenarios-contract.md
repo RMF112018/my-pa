@@ -3727,7 +3727,14 @@ adds a node. **Paging key (R10-S01):** `_item_key` keys a schedule virtual edge
 within the cursor bound), because a schedule edge's source is not unique (a version has
 `scenario_version_of` and `scenario_version_parent`; a Baseline-seeded Scenario has both
 `scenario_based_on_*`; a Baseline may designate and supersede); the `meeting_note_version_of` key
-stays `v:<from.record_id>`, so every existing cursor is byte-identical. In `records.lineage` and
+stays `v:<from.record_id>`, so every existing cursor is byte-identical. **Position grammar
+(amendment of S3 section 5, R10-T01):** `_lineage_position` (`src/my_pa/application/record_lineage.py`)
+accepts after `v:` either `<note_version_id>` (validated as a meeting note version, unchanged) or
+`<edge_type>:<from.family>:<from.record_id>:<to.family>:<to.record_id>`, where `edge_type` is a
+schedule `NativeVirtualEdge` (never `meeting_note_version_of`), the 2 families equal
+`NATIVE_VIRTUAL_EDGE_ENDPOINTS[edge_type]`, and each id validates for its family
+(`RECORD_FAMILY_ID_KINDS`); anything else is `invalid_request(CURSOR)`.
+`test_schedule_virtual_edges_page_without_repeat` (a page-size-1 walk) decodes such a cursor. In `records.lineage` and
 `records.lineage.related` the edges join the bounded item sequence after the note edges and page
 with it under that key.
 
@@ -3775,7 +3782,7 @@ publication completes after N: `ineligible` at N),
 `test_virtual_path_step_admits_only_the_note_edge`; web: the decoder tests above.
 
 **10. Ownership.** I10-C (15.15) owns `src/my_pa/contracts/v1/record_lineage.py`, the read paths of
-`src/my_pa/application/record_lineage.py` (node rendering, `_virtual_edges`, `_item_key`, related
+`src/my_pa/application/record_lineage.py` (node rendering, `_virtual_edges`, `_item_key`, `_lineage_position`, related
 digest inputs), the summary columns read in `src/my_pa/infrastructure/persistence/record_lineage.py`
 (read-only, Principal-partitioned, plain `SELECT` per S6-3-D21), the endpoint table in
 `src/my_pa/domain/lineage/vocabulary.py`, the web decoders, labels and fixture, and these tests.
@@ -4044,6 +4051,7 @@ head admits the lineage families; I10-C's head is the whole slice.
 | P3-55 | `VirtualEdgeView` admits a wrong endpoint pair; a virtual path step admits a schedule edge type (2 runs) | `test_virtual_edge_endpoint_table_is_exact`; `test_virtual_path_step_admits_only_the_note_edge` |
 | P3-56 | the schedule edge key left as `v:<from.record_id>` (R10-S01) | `test_schedule_virtual_edges_page_without_repeat` |
 | P3-57 | the node derives `authority` from `effective` instead of `effective_type` (R10-S02) | `test_schedule_nodes_carry_exactly_their_summary[schedule_baseline-revoked]` (and `[ineligible]`) |
+| P3-58 | `_lineage_position` left unchanged (it validates everything after `v:` as a note version id) (R10-T01) | `test_schedule_virtual_edges_page_without_repeat` (the next page is refused `invalid_request(CURSOR)`) |
 | P3-42 | withdraw passes `None` for a client channel (bucket taken from anything but `PlaneProvenance`) (R10-F06) | `test_operator_may_propose_and_only_the_operator_withdraws_it[client_withdraws_other_bucket]` and `[local_unattested]` |
 | P3-43 | the import plane gate placed before E-10/E-12 (R10-F01) | `test_baseline_import_refused_while_plane_off` (the remote case answers `invalid_request`) |
 | P3-44 | `share_endpoint` takes `FOR SHARE` on the `schedule_activity` family (a table without `UPDATE` under the test role; R10-F12, R10-N04) | `test_share_endpoint_needs_only_select_on_the_schedule_tables[schedule_activity]` (`insufficient_privilege`, SQLSTATE `42501`, under the role holding exactly P-check ∪ Q8); a mutation on the publication family would stay green (the role holds `UPDATE` there) and is not a valid prove-red |
@@ -4267,3 +4275,9 @@ Design review R10 (PASS_WITH_REQUIRED_CHANGES at `de81d3d8`); Orchestrator dispo
 | R10-S06 | node-only label row (`source_bound_derived`, `schedule_publication`, `schedule_activity`) in 15.6.3 and the web label enumeration; measured `_size` instead of + 192 (15.6.3, 15.11.3a items 5, 8) |
 | R10-S07 | "the related decoder" dropped: no related-read web decoder exists (15.11.3a item 8, 15.15) |
 | Rulings | U08 accepted with the guidance condition (15.12.5 states it); U09 accepted, reason corrected; U10 accepted; P3-54 mutation clarified (15.12.5, 15.16.3, 15.18.2) |
+
+**R10 re-review 4 (at `5fcebff5`) → fix (revision R10-5).**
+
+| Finding | Fix (section) |
+|---|---|
+| R10-T01 | `_lineage_position` accepts the schedule edge key form (schedule edge type, families from `NATIVE_VIRTUAL_EDGE_ENDPOINTS`, ids validated per family) besides `v:<note_version_id>`, amending S3 section 5; owned by I10-C; the page-size-1 test decodes it; P3-58 (15.11.3a items 5, 10; 15.16.3) |

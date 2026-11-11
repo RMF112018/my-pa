@@ -79,7 +79,8 @@ def reachless_role(db_engine: Engine) -> Iterator[str]:
 
 def test_predeploy_checks_pass_on_a_clean_scratch_database(db_engine: Engine) -> None:
     before = _run(db_engine, PredeployPhase.BEFORE)
-    assert list(before) == ["Q0", "Q1", "Q2", "Q3", "Q4", "Q5"]
+    # Schedule Scenarios S6-3: Q10 sizes `audit_events` for revision B (reported).
+    assert list(before) == ["Q0", "Q1", "Q2", "Q3", "Q4", "Q5", "Q10"]
     for check_id in ("Q0", "Q1", "Q2", "Q4"):
         assert before[check_id].status is CheckStatus.HOLDS, before[check_id]
     assert before["Q2"].detail == "retired_role_rows=false"
@@ -88,10 +89,14 @@ def test_predeploy_checks_pass_on_a_clean_scratch_database(db_engine: Engine) ->
     assert "reach=owner" in before["Q4"].detail and "owner=" in before["Q4"].detail
     digest = before["Q5"].detail.removeprefix("sha256=")
     assert before["Q5"].status is CheckStatus.REPORT and len(digest) == 64
+    assert before["Q10"].status is CheckStatus.REPORT
+    assert before["Q10"].detail.startswith("audit_events:rows~")
     after = _run(db_engine, PredeployPhase.AFTER, digest)
-    assert list(after) == ["Q0", "Q5", "Q6", "Q7", "Q8", "Q9"]
+    # Q11: revision B's restated audit CHECKs name the 26 plane names and 3 purposes.
+    assert list(after) == ["Q0", "Q5", "Q6", "Q7", "Q8", "Q9", "Q11"]
     assert all(check.status is CheckStatus.HOLDS for check in after.values()), after
     assert after["Q9"].detail == "tables=11,functions=15,trigger=1"
+    assert after["Q11"].detail == "capabilities=26,purposes=3"
 
 
 def test_checks_are_read_only_and_always_roll_back(
@@ -188,6 +193,15 @@ _STOPS: Final[dict[str, tuple[PredeployPhase, tuple[str, ...], str]]] = {
         ),
         "trigger:a_schedule_intake_series_admits_no_other_publication",
     ),
+    # Schedule Scenarios S6-3 (contract section 15.13): revision B not applied.
+    "Q11": (
+        PredeployPhase.AFTER,
+        (
+            "ALTER TABLE knowledge.audit_events DROP CONSTRAINT purpose_is_known, "
+            "ADD CONSTRAINT purpose_is_known CHECK (purpose IN ('status_observation'))",
+        ),
+        "purpose_is_known:schedule_analysis_authoring",
+    ),
 }
 
 
@@ -242,7 +256,7 @@ def test_the_runner_prints_one_line_per_check_and_no_connection_string(
     main: Callable[[list[str]], int] = _runner().main
     assert main(["--phase", "before"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert [line.split()[1] for line in lines[:-1]] == ["Q0", "Q1", "Q2", "Q3", "Q4", "Q5"]
+    assert [line.split()[1] for line in lines[:-1]] == ["Q0", "Q1", "Q2", "Q3", "Q4", "Q5", "Q10"]
     assert lines[-1] == "schedule_scenarios_predeploy phase=before result=pass"
     digest = lines[5].rsplit("sha256=", 1)[1]
     assert main(["--phase", "after", "--before-acl-sha256", digest]) == 0

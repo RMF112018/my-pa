@@ -399,8 +399,6 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     139: "One hundred and thirty-nine",
     140: "One hundred and forty",
     141: "One hundred and forty-one",
-    # Schedule Scenarios S6-3: the withheld figure, 131 -> 157.
-    157: "One hundred and fifty-seven",
     142: "One hundred and forty-two",
     # Extended at `PC-CM-IMP-WP07`, when the twelve Constraint Management
     # mutations took the public set past a hundred and forty-two. Extended

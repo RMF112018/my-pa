@@ -561,6 +561,10 @@ def test_operator_may_propose_and_only_the_operator_withdraws_it(
 
     if case == "operator_proposes":
         monkeypatch.setattr("my_pa.domain.schedule.baselines.MAX_PENDING_PER_BUCKET", 1)
+        # A `local_unattested` caller fills its own bucket (`"local_unattested\x1f"`);
+        # the operator's bucket is none a client can reach, so it is not counted there.
+        unattested = _publish(rt, w, monkeypatch, data_date=date(2026, 7, 1))
+        assert plane.ok(_propose(unattested))["status"] == "proposed"
         first = plane.operator(_propose(publication))
         assert first["status"] == "proposed" and first["labels"]["authority"] == "proposed"
         second_publication = _publish(rt, w, monkeypatch, data_date=date(2026, 6, 1))

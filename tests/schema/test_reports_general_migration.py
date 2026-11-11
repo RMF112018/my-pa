@@ -825,7 +825,7 @@ def test_empty_to_head_creates_exactly_the_eleven_tables(
         _triggers(engine),
     )
     assert not before & set(PLANE_TABLES)
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     assert _version(engine) == REVISION
     assert _relations(engine) - before == set(PLANE_TABLES)
     assert before <= _relations(engine)
@@ -898,7 +898,7 @@ def test_runtime_metadata_matches_the_revision(disposable_database: str, engine:
     tables built from `tables.py` into a scratch schema equals the revision's.
     """
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     parity = "rpt_parity"
     plane = set(PLANE_TABLES)
     copies = MetaData()
@@ -1114,7 +1114,7 @@ def test_predecessor_with_legacy_evidence_upgrades_unchanged(
     for table in LEGACY_SEEDED:
         assert before[table][0] >= 1, table
     assert not set(before) & _PLANE_QUALIFIED
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     assert _version(engine) == REVISION
     after = _evidence(engine)
     assert set(after) - set(before) == _PLANE_QUALIFIED
@@ -3846,7 +3846,9 @@ def plane_engine(module_cloned_database_url: str) -> Iterator[Engine]:
     """One current-head clone shared by the guard cases; every case writes its own ids."""
     built = create_database_engine(module_cloned_database_url)
     try:
-        assert _version(built) == REVISION
+        # The clone is at the head, Schedule Scenarios S6-3's revision B, which
+        # touches only the audit vocabulary on top of this revision.
+        assert _version(built) == "b77334135653"
         yield built
     finally:
         built.dispose()
@@ -4994,7 +4996,7 @@ def test_the_upgrade_admits_reports_publish_and_the_downgrade_refuses_while_audi
     with pytest.raises(DBAPIError) as refused_before:
         _publish_audit(engine, "rptmigaudit0001")
     _assert_refused(refused_before.value, _check("audit_events", "capability_is_known"))
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _publish_audit(engine, "rptmigaudit0002")
     assert _audit_rows(engine) == 1
     # The plane is empty: only the audit clause can refuse.
@@ -5022,7 +5024,7 @@ def test_a_report_lifecycle_audit_event_is_admitted_and_holds_the_downgrade(
             engine, "rptmigaudit0004", capability="reports.archive", purpose=ADMITTED_PURPOSE
         )
     assert getattr(refused_before.value.orig, "sqlstate", None) == CHECK_VIOLATION
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _publish_audit(
         engine, "rptmigaudit0005", capability="reports.archive", purpose=ADMITTED_PURPOSE
     )
@@ -5058,7 +5060,7 @@ def test_a_custody_audit_event_is_admitted_and_alone_holds_the_downgrade(
     with pytest.raises(DBAPIError) as refused_before:
         _publish_audit(engine, "rptmigaudit0006", capability=capability, purpose=purpose)
     assert getattr(refused_before.value.orig, "sqlstate", None) == CHECK_VIOLATION
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _publish_audit(engine, "rptmigaudit0007", capability=capability, purpose=purpose)
     assert _audit_rows(engine, capability) == 1
     assert all(count == 0 for count, _ in _plane_rows(engine).values())
@@ -5093,7 +5095,7 @@ def test_a_transfer_audit_event_is_admitted_and_alone_holds_the_downgrade(
     with pytest.raises(DBAPIError) as refused_before:
         _publish_audit(engine, "rptmigaudit0009", capability=capability, purpose=purpose)
     assert getattr(refused_before.value.orig, "sqlstate", None) == CHECK_VIOLATION
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _publish_audit(engine, "rptmigaudit0010", capability=capability, purpose=purpose)
     assert _audit_rows(engine, capability) == 1
     assert all(count == 0 for count, _ in _plane_rows(engine).values())
@@ -5113,7 +5115,7 @@ def test_a_custody_purpose_alone_holds_the_downgrade(
 ) -> None:
     """WP05b A5: a custody purpose under an older capability alone holds the downgrade."""
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _publish_audit(engine, "rptmigaudit0008", capability="capabilities.get", purpose=purpose)
     catalog = _full_catalog(engine)
     with pytest.raises(DBAPIError) as refused:
@@ -5197,7 +5199,7 @@ def test_downgrade_refuses_while_plane_state_exists(
     disposable_database: str, engine: Engine, state: str
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     ids = _ids(uuid.uuid4().hex[:16], P)
     _execute(engine, _DOWNGRADE_STATES[state](ids))
     rows, catalog = _plane_rows(engine), _full_catalog(engine)
@@ -5248,14 +5250,14 @@ def test_an_empty_plane_downgrades_cleanly_and_upgrades_again(
     del disposable_database
     command.upgrade(_config(), PREVIOUS)
     at_previous = _full_catalog(engine)
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     at_head = _full_catalog(engine)
     command.downgrade(_config(), PREVIOUS)
     assert _version(engine) == PREVIOUS
     assert not _relations(engine) & set(PLANE_TABLES)
     assert not _functions(engine) & set(PLANE_FUNCTIONS)
     assert _full_catalog(engine) == at_previous
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     assert _version(engine) == REVISION
     assert _full_catalog(engine) == at_head
 

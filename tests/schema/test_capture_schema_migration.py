@@ -73,6 +73,7 @@ from tests.schema.knowledge_schema_ahead_contract import (
     admitted_ahead,
 )
 from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
+from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
@@ -714,6 +715,9 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "reports.transfer.finalize",
         "reports.transfer.abort",
         "reports.transfer.read_chunk",
+        # Schedule Scenarios S6-3, admitted by revision B (`b77334135653`) with the
+        # domain declaring every name in the same change.
+        *S63_CAPABILITIES,
     }
 )
 

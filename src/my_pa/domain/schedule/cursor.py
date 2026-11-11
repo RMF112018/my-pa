@@ -66,19 +66,41 @@ _INSTANT_FORMAT: Final = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 
 class ScheduleCursorOrder(StrEnum):
-    """The 5 orders a Schedule cursor can continue, bound into its digest."""
+    """The 11 orders a Schedule cursor can continue, bound into its digest.
+
+    The last 6 are the Schedule Scenarios S6-3 plane orders (schedule-scenarios
+    contract section 15.6.2, S6-3-D08).
+    """
 
     SERIES = "series_created_desc_id_desc"
     PUBLICATIONS = "publications_admitted_desc_id_desc"
     ACTIVITIES = "activities_row_ordinal_asc_row_id_asc"
     HISTORY = "history_data_date_asc_admitted_asc_id_asc"
     CHANGES = "changes_offset_in_published_id_kind_field_order"
+    SCENARIOS = "scenarios_created_desc_id_desc"
+    VERSIONS = "versions_no_desc"
+    SCENARIO_CONTENT = "scenario_content_offset"
+    OUTPUTS = "outputs_created_desc_id_desc"
+    MATCH_DECISIONS = "match_decisions_created_desc_id_desc"
+    BASELINES = "baselines_created_desc_id_desc"
 
 
 #: A decoded position, typed: series `(created_at, series_id)`, publications
 #: `(admitted_at, publication_id)`, activities `(row_ordinal, row_id)`,
-#: history `(data_date, admitted_at, publication_id)`, changes `(offset,)`.
+#: history `(data_date, admitted_at, publication_id)`, changes `(offset,)`;
+#: scenarios `(created_at, scenario_id)`, versions `(version_no,)`, scenario
+#: content `(offset,)`, outputs `(created_at, output_id)`, match decisions
+#: `(created_at, decision_id)`, baselines `(created_at, baseline_id)`.
 type SchedulePosition = tuple[datetime | date | int | str, ...]
+
+
+#: The identifier kind of the 4 plane `(created_at, identifier)` keyset orders.
+_PLANE_KEYSET: Final[dict[ScheduleCursorOrder, IdKind]] = {
+    ScheduleCursorOrder.SCENARIOS: IdKind.SCHEDULE_SCENARIO,
+    ScheduleCursorOrder.OUTPUTS: IdKind.SCHEDULE_SCENARIO_OUTPUT,
+    ScheduleCursorOrder.MATCH_DECISIONS: IdKind.SCHEDULE_SERIES_MATCH,
+    ScheduleCursorOrder.BASELINES: IdKind.SCHEDULE_BASELINE,
+}
 
 
 class ScheduleCursorError(ValueError):
@@ -143,7 +165,14 @@ def _encode_position(order: ScheduleCursorOrder, position: SchedulePosition) -> 
     """The wire form of a position; `ValueError` on a shape this order does not take."""
     match order, position:
         case (
-            (ScheduleCursorOrder.SERIES | ScheduleCursorOrder.PUBLICATIONS),
+            (
+                ScheduleCursorOrder.SERIES
+                | ScheduleCursorOrder.PUBLICATIONS
+                | ScheduleCursorOrder.SCENARIOS
+                | ScheduleCursorOrder.OUTPUTS
+                | ScheduleCursorOrder.MATCH_DECISIONS
+                | ScheduleCursorOrder.BASELINES
+            ),
             (
                 datetime() as at,
                 str() as identifier,
@@ -156,8 +185,13 @@ def _encode_position(order: ScheduleCursorOrder, position: SchedulePosition) -> 
             if isinstance(day, datetime):
                 raise ValueError("a history position starts with a date")
             return [day.isoformat(), _instant(at), identifier]
-        case ScheduleCursorOrder.CHANGES, (int() as offset,):
+        case (
+            (ScheduleCursorOrder.CHANGES | ScheduleCursorOrder.SCENARIO_CONTENT),
+            (int() as offset,),
+        ):
             return [offset]
+        case ScheduleCursorOrder.VERSIONS, (int() as version_no,):
+            return [version_no]
     raise ValueError("a position does not fit its order")
 
 
@@ -236,6 +270,14 @@ def _decode_position(order: ScheduleCursorOrder, raw: object) -> SchedulePositio
             )
         case ScheduleCursorOrder.CHANGES, [offset] if _is_int(offset) and offset >= 0:
             return (offset,)
+        case ScheduleCursorOrder.SCENARIO_CONTENT, [offset] if _is_int(offset) and offset >= 0:
+            return (offset,)
+        case ScheduleCursorOrder.VERSIONS, [version_no] if _is_int(version_no) and version_no >= 1:
+            return (version_no,)
+    if order in _PLANE_KEYSET:
+        match raw:
+            case [at, identifier]:
+                return (_read_instant(at), _identifier(identifier, _PLANE_KEYSET[order]))
     raise ScheduleCursorError()
 
 

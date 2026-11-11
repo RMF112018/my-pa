@@ -50,6 +50,7 @@ from my_pa.contracts.ports import (
     CpmComputeBusyError,
     CpmRunWritten,
     NewCpmRun,
+    PlaneReservation,
     PlaneReservationOutcome,
     PlaneSubjectAbsentError,
     ScenarioIntegrityError,
@@ -158,6 +159,11 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _admit_nothing(repository: ScenarioRepository, principal_id: str, new_bytes: int) -> None:
+    """The default `admit_write`: no write budget (S6-2 callers and tests)."""
+    del repository, principal_id, new_bytes
+
+
 def compute_and_store_cpm_run(
     engine: Engine,
     principal_id: str,
@@ -167,6 +173,7 @@ def compute_and_store_cpm_run(
     request_digest: str,
     writer: PlaneProvenance,
     admit_compute: Callable[[int, int], None],
+    admit_write: Callable[[ScenarioRepository, str, int], None] = _admit_nothing,
     compute: Callable[[ScenarioContent], CpmResult] = run_cpm,
     clock: Callable[[], datetime] = _now,
 ) -> CpmRunWritten:
@@ -175,6 +182,15 @@ def compute_and_store_cpm_run(
     `admit_compute(units_used_last_hour, units_requested)` is S6-3's
     activity-units check, called while the lease is held; it raises to refuse.
     `compute` is injected so tests can hold a compute on a barrier.
+
+    `admit_write(repository, principal_id, new_bytes)` is S6-3's client
+    write-budget check (section 15.10, R10-F02, R10-N01, S6-3-D23), called
+    twice: only on the compute path -- after the ledger probe and the
+    natural-key probe both found nothing -- in a short transaction under P with
+    0 new bytes, immediately before the leased compute, so a client already
+    over a budget never computes; and authoritatively in the write transaction
+    after a `RESERVED` reservation and before the insert, with the bytes the
+    write stores (0 for a natural-key hit). It raises to refuse.
     """
     validate_identifier(principal_id, IdKind.PRINCIPAL)
     # Step 1: the ledger probe, the natural-key probe and the verified content.
@@ -183,7 +199,7 @@ def compute_and_store_cpm_run(
             principal_id, CPM_RUN_CAPABILITY, capability_key, request_digest
         )
         if replay is not None:
-            return _replayed(uow.scenarios, principal_id, replay.outcome, replay.result_id)
+            return _replayed(uow.scenarios, principal_id, replay)
         existing = uow.scenarios.get_cpm_run(principal_id, version_id, ENGINE_VERSION)
         verified = (
             None if existing is not None else uow.scenarios.load_content(principal_id, version_id)
@@ -192,6 +208,11 @@ def compute_and_store_cpm_run(
             raise PlaneSubjectAbsentError()
     stored = None
     if verified is not None:
+        # R10-F02/R10-N01: the read-only pre-check, never reached by a replay or
+        # a natural-key hit, with 0 new bytes (step 5 re-checks the actual size).
+        with SqlAlchemyScenarioUnitOfWork(engine) as uow:
+            uow.scenarios.lock_principal(principal_id)
+            admit_write(uow.scenarios, principal_id, 0)
         stored = _leased_compute(
             engine,
             principal_id,
@@ -209,13 +230,15 @@ def compute_and_store_cpm_run(
             principal_id, CPM_RUN_CAPABILITY, capability_key, request_digest, writer
         )
         if reservation.outcome is not PlaneReservationOutcome.RESERVED:
-            return _replayed(scenarios, principal_id, reservation.outcome, reservation.result_id)
+            return _replayed(scenarios, principal_id, reservation)
         if stored is None:
             run = existing
             created = False
             if run is None:  # pragma: no cover - step 1 returned or computed
                 raise ScenarioIntegrityError("cpm_run_missing")
+            admit_write(scenarios, principal_id, 0)
         else:
+            admit_write(scenarios, principal_id, stored.result_size_bytes)
             run, created = scenarios.insert_cpm_run(principal_id, stored, writer)
         scenarios.complete_request(
             principal_id,
@@ -229,15 +252,14 @@ def compute_and_store_cpm_run(
 
 
 def _replayed(
-    scenarios: ScenarioRepository,
-    principal_id: str,
-    outcome: PlaneReservationOutcome,
-    result_id: str | None,
+    scenarios: ScenarioRepository, principal_id: str, reservation: PlaneReservation
 ) -> CpmRunWritten:
-    if outcome is PlaneReservationOutcome.CONFLICT or result_id is None:
+    """A replay answers the stored run and its original `created` (S6-3, section 15.6.1)."""
+    result_id = reservation.result_id
+    if reservation.outcome is PlaneReservationOutcome.CONFLICT or result_id is None:
         return CpmRunWritten(PlaneReservationOutcome.CONFLICT, None, None)
     run = scenarios.get_cpm_run_by_id(principal_id, result_id)
-    return CpmRunWritten(PlaneReservationOutcome.REPLAYED, run, False)
+    return CpmRunWritten(PlaneReservationOutcome.REPLAYED, run, bool(reservation.result_created))
 
 
 def _leased_compute(

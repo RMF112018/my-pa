@@ -570,6 +570,18 @@ class Settings(StrictModel):
     #: switch; turning it on or off changes no row. Enabling it anywhere but a
     #: test, or running a schedule worker, is an operator gate (contract 8.3).
     schedule_enabled: bool = False
+    #: Schedule Scenarios S6-3 plane switch (schedule-scenarios contract section
+    #: 15.8), env `MY_PA_SCHEDULE_SCENARIOS_ENABLED`. Default off, and it widens
+    #: nothing alone: the plane is effective only while this and
+    #: `schedule_enabled` are both on (and the composition is unrestricted). Off
+    #: withholds the 26 plane capabilities from `capabilities.get`, readiness,
+    #: the MCP tool list, the remote profile and the ChatLLM composition, each
+    #: plane handler answers `unsupported`, the import refuses `series_auto` and
+    #: role `baseline`, the gateway composes no plane unit of work, and the
+    #: schedule worker's series-match hook admits nothing. Turning it on or off
+    #: changes no row. Enabling it anywhere but a test is an operator gate
+    #: (contract section 15.17).
+    schedule_scenarios_enabled: bool = False
     #: KLP-WP-04 (R6 section 3.4, KLP-AC-019). The exact OAuth client ids bound
     #: as Knowledge discovery clients. Compared exactly, never by prefix; empty --
     #: the default -- binds no client, so `knowledge.assertions.submit` and

@@ -42,7 +42,7 @@ Series is `SERIES_NOT_FOUND`.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager
 from datetime import date, datetime
 from decimal import Decimal
@@ -159,6 +159,7 @@ from my_pa.infrastructure.persistence.tables import (
     schedule_publications,
     schedule_rows,
     schedule_series,
+    schedule_series_match_decisions,
     source_object_versions,
 )
 
@@ -845,6 +846,45 @@ class SqlScheduleRepository(ScheduleRepository):
         if row is None and request.series_id is not None:
             raise _refuse(ScheduleAdmissionRefusal.SERIES_NOT_FOUND)
         return None if row is None else _to_series(row, principal_id)
+
+    def intake_publication_ids(
+        self, principal_id: str, publication_ids: Collection[str]
+    ) -> Mapping[str, str | None]:
+        """Schedule Scenarios S6-3 (section 15.6.2): intake publications -> decision ids."""
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        named = sorted(set(publication_ids))
+        if not named:
+            return {}
+        intake = schedule_intake_series
+        decisions = schedule_series_match_decisions
+        found = self._connection.execute(
+            select(intake.c.publication_id, decisions.c.decision_id)
+            .select_from(
+                intake.outerjoin(
+                    decisions,
+                    and_(
+                        matching_partition_criterion(decisions, intake),
+                        decisions.c.intake_publication_id == intake.c.publication_id,
+                    ),
+                )
+            )
+            .where(_mine(intake, principal_id), intake.c.publication_id.in_(named))
+        ).all()
+        return {str(row.publication_id): row.decision_id for row in found}
+
+    def intake_series_ids(self, principal_id: str, series_ids: Collection[str]) -> frozenset[str]:
+        """Schedule Scenarios S6-3 (section 15.6.2): the named owned intake Series."""
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        named = sorted(set(series_ids))
+        if not named:
+            return frozenset()
+        intake = schedule_intake_series
+        found = self._connection.execute(
+            select(intake.c.series_id).where(
+                _mine(intake, principal_id), intake.c.series_id.in_(named)
+            )
+        ).scalars()
+        return frozenset(str(value) for value in found)
 
     def _is_intake_series(self, principal_id: str, series_id: str) -> bool:
         marked = self._connection.execute(

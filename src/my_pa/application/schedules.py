@@ -608,7 +608,11 @@ class ScheduleApplication:
     # ---- import (section 3.6) -------------------------------------------------------
 
     def import_publication(
-        self, authorization: Authorization, command: ImportSchedulePublication
+        self,
+        authorization: Authorization,
+        command: ImportSchedulePublication,
+        *,
+        scenario_plane_effective: bool = False,
     ) -> ScheduleAnswer:
         # E-10: never from a remote composition, whatever its Principal kind
         # (every remote OAuth client is an operator, so policy alone would not
@@ -619,14 +623,27 @@ class ScheduleApplication:
             or authorization.authenticated_client_id is not None
         ):
             raise UnsupportedError()
-        attested_lineage_authority(authorization)
+        authority = attested_lineage_authority(authorization)
         principal_id = authorization.principal.principal_id
         request = command.import_request()
+        # Schedule scenarios contract section 15.9 (R10-F01, S6-3-D22): the plane
+        # gates, after E-10/E-12 so a remote or unattested caller never learns of
+        # the plane, keyed on the request's own approval -- `import_request` has
+        # already refused, whatever the switch, an approval missing a field.
+        if not scenario_plane_effective and request.series_auto:
+            raise InvalidRequestError(SafeDetail.SERIES_AUTO)
+        if not scenario_plane_effective and request.approval is not None:
+            raise InvalidRequestError(SafeDetail.PUBLICATION_ROLE)
+        operator_channel = (
+            authority.decision_channel.value if request.approval is not None else None
+        )
         digest = schedule_import_request_digest(principal_id, request)
         refusal: ScheduleAdmissionRefusal | None = None
         try:
             with self._unit_of_work() as work:
-                admission = work.schedules.admit_publication(principal_id, request, digest)
+                admission = work.schedules.admit_publication(
+                    principal_id, request, digest, operator_channel=operator_channel
+                )
                 created = admission.outcome is ScheduleAdmissionOutcome.CREATED
                 status = (
                     SchedulePublicationStatus.QUEUED
@@ -691,12 +708,18 @@ class ScheduleApplication:
             found = work.schedules.list_series(
                 principal_id, command.project_id, after=after, limit=paging.page_size + 1
             )
-        page = found[: paging.page_size]
+            page = found[: paging.page_size]
+            intake = work.schedules.intake_series_ids(
+                principal_id, [summary.series_id for summary in page]
+            )
         last = None if not page else (page[-1].created_at, page[-1].series_id)
         return ScheduleAnswer(
             payload={
                 "project_id": command.project_id,
-                "series": [_series(summary) for summary in page],
+                "series": [
+                    {**_series(summary), "series_kind": _series_kind(summary.series_id in intake)}
+                    for summary in page
+                ],
                 "page_size": paging.page_size,
             },
             disclosure=schedule_disclosure(
@@ -737,6 +760,9 @@ class ScheduleApplication:
                 after=after,
                 limit=paging.page_size + 1,
             )
+            kind = _series_kind(
+                bool(work.schedules.intake_series_ids(principal_id, [command.series_id]))
+            )
         page = found[: paging.page_size]
         last = (
             None
@@ -746,7 +772,9 @@ class ScheduleApplication:
         return ScheduleAnswer(
             payload={
                 "series_id": command.series_id,
-                "publications": [_publication_row(summary) for summary in page],
+                "publications": [
+                    {**_publication_row(summary), "series_kind": kind} for summary in page
+                ],
                 "page_size": paging.page_size,
             },
             disclosure=schedule_disclosure(
@@ -762,10 +790,15 @@ class ScheduleApplication:
         principal_id = authorization.principal.principal_id
         with self._unit_of_work() as work:
             detail = work.schedules.get_publication_detail(principal_id, command.publication_id)
+            intake = (
+                {}
+                if detail is None
+                else work.schedules.intake_publication_ids(principal_id, [command.publication_id])
+            )
         if detail is None:
             raise NotFoundError(SafeDetail.PUBLICATION_ID)
         return ScheduleAnswer(
-            payload=_publication_detail(detail),
+            payload=_with_match_state(_publication_detail(detail), detail, intake),
             disclosure=schedule_disclosure(
                 publications=[(detail.source, detail.effective_status)],
                 observed_at=authorization.at,
@@ -873,6 +906,15 @@ class ScheduleApplication:
             second = schedules.get_publication_detail(principal_id, command.to_publication_id)
             if second is None:
                 raise NotFoundError(SafeDetail.TO_PUBLICATION_ID)
+            # Schedule scenarios contract sections 11.4, 15.6.2 (S6-3-D18): an
+            # intake publication is never one end of a delta.
+            intake = schedules.intake_publication_ids(
+                principal_id, [command.from_publication_id, command.to_publication_id]
+            )
+            if command.to_publication_id in intake:
+                raise InvalidRequestError(SafeDetail.TO_PUBLICATION_ID)
+            if command.from_publication_id in intake:
+                raise InvalidRequestError(SafeDetail.FROM_PUBLICATION_ID)
             a, b = first.publication, second.publication
             if (a.project_id, a.series_id) != (b.project_id, b.series_id):
                 raise InvalidRequestError(SafeDetail.TO_PUBLICATION_ID)
@@ -920,6 +962,50 @@ class ScheduleApplication:
                 trust_basis=(*SCHEDULE_READ_TRUST_BASIS, DELTA_ALGORITHM_VERSION),
             ),
         )
+
+
+def _series_kind(intake: bool) -> str:
+    """Section 15.6.2: a Series is `intake` (the worker's own) or `standard`."""
+    return "intake" if intake else "standard"
+
+
+_TERMINAL: Final = frozenset(
+    {
+        SchedulePublicationStatus.COMPLETE,
+        SchedulePublicationStatus.PARTIAL,
+        SchedulePublicationStatus.REVIEW_REQUIRED,
+        SchedulePublicationStatus.FAILED,
+    }
+)
+
+
+def _with_match_state(
+    payload: dict[str, Any],
+    detail: SchedulePublicationDetail,
+    intake: Mapping[str, str | None],
+) -> dict[str, Any]:
+    """Section 15.6.2: `series_kind`, and an intake publication's match state.
+
+    `pending` while non-terminal; `decided` once a decision is recorded; a
+    terminal intake publication with no decision is `undecided`
+    (S6-2-U09/U10).
+    """
+    publication_id = detail.publication.publication_id
+    if publication_id not in intake:
+        return {**payload, "series_kind": _series_kind(False)}
+    decision = intake[publication_id]
+    if decision is not None:
+        state = "decided"
+    elif detail.effective_status in _TERMINAL:
+        state = "undecided"
+    else:
+        state = "pending"
+    return {
+        **payload,
+        "series_kind": _series_kind(True),
+        "match_state": state,
+        "match_decision_id": decision,
+    }
 
 
 def _eligible(

@@ -1,4 +1,9 @@
-"""Read-only Schedule Scenarios revision-A pre-deploy checks (contract section 14.9).
+"""Read-only Schedule Scenarios revision-A and revision-B pre-deploy checks.
+
+Contract sections 14.9 and 15.13: Q0-Q9 gate revision A (`2a90f91dd786`); Q10
+(before, reported) sizes the live `knowledge.audit_events` that revision B
+(`b77334135653`) locks `ACCESS EXCLUSIVE`, and Q11 (after) proves the restated
+audit CHECKs name the 26 Schedule Scenarios capabilities and their 3 purposes.
 
 The S6-2 operator gates (contract section 14.12.4) as reads an operator runs,
 as the runtime role the gateway and worker connect as, before and after
@@ -124,6 +129,47 @@ _HEAD_TEXTS: Final[Mapping[str, tuple[str, tuple[str, ...], tuple[str, ...]]]] =
     "a_record_link_pair_is_admitted": ("record_links", _S6_RELATIONS, ()),
     "a_record_link_from_family_is_known": ("record_links", _S6_FAMILIES, ()),
     "a_schedule_publication_role_is_known": ("schedule_publications", (), ("reference",)),
+}
+
+#: Q10/Q11 (contract section 15.13): the live table revision B locks, and what its
+#: restated audit CHECKs must name at head (frozen literals).
+AUDIT_TABLE: Final = "audit_events"
+_S63_CAPABILITIES: Final = (
+    "schedule_baselines.approve",
+    "schedule_baselines.compare",
+    "schedule_baselines.governing",
+    "schedule_baselines.list",
+    "schedule_baselines.propose",
+    "schedule_baselines.read",
+    "schedule_baselines.reject",
+    "schedule_baselines.revoke",
+    "schedule_baselines.set_governing",
+    "schedule_baselines.withdraw",
+    "schedule_cpm_runs.activities",
+    "schedule_cpm_runs.create",
+    "schedule_cpm_runs.read",
+    "schedule_scenario_outputs.list",
+    "schedule_scenario_outputs.read",
+    "schedule_scenario_outputs.record",
+    "schedule_scenario_versions.activities",
+    "schedule_scenario_versions.changes",
+    "schedule_scenario_versions.create",
+    "schedule_scenario_versions.read",
+    "schedule_scenario_versions.relationships",
+    "schedule_scenarios.create",
+    "schedule_scenarios.list",
+    "schedule_scenarios.read",
+    "schedule_series.current",
+    "schedule_series.match_decisions",
+)
+_S63_PURPOSES: Final = (
+    "schedule_analysis_authoring",
+    "schedule_analysis_read",
+    "schedule_baseline_approval",
+)
+_AUDIT_TEXTS: Final[Mapping[str, tuple[str, ...]]] = {
+    "capability_is_known": _S63_CAPABILITIES,
+    "purpose_is_known": _S63_PURPOSES,
 }
 
 #: The only non-`SELECT` statement, always the transaction's first.
@@ -269,7 +315,7 @@ def run_predeploy_checks(
 ) -> tuple[PredeployCheck, ...]:
     """The checks of `phase`, in one `READ ONLY` transaction that is rolled back.
 
-    Before: Q0-Q5. After: Q0, Q5-Q9. `before_acl_sha256` is the Q5 digest the
+    Before: Q0-Q5, Q10. After: Q0, Q5-Q9, Q11. `before_acl_sha256` is the Q5 digest the
     `before` run reported; the `after` run stops without it. An open
     transaction on `connection` is refused, so the `READ ONLY` statement is
     always the transaction's first.
@@ -287,6 +333,7 @@ def run_predeploy_checks(
                 _lock_sizing(connection),
                 _runtime_role_reach(connection),
                 _acl_snapshot(connection, phase, before_acl_sha256),
+                _audit_sizing(connection),
             ]
         else:
             checks += [
@@ -295,6 +342,7 @@ def run_predeploy_checks(
                 _vocabulary_at_head(connection),
                 _runtime_reach(connection),
                 _plane_objects(connection),
+                _audit_vocabulary(connection),
             ]
         return tuple(checks)
     finally:
@@ -494,4 +542,34 @@ def _plane_objects(connection: Connection) -> PredeployCheck:
         "plane_objects",
         CheckStatus.HOLDS,
         f"tables={len(PLANE_TABLES)},functions={len(PLANE_FUNCTIONS)},trigger=1",
+    )
+
+
+def _audit_sizing(connection: Connection) -> PredeployCheck:
+    """Q10: estimated rows and size of `knowledge.audit_events`, which revision B locks."""
+    rows = _select(connection, "lock_sizing", schema=SCHEMA, tables=[AUDIT_TABLE])
+    if not rows:
+        return PredeployCheck("Q10", "audit_sizing", CheckStatus.STOP, f"absent={AUDIT_TABLE}")
+    row = rows[0]
+    detail = f"{AUDIT_TABLE}:rows~{row['estimated_rows']},bytes={row['size_bytes']}"
+    return PredeployCheck("Q10", "audit_sizing", CheckStatus.REPORT, detail)
+
+
+def _audit_vocabulary(connection: Connection) -> PredeployCheck:
+    """Q11: the restated audit CHECKs name the 26 plane capabilities and the 3 purposes."""
+    missing: list[str] = []
+    for name, required in _AUDIT_TEXTS.items():
+        rows = _select(connection, "constraint_text", schema=SCHEMA, table=AUDIT_TABLE, name=name)
+        if not rows:
+            missing.append(f"{name}:absent")
+            continue
+        definition = str(rows[0]["definition"])
+        missing += [f"{name}:{token}" for token in required if f"'{token}'" not in definition]
+    if missing:
+        return PredeployCheck("Q11", "audit_vocabulary", CheckStatus.STOP, ",".join(missing))
+    return PredeployCheck(
+        "Q11",
+        "audit_vocabulary",
+        CheckStatus.HOLDS,
+        f"capabilities={len(_S63_CAPABILITIES)},purposes={len(_S63_PURPOSES)}",
     )

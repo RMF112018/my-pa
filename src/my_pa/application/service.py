@@ -139,6 +139,7 @@ from my_pa.application.commands import (
     AddIssueProjectLink,
     AppendReportTransfer,
     ApplyConstraintSync,
+    ApproveScheduleBaseline,
     ArchiveCapture,
     ArchiveEntity,
     ArchiveGeneralReport,
@@ -159,6 +160,7 @@ from my_pa.application.commands import (
     CloseProject,
     Command,
     CommitIntelligenceArtifact,
+    CompareScheduleBaseline,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
     ConfirmIssueMembership,
@@ -190,6 +192,9 @@ from my_pa.application.commands import (
     CreatePublishedConstraint,
     CreateRelationshipMemory,
     CreateReportType,
+    CreateScheduleCpmRun,
+    CreateScheduleScenario,
+    CreateScheduleScenarioVersion,
     CreateSituation,
     CreateTask,
     CreateTaskComment,
@@ -264,9 +269,17 @@ from my_pa.application.commands import (
     ListReportTypes,
     ListReviewCases,
     ListScheduleActivities,
+    ListScheduleBaselines,
     ListScheduleChanges,
+    ListScheduleCpmRunActivities,
     ListSchedulePublications,
+    ListScheduleScenarioActivities,
+    ListScheduleScenarioChanges,
+    ListScheduleScenarioOutputs,
+    ListScheduleScenarioRelationships,
+    ListScheduleScenarios,
     ListScheduleSeries,
+    ListScheduleSeriesMatchDecisions,
     ListSituations,
     ListSources,
     ListTaskComments,
@@ -281,6 +294,7 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
+    ProposeScheduleBaseline,
     PublishConstraint,
     PublishGeneralReport,
     PullGoodNotesWork,
@@ -294,6 +308,7 @@ from my_pa.application.commands import (
     ReadConstraintSyncDelta,
     ReadConstraintSyncState,
     ReadGoodNotes,
+    ReadGoverningScheduleBaseline,
     ReadIntelligenceArtifact,
     ReadIssue,
     ReadIssueClosureReadiness,
@@ -315,13 +330,21 @@ from my_pa.application.commands import (
     ReadReportManifest,
     ReadReportTransferChunk,
     ReadScheduleActivityHistory,
+    ReadScheduleBaseline,
+    ReadScheduleCpmRun,
     ReadSchedulePublication,
+    ReadScheduleScenario,
+    ReadScheduleScenarioOutput,
+    ReadScheduleScenarioVersion,
+    ReadScheduleSeriesCurrent,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordIssueHandoff,
+    RecordScheduleScenarioOutput,
     RecordTask,
     ReinstateRecordAssociation,
+    RejectScheduleBaseline,
     ReleaseReportHold,
     ReopenConstraint,
     ReopenIssue,
@@ -356,6 +379,7 @@ from my_pa.application.commands import (
     ReviseManagedDocument,
     ReviseManagedDocumentCommand,
     ReviseRelationshipMemory,
+    RevokeScheduleBaseline,
     SearchCaptures,
     SearchCommitments,
     SearchCommitmentsV2,
@@ -369,6 +393,7 @@ from my_pa.application.commands import (
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
+    SetGoverningScheduleBaseline,
     SetReportRetention,
     SplitEntity,
     StartGsqsB0,
@@ -392,6 +417,7 @@ from my_pa.application.commands import (
     VoidConstraint,
     WaitingOn,
     WaitingOnV2,
+    WithdrawScheduleBaseline,
     catalog_refusal,
     custody_refusal,
     hold_request,
@@ -657,6 +683,7 @@ from my_pa.application.relationship_memory import (
     ReviseMemoryCommand,
 )
 from my_pa.application.report_retention import report_purge_eligibility
+from my_pa.application.schedule_scenarios import ScheduleScenarioApplication
 from my_pa.application.schedules import ScheduleApplication
 from my_pa.application.tasks import (
     TaskManagementService,
@@ -732,6 +759,9 @@ from my_pa.contracts.ports import (
     ReportTrashPreflightError,
     ReportWithdrawnError,
     ReviewDecisionRequest,
+    ScenarioCpmRunner,
+    ScenarioRecordBuilders,
+    ScenarioUnitOfWork,
     ScheduleUnitOfWork,
     SearchOutcome,
     TransactionConflictError,
@@ -4901,6 +4931,10 @@ class ApplicationService:
         program_read_unit_of_work: Callable[[], ProgramReadUnitOfWork] | None = None,
         schedule_enabled: bool = False,
         schedule_unit_of_work: Callable[[], ScheduleUnitOfWork] | None = None,
+        schedule_scenarios_enabled: bool = False,
+        scenario_unit_of_work: Callable[[], ScenarioUnitOfWork] | None = None,
+        scenario_cpm_runner: ScenarioCpmRunner | None = None,
+        scenario_record_builders: ScenarioRecordBuilders | None = None,
         knowledge_discovery_client_ids: frozenset[str] = frozenset(),
         knowledge_operator_review_client_ids: frozenset[str] = frozenset(),
         knowledge_manager_client_ids: frozenset[str] = frozenset(),
@@ -5015,6 +5049,16 @@ class ApplicationService:
         #: Schedule handler answers `unsupported` unless both are present.
         self._schedule_enabled = schedule_enabled
         self._schedule_unit_of_work = schedule_unit_of_work
+        #: Schedule Scenarios S6-3 (schedule-scenarios contract section 15.8): the
+        #: plane switch and the 3 plane ports, `None` unless the gateway composed
+        #: them (both switches on, no restricted `data_engine`). The plane is
+        #: served only while the Schedule plane is too; `available_capabilities`
+        #: withholds the 26 names and every plane handler answers `unsupported`
+        #: otherwise.
+        self._schedule_scenarios_enabled = schedule_scenarios_enabled
+        self._scenario_unit_of_work = scenario_unit_of_work
+        self._scenario_cpm_runner = scenario_cpm_runner
+        self._scenario_record_builders = scenario_record_builders
         #: KLP-WP-04 (R6 section 6.1): the exact discovery allowlist the second
         #: service gate reads. Empty -- the default -- refuses every submit and
         #: checkpoint, so an unconfigured build fails closed for the role.
@@ -5237,6 +5281,17 @@ class ApplicationService:
         # the remote profile, the facade and the ChatLLM composition.
         if not (self._schedule_enabled and self._schedule_unit_of_work is not None):
             served -= _SCHEDULE_CAPABILITIES
+        # Schedule Scenarios S6-3 (contract section 15.8): the plane switch on top
+        # of the Schedule plane, and the 3 plane ports, withhold the 26 names.
+        if not (
+            self._schedule_enabled
+            and self._schedule_unit_of_work is not None
+            and self._schedule_scenarios_enabled
+            and self._scenario_unit_of_work is not None
+            and self._scenario_cpm_runner is not None
+            and self._scenario_record_builders is not None
+        ):
+            served -= _SCHEDULE_SCENARIO_CAPABILITIES
         # A proposal surface without a trusted server registration would
         # advertise a write every authenticated caller can only be denied.
         # Withhold both producer capabilities when composition has no exact
@@ -5607,6 +5662,19 @@ class ApplicationService:
     def _schedule_is_composed(self) -> bool:
         """Whether the Schedule plane is served: its switch and its factory (contract 3.1)."""
         return self._schedule_enabled and self._schedule_unit_of_work is not None
+
+    def _scenario_plane_is_composed(self) -> bool:
+        """Whether the Schedule Scenarios plane is effective (contract section 15.8).
+
+        Its switch on top of the Schedule plane, and the composed plane ports.
+        """
+        return (
+            self._schedule_is_composed()
+            and self._schedule_scenarios_enabled
+            and self._scenario_unit_of_work is not None
+            and self._scenario_cpm_runner is not None
+            and self._scenario_record_builders is not None
+        )
 
     def _fallback_worker_planes(self) -> tuple[str, ...]:
         """The planes reported `unavailable` when no worker-health read exists.
@@ -14341,6 +14409,16 @@ class ApplicationService:
         if not self._schedule_is_composed():
             raise UnsupportedError()
 
+    def _scenario_plane(self) -> None:
+        """Refuse unless the Schedule Scenarios plane is effective (contract section 15.8).
+
+        Asked first by every one of the 26 plane handlers, before any read, write,
+        replay or count (the `_schedule_plane` precedent): `invoke` routes into
+        `_HANDLERS` without consulting `available_capabilities`.
+        """
+        if not self._scenario_plane_is_composed():
+            raise UnsupportedError()
+
     def _program_plane(self) -> None:
         """Refuse unless both the lineage and the Program-reporting switches are on.
 
@@ -15717,7 +15795,9 @@ class ApplicationService:
         """`schedule_publications.import`: admit one enrolled PDF version (section 3.6)."""
         del unit_of_work
         self._schedule_plane()
-        answer = self._schedule_application().import_publication(authorization, command)
+        answer = self._schedule_application().import_publication(
+            authorization, command, scenario_plane_effective=self._scenario_plane_is_composed()
+        )
         return _Result(payload=answer.payload, disclosure=answer.disclosure)
 
     def _schedule_series_list(
@@ -15790,6 +15870,313 @@ class ApplicationService:
         self._schedule_plane()
         require_read_grant(authorization.capability_grants, command.capability)
         answer = self._schedule_application().list_changes(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    # Schedule Scenarios S6-3 (schedule-scenarios contract section 15.10). Each of
+    # the 26 handlers asks the plane switch first, before any read, write, replay
+    # or count; the grant re-check, the authority, the bounds and the behaviour
+    # run in `application.schedule_scenarios` on the plane unit of work.
+    def _scenario_application(self) -> ScheduleScenarioApplication:
+        factory = self._scenario_unit_of_work
+        runner = self._scenario_cpm_runner
+        records = self._scenario_record_builders
+        schedules = self._schedule_unit_of_work
+        if factory is None or runner is None or records is None or schedules is None:
+            raise UnsupportedError()  # pragma: no cover - `_scenario_plane` refused first
+        return ScheduleScenarioApplication(factory, runner, records, schedules)
+
+    def _schedule_scenarios_create(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateScheduleScenario,
+    ) -> _Result:
+        """`schedule_scenarios.create` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().create_scenario(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_scenario_versions_create(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateScheduleScenarioVersion,
+    ) -> _Result:
+        """`schedule_scenario_versions.create` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().append_version(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_cpm_runs_create(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateScheduleCpmRun
+    ) -> _Result:
+        """`schedule_cpm_runs.create` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().create_cpm_run(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_scenario_outputs_record(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: RecordScheduleScenarioOutput,
+    ) -> _Result:
+        """`schedule_scenario_outputs.record` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().record_output(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_baselines_propose(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ProposeScheduleBaseline,
+    ) -> _Result:
+        """`schedule_baselines.propose` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().propose_baseline(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_baselines_withdraw(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: WithdrawScheduleBaseline,
+    ) -> _Result:
+        """`schedule_baselines.withdraw` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().withdraw_baseline(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_baselines_approve(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ApproveScheduleBaseline,
+    ) -> _Result:
+        """`schedule_baselines.approve` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().approve_baseline(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_baselines_reject(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: RejectScheduleBaseline,
+    ) -> _Result:
+        """`schedule_baselines.reject` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().reject_baseline(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_baselines_revoke(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: RevokeScheduleBaseline,
+    ) -> _Result:
+        """`schedule_baselines.revoke` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().revoke_baseline(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_baselines_set_governing(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SetGoverningScheduleBaseline,
+    ) -> _Result:
+        """`schedule_baselines.set_governing` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().set_governing(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_scenarios_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListScheduleScenarios
+    ) -> _Result:
+        """`schedule_scenarios.list` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().list_scenarios(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_scenarios_read(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadScheduleScenario
+    ) -> _Result:
+        """`schedule_scenarios.read` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().read_scenario(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_scenario_versions_read(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadScheduleScenarioVersion,
+    ) -> _Result:
+        """`schedule_scenario_versions.read` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().read_version(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_scenario_versions_activities(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListScheduleScenarioActivities,
+    ) -> _Result:
+        """`schedule_scenario_versions.activities` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().list_version_activities(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_scenario_versions_relationships(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListScheduleScenarioRelationships,
+    ) -> _Result:
+        """`schedule_scenario_versions.relationships` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().list_version_relationships(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_scenario_versions_changes(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListScheduleScenarioChanges,
+    ) -> _Result:
+        """`schedule_scenario_versions.changes` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().list_version_changes(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_cpm_runs_read(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadScheduleCpmRun
+    ) -> _Result:
+        """`schedule_cpm_runs.read` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().read_cpm_run(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_cpm_runs_activities(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListScheduleCpmRunActivities,
+    ) -> _Result:
+        """`schedule_cpm_runs.activities` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().list_cpm_run_activities(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_scenario_outputs_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListScheduleScenarioOutputs,
+    ) -> _Result:
+        """`schedule_scenario_outputs.list` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().list_outputs(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_scenario_outputs_read(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadScheduleScenarioOutput,
+    ) -> _Result:
+        """`schedule_scenario_outputs.read` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().read_output(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_series_current(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadScheduleSeriesCurrent,
+    ) -> _Result:
+        """`schedule_series.current` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().series_current(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_series_match_decisions(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListScheduleSeriesMatchDecisions,
+    ) -> _Result:
+        """`schedule_series.match_decisions` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().list_match_decisions(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_baselines_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListScheduleBaselines
+    ) -> _Result:
+        """`schedule_baselines.list` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().list_baselines(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_baselines_read(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadScheduleBaseline
+    ) -> _Result:
+        """`schedule_baselines.read` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().read_baseline(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_baselines_governing(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadGoverningScheduleBaseline,
+    ) -> _Result:
+        """`schedule_baselines.governing` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().governing(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_baselines_compare(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CompareScheduleBaseline,
+    ) -> _Result:
+        """`schedule_baselines.compare` (schedule-scenarios contract section 15.3)."""
+        del unit_of_work
+        self._scenario_plane()
+        answer = self._scenario_application().compare(authorization, command)
         return _Result(payload=answer.payload, disclosure=answer.disclosure)
 
     def _program_reference_recompute(
@@ -19298,6 +19685,53 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.SCHEDULE_ACTIVITIES_LIST: ApplicationService._schedule_activities_list,
         Capability.SCHEDULE_ACTIVITIES_HISTORY: ApplicationService._schedule_activities_history,
         Capability.SCHEDULE_CHANGES_LIST: ApplicationService._schedule_changes_list,
+        # Schedule Scenarios S6-3 (schedule-scenarios contract section 15.3).
+        Capability.SCHEDULE_SCENARIOS_CREATE: ApplicationService._schedule_scenarios_create,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE: (
+            ApplicationService._schedule_scenario_versions_create
+        ),
+        Capability.SCHEDULE_CPM_RUNS_CREATE: ApplicationService._schedule_cpm_runs_create,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD: (
+            ApplicationService._schedule_scenario_outputs_record
+        ),
+        Capability.SCHEDULE_BASELINES_PROPOSE: ApplicationService._schedule_baselines_propose,
+        Capability.SCHEDULE_BASELINES_WITHDRAW: ApplicationService._schedule_baselines_withdraw,
+        Capability.SCHEDULE_BASELINES_APPROVE: ApplicationService._schedule_baselines_approve,
+        Capability.SCHEDULE_BASELINES_REJECT: ApplicationService._schedule_baselines_reject,
+        Capability.SCHEDULE_BASELINES_REVOKE: ApplicationService._schedule_baselines_revoke,
+        Capability.SCHEDULE_BASELINES_SET_GOVERNING: (
+            ApplicationService._schedule_baselines_set_governing
+        ),
+        Capability.SCHEDULE_SCENARIOS_LIST: ApplicationService._schedule_scenarios_list,
+        Capability.SCHEDULE_SCENARIOS_READ: ApplicationService._schedule_scenarios_read,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_READ: (
+            ApplicationService._schedule_scenario_versions_read
+        ),
+        Capability.SCHEDULE_SCENARIO_VERSIONS_ACTIVITIES: (
+            ApplicationService._schedule_scenario_versions_activities
+        ),
+        Capability.SCHEDULE_SCENARIO_VERSIONS_RELATIONSHIPS: (
+            ApplicationService._schedule_scenario_versions_relationships
+        ),
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CHANGES: (
+            ApplicationService._schedule_scenario_versions_changes
+        ),
+        Capability.SCHEDULE_CPM_RUNS_READ: ApplicationService._schedule_cpm_runs_read,
+        Capability.SCHEDULE_CPM_RUNS_ACTIVITIES: ApplicationService._schedule_cpm_runs_activities,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_LIST: (
+            ApplicationService._schedule_scenario_outputs_list
+        ),
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_READ: (
+            ApplicationService._schedule_scenario_outputs_read
+        ),
+        Capability.SCHEDULE_SERIES_CURRENT: ApplicationService._schedule_series_current,
+        Capability.SCHEDULE_SERIES_MATCH_DECISIONS: (
+            ApplicationService._schedule_series_match_decisions
+        ),
+        Capability.SCHEDULE_BASELINES_LIST: ApplicationService._schedule_baselines_list,
+        Capability.SCHEDULE_BASELINES_READ: ApplicationService._schedule_baselines_read,
+        Capability.SCHEDULE_BASELINES_GOVERNING: ApplicationService._schedule_baselines_governing,
+        Capability.SCHEDULE_BASELINES_COMPARE: ApplicationService._schedule_baselines_compare,
         Capability.MEETINGS_NOTES_VERSIONS: ApplicationService._meetings_notes_versions,
         Capability.MEETINGS_NOTES_READ_VERSION: ApplicationService._meetings_notes_read_version,
         Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,
@@ -19814,6 +20248,38 @@ _SCHEDULE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.SCHEDULE_ACTIVITIES_LIST,
         Capability.SCHEDULE_ACTIVITIES_HISTORY,
         Capability.SCHEDULE_CHANGES_LIST,
+    }
+)
+#: Schedule Scenarios S6-3 (contract section 15.8): the 26 plane names, withheld
+#: unless the plane is effective (`_scenario_plane_is_composed`).
+_SCHEDULE_SCENARIO_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.SCHEDULE_SCENARIOS_CREATE,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE,
+        Capability.SCHEDULE_CPM_RUNS_CREATE,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD,
+        Capability.SCHEDULE_BASELINES_PROPOSE,
+        Capability.SCHEDULE_BASELINES_WITHDRAW,
+        Capability.SCHEDULE_BASELINES_APPROVE,
+        Capability.SCHEDULE_BASELINES_REJECT,
+        Capability.SCHEDULE_BASELINES_REVOKE,
+        Capability.SCHEDULE_BASELINES_SET_GOVERNING,
+        Capability.SCHEDULE_SCENARIOS_LIST,
+        Capability.SCHEDULE_SCENARIOS_READ,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_READ,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_ACTIVITIES,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_RELATIONSHIPS,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CHANGES,
+        Capability.SCHEDULE_CPM_RUNS_READ,
+        Capability.SCHEDULE_CPM_RUNS_ACTIVITIES,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_LIST,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_READ,
+        Capability.SCHEDULE_SERIES_CURRENT,
+        Capability.SCHEDULE_SERIES_MATCH_DECISIONS,
+        Capability.SCHEDULE_BASELINES_LIST,
+        Capability.SCHEDULE_BASELINES_READ,
+        Capability.SCHEDULE_BASELINES_GOVERNING,
+        Capability.SCHEDULE_BASELINES_COMPARE,
     }
 )
 #: The 6 Schedule reads (`SCHEDULE_DATA_NAMES` in the ChatLLM policy).

@@ -23,6 +23,7 @@ from typing import Any, Final
 
 import pytest
 
+from my_pa.adapters.mcp.remote import remote_tool_names
 from my_pa.adapters.remote_request import compose_remote_arguments
 from my_pa.application import schedule_scenarios as plane_module
 from my_pa.application.commands import (
@@ -505,6 +506,14 @@ def test_baseline_approval_is_attested_operator_only(
     capability: Capability,
 ) -> None:
     """P48: a remote client, stdio MCP and `local_unattested` never decide (P3-01, P3-02)."""
+    # Never published remotely (`_OPERATOR_ONLY`), even with remote writes on and
+    # the compact operator publication (P3-01).
+    for compact in (False, True):
+        published = remote_tool_names(
+            plane.service, writes_enabled=True, compact_operator_publication=compact
+        )
+        assert capability.value not in published
+        assert Capability.SCHEDULE_BASELINES_PROPOSE.value in published
     publication = _publish(rt, w, monkeypatch)
     proposal = plane.ok(_propose(publication), remote_client=CLIENT_A)
     if capability in (

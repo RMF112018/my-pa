@@ -6,11 +6,11 @@ deterministic CPM engine), S6-2 (schema, migrations, persistence, unit of work, 
 and S6-3 (capabilities, handlers, façade, catalog, ChatLLM, remote policy, lineage endpoints,
 guidance) implementers code against. S6-1 (the pure domain and engine) is implemented and
 merged (#348, section 9.1.1); S6-2 (schema, revision A `2a90f91dd786`, persistence, worker
-hook; section 14) is implemented and merged (#349); S6-3 is designed (section 15, the
-implementation note on `feat/schedule-scenarios-capabilities`) and not implemented. No plane
-capability, grant or switch exists in any deployment. It authorizes **no** production migration, grant,
-`profile-apply`, OAuth change or deployment, and its switch `MY_PA_SCHEDULE_SCENARIOS_ENABLED`
-(added by S6-3; it does not exist yet) is to be **off by default** and stacks on
+hook; section 14) is implemented and merged (#349); S6-3 (section 15) is implemented on
+`feat/schedule-scenarios-capabilities` by packages I10-A, I10-B and I10-C (section 15.19) and
+not merged. No plane capability, grant or switch exists in any deployment. It authorizes
+**no** production migration, grant, `profile-apply`, OAuth change or deployment, and its
+switch `MY_PA_SCHEDULE_SCENARIOS_ENABLED` (added by S6-3) is **off by default** and stacks on
 `MY_PA_SCHEDULE_ENABLED` (off by default). The governing
 decision record is
 [`ADR-017`](../decisions/ADR-017-schedule-scenarios-and-baselines.md), which partially
@@ -3084,9 +3084,10 @@ helper is `tests/database/schedule_plane_world.py`.
 
 ---
 
-## 15. S6-3 implementation note (design D10; not implemented)
+## 15. S6-3 implementation note (design D10; implemented on this branch by I10-A, I10-B and I10-C, not merged)
 
-**Status.** Designed, not implemented, migrated, granted or deployed. Written by D10 on
+**Status.** Implemented on `feat/schedule-scenarios-capabilities` by packages I10-A, I10-B and
+I10-C (section 15.19); not merged, migrated, granted or deployed. Written by D10 on
 `feat/schedule-scenarios-capabilities` at base `59f333d72c10b1eaebd6ee988e7ec9f31735c6b3`, tree
 `93e82197887b9758cc3a10c8b70f5d232ed0c271` (= `origin/main` with S6-2 #349 merged as `3a1bdea7`
 and then Reports Modernization #351). Once design review R10 passes it, this section and the

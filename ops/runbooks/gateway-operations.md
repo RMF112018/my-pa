@@ -106,7 +106,14 @@ the 7 S4 reads), and `issues.close`, `issues.reopen`, the 3 `confirm` names and 
 production environment block, switch matrix, grant and companion tables, read-only recon
 and residual risks are in
 [`remote-mcp-cloudflare.md`, "Record lineage client exposure (P1)"](remote-mcp-cloudflare.md#record-lineage-client-exposure-p1).
-The current profile, `chatllm-data-v12` (Reports Modernization), adds only the 11
+The current profile is `chatllm-data-v13` (Schedule Scenarios S6-3) adds the 22 client-usable Schedule
+Scenarios names (6 writes under `schedule_analysis_authoring`, 16 reads under
+`schedule_analysis_read`) as `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_ENABLED` and
+`MY_PA_SCHEDULE_SCENARIOS_ENABLED` together, and keeps the 4 operator baseline decisions
+(`schedule_baselines.approve`, `.reject`, `.revoke`, `.set_governing`)
+`CONTROL_PLANE_EXCLUDED`. v13 with `MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires exactly
+the v12 set, so a pending Reports commissioning uses v13 after this build.
+`chatllm-data-v12` (Reports Modernization) added only the 11
 standalone Reports names as `DATA_REQUIRED` (no plane switch): `reports.publish` and
 `reports.update` under `report_authoring` (write), `reports.history` under `report_read`,
 `reports.archive`, `reports.delete` (recoverable Trash) and `reports.restore` under the new
@@ -114,8 +121,8 @@ standalone Reports names as `DATA_REQUIRED` (no plane switch): `reports.publish`
 `reports.transfer.*` names (`begin`, `append`, `finalize`, `abort` under
 `report_authoring`, write; `read_chunk` under `report_read`); `profile-plan` for a client
 converged on `chatllm-data-v11` adds exactly those 11 grants. Reports took
-`chatllm-data-v12`; the Schedule scenarios bump (S6-3) takes the next free version when
-written (operator decision 2026-11-05). `reports.publish`'s
+`chatllm-data-v12`; the Schedule scenarios bump (S6-3) took the next free version,
+`chatllm-data-v13` (operator decision 2026-11-05). `reports.publish`'s
 inline identity content limit is 524,288 decoded UTF-8 bytes (WP05 `gzip+base64` bounds: `mcp-and-cli-operations.md`), but the whole JSON request must also fit the 762,288-byte
 `MAX_REQUEST_BYTES` request ceiling, so heavily escaped content (quotes, backslashes,
 control characters, `\u`-escaped non-ASCII) may need to be smaller; a request over the

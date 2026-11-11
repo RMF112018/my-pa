@@ -658,7 +658,12 @@ does not. It remains an unverified caller string.
 
 **Nothing here is commissioned.** The migration `1d9b248e7f83` and the TRUNCATE
 refusal `c8e4a1b70d35` are proven on disposable databases only. The ChatLLM
-data profile `chatllm-data-v12`, which adds only the 11 Reports Modernization names
+data profile `chatllm-data-v13`, which adds the 22 client-usable Schedule Scenarios names
+as `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_ENABLED` and `MY_PA_SCHEDULE_SCENARIOS_ENABLED`
+and keeps the 4 operator baseline decisions excluded (Schedule Scenarios S6-3; v13 with
+`MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires exactly the v12 set, so a pending Reports
+commissioning uses v13 after this build), on top of `chatllm-data-v12`, which adds only
+the 11 Reports Modernization names
 (`reports.publish`, `reports.update`, `reports.history`, `reports.archive`,
 `reports.delete`, `reports.restore` and the 5 `reports.transfer.*` names, all
 `DATA_REQUIRED`; no grant changed) on top of `chatllm-data-v11`, which adds the 6 CPM Workbench Schedule reads as

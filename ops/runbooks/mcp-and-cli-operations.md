@@ -494,7 +494,7 @@ composition and in every MCP publication that composition produces.
   family, and each Meeting capability appears in it only for an authenticated
   client whose grants, purpose, capability version and write gates admit it.
 - **Desired ChatLLM profile.** The repository's ChatLLM data profile is
-  `chatllm-data-v12`. Since `chatllm-data-v3` it has classified the six
+  `chatllm-data-v13`. Since `chatllm-data-v3` it has classified the six
   `meetings.` names as `DATA_REQUIRED`: reads under `meeting_read`, writes under
   `meeting_authoring`; `chatllm-data-v4` adds `record_events.list` under
   `record_event_read`; `chatllm-data-v5` adds `capture.archive` and
@@ -539,8 +539,16 @@ composition and in every MCP publication that composition produces.
   `finalize`, `abort`: write, `report_authoring`; `read_chunk`: read,
   `report_read`), so a client converged on `chatllm-data-v11` plans exactly
   those 11 adds. Reports took `chatllm-data-v12`; the Schedule scenarios bump
-  (S6-3) takes the next free version when written (operator decision
-  2026-11-05).
+  (S6-3) took the next free version (operator decision 2026-11-05):
+  `chatllm-data-v13` adds the 22 client-usable Schedule Scenarios names (6
+  writes under `schedule_analysis_authoring`, 16 reads under
+  `schedule_analysis_read`) as `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_ENABLED` and
+  `MY_PA_SCHEDULE_SCENARIOS_ENABLED` together, and classifies the 4 operator
+  baseline decisions (`schedule_baselines.approve`, `.reject`, `.revoke`,
+  `.set_governing`; `schedule_baseline_approval`) `CONTROL_PLANE_EXCLUDED`.
+  v13 with `MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires exactly the v12 set,
+  so a pending Reports commissioning uses v13 after this build; the operator
+  procedure is `ops/runbooks/cpm-workbench.md` section 9.
   That is repository desire only. Whether any deployed client holds those
   grants is a runtime fact this document does not state.
 - **Reports catalog (Reports Modernization WP04).** `reports.list` and
@@ -569,8 +577,8 @@ composition and in every MCP publication that composition produces.
   and text extracted from the decoded content (a body, and JSON string values),
   truncated to the first 65,536 code points; transport bytes and Base64 are never
   indexed, and text past that bound is not searchable. Results carry no totals
-  or counts. No capability, purpose or profile changes: the profile is
-  `chatllm-data-v12`.
+  or counts. No capability, purpose or profile changes: the profile was
+  `chatllm-data-v12` (now `chatllm-data-v13`, which changes nothing here).
 - **Report creator attribution (Reports Modernization WP05).** The server
   derives who wrote a standalone report from the authorization alone, never
   from a request field: `kind` is `local_principal` (a local transport, keyed
@@ -766,10 +774,10 @@ python -m alembic heads
 python apps/cli/health.py
 python apps/cli/remote_mcp.py profile-diff \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v13
 python apps/cli/remote_mcp.py profile-plan \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v12
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v13
 ```
 
 `apps/cli/health.py` answers `not_at_head` for a database below `c8e4a1b70d35`,

@@ -82,10 +82,11 @@ S4_HANDLERS: Final = (
 #: only the string-keyed storage vocabulary (schedule scenarios contract section
 #: 14.7.4) and leaves every public enum and map, and by Schedule Scenarios S6-3
 #: package I10-B, which widens the public enums and maps by exactly that storage
-#: vocabulary and bumps the read generation to 2 (section 15.11.1). S4 itself
-#: still changes no lineage vocabulary.
+#: vocabulary and bumps the read generation to 2 (section 15.11.1), and by
+#: package I10-C, which adds only `NATIVE_VIRTUAL_EDGE_ENDPOINTS` (section
+#: 15.11.3a item 2). S4 itself still changes no lineage vocabulary.
 LINEAGE_VOCABULARY_SHA256: Final = (
-    "967a60b7f05869b8a950130534a228ebcba6511182c11856984a430463e8f28b"
+    "4d86b68cbb3bec8b42a256dfc6db9b5cf25a2691b37c31ca70f321559efe6e14"
 )
 #: The S3 section 3 names S3 listed as "Program work"; S4 adds them nowhere (D-13).
 NOT_LINEAGE: Final = frozenset({"not_reportable", "source_not_integrated"})

@@ -20,9 +20,13 @@ The three implementation contracts control the detail and are not repeated here:
 Successor work: the Schedule Scenarios slices S6-1 to S6-3 are
 specified in [`schedule-scenarios-contract.md`](schedule-scenarios-contract.md) under
 [`ADR-017`](../decisions/ADR-017-schedule-scenarios-and-baselines.md). S6-1 (the pure domain
-and engine) is implemented and merged (#348); S6-2 (contract section 14) is implemented on
-the branch `feat/schedule-scenarios-persistence` and not merged; S6-3 is not implemented;
-nothing is deployed. This document describes the merged S5 behaviour and changes when they
+and engine) is implemented and merged (#348); S6-2 (contract section 14) is merged (#349);
+S6-3 (contract section 15: the 26 plane capabilities behind `MY_PA_SCHEDULE_SCENARIOS_ENABLED`,
+revision B `b77334135653`, the lineage families and read shapes, ChatLLM `chatllm-data-v13`)
+is implemented on the branch `feat/schedule-scenarios-capabilities` and not merged; nothing
+is deployed. Its operator procedure (switch order, grant and profile commissioning, read-only
+checks, rollback) is section 9 of
+[`ops/runbooks/cpm-workbench.md`](../../ops/runbooks/cpm-workbench.md). This document describes the merged S5 behaviour and changes when they
 land. **S6-2 change (implemented on that branch, not merged):** the `reference` role and kind
 `working` are retired, every role-`baseline` import is refused
 `invalid_request(PUBLICATION_ROLE)` until S6-3 adds the approval fields, and

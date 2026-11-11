@@ -1,11 +1,12 @@
 """CPM Workbench S5b-2: the Schedule keyset cursor (FAST).
 
 Worker and capabilities contract section 3.7 (R2 section 32.1): the round trip
-for each of the 5 orders, the 512-character bound, the 300 s TTL and the
-future-issue refusal, a binding that covers every input that decides a page
-(capability, Principal, purpose, every normalized command field, the effective
-page size, the order and, for changes, the delta algorithm), and a forged
-position that carries no authority. Every value is synthetic.
+for each of the 11 orders (the 6 Schedule Scenarios S6-3 plane orders
+included), the 512-character bound, the 300 s TTL and the future-issue refusal,
+a binding that covers every input that decides a page (capability, Principal,
+purpose, every normalized command field, the effective page size, the order
+and, for changes, the delta algorithm), and a forged position that carries no
+authority. Every value is synthetic.
 """
 
 from __future__ import annotations
@@ -49,6 +50,13 @@ _POSITIONS: Final[dict[ScheduleCursorOrder, tuple[Any, ...]]] = {
     ScheduleCursorOrder.ACTIVITIES: (17, "srow_cursor0001"),
     ScheduleCursorOrder.HISTORY: (date(2026, 5, 4), INSTANT, "spub_cursor0001"),
     ScheduleCursorOrder.CHANGES: (125,),
+    # Schedule Scenarios S6-3 (contract section 15.6.2): the 6 plane orders.
+    ScheduleCursorOrder.SCENARIOS: (INSTANT, "sscn_cursor0001"),
+    ScheduleCursorOrder.VERSIONS: (7,),
+    ScheduleCursorOrder.SCENARIO_CONTENT: (300,),
+    ScheduleCursorOrder.OUTPUTS: (INSTANT, "ssco_cursor0001"),
+    ScheduleCursorOrder.MATCH_DECISIONS: (INSTANT, "ssmd_cursor0001"),
+    ScheduleCursorOrder.BASELINES: (INSTANT, "sbl_cursor0001"),
 }
 
 

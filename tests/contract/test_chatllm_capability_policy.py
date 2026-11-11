@@ -76,7 +76,8 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
-    assert len(CHATLLM_CAPABILITY_POLICY) == 255
+    # Schedule Scenarios S6-3 package I10-A: the 26 plane names, held at v12.
+    assert len(CHATLLM_CAPABILITY_POLICY) == 281
     assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
 
 
@@ -102,7 +103,9 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # from every client, 19 -> 24. CPM Workbench S5b-2 (chatllm-data-v11): the
     # operator-only schedule import, 24 -> 25. Reports Modernization WP05b: the 4
     # operator-only report custody names, 25 -> 29 (no profile version change).
-    assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 29
+    # Schedule Scenarios S6-3 package I10-A (S6-3-D17, R10-F08): the 26 plane
+    # names held excluded, "pending exposure (I10-C)", 29 -> 55 (no version bump).
+    assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 55
     # Record lineage S1: the six Issue-plane names are an operator decision
     # (ADR-015, OD-07), 2 -> 8, and the eight remaining S1 names 8 -> 16; no
     # data-class member moves, so no profile bump. Record lineage S2's

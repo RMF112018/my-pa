@@ -50,6 +50,13 @@ _IMPORT_FIELDS: Final = frozenset(
         "expected_data_date",
         "supersedes_publication_id",
         "idempotency_key",
+        # Schedule Scenarios S6-3 (contract section 15.9): the automatic Series
+        # form and the import-time approval fields, all defaulted.
+        "series_auto",
+        "series_name_if_new",
+        "approval_reference",
+        "effective_from",
+        "reason",
     }
 )
 
@@ -176,8 +183,7 @@ def test_role_is_required_and_baseline_kind_follows_it() -> None:
     assert refused.allowed_values[SafeDetail.PUBLICATION_ROLE] == tuple(
         role.value for role in SchedulePublicationRole
     )
-    # Only a baseline names a kind (and, from S6-2 until S6-3, no baseline is
-    # imported: `test_baseline_import_is_refused_until_the_approval_fields_exist`).
+    # Only a baseline names a kind (`test_baseline_import_needs_every_approval_field`).
     for kind in ScheduleBaselineKind:
         assert _refused(_payload(baseline_kind=kind.value)).safe_details == (
             SafeDetail.BASELINE_KIND,
@@ -190,17 +196,78 @@ def test_role_is_required_and_baseline_kind_follows_it() -> None:
     assert _refused(_payload(baseline_kind="working")).safe_details == (SafeDetail.BASELINE_KIND,)
 
 
-def test_baseline_import_is_refused_until_the_approval_fields_exist() -> None:
-    """Schedule scenarios contract S6-2-D04: role `baseline` is refused until S6-3.
+_APPROVAL: Final[dict[str, Any]] = {
+    "publication_role": "baseline",
+    "baseline_kind": "contract",
+    "approval_reference": "Synthetic NTP letter 0001",
+    "effective_from": "2026-05-04",
+    "reason": "Synthetic prime contract schedule",
+}
 
-    Whatever the kind (or none), the refusal is `invalid_request(PUBLICATION_ROLE)`,
-    never an unclassified error from a request record that requires an approval.
+
+def test_baseline_import_needs_every_approval_field() -> None:
+    """Schedule scenarios contract section 15.9 (lifting S6-2-D04 for role `baseline`).
+
+    A role-`baseline` import names `baseline_kind`, `approval_reference`,
+    `effective_from` and `reason`; a missing one is refused with its own detail
+    whatever the switches (the plane gate runs in the application, S6-3-D22).
     """
-    for kind in (None, *(member.value for member in ScheduleBaselineKind), "working"):
-        refused = _refused(_payload(publication_role="baseline", baseline_kind=kind))
-        assert refused.safe_details == (SafeDetail.PUBLICATION_ROLE,), kind
-    # The role is still a known value: the refusal lists no other vocabulary.
-    assert "baseline" in {role.value for role in SchedulePublicationRole}
+    request = _build(_payload(**_APPROVAL)).import_request()
+    assert request.approval is not None
+    assert request.approval.approval_reference == "Synthetic NTP letter 0001"
+    assert str(request.approval.effective_from) == "2026-05-04"
+    for field, detail in (
+        ("baseline_kind", SafeDetail.BASELINE_KIND),
+        ("approval_reference", SafeDetail.APPROVAL_REFERENCE),
+        ("effective_from", SafeDetail.EFFECTIVE_FROM),
+        ("reason", SafeDetail.REASON),
+    ):
+        missing = {**_APPROVAL, field: None}
+        assert _refused(_payload(**missing)).safe_details == (detail,), field
+    # Role `update` names none of them.
+    for field, detail in (
+        ("approval_reference", SafeDetail.APPROVAL_REFERENCE),
+        ("effective_from", SafeDetail.EFFECTIVE_FROM),
+        ("reason", SafeDetail.REASON),
+    ):
+        refused = _refused(_payload(**{field: _APPROVAL[field]}))
+        assert refused.safe_details == (detail,), field
+    assert _refused(_payload(**{**_APPROVAL, "effective_from": "05/04/2026"})).safe_details == (
+        SafeDetail.EFFECTIVE_FROM,
+    )
+    # The retired kind is refused by the enum whatever the role.
+    assert _refused(_payload(**{**_APPROVAL, "baseline_kind": "working"})).safe_details == (
+        SafeDetail.BASELINE_KIND,
+    )
+
+
+def test_series_auto_form_is_a_plain_update() -> None:
+    """Section 15.9: the automatic form and its intake-name refusals."""
+    auto = {"series_name": None, "series_auto": True}
+    request = _build(_payload(**auto, series_name_if_new="Synthetic Tower")).import_request()
+    assert request.series_auto is True and request.series_name_if_new is not None
+    for extra, detail in (
+        ({"publication_role": "baseline"}, SafeDetail.SERIES_AUTO),
+        ({"baseline_kind": "contract"}, SafeDetail.SERIES_AUTO),
+        ({"approval_reference": "x"}, SafeDetail.SERIES_AUTO),
+        ({"effective_from": "2026-05-04"}, SafeDetail.SERIES_AUTO),
+        ({"reason": "x"}, SafeDetail.SERIES_AUTO),
+        ({"supersedes_publication_id": "spub_commands0001"}, SafeDetail.SERIES_AUTO),
+        ({"series_auto": "yes"}, SafeDetail.SERIES_AUTO),
+    ):
+        assert _refused(_payload(**{**auto, **extra})).safe_details == (detail,), extra
+    # A new-Series name only with the automatic form; two forms at once refused.
+    assert _refused(_payload(series_name_if_new="Synthetic Tower")).safe_details == (
+        SafeDetail.SERIES_AUTO,
+    )
+    assert _refused(_payload(series_auto=True)).safe_details == (SafeDetail.SERIES_ID,)
+    # An intake Series name is the worker's alone.
+    assert _refused(_payload(series_name="Schedule intake 0123456789ab")).safe_details == (
+        SafeDetail.SERIES_NAME,
+    )
+    assert _refused(_payload(**auto, series_name_if_new="Schedule Intake abc")).safe_details == (
+        SafeDetail.SERIES_NAME,
+    )
 
 
 @pytest.mark.parametrize(

@@ -42,6 +42,7 @@ from my_pa.application.commands import (
 from my_pa.application.service import _LINEAGE_CAPABILITIES
 from my_pa.contracts.v1.commitments import CommitmentListEntry, CommitmentView, WaitingOnEntry
 from my_pa.contracts.v1.envelope import ResponseEnvelope
+from my_pa.domain.identity.operation import Capability
 from my_pa.domain.program.vocabulary import PROGRAM_REPORTING_CAPABILITIES
 
 ROOT: Final = Path(__file__).resolve().parents[2]
@@ -181,6 +182,16 @@ def test_v1_commitment_answers_are_byte_identical(disposable_database: str) -> N
         on.close()
 
 
+#: Schedule Scenarios S6-3: the 5 plane families (`schedule_series.*` reads by name).
+_S63_FAMILIES: Final = (
+    "schedule_scenarios.",
+    "schedule_scenario_versions.",
+    "schedule_cpm_runs.",
+    "schedule_scenario_outputs.",
+    "schedule_baselines.",
+)
+
+
 def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
     excluded = {capability.value for capability in _LINEAGE_CAPABILITIES}
     excluded |= PROGRAM_REPORTING_CAPABILITIES
@@ -209,6 +220,10 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
     }
     # Reports Modernization WP04: the extended `reports.list` and `reports.search`.
     excluded |= {"reports.list", "reports.search"}
+    # Schedule Scenarios S6-3: its 26 plane names are new.
+    excluded |= {
+        capability.value for capability in Capability if capability.value.startswith(_S63_FAMILIES)
+    } | {"schedule_series.current", "schedule_series.match_decisions"}
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
@@ -224,19 +239,23 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
     published = json.loads(enums.pop())
     # CPM Workbench S5b-2 appends its 2 purposes after the S4 one (contract 3.12),
     # and Reports Modernization WP03 appends `report_lifecycle` after those, and
-    # WP05b `report_hold` and `report_retention` after that.
-    assert len(published) == 65
-    basis = published[:-6]
+    # WP05b `report_hold` and `report_retention` after that, and Schedule
+    # Scenarios S6-3 its 3 plane purposes after those.
+    assert len(published) == 68
+    basis = published[:-9]
     assert hashlib.sha256(json.dumps(basis, separators=(",", ":")).encode("utf-8")).hexdigest() == (
         BASIS_PURPOSE_ENUM_SHA256
     )
-    assert published[-6:] == [
+    assert published[-9:] == [
         "program_reporting_read",
         "schedule_import",
         "schedule_read",
         "report_lifecycle",
         "report_hold",
         "report_retention",
+        "schedule_analysis_authoring",
+        "schedule_analysis_read",
+        "schedule_baseline_approval",
     ]
     assert "program_reporting_read" not in basis
 

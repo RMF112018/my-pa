@@ -837,8 +837,8 @@ def test_the_chain_is_readable_and_non_empty() -> None:
     # Schedule audit and worker-plane vocabulary) as 125, and `2a90f91dd786`
     # (Schedule Scenarios S6-2, the scenario and baseline plane) as 126, and
     # `4c37731671fc` (Reports Modernization WP01, the general report plane) as 127.
-    assert len(revisions) == 127
-    assert len({revision for revision, _ in revisions}) == 127
+    assert len(revisions) == 128
+    assert len({revision for revision, _ in revisions}) == 128
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

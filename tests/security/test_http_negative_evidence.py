@@ -79,6 +79,7 @@ from tests.contract.test_transport_parity import (
     staged_mention,
     staged_project_entity,
 )
+from tests.schedule_scenario_samples import SCHEDULE_SCENARIO_CAPABILITIES, scenario_payloads
 from tests.wire import Reply, Wire, serve
 
 from my_pa.adapters.http import (
@@ -345,6 +346,8 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.SCHEDULE_ACTIVITIES_LIST,
         Capability.SCHEDULE_ACTIVITIES_HISTORY,
         Capability.SCHEDULE_CHANGES_LIST,
+        # Schedule Scenarios S6-3: the 26 plane names (scopeless, plane switch off).
+        *SCHEDULE_SCENARIO_CAPABILITIES,
     }
 )
 
@@ -1740,6 +1743,8 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "from_publication_id": "spub_wirepublic001",
             "to_publication_id": "spub_wirepublic002",
         },
+        # Schedule Scenarios S6-3: synthetic plane samples.
+        **scenario_payloads("wire"),
     }
 
 
@@ -2490,6 +2495,8 @@ SCOPED_CAPABILITIES = [
         Capability.SCHEDULE_ACTIVITIES_LIST,
         Capability.SCHEDULE_ACTIVITIES_HISTORY,
         Capability.SCHEDULE_CHANGES_LIST,
+        # Schedule Scenarios S6-3: the 26 plane names (scopeless, plane switch off).
+        *SCHEDULE_SCENARIO_CAPABILITIES,
     }
 ]
 

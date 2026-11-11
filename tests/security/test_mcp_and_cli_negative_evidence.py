@@ -87,6 +87,7 @@ from tests.contract.test_transport_parity import (
 from tests.contract.test_transport_parity import (
     payloads_for as transport_payloads_for,
 )
+from tests.schedule_scenario_samples import SCHEDULE_SCENARIO_CAPABILITIES
 from tests.transports import (
     Answer,
     CliTransport,
@@ -632,6 +633,8 @@ SCOPED_CAPABILITIES = [
         Capability.SCHEDULE_ACTIVITIES_LIST,
         Capability.SCHEDULE_ACTIVITIES_HISTORY,
         Capability.SCHEDULE_CHANGES_LIST,
+        # Schedule Scenarios S6-3: the 26 plane names (scopeless, plane switch off).
+        *SCHEDULE_SCENARIO_CAPABILITIES,
     }
 ]
 

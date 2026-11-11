@@ -421,7 +421,7 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     # CPM Workbench S5b-2 appends its 2 purposes after S4's (contract 3.12),
     # and Reports Modernization WP03 its `report_lifecycle` after those, and
     # WP05b `report_hold` and `report_retention` after that.
-    assert published[-10:] == [
+    assert published[-13:] == [
         *basis_tail,
         "lineage_backfill",
         "program_reporting_read",
@@ -430,6 +430,10 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
         "report_lifecycle",
         "report_hold",
         "report_retention",
+        # Schedule Scenarios S6-3: its 3 plane purposes after those.
+        "schedule_analysis_authoring",
+        "schedule_analysis_read",
+        "schedule_baseline_approval",
     ]
 
 

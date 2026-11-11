@@ -207,7 +207,9 @@ def test_non_lineage_tool_annotations_are_unchanged() -> None:
             capability
         ), name
     # Non-vacuous: keyed non-lineage writes exist, and none is annotated idempotent.
-    keyed = {c.value for c in _IDEMPOTENT_REMOTE_CAPABILITIES} - plane
+    # Schedule Scenarios S6-3 (S6-3-D06): the 6 client-bound plane writes are
+    # idempotent-hinted by their own registry and pinned by their own closure test.
+    keyed = {c.value for c in _IDEMPOTENT_REMOTE_CAPABILITIES} - plane - schedule
     assert keyed
     assert not any(_tools()[name].annotations.idempotent_hint for name in keyed)
     rows = _annotation_rows(others)
@@ -262,6 +264,13 @@ def test_the_remote_key_binds_the_client_for_open_writes_only() -> None:
         Capability.REPORTS_DELETE.value,
         Capability.REPORTS_RESTORE.value,
         Capability.REPORTS_TRANSFER_BEGIN.value,
+        # Schedule Scenarios S6-3 (S6-3-D06): the 6 client-usable plane writes.
+        Capability.SCHEDULE_SCENARIOS_CREATE.value,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE.value,
+        Capability.SCHEDULE_CPM_RUNS_CREATE.value,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD.value,
+        Capability.SCHEDULE_BASELINES_PROPOSE.value,
+        Capability.SCHEDULE_BASELINES_WITHDRAW.value,
     }
     end = {
         "link_id": "irl_lineages31parta01",

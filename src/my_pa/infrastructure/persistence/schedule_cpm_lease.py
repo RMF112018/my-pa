@@ -159,7 +159,9 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _admit_nothing(repository: ScenarioRepository, principal_id: str, new_bytes: int) -> None:
+def _admit_nothing(
+    repository: ScenarioRepository, principal_id: str, new_bytes: int | None
+) -> None:
     """The default `admit_write`: no write budget (S6-2 callers and tests)."""
     del repository, principal_id, new_bytes
 
@@ -173,7 +175,7 @@ def compute_and_store_cpm_run(
     request_digest: str,
     writer: PlaneProvenance,
     admit_compute: Callable[[int, int], None],
-    admit_write: Callable[[ScenarioRepository, str, int], None] = _admit_nothing,
+    admit_write: Callable[[ScenarioRepository, str, int | None], None] = _admit_nothing,
     compute: Callable[[ScenarioContent], CpmResult] = run_cpm,
     clock: Callable[[], datetime] = _now,
 ) -> CpmRunWritten:
@@ -187,10 +189,11 @@ def compute_and_store_cpm_run(
     write-budget check (section 15.10, R10-F02, R10-N01, S6-3-D23), called
     twice: only on the compute path -- after the ledger probe and the
     natural-key probe both found nothing -- in a short transaction under P with
-    0 new bytes, immediately before the leased compute, so a client already
-    over a budget never computes; and authoritatively in the write transaction
-    after a `RESERVED` reservation and before the insert, with the bytes the
-    write stores (0 for a natural-key hit). It raises to refuse.
+    `new_bytes=None` (nothing stored yet: S6-3 refuses a client already at or
+    over a budget or quota), immediately before the leased compute, so such a
+    client never computes; and authoritatively in the write transaction after
+    a `RESERVED` reservation and before the insert, with the bytes the write
+    stores (0 for a natural-key hit). It raises to refuse.
     """
     validate_identifier(principal_id, IdKind.PRINCIPAL)
     # Step 1: the ledger probe, the natural-key probe and the verified content.
@@ -209,10 +212,10 @@ def compute_and_store_cpm_run(
     stored = None
     if verified is not None:
         # R10-F02/R10-N01: the read-only pre-check, never reached by a replay or
-        # a natural-key hit, with 0 new bytes (step 5 re-checks the actual size).
+        # a natural-key hit, with no new bytes (step 5 re-checks the actual size).
         with SqlAlchemyScenarioUnitOfWork(engine) as uow:
             uow.scenarios.lock_principal(principal_id)
-            admit_write(uow.scenarios, principal_id, 0)
+            admit_write(uow.scenarios, principal_id, None)
         stored = _leased_compute(
             engine,
             principal_id,

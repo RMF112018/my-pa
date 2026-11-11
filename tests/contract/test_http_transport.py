@@ -82,6 +82,11 @@ from tests.contract.test_transport_parity import (
     staged_participation,
     staged_project_entity,
 )
+from tests.schedule_scenario_samples import (
+    SCHEDULE_SCENARIO_CAPABILITIES,
+    scenario_commands,
+    scenario_payloads,
+)
 from tests.wire import Wire, serve
 
 from my_pa.adapters.http import create_http_app
@@ -549,6 +554,8 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.SCHEDULE_ACTIVITIES_LIST,
         Capability.SCHEDULE_ACTIVITIES_HISTORY,
         Capability.SCHEDULE_CHANGES_LIST,
+        # Schedule Scenarios S6-3: the 26 plane names (scopeless, plane switch off).
+        *SCHEDULE_SCENARIO_CAPABILITIES,
         # Reports Modernization WP06 T14: the 4 transfer uploads need a report
         # content store and the transfer staging; this harness composes neither.
         Capability.REPORTS_TRANSFER_BEGIN,
@@ -2006,6 +2013,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "from_publication_id": "spub_httppublic001",
             "to_publication_id": "spub_httppublic002",
         },
+        # Schedule Scenarios S6-3: synthetic plane samples.
+        **scenario_payloads("http"),
     }
 
 
@@ -3369,6 +3378,8 @@ def commands_for(
         Capability.SCHEDULE_CHANGES_LIST: ListScheduleChanges(
             from_publication_id="spub_httppublic001", to_publication_id="spub_httppublic002"
         ),
+        # Schedule Scenarios S6-3: synthetic plane samples.
+        **scenario_commands("http"),
     }
 
 

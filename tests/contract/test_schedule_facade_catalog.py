@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Final
 
 import pytest
+from tests.schedule_scenario_samples import SCHEDULE_SCENARIO_CAPABILITIES
 
 from my_pa.adapters.mcp.chatllm_gateway import (
     OPERATOR_TOOL,
@@ -72,8 +73,13 @@ _TABLE: Final[dict[str, tuple[str, str]]] = {
 
 
 def test_every_schedule_capability_has_a_catalog_entry() -> None:
+    # Schedule Scenarios S6-3: the 26 plane names are pinned by
+    # `tests/contract/test_schedule_scenarios_policy_closure.py`.
     schedule = {
-        capability.value for capability in Capability if capability.value.startswith("schedule_")
+        capability.value
+        for capability in Capability
+        if capability.value.startswith("schedule_")
+        and capability not in SCHEDULE_SCENARIO_CAPABILITIES
     }
     assert schedule == set(_TABLE)
     tools = {tool.name: tool for tool in TOOLS}

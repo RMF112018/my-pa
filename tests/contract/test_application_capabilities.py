@@ -79,6 +79,7 @@ from my_pa.application.service import (
     _PROGRAM_REPORTING_CAPABILITIES,
     _REPORT_TRANSFER_UPLOAD_CAPABILITIES,
     _SCHEDULE_CAPABILITIES,
+    _SCHEDULE_SCENARIO_CAPABILITIES,
     ApplicationService,
 )
 from my_pa.contracts.ports import KnowledgeRecord
@@ -667,6 +668,8 @@ def test_capabilities_get_reports_phase_a_pull_contracts_as_not_implemented(
         | _PROGRAM_REPORTING_CAPABILITIES
         # CPM Workbench S5b-2: behind their own default-off switch.
         | _SCHEDULE_CAPABILITIES
+        # Schedule Scenarios S6-3: behind the plane switch on top of that one.
+        | _SCHEDULE_SCENARIO_CAPABILITIES
         # Reports Modernization WP06 T14: served only with a report content
         # store and the transfer staging, which this world composes neither of.
         | _REPORT_TRANSFER_UPLOAD_CAPABILITIES
@@ -709,6 +712,8 @@ def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derive
         - _PROGRAM_REPORTING_CAPABILITIES
         # CPM Workbench S5b-2: behind their own default-off switch.
         - _SCHEDULE_CAPABILITIES
+        # Schedule Scenarios S6-3: behind the plane switch on top of that one.
+        - _SCHEDULE_SCENARIO_CAPABILITIES
         # Reports Modernization WP06 T14: no content store and no staging here.
         - _REPORT_TRANSFER_UPLOAD_CAPABILITIES
     )
@@ -716,6 +721,7 @@ def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derive
     # WP03 adds `reports.update`, `.history`, `.archive`, `.delete`, `.restore`, ungated too;
     # WP05b its 4 operator custody names, ungated as the lifecycle writes.
     # WP06: `reports.transfer.read_chunk` is ungated (T14); its 4 uploads are not.
+    # Schedule Scenarios S6-3: its 26 names are all gated, so the count holds.
     assert len(expected_available) == 191
     assert readiness["implemented_capabilities"] == len(expected_available)
     assert readiness["limitations"]

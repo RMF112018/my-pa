@@ -103,10 +103,12 @@ class _Repository:
 
     def lock_principal(self, *_: object) -> None:
         self._world.steps.append("lock_principal")
-        if self._world.units_read_fails:
-            raise RuntimeError("the units read failed")
 
     def cpm_units_since(self, *_: object) -> int:
+        # S6-3 (R10-F02): the write-budget pre-check takes P before the lease too,
+        # so the units read itself (under the lease) is what fails here.
+        if self._world.units_read_fails:
+            raise RuntimeError("the units read failed")
         return 0
 
     def reserve_request(self, *_: object) -> PlaneReservation:

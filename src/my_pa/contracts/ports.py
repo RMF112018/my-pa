@@ -10933,9 +10933,10 @@ class ScenarioCpmRunner(Protocol):
     The composition root (`bootstrap/gateway.py`) binds the work engine, so the
     application reaches the leased compute without importing the plane
     persistence. `admit_write(repository, principal_id, new_bytes)` is the
-    client write-budget check, called before the leased compute with 0 new
-    bytes (only on the compute path) and again in the write transaction with
-    the bytes the write stores; `admit_compute(used, requested)` is the hourly
+    client write-budget check, called before the leased compute with
+    `new_bytes=None` (only on the compute path: nothing stored yet) and again
+    in the write transaction with the bytes the write stores (0 for a
+    natural-key hit); `admit_compute(used, requested)` is the hourly
     CPM-units check, called under the lease.
     """
 
@@ -10948,7 +10949,7 @@ class ScenarioCpmRunner(Protocol):
         request_digest: str,
         writer: PlaneProvenance,
         admit_compute: Callable[[int, int], None],
-        admit_write: Callable[[ScenarioRepository, str, int], None] = ...,
+        admit_write: Callable[[ScenarioRepository, str, int | None], None] = ...,
         compute: Callable[[ScenarioContent], CpmResult] = ...,
         clock: Callable[[], datetime] = ...,
     ) -> CpmRunWritten:

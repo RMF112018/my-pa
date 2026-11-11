@@ -804,9 +804,16 @@ class ScheduleScenarioApplication:
         principal_id: str,
         writer: PlaneProvenance,
         at: datetime,
-        new_bytes: int,
+        new_bytes: int | None,
     ) -> None:
-        """Section 15.10 step 6: the client write budgets and byte quotas, under P."""
+        """Section 15.10 step 6: the client write budgets and byte quotas, under P.
+
+        `new_bytes` is the canonical bytes this write stores (0 for a CPM
+        natural-key hit, which consumes a write and no bytes, so no byte quota
+        refuses it), or `None` for the CPM pre-check before the leased compute
+        (R10-F02, R10-N01): nothing is stored yet, so it refuses only a client
+        already at or over a write budget or a byte quota.
+        """
         if _is_operator(writer):
             return
         writes = scenarios.client_write_counts(principal_id, writer, at)
@@ -816,12 +823,19 @@ class ScheduleScenarioApplication:
             or writes.principal_day >= PRINCIPAL_WRITES_PER_DAY
         ):
             raise RateLimitedError(SafeDetail.SCENARIO_WRITE_BUDGET)
+        if new_bytes == 0:
+            return
         stored = scenarios.plane_byte_counts(principal_id, writer, at)
-        if (
-            stored.principal_total + new_bytes > PRINCIPAL_BYTES_TOTAL
-            or stored.principal_day + new_bytes > PRINCIPAL_BYTES_PER_DAY
-            or stored.bucket_day + new_bytes > BUCKET_BYTES_PER_DAY
-        ):
+        totals = (
+            (stored.principal_total, PRINCIPAL_BYTES_TOTAL),
+            (stored.principal_day, PRINCIPAL_BYTES_PER_DAY),
+            (stored.bucket_day, BUCKET_BYTES_PER_DAY),
+        )
+        if new_bytes is None:
+            over = any(used >= quota for used, quota in totals)
+        else:
+            over = any(used + new_bytes > quota for used, quota in totals)
+        if over:
             raise RateLimitedError(SafeDetail.STORAGE_QUOTA)
 
     def _reserve(
@@ -881,7 +895,8 @@ class ScheduleScenarioApplication:
     def _reader(authorization: Authorization, payload: dict[str, Any]) -> dict[str, Any]:
         """Section 15.6.4: a remote reader never sees which OAuth client wrote a row."""
         if authorization.capability_grants is not None:
-            return withhold_client_ids(payload)
+            withheld: dict[str, Any] = _without_proposer_clients(withhold_client_ids(payload))
+            return withheld
         return payload
 
     def _answer(
@@ -972,6 +987,7 @@ class ScheduleScenarioApplication:
             replay = work.scenarios.find_request(
                 principal_id, capability.value, command.idempotency_key, digest
             )
+            _refuse_a_conflict(replay)
         if replay is not None:
             return self._replayed_scenario(authorization, replay)
         if command.from_version_id is not None:
@@ -1019,7 +1035,9 @@ class ScheduleScenarioApplication:
             raise _snapshot_refusal(refusal)
         if snapshot is None:  # pragma: no cover
             raise InternalError()
-        version = self._new_version(snapshot.content, label=label, note=note, snapshot=snapshot)
+        version = self._new_version(
+            snapshot.content, label=label, note=note, snapshot=snapshot.report
+        )
         scenario = NewScenario(
             name=scenario.name,
             description=scenario.description,
@@ -1215,6 +1233,7 @@ class ScheduleScenarioApplication:
             replay = work.scenarios.find_request(
                 principal_id, capability.value, command.idempotency_key, digest
             )
+            _refuse_a_conflict(replay)
             if replay is None:
                 # The CAS pre-check (P3-11): a moved head never reaches the change set.
                 head = work.scenarios.head_version(principal_id, command.scenario_id)
@@ -1338,7 +1357,7 @@ class ScheduleScenarioApplication:
             if not operator and used + requested > CPM_UNITS_PER_HOUR:
                 raise RateLimitedError(SafeDetail.CPM_RUN)
 
-        def admit_write(scenarios: ScenarioRepository, owner: str, new_bytes: int) -> None:
+        def admit_write(scenarios: ScenarioRepository, owner: str, new_bytes: int | None) -> None:
             self._admit_write(scenarios, owner, writer, authorization.at, new_bytes)
 
         failure: ApplicationError | None = None
@@ -1422,6 +1441,7 @@ class ScheduleScenarioApplication:
             replay = scenarios.find_request(
                 principal_id, capability.value, command.idempotency_key, digest
             )
+            _refuse_a_conflict(replay)
             if replay is None:
                 version = _owned_version(scenarios, principal_id, version_id)
                 if version is None:
@@ -2300,6 +2320,30 @@ class ScheduleScenarioApplication:
 
 
 # ---- module helpers --------------------------------------------------------------------
+
+
+def _without_proposer_clients(document: Any) -> Any:  # noqa: ANN401
+    """Section 15.4: a proposer's or approver's `client_id`, withheld like the rows'."""
+    if isinstance(document, dict):
+        return {
+            key: (
+                {**value, "client_id": None}
+                if key in {"proposer", "approver"}
+                and isinstance(value, dict)
+                and "client_id" in value
+                else _without_proposer_clients(value)
+            )
+            for key, value in document.items()
+        }
+    if isinstance(document, list):
+        return [_without_proposer_clients(item) for item in document]
+    return document
+
+
+def _refuse_a_conflict(replay: PlaneReservation | None) -> None:
+    """A probed key held by another request digest is `conflict(idempotency_key)`."""
+    if replay is not None and replay.outcome is PlaneReservationOutcome.CONFLICT:
+        raise ConflictError(SafeDetail.IDEMPOTENCY_KEY)
 
 
 def _owned_version(

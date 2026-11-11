@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "4c37731671fc"
+CURRENT_HEAD: Final = "b77334135653"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -144,6 +144,10 @@ SCHEDULE_SCENARIOS_MIGRATION: Final = (
 )
 #: Reports Modernization WP01's additive head (`4c37731671fc`), on the same precedent.
 GENERAL_REPORT_PLANE_MIGRATION: Final = MIGRATIONS / "20261104_4c37731671fc_general_report_plane.py"
+#: Schedule Scenarios S6-3's additive head (`b77334135653`, revision B), on the same precedent.
+SCHEDULE_SCENARIOS_VOCABULARY_MIGRATION: Final = (
+    MIGRATIONS / "20261111_b77334135653_schedule_scenarios_vocabulary.py"
+)
 #: The one sanctioned edit to a historical revision (operator ruling
 #: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
 #: work freezes `a_managed_document_is_identified_within_its_owner` out of
@@ -213,8 +217,6 @@ CONSTRAINT_TABLES: Final[frozenset[str]] = frozenset(
 #: Fixed and written out, so the recurrence guard below is a bounded check over a
 #: named list rather than a repository-wide scan.
 HEAD_PIN_FILES: Final[tuple[str, ...]] = (
-    # Names the head only in a comment explaining its own revision-count bump.
-    "tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py",
     "tests/database/test_cli_auth.py",
     "tests/database/test_entities_graph_vocabulary_migration.py",
     "tests/database/test_legacy_entity_backfill_migration.py",
@@ -223,9 +225,6 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_auth_identity_and_grants_migration.py",
     "tests/schema/test_canvas_workspace_migration.py",
     "tests/schema/test_capture_lifecycle_migration.py",
-    # Names the head only in a comment: Reports Modernization WP02's revision
-    # restates `capability_is_known` to admit `reports.publish`.
-    "tests/schema/test_capture_schema_migration.py",
     # The Commitment counterparty Entity cutover's own revision module names
     # the head as the revision it tests.
     "tests/schema/test_commitment_counterparty_entity_migration.py",
@@ -239,7 +238,6 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_cpm_workbench_vocabulary_migration.py",
     "tests/schema/test_continuity_projects_mutation_migration.py",
     "tests/schema/test_continuity_projects_read_capability_migration.py",
-    "tests/schema/test_extraction_schema_migration.py",
     "tests/schema/test_goodnotes_browser_contract_migration.py",
     "tests/schema/test_goodnotes_client_resume_migration.py",
     "tests/schema/test_goodnotes_content_and_durable_note_stages.py",
@@ -288,9 +286,8 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_webauthn_auth_persistence_migration.py",
     "tests/schema/test_work_task_commitment_migration.py",
     "tests/unit/test_cli_auth.py",
-    # Reports Modernization WP06: names the head's migration file to read its
-    # chunk bound, never as a head constant.
-    "tests/unit/test_reports_transfer_domain.py",
+    # Schedule Scenarios S6-3: names revision B as the head.
+    "tests/schema/test_schedule_scenarios_vocabulary_migration.py",
 )
 
 #: The constant names those files use for the chain's head.
@@ -368,7 +365,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "2a90f91dd786"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "4c37731671fc"
+    assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
     assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
     assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
     assert script.get_revision("6c2306330ceb").down_revision == "023f8f7eb499"
@@ -399,7 +397,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 127
+    assert len(list(MIGRATIONS.glob("*.py"))) == 128
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -560,6 +558,7 @@ def test_no_historical_revision_was_edited() -> None:
         CPM_WORKBENCH_VOCABULARY_MIGRATION.relative_to(ROOT).as_posix(),
         SCHEDULE_SCENARIOS_MIGRATION.relative_to(ROOT).as_posix(),
         GENERAL_REPORT_PLANE_MIGRATION.relative_to(ROOT).as_posix(),
+        SCHEDULE_SCENARIOS_VOCABULARY_MIGRATION.relative_to(ROOT).as_posix(),
         # Not an additive head: the one sanctioned historical edit (see
         # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).
         SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix(),

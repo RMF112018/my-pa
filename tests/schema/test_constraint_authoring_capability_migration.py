@@ -288,6 +288,10 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/unit/test_cli_auth.py",
     # Schedule Scenarios S6-3: names revision B as the head.
     "tests/schema/test_schedule_scenarios_vocabulary_migration.py",
+    # Schedule Scenarios S6-3: names revision B as the head.
+    "tests/contract/test_schedule_scenarios_policy_closure.py",
+    # Schedule Scenarios S6-3: names revision B as the head.
+    "tests/schema/test_capture_schema_migration.py",
 )
 
 #: The constant names those files use for the chain's head.

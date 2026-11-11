@@ -4005,8 +4005,26 @@ the R10 re-review:
 
 ### 15.19 Executed results (S6-3)
 
-Not implemented; the implementing packages record their commands, counts, the revision B
-scratch-cluster measurement and the prove-red outcomes here.
+The implementing packages record their commands, counts, the revision B scratch-cluster
+measurement and the prove-red outcomes here.
+
+**Package I10-A (capabilities; branch `feat/schedule-scenarios-capabilities`, 2026-11-11, not
+merged, migrated, granted or deployed).** Revision B is `b77334135653` (`down_revision =
+"4c37731671fc"`; 128 revision files). Its window, measured on a Homebrew PostgreSQL 15.15
+scratch cluster (`initdb --auth=trust`, loopback, `PGTZ=UTC`; synthetic `audit_events` rows
+inserted under `session_replication_role = replica`, then `ANALYZE`), as the wall clock of
+`alembic upgrade b77334135653` and of `alembic downgrade 4c37731671fc` from a fresh interpreter
+(about 0.5 s of each is interpreter and Alembic start-up, not lock time):
+
+| `audit_events` rows (`reltuples`) | `pg_relation_size` | upgrade (2 restatements) | clean downgrade (refusal scan + 2 restatements) |
+|---|---|---|---|
+| 100,000 | 16,719,872 bytes | 0.68 s | 0.68 s |
+| 1,000,000 | 167,190,528 bytes | 1.54 s | 1.87 s |
+
+Scale by Q10's `reltuples` and `pg_relation_size` on the production host (section 14.14's
+rule); the lock is `ACCESS EXCLUSIVE` on `audit_events` for the whole window, so every
+authorized request pauses for it. Package I10-A's commands, counts and prove-red outcomes are in
+its handoff report; packages I10-B and I10-C add theirs here.
 
 ### 15.20 R10 findings → fixes (revision R10-1)
 

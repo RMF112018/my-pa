@@ -1021,6 +1021,24 @@ ISSUE_AUTHORING_EXEMPTION = frozenset(
     }
 )
 
+#: Schedule Scenarios S6-3's three plane creates the substring proxy refuses --
+#: `schedule_scenarios.create`, `schedule_scenario_versions.create` and
+#: `schedule_cpm_runs.create` -- on the same reading: they append the acting
+#: Principal's own immutable plane rows and reach no source provider and no
+#: enrollment. The 3 `schedule_scenario_outputs.` names trip the proxy only on
+#: the substring "put" in "outputs": a client-asserted output is recorded,
+#: listed and read in the Principal's own plane, and no source moves.
+SCHEDULE_SCENARIO_AUTHORING_EXEMPTION = frozenset(
+    {
+        Capability.SCHEDULE_SCENARIOS_CREATE,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE,
+        Capability.SCHEDULE_CPM_RUNS_CREATE,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_LIST,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_READ,
+    }
+)
+
 
 def test_neither_transport_routes_a_mutating_capability() -> None:
     """The tool list and the CLI's positional, and no name that mutates a *source*.
@@ -1055,6 +1073,7 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
         | REPORT_TYPE_AUTHORING_EXEMPTION
         | GENERAL_REPORT_MANAGEMENT_EXEMPTION
         | ISSUE_AUTHORING_EXEMPTION
+        | SCHEDULE_SCENARIO_AUTHORING_EXEMPTION
     )
     checked = [c for c in IMPLEMENTED_CAPABILITIES if c not in exempt]
     assert len(checked) == len(IMPLEMENTED_CAPABILITIES) - len(exempt)

@@ -79,6 +79,7 @@ from my_pa.infrastructure.persistence.schedule_scenarios import (
 )
 from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManagementUnitOfWork
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
+from tests.database.lineage_s3_read_harness import READS, grant
 from tests.database.schedule_capability_harness import LIMITS, PRINCIPAL, ScheduleRuntime, World
 from tests.database.schedule_plane_world import seed_publication
 from tests.database.test_commitment_entity_counterparty import seed_counterparty_entity
@@ -94,6 +95,7 @@ from tests.database.test_schedule_scenario_capabilities import (
 pytestmark = pytest.mark.database
 
 CLI: Final = OperatorSurface.CLI
+REMOTE: Final = "synthetic-s63-lineage-client"
 BODY: Final = "Decisions: the crane slips a week. Next: resequence the pour."
 _STARTS: Final = datetime(2026, 10, 1, 15, tzinfo=UTC)
 
@@ -245,19 +247,24 @@ def _constraint(plane: LineagePlane, project: str) -> str:
 
 
 def _intake_and_queued(rt: ScheduleRuntime, w: World) -> tuple[str, str]:
-    """An intake Series with its one complete publication, and a queued publication."""
-    intake_series, intake, queued = "sser_s63linintake1", "spub_s63linintake1", "spub_s63linqueued1"
+    """An intake Series with its one complete publication, and a queued one in a plain Series."""
+    intake_series, intake = "sser_s63linintake1", "spub_s63linintake1"
+    queued_series, queued = "sser_s63linqueued1", "spub_s63linqueued1"
     with rt.engine.begin() as c:
         c.execute(text("SET LOCAL session_replication_role = replica"))
-        c.execute(
-            text(
-                "INSERT INTO knowledge.schedule_series (series_id, principal_id, project_id, "
-                "name, name_key) VALUES (:s, :p, :j, :n, lower(:n))"
-            ),
-            {"s": intake_series, "p": PRINCIPAL, "j": w.project, "n": "Schedule intake s63lin"},
-        )
+        for series, name in (
+            (intake_series, "Schedule intake s63lin"),
+            (queued_series, "Queued s63lin"),
+        ):
+            c.execute(
+                text(
+                    "INSERT INTO knowledge.schedule_series (series_id, principal_id, project_id, "
+                    "name, name_key) VALUES (:s, :p, :j, :n, lower(:n))"
+                ),
+                {"s": series, "p": PRINCIPAL, "j": w.project, "n": name},
+            )
         seed_publication(c, PRINCIPAL, intake, intake_series, w.project, "complete", 0)
-        seed_publication(c, PRINCIPAL, queued, intake_series, w.project, "queued", 1)
+        seed_publication(c, PRINCIPAL, queued, queued_series, w.project, "queued", 1)
         c.execute(
             text(
                 "INSERT INTO knowledge.schedule_intake_series (principal_id, project_id, "
@@ -605,6 +612,21 @@ def test_withheld_family_link_stays_confirmable_and_endable(
             (note_anchor(scene, "discussion"),),
         )
     ) == ("not_found", ["to"])
+    # So it does to a remote client granted every family read, the plane's included.
+    remote = grant(*READS, "schedule_scenarios.read", "records.associations.assert")
+    assert (
+        on.ok(
+            assertion("concerns", _ref(scene, "scenario"), _ref(scene, "task"), cited),
+            remote_client=REMOTE,
+            grants=remote,
+        )["association"]["acceptance_basis"]
+        == "client_identified"
+    )
+    assert off.refused(
+        assertion("concerns", _ref(scene, "scenario"), _ref(scene, "commitment"), cited),
+        remote_client=REMOTE,
+        grants=remote,
+    ) == ("not_found", ["from"])
     # Reads drop its endpoints: neither emitted nor counted, only `restricted_evidence`.
     families, qualifiers = _lineage_nodes(off, issue[1])
     assert families == {"situation"}

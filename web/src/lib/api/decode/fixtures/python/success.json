@@ -5152,6 +5152,72 @@
           "edge": "virtual",
           "edge_type": "meeting_note_version_of"
         }
+      },
+      {
+        "family": "scenario",
+        "record_id": "sscn_aaaaaaaa11111111",
+        "depth": 1,
+        "reached_from": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "reached_via": {
+          "edge": "typed",
+          "link_id": "irl_cccccccc33333333"
+        },
+        "schedule": {
+          "data_class": "schedule_scenario",
+          "authority": "client_authored",
+          "authoritative": false,
+          "reportable": false,
+          "trust": "model_proposed",
+          "origin_kind": "publication"
+        }
+      },
+      {
+        "family": "scenario_version",
+        "record_id": "sscv_aaaaaaaa11111111",
+        "depth": 1,
+        "reached_from": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "reached_via": {
+          "edge": "typed",
+          "link_id": "irl_dddddddd44444444"
+        },
+        "schedule": {
+          "data_class": "schedule_scenario",
+          "authority": "client_authored",
+          "authoritative": false,
+          "reportable": false,
+          "trust": "model_proposed",
+          "version_no": 2,
+          "version_label": "what_if"
+        }
+      },
+      {
+        "family": "schedule_baseline",
+        "record_id": "sbl_aaaaaaaa11111111",
+        "depth": 1,
+        "reached_from": {
+          "family": "task",
+          "record_id": "tsk_aaaaaaaa11111111"
+        },
+        "reached_via": {
+          "edge": "typed",
+          "link_id": "irl_eeeeeeee55555555"
+        },
+        "schedule": {
+          "data_class": "schedule_baseline",
+          "authority": "proposed",
+          "authoritative": false,
+          "reportable": false,
+          "trust": "model_proposed",
+          "status": "proposed",
+          "label": null,
+          "effective_type": null
+        }
       }
     ],
     "typed_edges": [
@@ -5227,6 +5293,17 @@
         "to": {
           "family": "meeting",
           "record_id": "mtg_aaaaaaaa11111111"
+        }
+      },
+      {
+        "edge_type": "scenario_version_of",
+        "from": {
+          "family": "scenario_version",
+          "record_id": "sscv_aaaaaaaa11111111"
+        },
+        "to": {
+          "family": "scenario",
+          "record_id": "sscn_aaaaaaaa11111111"
         }
       }
     ],

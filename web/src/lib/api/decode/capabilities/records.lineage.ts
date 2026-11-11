@@ -1,4 +1,4 @@
-import { closed } from "../primitives";
+import { closed, ok } from "../primitives";
 import type { Decoder } from "../types";
 import { strictObject, nullable, arrayOf, checked, text, boolean, integer, enumeration, identifier, timestamp, type Decoded } from "./continuity.projects.create";
 
@@ -25,6 +25,13 @@ import { strictObject, nullable, arrayOf, checked, text, boolean, integer, enume
  * client's unreviewed fact), and it states the client's unverified
  * `user_directed_claim` and the writing OAuth client (`asserting_client_id`,
  * `null` for the human channel and for every remote reader).
+ *
+ * Schedule Scenarios S6-3 (schedule scenarios contract section 15.11.3a) widens
+ * in lockstep: a node of one of the 6 Schedule families carries a `schedule`
+ * summary with exactly its family's keys (every key present, `null` included),
+ * and never another family; a virtual edge admits the 8 Schedule edge types,
+ * each between exactly its two endpoint families; a path step stays the
+ * `meeting_note_version_of` step only (a Schedule edge is never traversed).
  */
 const invalid = () => closed("upstream_contract_invalid", "Invalid capability success contract");
 
@@ -145,10 +152,83 @@ const pathEdge: Decoder<LineagePathEdge> = (input) => {
 };
 
 /*
+ * Schedule Scenarios S6-3 (contract section 15.11.3a item 1): a Schedule node's
+ * `schedule` summary -- its labels (`data_class`, `authority`, `authoritative`,
+ * `reportable`, always `false`, and `trust`) and its family's few fields, never
+ * a name, client text, provenance or another record's identifier.
+ */
+/** The label values a Schedule node carries (section 15.6.3, the node-only row of R10-S06). */
+export const SCHEDULE_DATA_CLASSES = [
+  "schedule_publication", "schedule_activity", "schedule_baseline", "schedule_scenario",
+  "schedule_scenario_output",
+] as const;
+export const SCHEDULE_AUTHORITIES = [
+  "source_bound_derived", "operator_approved", "proposed", "client_authored", "client_asserted",
+] as const;
+export const SCHEDULE_TRUST_LEVELS = ["source_bound_derived", "model_proposed"] as const;
+/** Python `SchedulePublicationStatus`, `BaselineStatus`, `BaselineType`, `VersionLabel`, `OutputKind`. */
+const PUBLICATION_STATUSES = ["queued", "processing", "complete", "partial", "review_required", "failed"] as const;
+const BASELINE_STATUSES = ["proposed", "approved", "ineligible", "rejected", "withdrawn", "revoked"] as const;
+const BASELINE_TYPES = ["contract", "approved_update"] as const;
+const VERSION_LABELS = ["what_if", "update", "simulation_input"] as const;
+const OUTPUT_KINDS = ["monte_carlo", "criticality", "sensitivity"] as const;
+const isoDate = checked(text(10, 10), (value) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const day = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(day.getTime()) && day.toISOString().slice(0, 10) === value;
+});
+const no = checked(boolean, (value) => !value);
+function labels<const C extends string, const A extends readonly string[], const T extends string>(
+  dataClass: C, authorities: A, trust: T, authoritative: Decoder<boolean> = no,
+) {
+  return {
+    data_class: enumeration([dataClass] as const), authority: enumeration(authorities),
+    authoritative, reportable: no, trust: enumeration([trust] as const),
+  };
+}
+const SOURCE = ["source_bound_derived"] as const;
+const SCHEDULE_SHAPES = {
+  schedule_publication: strictObject({
+    ...labels("schedule_publication", SOURCE, "source_bound_derived"),
+    data_date: nullable(isoDate), status: enumeration(PUBLICATION_STATUSES),
+    series_kind: enumeration(["standard", "intake"]),
+  }),
+  schedule_activity: strictObject({
+    ...labels("schedule_activity", SOURCE, "source_bound_derived"),
+    published_activity_id: text(1, 256),
+  }),
+  schedule_baseline: checked(strictObject({
+    ...labels("schedule_baseline", ["operator_approved", "proposed"] as const, "model_proposed", boolean),
+    status: enumeration(BASELINE_STATUSES), label: nullable(text(1, 32)),
+    effective_type: nullable(enumeration(BASELINE_TYPES)),
+  }), (value) => (value.authority === "operator_approved") === (value.effective_type !== null) &&
+    value.authoritative === (value.status === "approved")),
+  scenario: strictObject({
+    ...labels("schedule_scenario", ["client_authored"] as const, "model_proposed"),
+    origin_kind: enumeration(["publication", "version"]),
+  }),
+  scenario_version: strictObject({
+    ...labels("schedule_scenario", ["client_authored"] as const, "model_proposed"),
+    version_no: integer(1), version_label: enumeration(VERSION_LABELS),
+  }),
+  scenario_output: strictObject({
+    ...labels("schedule_scenario_output", ["client_asserted"] as const, "model_proposed"),
+    kind: enumeration(OUTPUT_KINDS), iterations: integer(1),
+  }),
+};
+type ScheduleFamily = keyof typeof SCHEDULE_SHAPES;
+export type ScheduleNodeSummary = Decoded<(typeof SCHEDULE_SHAPES)[ScheduleFamily]>;
+function isScheduleFamily(family: unknown): family is ScheduleFamily {
+  return typeof family === "string" && Object.hasOwn(SCHEDULE_SHAPES, family);
+}
+
+/*
  * A node carries `meeting_id` only as a note version, `title` and `state` only
- * as an Issue, and `availability` only as a Capture version; Python omits the
- * keys a family does not carry, so each family has its own closed shape. Every
- * family carries its path step (S3).
+ * as an Issue, `availability` only as a Capture version, and `schedule` only as
+ * one of the 6 Schedule families (S6-3); Python omits the keys a family does
+ * not carry, so each family has its own closed shape. Every family carries its
+ * path step (S3).
  */
 const nodeBase = {
   family: enumeration(RECORD_FAMILIES), record_id: text(), depth: integer(0, 4),
@@ -160,6 +240,14 @@ const NODE_SHAPES = {
   situation: strictObject({ ...nodeBase, title: issueTitle, state: enumeration(ISSUE_STATES) }),
   capture_version: strictObject({ ...nodeBase, availability: enumeration(["available", "archived"]) }),
 };
+const SCHEDULE_NODE_SHAPES: Readonly<Record<ScheduleFamily, Decoder<unknown>>> = {
+  schedule_publication: strictObject({ ...nodeBase, schedule: SCHEDULE_SHAPES.schedule_publication }),
+  schedule_activity: strictObject({ ...nodeBase, schedule: SCHEDULE_SHAPES.schedule_activity }),
+  schedule_baseline: strictObject({ ...nodeBase, schedule: SCHEDULE_SHAPES.schedule_baseline }),
+  scenario: strictObject({ ...nodeBase, schedule: SCHEDULE_SHAPES.scenario }),
+  scenario_version: strictObject({ ...nodeBase, schedule: SCHEDULE_SHAPES.scenario_version }),
+  scenario_output: strictObject({ ...nodeBase, schedule: SCHEDULE_SHAPES.scenario_output }),
+};
 export type LineageNode = {
   readonly family: RecordFamily;
   readonly record_id: string;
@@ -168,23 +256,49 @@ export type LineageNode = {
   readonly title?: string;
   readonly state?: (typeof ISSUE_STATES)[number];
   readonly availability?: "available" | "archived";
+  readonly schedule?: ScheduleNodeSummary;
   readonly reached_from: Decoded<typeof recordRef> | null;
   readonly reached_via: LineagePathEdge | null;
 };
 const node: Decoder<LineageNode> = (input) => {
   const family = (input as { family?: unknown } | null)?.family;
-  const shape = family === "meeting_note_version" || family === "situation" || family === "capture_version"
-    ? NODE_SHAPES[family] : NODE_SHAPES.plain;
+  const shape: Decoder<unknown> = isScheduleFamily(family) ? SCHEDULE_NODE_SHAPES[family]
+    : family === "meeting_note_version" || family === "situation" || family === "capture_version"
+      ? NODE_SHAPES[family] : NODE_SHAPES.plain;
   const result = shape(input);
-  if (!result.ok) return result;
+  if (!result.ok) return invalid();
   const value = result.value as LineageNode;
   if ((value.reached_from === null) !== (value.reached_via === null)) return invalid();
-  return prefixed(value.record_id, FAMILY_PREFIX[value.family]) ? result : invalid();
+  return prefixed(value.record_id, FAMILY_PREFIX[value.family]) ? ok(value) : invalid();
 };
 
+/** Python `NATIVE_VIRTUAL_EDGE_ENDPOINTS`: each native edge's `(from, to)` families (15.11.3a item 2). */
+export const NATIVE_VIRTUAL_EDGE_ENDPOINTS = {
+  meeting_note_version_of: ["meeting_note_version", "meeting"],
+  scenario_version_of: ["scenario_version", "scenario"],
+  scenario_version_parent: ["scenario_version", "scenario_version"],
+  scenario_based_on_publication: ["scenario", "schedule_publication"],
+  scenario_based_on_baseline: ["scenario", "schedule_baseline"],
+  scenario_forked_from_version: ["scenario", "scenario_version"],
+  scenario_output_of: ["scenario_output", "scenario_version"],
+  schedule_baseline_designates: ["schedule_baseline", "schedule_publication"],
+  schedule_baseline_supersedes: ["schedule_baseline", "schedule_baseline"],
+} as const satisfies Readonly<Record<string, readonly [RecordFamily, RecordFamily]>>;
+/** Python `NativeVirtualEdge`: the note-version edge and the 8 Schedule Scenarios S6-3 edges. */
+export const NATIVE_VIRTUAL_EDGES = [
+  "meeting_note_version_of",
+  "scenario_version_of", "scenario_version_parent", "scenario_based_on_publication",
+  "scenario_based_on_baseline", "scenario_forked_from_version", "scenario_output_of",
+  "schedule_baseline_designates", "schedule_baseline_supersedes",
+] as const satisfies readonly (keyof typeof NATIVE_VIRTUAL_EDGE_ENDPOINTS)[];
+export type NativeVirtualEdge = (typeof NATIVE_VIRTUAL_EDGES)[number];
+
 const virtualEdge = checked(
-  strictObject({ edge_type: enumeration(["meeting_note_version_of"]), from: recordRef, to: recordRef }),
-  (value) => value.from.family === "meeting_note_version" && value.to.family === "meeting",
+  strictObject({ edge_type: enumeration(NATIVE_VIRTUAL_EDGES), from: recordRef, to: recordRef }),
+  (value) => {
+    const [from, to] = NATIVE_VIRTUAL_EDGE_ENDPOINTS[value.edge_type];
+    return value.from.family === from && value.to.family === to;
+  },
 );
 
 /** S3: `next_cursor` is an opaque base64url token (at most 2048 characters) or `null`. */

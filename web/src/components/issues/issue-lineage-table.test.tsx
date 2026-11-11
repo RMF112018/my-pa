@@ -36,7 +36,17 @@ describe("IssueLineageTable", () => {
     render(<IssueLineageTable issueId={ISSUE_ID} />);
     const nodes = await screen.findByRole("table", { name: "Records" });
     const rows = within(nodes).getAllByRole("row").slice(1);
-    expect(rows).toHaveLength(4);
+    // The committed fixture also carries 3 Schedule Scenarios S6-3 nodes (schedule
+    // scenarios contract section 15.11.3a), rendered by family name, without a link.
+    expect(rows).toHaveLength(7);
+    for (const [index, name] of [
+      [4, "Schedule scenario sscn_aaaaaaaa11111111"],
+      [5, "Schedule scenario version sscv_aaaaaaaa11111111"],
+      [6, "Schedule baseline sbl_aaaaaaaa11111111"],
+    ] as const) {
+      expect(within(rows[index]!).getByText(name)).toBeInTheDocument();
+      expect(within(rows[index]!).queryByRole("link")).toBeNull();
+    }
     expect(within(rows[0]!).getByRole("link", { name: "Task tsk_aaaaaaaa11111111" })).toHaveAttribute("href", "/work/tasks/tsk_aaaaaaaa11111111");
     expect(within(rows[0]!).getByText("The Issue itself")).toBeInTheDocument();
     expect(within(rows[1]!).getByText("Meeting note version mnote_aaaaaaaa11111111")).toBeInTheDocument();

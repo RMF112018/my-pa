@@ -334,7 +334,7 @@ def _remote_write(scene: Scene) -> None:
 
 def _chatllm_policy(scene: Scene) -> None:
     del scene
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
     for capability in READS:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL, capability
@@ -513,9 +513,10 @@ def test_import_is_control_plane_excluded() -> None:
 
 
 def test_v11_targets() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
-    # Schedule Scenarios S6-3 package I10-A holds its 26 excluded (R10-F08), so
-    # every target below is unchanged.
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    # Schedule Scenarios S6-3 (chatllm-data-v13): the 22 plane names compose only
+    # with `schedule_scenarios` too, off here, so every target below is
+    # unchanged (`test_v13_targets` has the scenario targets).
     assert len(CHATLLM_CAPABILITY_POLICY) == 281
     # chatllm-data-v12 (Reports Modernization): `reports.publish`, the 5 report
     # management names and the 5 `reports.transfer.*` names (`DATA_REQUIRED`)
@@ -531,7 +532,8 @@ def test_v11_targets() -> None:
     )
     default_all = _planes(constraints=True, lineage=True, program_reporting=True, schedule=True)
     assert len(_desired(default_all)) == 147
-    assert len(_every_composition()) == 512
+    # The `schedule_scenarios` flag doubles the compositions, 512 -> 1,024.
+    assert len(_every_composition()) == 1024
 
 
 def test_planner_desires_schedule_reads_only_with_the_switch() -> None:

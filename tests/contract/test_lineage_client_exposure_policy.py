@@ -139,7 +139,7 @@ _FULL: Final = {
 
 
 def test_v10_client_usable_lineage_names_are_data_conditional() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
     assert len(EXPOSED_LINEAGE) == 27
     assert len(EXPOSED_PROGRAM) == 7
     assert len(EXPOSED) == 34
@@ -237,7 +237,8 @@ def test_v10_demands_program_reporting_grants_only_with_both_switches_and_their_
 def test_v10_never_desires_a_withheld_lineage_name_in_any_composition() -> None:
     compositions = _every_composition()
     # CPM Workbench S5b-2 (chatllm-data-v11): the `schedule` plane flag, 256 -> 512.
-    assert len(compositions) == 512
+    # Schedule Scenarios S6-3 (chatllm-data-v13): `schedule_scenarios`, 512 -> 1,024.
+    assert len(compositions) == 1024
     for planes in compositions:
         for knowledge_manager in (False, True):
             assert not _desired(planes, knowledge_manager=knowledge_manager) & WITHHELD, planes

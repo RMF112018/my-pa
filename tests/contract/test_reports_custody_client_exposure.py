@@ -126,7 +126,7 @@ def test_remote_tool_names_never_publish_a_custody_name(profile: str, writes_ena
 
 
 def test_the_chatllm_policy_excludes_every_custody_name_with_its_rationale() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
     for capability in CUSTODY:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED, capability

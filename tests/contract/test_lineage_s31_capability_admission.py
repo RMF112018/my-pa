@@ -296,7 +296,7 @@ def test_s31_capabilities_are_operator_decision_required() -> None:
     # Schedule Scenarios S6-3: its 26 plane names (no operator decision among them).
     assert len(Capability) == 281
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
 
 
 def test_switch_off_withholds_every_s31_capability(scene: Scene) -> None:
@@ -519,7 +519,7 @@ def test_no_s31_capability_is_in_the_chatllm_data_profile() -> None:
             desired_effective_capabilities(composed_off, knowledge_manager=knowledge_manager)
             & lineage_plane
         )
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
 
 
 # ---- client guidance (section 7.12) ----------------------------------------------

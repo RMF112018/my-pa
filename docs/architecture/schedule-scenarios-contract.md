@@ -2912,7 +2912,7 @@ stopped and removed at the end.
 | S6-2-D01 | **Amendment of section 5.4 and ADR-015 decision 17's "together with the vocabulary":** revision A widens the `record_links` CHECKs from a string-keyed **storage vocabulary**; the public enums and maps move in S6-3 | widening `RecordFamily`/`RelationType` in S6-2 would change the public `records.associations.assert` schema and admit families no resolver can read (R2-09) while S6-2 may expose nothing; the database and the Python declaration stay in lockstep through `tables.py` |
 | S6-2-D02 | **Amendment of section 5.4:** `LINEAGE_READ_GENERATION` 1 → 2 moves to S6-3 | the generation tracks read rules (S3 §3); S6-2 changes none; one bump when the families become visible |
 | S6-2-D03 | **Amendment of section 9.2's table list:** an 11th table, `schedule_scenario_write_refusals` | section 8.3's refused-write bound must survive the refused transaction's rollback; no other plane table can hold it, and adding it in S6-3 would turn revision B into a schema revision |
-| S6-2-D04 | **Owned exception to "commands are S6-3":** `ImportSchedulePublication.import_request` refuses role `baseline` with `invalid_request(PUBLICATION_ROLE)` from S6-2 until S6-3 adds the section 12.3 fields and the `BASELINE_TYPE` plane gate | from S6-2 on a baseline import must carry an approval (one mechanism, R8-F20 b); without this edit the S5 command would build a request the record refuses (an unclassified error), or admit a baseline declaration with no Baseline object |
+| S6-2-D04 | **Owned exception to "commands are S6-3":** `ImportSchedulePublication.import_request` refuses role `baseline` with `invalid_request(PUBLICATION_ROLE)` from S6-2 until S6-3 adds the section 12.3 fields and the `BASELINE_TYPE` plane gate (amended by S6-3-D14: the gate answers `PUBLICATION_ROLE`) | from S6-2 on a baseline import must carry an approval (one mechanism, R8-F20 b); without this edit the S5 command would build a request the record refuses (an unclassified error), or admit a baseline declaration with no Baseline object |
 | S6-2-D05 | a per-Principal plane transaction lock P serializes every plane write | race-free budget, quota and CAS reads under READ COMMITTED (the lineage allocator-lock precedent) |
 | S6-2-D06 | plane advisory namespaces `0x53534350` (P, J) and `0x5343504D` (C) | collision-free against every existing key; C separate so a lease can never block its own request |
 | S6-2-D07 | no `admission_basis` column on `schedule_publications`; the auto-match basis is the decision row's `resulting_publication_id` (and the v2 digest's `match_decision_id`) | F3 freezes the publication's admission columns by an explicit list; a new column would need F3 replaced; the decision row is the evidence (section 11.2 step 3) |
@@ -3533,11 +3533,14 @@ thin `ApplicationService._schedule_scenarios_create`, … handlers):
 
 **CPM runs (amended by R10-F02, R10-F04).** The handler runs steps 1–4, then
 `compute_and_store_cpm_run`, whose `admit_write(repository, principal_id)` keyword (S6-3-D10) is
-called **twice**: (a) in its step 1, inside a short transaction under P (`lock_principal`, then
-the read-only `client_write_counts` and `plane_byte_counts` with the version's
-`content_size_bytes` as the byte estimate of the result), **before** the leased compute, so a
-client over its write budget or byte quota is refused without computing
-(`test_over_budget_cpm_run_never_computes`, P3-41); and (b) authoritatively in its step 5 after a
+called **twice**: (a) **only on the compute path** (amended by R10-N01): after step 1's ledger
+probe and natural-key probe have **both** found nothing, and immediately before the leased
+compute, inside a short transaction under P (`lock_principal`, then the read-only
+`client_write_counts` and `plane_byte_counts` with **0 new bytes**), so it refuses only a client
+that is already at or over a write budget or a byte quota, and is never reached by a replay
+(which returns the stored run, consuming nothing) or a natural-key hit (which consumes a write but
+no bytes and is admitted under its step-5 check); a client over its write budget or byte quota is
+thus refused without computing (`test_over_budget_cpm_run_never_computes`, P3-41); and (b) authoritatively in its step 5 after a
 `RESERVED` reservation and before the insert, with the result's actual canonical size (the
 step-6 rules). A natural-key hit completes a ledger row with `stored_bytes = 0`, so it consumes a
 write but no bytes. `admit_compute(used, requested)` refuses a client channel when `used +
@@ -3586,13 +3589,20 @@ the **general** unit of work's connection (reads only; no plane or S5 row is wri
 section 5.3, S6-3-D21, R10-F12):** they are read with a plain `SELECT`, not `FOR SHARE`. Each
 named row is immutable for linkability: the 5 plane/S5 tables other than
 `schedule_publications` are append-only (G1/F-triggers refuse `UPDATE`/`DELETE`), and a
-publication is linkable only in a terminal `complete`/`partial` status, which never changes; the
-facts read (status, intake mark, `approve`/`revoke` events) can only move from linkable to not
-(`revoke`), and a link to a since-revoked Baseline is the same as one asserted just before the
-revoke. `FOR SHARE` would need `UPDATE` privilege, which repository truth does not guarantee to
+publication is linkable only in a terminal `complete`/`partial` status, which never changes.
+Every fact either is fixed once linkable (terminal publication status — the S5b-1 trigger
+`a_schedule_publication_follows_its_lifecycle` refuses any update of a terminal row; the frozen
+accepted run; set-once row links — `a_schedule_row_changes_only_by_linking`; an intake mark written
+only in the admitting transaction — `_mark_intake` from `admit_publication` — and refused on a
+Series holding another publication — `an_intake_series_holds_only_its_publication`) or moves only
+toward linkable. The one change away from linkable is a `revoke` event append, which takes no row
+lock on `schedule_baselines`, so `FOR SHARE` never serialized against it, and a link read before
+the revoke commits is the serial order link-then-revoke (RR1-F08 "at assert time"; R10-N03,
+verified by R10 re-review 1). `FOR SHARE` would need `UPDATE` privilege, which repository truth does not guarantee to
 the runtime role on these tables (R3-29). **I10-B precondition:** the database-tier test
-`test_share_endpoint_needs_only_select_on_the_schedule_tables` runs `share_endpoint` for each
-family as a role holding exactly the Q8/P-check privileges (no `UPDATE` on the 5 tables); if
+`test_share_endpoint_needs_only_select_on_the_schedule_tables` runs `share_endpoint` for **every**
+family, the publication family included, as a role holding exactly P-check ∪ Q8 privileges (no
+`UPDATE` on the 5 tables other than `schedule_publications`); if
 any implementation path needs more (a lock, an `UPDATE`), I10-B stops and reports: a grant is a
 schema/operator change, never added silently. `LineageEndpoint` gains
 `schedule_linkable: bool = False` and `baseline_approved: bool = False`:
@@ -3669,9 +3679,9 @@ names in `_CONTROL_PLANE_EXCLUDED` with `_SCHEDULE_BASELINE_APPROVAL_EXCLUSION`.
 **Old clients and DV-01:** the version is checked only as the `profile-*` CLI argument
 (`apps/cli/remote_mcp.py` `_run_profile_command`), never stamped on a grant: a client
 provisioned at v10, v11 or v12 keeps every grant and stays healthy while the scenario plane is
-off (its desired set is unchanged); with the plane on, `profile-diff` reports as missing the
-22 (a client already holding the 6 S5b-2 reads) or 28 (a client never profiled with
-`MY_PA_SCHEDULE_ENABLED` on, which also lacks `schedule_series.list`, `schedule_publications.list`, `schedule_publications.read`, `schedule_activities.list`, `schedule_activities.history`, `schedule_changes.list` (purpose `schedule_read`); R10-F05) until the operator runs `profile-apply --profile-version chatllm-data-v13`; calls to an
+off (its desired set is unchanged); with the plane on, `profile-diff` reports as missing the 22
+plus whichever of the 6 S5b-2 reads and the 11 v12 Reports names the client does not hold yet
+(22, 28, 33 or 39; the set rule of 15.17 step 2, R10-F05, R10-N02) until the operator runs `profile-apply --profile-version chatllm-data-v13`; calls to an
 ungranted name are denied. `profile-*` with `chatllm-data-v12` is refused after the bump. No
 MCP database profile, role or opt-in changes (DV-01; T6-18).
 
@@ -3817,7 +3827,7 @@ head admits the lineage families; I10-C's head is the whole slice.
 | client-bound keys (6.7, R8-F09) | façade `test_identical_payloads_from_two_clients_create_two_rows`; and `test_identical_retry_from_one_client_replays` |
 | OD-08 (7) | scope `test_scenario_data_reaches_no_program_surface`; `test_manifest_lineage_section_is_pinned_to_seven_families` |
 | import refused while off (6.2, 12.2, P56; amended by R10-F07) | capabilities `test_baseline_import_refused_while_plane_off` (role `baseline` with all 4 approval fields → `invalid_request(PUBLICATION_ROLE)` with only `MY_PA_SCHEDULE_ENABLED`; the same from a remote or unattested caller → `unsupported`/`denied` first; `reference`/`working` refused whatever the switches) |
-| CPM budget before compute (8.3, R10-F02) | capabilities `test_over_budget_cpm_run_never_computes` (parametrized: write budget, byte quota, refusal bound; the injected `compute` seam is never called) |
+| CPM budget before compute (8.3, R10-F02, R10-N01) | capabilities `test_over_budget_cpm_run_never_computes` (parametrized: `write_budget`, `byte_quota`, `refusal_bound` — the injected `compute` seam is never called; `replay_over_budget` — returns the stored run with `replayed: true`; `natural_key_over_byte_quota` — the existing run is returned, `created: false`, admitted) |
 | operator approval required (12.3, P48) | capabilities `test_baseline_approval_is_attested_operator_only` (each of the 4 by a remote client, stdio MCP and `local_unattested`: `denied`/`unsupported`; by the CLI operator: admitted) |
 | provenance on every output (7, 12.1) | capabilities `test_baseline_outputs_show_provenance` |
 | scenarios record the exact baseline (12.1) | capabilities `test_scenario_records_the_exact_baseline` |
@@ -3876,9 +3886,11 @@ head admits the lineage families; I10-C's head is the whole slice.
 | P3-39 | the composition root rule: application imports `schedule_scenarios` persistence | `test_only_the_composition_root_imports_the_plane` |
 | P3-40 | a refused client write not recorded | `test_refusal_bound_answers_before_decoding[recorded]` |
 | P3-41 | the step-1 `admit_write` pre-check removed from the CPM path (R10-F02) | `test_over_budget_cpm_run_never_computes[write_budget]` (the compute seam is reached) |
+| P3-46 | the pre-check moved before the replay probe (R10-N01) | `test_over_budget_cpm_run_never_computes[replay_over_budget]` (refused instead of replayed) |
+| P3-47 | the pre-check uses the version's content size instead of 0 new bytes, or runs before the natural-key probe (2 runs; R10-N01) | `test_over_budget_cpm_run_never_computes[natural_key_over_byte_quota]` (refused instead of admitted) |
 | P3-42 | withdraw passes `None` for a client channel (bucket taken from anything but `PlaneProvenance`) (R10-F06) | `test_operator_may_propose_and_only_the_operator_withdraws_it[client_withdraws_other_bucket]` and `[local_unattested]` |
 | P3-43 | the import plane gate placed before E-10/E-12 (R10-F01) | `test_baseline_import_refused_while_plane_off` (the remote case answers `invalid_request`) |
-| P3-44 | `share_endpoint` takes `FOR SHARE` on a schedule family (R10-F12) | `test_share_endpoint_needs_only_select_on_the_schedule_tables` (`insufficient_privilege` under the Q8-shaped role) |
+| P3-44 | `share_endpoint` takes `FOR SHARE` on the `schedule_activity` family (a table without `UPDATE` under the test role; R10-F12, R10-N04) | `test_share_endpoint_needs_only_select_on_the_schedule_tables[schedule_activity]` (`insufficient_privilege`, SQLSTATE `42501`, under the role holding exactly P-check ∪ Q8); a mutation on the publication family would stay green (the role holds `UPDATE` there) and is not a valid prove-red |
 | P3-45 | a step-2 grant `denied` recorded as a refusal (R10-F11) | `test_refusal_counting_scope` |
 
 A prove-red that stays green is reported as redundancy, a masked test or an unreachable hazard,
@@ -3897,12 +3909,15 @@ refuses, so the test asserts the seam, not the answer.
    restart both.
 2. **Commissioning (operator-run, not run):** for each ChatLLM client, `profile-diff`,
    `profile-plan`, then `profile-apply --profile-version chatllm-data-v13` (the
-   `ops/runbooks/managed-knowledge-context.md` form). Expected diff (R10-F05): **22 adds** for a
-client that already holds the 6 S5b-2 reads, **28 adds** for one never profiled with
-`MY_PA_SCHEDULE_ENABLED` on (production today: the switch is absent), the extra 6 being
-`schedule_series.list`, `schedule_publications.list`, `schedule_publications.read`, `schedule_activities.list`, `schedule_activities.history`, `schedule_changes.list` (purpose `schedule_read`); anything else is a stop. v13 with `MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires
-exactly the v12 set, so a still-pending Reports commissioning simply uses v13 after this build
-(R10-F03). The 22:
+   `ops/runbooks/managed-knowledge-context.md` form). **Go/no-go is a set rule, not a count**
+(R10-F05, R10-N02): (i) the diff shows **no removal**; (ii) every add is in {the 22 below} ∪ {the
+6 S5b-2 reads `schedule_series.list`, `schedule_publications.list`, `schedule_publications.read`, `schedule_activities.list`, `schedule_activities.history`, `schedule_changes.list` (purpose `schedule_read`)} ∪ {the 11 `chatllm-data-v12` Reports names `reports.publish`, `reports.update`, `reports.history`, `reports.archive`, `reports.delete`, `reports.restore`, `reports.transfer.begin`, `reports.transfer.append`, `reports.transfer.finalize`, `reports.transfer.abort`, `reports.transfer.read_chunk`}; (iii) all 22 are
+present. Anything else is a stop. Expected cases: **22** adds (the client holds the 6 S5b-2 reads
+and was applied at v12), **28** (never profiled with `MY_PA_SCHEDULE_ENABLED` on; production
+today: that switch is absent), **33** (holds the 6 reads, never applied at v12: the Reports
+commissioning still pending in production), **39** (neither). v13 with
+`MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires exactly the v12 set, so a still-pending Reports
+commissioning simply uses v13 after this build (R10-F03). The 22:
    writes `schedule_scenarios.create`, `schedule_scenario_versions.create`,
    `schedule_cpm_runs.create`, `schedule_scenario_outputs.record`, `schedule_baselines.propose`,
    `schedule_baselines.withdraw` (purpose `schedule_analysis_authoring`, `--write`); reads
@@ -4013,3 +4028,14 @@ Design review R10 (PASS_WITH_REQUIRED_CHANGES at `de81d3d8`); Orchestrator dispo
 | R10-F12 | repository truth R3-29 (grant-free revisions; P/Q checks assert no `UPDATE` on 5 of the 6 tables); no `FOR SHARE` for the 6 families (S6-3-D21); I10-B precondition test and stop rule; P3-44; open question 1 (15.1, 15.11.2, 15.18.3) |
 | R10-F13 | `IdKind` module path; the non-effective `from_baseline_id`/`compare` cases mapped (15.1, 15.7.2) |
 | R10 limits | D10 verified: the 14 `change_set_*` values collide with nothing (15.7.1); the base planner targets were executed and the S6-3 rule verified over 512 compositions (15.2) |
+
+**Re-review R10-RR1 (PASS_WITH_REQUIRED_CHANGES at `a0eaca31`; S6-3-D21 accepted) → fixes
+(revision R10-2).**
+
+| Finding | Fix (section) |
+|---|---|
+| R10-N01 | the CPM `admit_write` pre-check runs only on the compute path, after both the replay and the natural-key probe miss, with 0 new bytes; step 5 stays authoritative with the actual size; test cases `[replay_over_budget]`, `[natural_key_over_byte_quota]`; P3-46, P3-47 (15.10, 15.16) |
+| R10-N02 | commissioning go/no-go as a set rule (no removals; every add in the 22 ∪ the 6 S5b-2 reads ∪ the 11 v12 Reports names, listed; all 22 present), with 22/28/33/39 as the expected cases; 15.12.1 aligned (15.12.1, 15.17) |
+| R10-N03 | D21 justification reworded: facts are fixed once linkable or move only toward linkable; the evidence (lifecycle, row-link and intake triggers; `_mark_intake`); revoke takes no row lock (15.11.2) |
+| R10-N04 | P3-44 targets `schedule_activity` (no `UPDATE`), expects `42501` under the P-check ∪ Q8 role; the precondition test runs every family, the publication family included (15.11.2, 15.16.3) |
+| R10-N05 | the S6-2-D04 row points to the S6-3-D14 amendment (14.12.1) |

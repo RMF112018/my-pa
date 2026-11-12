@@ -20,7 +20,7 @@ review and, for any real data, the operator source designation of OD-06.
 | Real financial source | **none designated** (OD-06 open; UB-009 `FINANCE_SOURCE_NOT_DESIGNATED`) |
 | Certified Program financial totals | **unreachable** (OD-08: any material gap is `NOT_REPORTABLE`; a looser threshold is an operator risk acceptance) |
 | F-1 content | pure domain under `src/my_pa/domain/project_controls/financial/`, the synthetic interchange parser under `src/my_pa/infrastructure/financial/`, synthetic fixtures under `tests/fixtures/financial_source/`, tests |
-| F-1 implementation state | **I11-A (pure domain and its 6 test modules): implemented in F-1 (not deployed)**, branch `feat/financial-source-domain`; implementation divergences F1-D26 to F1-D33 (section 13.1). I11-B (parser, fixtures, manifest, scope guard): not yet implemented |
+| F-1 implementation state | **implemented in F-1 (not deployed)**, branch `feat/financial-source-domain`: I11-A (pure domain and its 6 test modules; implementation divergences F1-D26 to F1-D33) and I11-B (synthetic parser, 23 named + 52 malformed fixtures and the hash-pinned manifest, the `.gitattributes` rule, the parser, fixture and scope-guard test modules; implementation divergences F1-D34 to F1-D41), section 13.1. Nothing is deployed, persisted or served |
 | Migration, table, persistence, capability, purpose, handler, grant, façade, ChatLLM or remote policy, web route, Settings field, worker | **none in F-1** (section 12.3 pins it) |
 | Switch `MY_PA_FINANCIAL_SOURCE_ENABLED` | documented future switch for F-2; **not defined and not read** anywhere in F-1 |
 | Deployment, production data, legacy `financial` schema and `procore.procore_financial_*` rows | none touched, none read |
@@ -1422,14 +1422,15 @@ hazard, never as "covered".
 | CR-011 exact hash parity (evaluator) | 3.7 step 7 | `tests/unit/test_financial_reportability.py::test_admitted_run_failing_hash_parity_is_hash_mismatch`; `tests/unit/test_financial_canonical.py::test_canonical_encoder_bytes_are_pinned` |
 | Legacy names never match the planned-table guard | 12.3 | `tests/architecture/test_financial_source_scope.py::test_the_table_guard_does_not_match_legacy_names` |
 
-**Implementation state of the crosswalk (I11-A).** Every row naming
-`tests/unit/test_financial_money.py`, `tests/unit/test_financial_domain.py`,
+**Implementation state of the crosswalk (I11-A, I11-B).** Every row naming an F-1 test
+module — `tests/unit/test_financial_money.py`, `tests/unit/test_financial_domain.py`,
 `tests/unit/test_financial_equations.py`, `tests/unit/test_financial_reportability.py`,
-`tests/unit/test_financial_canonical.py` or `tests/unit/test_financial_properties.py` is
-implemented in F-1 (not deployed). Rows naming `tests/unit/test_financial_source_parser.py`,
-`tests/unit/test_financial_source_fixtures.py` or
-`tests/architecture/test_financial_source_scope.py` are pending I11-B. Rows owned by F-2 or
-F-3 are unchanged.
+`tests/unit/test_financial_canonical.py`, `tests/unit/test_financial_properties.py` (I11-A),
+`tests/unit/test_financial_source_parser.py`, `tests/unit/test_financial_source_fixtures.py`
+and `tests/architecture/test_financial_source_scope.py` (I11-B) — is implemented in F-1 (not
+deployed); `test_financial_crosswalk_names_real_tests` binds every name of section 12.1 and
+this table to a defined function. Rows owned by F-2 or F-3 are unchanged and not implemented
+(no persistence, import, read or exposure exists).
 
 ---
 
@@ -1477,6 +1478,19 @@ Implementation divergences recorded by I11-A (contract vs code; none changes a d
 | F1-D31 | `test_seeded_body_mutations_are_refused`: a random byte change in a valid **file** body is refused | in I11-A it mutates 1 random byte of the canonical bytes of a valid version: the strict decoder refuses it, or the decoded version has a different `content_sha256` and the evaluator reports `hash_mismatch` (33 of 200 seeds reach the decoded branch) | the file half needs the I11-B parser; I11-B adds the file-body mutation property to `tests/unit/test_financial_source_parser.py` or extends this test |
 | F1-D32 | section 12.3: no `json` import outside `canonical.py`'s use of the shared encoder | `canonical.py` imports `json` for `loads_canonical` (the only JSON decode path, with refusing `parse_float` / `parse_constant` hooks, section 6.2) | I11-B's `test_financial_modules_use_no_float_io_or_logging` allows `json` in `canonical.py` only |
 | F1-D33 | input-contract violations of section 5.3 step 1 | also raise `ValueError` for 2 supplied runs with the same `run_ref`, an admitted run whose version names another system than its designation, and `admit_source_run` given an outcome of another file digest; `quarantined_run_refs` of any other type than `frozenset` is a `TypeError`; `MAX_FINANCIAL_PROJECTS = 100` is a finance constant pinned equal to S4 `MAX_PROGRAM_PROJECTS` by `test_project_cap_is_the_s4_cap` (the domain imports only `MetricValueState` from S4) | fail-closed inputs; the allowed-roots rule of section 12.3 |
+
+Implementation divergences recorded by I11-B (contract vs code; none changes a decision above):
+
+| ID | Contract | Implementation | Reason |
+| --- | --- | --- | --- |
+| F1-D34 | V13 assigns `partial_export` "(last line or the early `end`)"; PR-21 expects line 3 for `partial_export__count.csv` | a missing final `end` refuses at the last line, an early `end` at its line, a line-3 `row_count` different from the actual count at line 3, an `end` `row_count` different from it at the `end` line; a file that has its format line but no header or no line 3 is `partial_export` at its last line (truncated, not `header_mismatch`) | the refusal line names the line that disagrees; PR-21 fixes line 3 |
+| F1-D35 | V2, V5, V8 and V10 each list 2 codes | the first-listed check runs over the whole input before the second (`empty_input` before `too_large`, `carriage_return` before `control_character`, `too_many_rows` before `line_too_long`, `duplicate_column` before `header_mismatch`) | "the first failing step decides" read per listed check |
+| F1-D36 | V12/V15 "requirements, formula, grammars" | per line: the requirement of every column (in header order), then the formula check of every non-`amount` cell, then the grammar of every non-empty cell in header order; on line 3 an unknown `status` makes `approved_by`/`approved_at` optional so its own `enum_value` decides | 1 deterministic order; a bad `status` is not misreported as `cell_missing` |
+| F1-D37 | V16 "in the listed order" | each section 7.7 rule (and each sub-rule of a bullet, and each transfer rule) runs over every record or transfer group before the next rule; a transfer refusal names the later leg (for `transfer_leg_count`, the group's last leg) | 1 deterministic first offending line |
+| F1-D38 | V13: an `end` cell formula is `formula_injection` | unreachable: every `end` cell except `row_count` must be empty, so the requirement phase answers `cell_not_empty` first, and `row_count` must equal the actual count; `test_end_line_cells_are_validated` asserts `cell_not_empty` for a formula cell | the requirement phase precedes the formula phase (F1-D36) |
+| F1-D39 | section 8.3 gives the values of each file | the admitted files are rendered by the writer from the I11-A builder's versions (`tests/fixtures/financial_domain.py`, whose refs such as `SYN-L-K01` the contract does not name), so every parsed file reproduces the domain `content_sha256`; refusal lines are written by the writer from each mutation's position, never computed by the parser; the manifest adds a `domain_key` per named file and a `synthetic` note, and its 43 scenario goldens (reportability, reasons, program reasons, `overview_sha256`) come from the domain evaluation | the parser is checked against independent expectations, and the 2 packages against each other |
+| F1-D40 | 9 test modules with the exact section 12.1 names | as written, plus `tests/unit/test_financial_source_parser.py::test_seeded_file_body_mutations_are_refused` (the file half of F1-D31: 200 seeds, 1 random byte of the base body replaced, never admitted) and `tests/architecture/test_financial_source_scope.py::test_evaluator_signature_is_pinned` (section 5.3: by `ast`, exactly 5 parameters, all required, the last `quarantined_run_refs: frozenset[str]`) | F1-D31 and "the scope guard pins the signature" |
+| F1-D41 | section 8.1 rule "or `binary`" fallback | the `-text whitespace=...` rule holds: `git diff --check` over the fixture tree is clean, so the `binary` fallback is not used; `FinanceParseLimits` also refuses a non-`int` or non-positive bound (`TypeError` / `ValueError`) | the primary rule suffices; a limit of 0 would refuse every input |
 
 ### 13.2 Open operator decisions
 

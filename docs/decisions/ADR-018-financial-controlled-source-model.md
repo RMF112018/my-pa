@@ -1,9 +1,12 @@
 # ADR-018: Financial controlled source model
 
-- **Status:** Proposed — accepted by directive for **design and synthetic proof only**
-  (slice F-1: pure domain, a neutral synthetic interchange parser and synthetic fixtures).
-  No real financial source is designated (OD-06 open; UB-009
-  `FINANCE_SOURCE_NOT_DESIGNATED` stands); certified Program financial totals are
+- **Status:** Proposed — **not accepted**. Design and synthetic proof (slice F-1: pure
+  domain, a neutral synthetic interchange parser and synthetic fixtures) undertaken under the
+  operator's program directive of 2026-10-17 and the operator's 2026-11-12 discretion grant
+  ("proceed with the next appropriate step at your discretion"; F-1 selected by the Manager),
+  within OD-06's "theoretical schema/fixtures can be prepared" carve-out. The model decisions
+  below are **not operator-ratified**. No real financial source is designated (OD-06 open;
+  UB-009 `FINANCE_SOURCE_NOT_DESIGNATED` stands); certified Program financial totals are
   unreachable (OD-08). Nothing is persisted, migrated, granted, exposed or deployed; no
   capability, table, identifier kind or switch consumer exists. F-2 (persistence and
   operator-only import) and F-3 (Program financial read) each need separate authorization.
@@ -11,12 +14,11 @@
 - **Repository basis:** `origin/main@10095168dc5f3c4709e0706751e6252db57418b7`, tree
   `15e2cc01fde83d29721a194dc0aa9d1b323c5940`, branch `feat/financial-source-domain`.
   `ADR-018` was unallocated there: `docs/decisions/` held ADR-001 to ADR-017.
-- **Authority:** the record lineage program's operator-selected defaults (OD-08 selected by
-  the operator directive of 2026-10-17, recorded in
-  [ADR-015](ADR-015-record-lineage-and-issue-situations.md)), under which OD-06 permits
-  "theoretical schema/fixtures" while blocking import and real totals; and the Manager's F-1
-  slice authorization relayed to the design worker. This ADR does not ratify any source,
-  approval hierarchy, threshold or exposure.
+- **Authority:** as in Status. The OD-08 default (selected by the operator directive of
+  2026-10-17, recorded in [ADR-015](ADR-015-record-lineage-and-issue-situations.md)) governs
+  reportability. This ADR does not ratify any source, approval hierarchy, threshold or
+  exposure; design review R11 (PASS_WITH_REQUIRED_CHANGES) is resolved in contract revision
+  R11-1.
 - **Scope and contract:** WP-05A, CR-011, AT-020 of review package
   `MYPA-LINEAGE-ADVERSARIAL-REVIEW-20261017-001`; the concrete contract is
   [`financial-source-contract.md`](../architecture/financial-source-contract.md).
@@ -28,8 +30,13 @@ and lists finance as not built. CR-011 asks for an immutable, controlled financi
 model: source runs and versions with hashes, periods, cutoffs and approval, Project
 mappings, change orders and balanced scope transfers, exact money and a `NOT_REPORTABLE`
 answer whenever a material fact is missing. No finance source has been designated, the
-`Project.value` field and collector prose are not a ledger, and the migrated legacy
-PostgreSQL schema named `financial` is archived legacy data, not a designated source.
+`Project.value` field and collector prose are not a ledger. A migrated legacy PostgreSQL
+schema named `financial` exists (67 objects: 28 `MIGRATE_DATA`, 20 `REBUILD_AND_VALIDATE`, 11
+`ARCHIVE_LEGACY_SOURCE_ONLY`, 8 `REINITIALIZE_OPERATIONAL_STATE`; 65 `FINANCIAL_OPERATIONAL`, 2
+personal), together with legacy `procore.procore_financial_*` tables; both are unanalysed,
+their production row content is unverified, and neither is a designated source. They are
+flagged to the operator as a possible OD-06 candidate needing its own analysis and
+designation; UB-009 stands.
 
 ## Decision
 
@@ -37,10 +44,14 @@ PostgreSQL schema named `financial` is archived legacy data, not a designated so
    never writes to a source. A source version is an immutable snapshot of an external
    export, identified by `(source_system, source_version_ref)` and its canonical content
    SHA-256; the same ref with different content is a conflict, never an update.
-2. **Approval is the source's assertion, checked against an operator designation.** A
-   version is usable only when approved by a designated approver, not stale (`approved_at <
-   cutoff_at` is stale), not withdrawn and unambiguous. Proposed versions never supersede and
-   never feed a figure. No client can approve, designate, import or map.
+2. **Approval is self-asserted export content; authenticity is provenance.** The file's
+   status, approver, source system and body hash are consistency-checked against the operator
+   designation (a version is usable only when it names a designated approver, is not stale —
+   `approved_at < cutoff_at` is stale — not withdrawn and unambiguous), but these checks do
+   **not** authenticate the file: a forger can write any of them and recompute the hash.
+   Authenticity rests entirely on an operator-only import of a file the operator obtained from
+   the designated source; there is no signature. Proposed versions never supersede and never
+   feed a figure. No client can approve, designate, import or map.
 3. **Mappings from external to native Projects are operator-reviewed, append-only
    revisions** with the single match basis `operator_review`; there is no fuzzy or automatic
    acceptance; a wrong mapping is quarantined by a new revision.
@@ -55,14 +66,16 @@ PostgreSQL schema named `financial` is archived legacy data, not a designated so
    transfer, eliminated once in Program gross movement; double counting is detected.
 6. **Every material gap is `NOT_REPORTABLE`** with closed reasons, an explicit denominator and
    per-Project figures; no zero is substituted; the evaluator has no threshold parameter.
-   Without a designation the answer is `source_not_integrated`.
+   Without a designation the answer is `source_not_integrated`. `reportable` certifies source
+   integrity and coverage only; it is never a certified total (OD-08).
 7. **Synthetic only until OD-06.** F-1 defines a neutral, versioned synthetic interchange
    format `my-pa-synthetic-finance-v1` (strict unquoted ASCII CSV, whole-file accept or
    refuse, closed refusal codes) and synthetic fixtures. A real source needs its own adapter,
    mapping review and independent review.
 8. **Staging.** F-1 adds no public or persistent surface (pinned by an architecture scope
-   guard). F-2 plans 9 append-only, Principal-partitioned `financial_*` tables in schema
-   `knowledge`, an operator-only import behind the default-off switch
+   guard). F-2 plans 9 append-only, Principal-partitioned tables, always schema-qualified
+   `knowledge.financial_*` (never in schema `financial`; classified `excluded` and protected in
+   the MCP object-grant mechanism), an operator-only, attested-local import behind the default-off switch
    `MY_PA_FINANCIAL_SOURCE_ENABLED`, and recovery by switch-off with rows retained. F-3 plans
    `programs.financial.overview` withheld from ChatLLM and remote clients until OD-06 and
    OD-08 are decided.

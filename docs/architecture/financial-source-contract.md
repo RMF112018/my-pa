@@ -2,8 +2,12 @@
 
 **Status:** proposed implementation contract for the financial controlled-source slice
 (WP-05A, CR-011, AT-020) under
-[`ADR-018`](../decisions/ADR-018-financial-controlled-source-model.md) (Proposed —
-accepted by directive for design and synthetic proof only). It is the single document the
+[`ADR-018`](../decisions/ADR-018-financial-controlled-source-model.md) (Proposed — **not
+accepted**; design and synthetic proof undertaken under the operator's program directive of
+2026-10-17 and the operator's 2026-11-12 discretion grant, with F-1 selected by the Manager,
+inside OD-06's "theoretical schema/fixtures can be prepared" carve-out; the model decisions
+are not operator-ratified). Revision R11-1 resolves design review R11 (section 15). It is the
+single document the
 F-1 (pure domain, synthetic interchange parser, synthetic fixtures), F-2 (schema,
 persistence, operator-only import, mapping review) and F-3 (Program financial read and its
 exposure) implementers code against. **Only F-1 is in scope now.** F-2 and F-3 are written
@@ -17,10 +21,12 @@ review and, for any real data, the operator source designation of OD-06.
 | F-1 content | pure domain under `src/my_pa/domain/project_controls/financial/`, the synthetic interchange parser under `src/my_pa/infrastructure/financial/`, synthetic fixtures under `tests/fixtures/financial_source/`, tests |
 | Migration, table, persistence, capability, purpose, handler, grant, façade, ChatLLM or remote policy, web route, Settings field, worker | **none in F-1** (section 12.3 pins it) |
 | Switch `MY_PA_FINANCIAL_SOURCE_ENABLED` | documented future switch for F-2; **not defined and not read** anywhere in F-1 |
-| Deployment, production data, legacy `financial` schema rows | none touched, none read |
+| Deployment, production data, legacy `financial` schema and `procore.procore_financial_*` rows | none touched, none read |
 
 Without a designated source every answer is `source_not_integrated` / `NOT_REPORTABLE`,
-never a fabricated zero, budget or EAC.
+never a fabricated zero, budget or EAC. A `reportable` answer certifies **source integrity
+and coverage only** (section 5.3); it is never a "certified total" — OD-08 still blocks
+certified Program totals, and no F-3 surface may present it as one (F1-U11).
 
 **Basis:** `origin/main@10095168dc5f3c4709e0706751e6252db57418b7` (tree
 `15e2cc01fde83d29721a194dc0aa9d1b323c5940`, S6-3 #354 merged), branch
@@ -62,7 +68,10 @@ source format, its adapter, its mapping and its approval hierarchy are an operat
 5. Tests (section 12): money, domain, equations (with the AT-020 domain assertions),
    evaluator, canonical vectors, seeded property tests, parser, fixtures, and the
    architecture scope guard.
-6. Count pins and shard weights re-measured in lockstep (section 2, row R-17).
+6. Count pins, claimed counts and shard weights re-measured in lockstep **by each package at
+   its own head** (section 2, row R-17; section 14).
+7. A `.gitattributes` rule keeping the byte-exact fixtures out of text and whitespace
+   handling (section 8.1).
 
 ### 1.2 Not in F-1
 
@@ -93,14 +102,15 @@ proves nothing public or persistent exists.
 | R-07 | ADR number | — | `docs/decisions/` holds ADR-001 to ADR-017 | **ADR-018** allocated |
 | R-08 | Capability naming | `programs.financial.overview` (07) | `programs.members.resolve`, `programs.overview` exist (S4), Purpose `program_reporting_read`, behind `MY_PA_PROGRAM_REPORTING_ENABLED` | F-3 adds `programs.financial.overview` in the same `programs.*` family with its own purpose (section 10). No capability in F-1 |
 | R-09 | IdKind | finance identifiers implied | 174 members; none of `fdes`, `fsrun`, `fsver`, `fmap`, `fpsn`, `fline`, `fchg`, `fxfr`, `fleg` is used | F-1 adds **no** IdKind; F-2 adds the 9 planned prefixes (section 9.2) |
-| R-10 | Tables | 8 `financial_*` tables | No `financial_*` table in `src/my_pa/infrastructure/persistence/tables.py` (`METADATA` schema `knowledge`). A **legacy** PostgreSQL schema named `financial` exists (created by revision `5d75f23847c9`; 67 legacy objects in `migrations/data/disposition_registry.json`, dispositions `MIGRATE_DATA` 28, `REBUILD_AND_VALIDATE` 20, `ARCHIVE_LEGACY_SOURCE_ONLY` 11, `REINITIALIZE_OPERATIONAL_STATE` 8) and `financial` is in the grant allowlist of `src/my_pa/infrastructure/database/mcp_object_grants.py` | F-2 tables go in schema `knowledge`, never in the legacy `financial` schema. The legacy schema is **not** a designated source, is never read by this slice and does not change UB-009 (F1-D08, F1-U09) |
+| R-10 | Tables | 8 `financial_*` tables | None of the 9 planned table names (section 9.1) exists in `src/my_pa/infrastructure/persistence/tables.py` (`METADATA` schema `knowledge`). A **migrated legacy** PostgreSQL schema named `financial` exists: created by revision `5d75f23847c9` (`SCHEMAS` tuple), its tables by the generated target DDL `migrations/sql/target_tables.up.sql` (e.g. `"financial"."aging_exposure_report_items"`, `"financial"."forecast_accuracy_results"`) under revision `1e6c0a94f3b7`. `migrations/data/disposition_registry.json` lists 67 objects with `target_schema = "financial"`: dispositions `MIGRATE_DATA` 28, `REBUILD_AND_VALIDATE` 20, `ARCHIVE_LEGACY_SOURCE_ONLY` 11, `REINITIALIZE_OPERATIONAL_STATE` 8; sensitivity `FINANCIAL_OPERATIONAL` 65, `PERSONAL_COMMUNICATION_OR_IDENTITY` 2; object families `forecast_*` (including `forecast_external_forecasts`, `forecast_cost_entries`, `forecast_monthly_actuals_by_budget_code`, `forecast_source_ingestions`, `forecast_budget_details`), `second_brain_financial_*` and `staffing_*`. `financial` is in `_SCHEMAS` of `src/my_pa/infrastructure/database/mcp_object_grants.py` and in `src/my_pa/infrastructure/migration/reconciliation.py`. Production row content is **unverified** (28 objects are data-migration targets, so real financial rows may exist) | F-2 tables are always schema-qualified `knowledge.financial_*`; never created in, granted through or read from schema `financial`. The legacy schema is unanalysed and **not** a designated source; it does not change UB-009. It is recorded as a possible OD-06 candidate needing its own analysis and designation (F1-O12, F1-D08, F1-U09) |
+| R-10a | Procore financial tables | not mentioned | schema `procore` holds legacy `procore_financial_change_orders`, `procore_financial_change_order_line_items`, `procore_financial_change_events` (target DDL); the target DDL also names `second_brain_financial_source_coverage_snapshots` and the column `raw_financial_source_payload_persisted` | Not read, not mapped, not designated by any slice here; no F-2/F-3 code reads `procore.*` or `financial.*` (an F-2/F-3 obligation, section 9.1). Possible OD-06 candidate (F1-O12). The F-1 scope guard must not match these legacy names (section 12.3 positive control) |
 | R-11 | Finance mentions in source | — | `financial_mention` (Capture classification), `financial_fact` (Knowledge consequential class), the legacy schema name; none is a finance ledger | Untouched; the scope guard matches only this slice's tokens (section 12.3) |
 | R-12 | Operator-only source import | operator designation | S5b-2 precedent: `schedule_publications.import` is an operator-only, attested-local capability (ADR-016) | F-2 follows that precedent (section 9.4); OD for CLI vs capability recorded as F1-O09 |
 | R-13 | Domain dependency rule | — | `tests/architecture/test_dependency_direction.py`: domain uses only the standard library and `my_pa.domain` / `my_pa.contracts`; domain may import other domain packages | Finance domain imports stdlib + `my_pa.domain.schedule.canonical` (`canonical_json_bytes` only) + `my_pa.domain.program.vocabulary` (`MetricValueState` only) |
 | R-14 | Settings field | switch `MY_PA_FINANCIAL_SOURCE_ENABLED` | Switches live in `src/my_pa/bootstrap/settings.py` | **F1-D15:** F-1 adds no Settings field; the scope guard pins that the string has no consumer |
 | R-15 | `programs.financial.overview` input | `program_entity_id`, `period`, `perspective`, `currency` | Variance is defined only within 1 cost basis | F-3 adds required `cost_basis` (F1-D11) |
 | R-16 | AT-020 test | `tests/integration/test_financial_scope_transfer.py` (database+integration) | no finance persistence exists | AT-020 domain half in F-1 (`tests/unit/test_financial_equations.py`); the DB half keeps the package path and is **owned by F-2**, not added as a skipped test (F1-D13) |
-| R-17 | Count pins F-1 trips | — | `tests/architecture/test_spelled_counts_match_the_sets_they_name.py::test_section_3_states_the_module_counts_it_says_it_derives` binds `docs/plans/mcv-completion-plan.md` section 3 to `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`; `tests/architecture/test_claimed_test_counts_match_collection.py` binds the mypy corpus, FAST and architecture tier figures in `docs/plans/relationship-intelligence-implementation-plan.md`; `tests/ci_shard_weights.json` and `python -m tests.ci_shard verify` | F-1 adds 8 source modules (494 → 502) and 9 test modules (953 → 962). The last-landing implementer re-measures every figure with the command its sentence names, in the file's own style (a dated current paragraph, the previous one demoted), and re-weighs the shards. No Capability, Purpose, IdKind or revision count moves |
+| R-17 | Count pins F-1 trips | — | `tests/architecture/test_spelled_counts_match_the_sets_they_name.py::test_section_3_states_the_module_counts_it_says_it_derives` binds `docs/plans/mcv-completion-plan.md` section 3 to `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`; `tests/architecture/test_claimed_test_counts_match_collection.py` binds the mypy corpus, FAST and architecture tier figures in `docs/plans/relationship-intelligence-implementation-plan.md`; `tests/ci_shard_weights.json` and `python -m tests.ci_shard verify` | F-1 adds 8 source modules and 9 test modules: **I11-A** 494 → 500 source, 953 → 959 test; **I11-B** 500 → 502, 959 → 962. **Each package** re-measures every figure of both contended `docs/plans` files with the command its sentence names, in the file's own style (a dated current paragraph, the previous one demoted), and re-weighs `tests/ci_shard_weights.json` and runs `python -m tests.ci_shard verify` **at its own head**, so every package head is green. No Capability, Purpose, IdKind or revision count moves |
 
 ---
 
@@ -140,7 +150,7 @@ value.
 | `FinancialReportability` | `reportable`, `not_reportable`, `source_not_integrated` (07 enum verbatim) |
 | `FinancialSourceState` | `effective`, `not_integrated`, `integrity_gap`, `mapping_gap`, `approval_gap`, `source_gap` |
 | `FinancialMetric` | section 4.1 (17 members) |
-| `FinancialNotReportableReason` | section 5.1 (28 members) |
+| `FinancialNotReportableReason` | section 5.1 (29 members) |
 | `FinanceParseRefusalCode` | section 7.8 (50 members) |
 
 Measures valid per perspective (anything else is parser refusal `measure_perspective_mismatch`):
@@ -157,8 +167,10 @@ Measures valid per perspective (anything else is parser refusal `measure_perspec
 | `contingency` | yes | yes | ≥ 0 |
 | `allowance` | yes | yes | ≥ 0 |
 
-A change order amount is any non-zero amount (deductive changes are negative). A transfer
-leg is `debit` with amount < 0 and `credit` with amount > 0.
+The sign column applies to `account_line` records only (parser code `amount_sign`). A change
+order amount is any non-zero amount (deductive changes are negative; zero is
+`change_order_zero`). A transfer leg is `debit` with amount < 0 and `credit` with amount > 0,
+checked **only** by `transfer_leg_sign`, never by `amount_sign` (R11-F12).
 
 ### 3.3 Money (`money.py`)
 
@@ -168,7 +180,9 @@ leg is `debit` with amount < 0 and `credit` with amount > 0.
 | Storage semantics | `NUMERIC(20,4)`: scale exactly 4, at most 16 integer digits, `-10^16 < amount < 10^16` (`AMOUNT_LIMIT = Decimal(10) ** 16`, exclusive) |
 | Canonical value | every amount held by a record is `quantize(Decimal("0.0001"))` of its exact input and satisfies `is_storable_amount`; constructing a record with an exponent other than `-4` raises `ValueError` |
 | `is_storable_amount(value: object) -> bool` | `type(value) is Decimal`, finite, exponent `-4`, `abs(value) < AMOUNT_LIMIT`, not negative zero |
-| `parse_amount(text: str) -> Decimal` | section 7.5 grammar; raises `AmountError(code)` with `code` ∈ {`amount_grammar`, `amount_negative_zero`, `amount_scale`, `amount_range`}; scale > 4 is **refused, never rounded** |
+| `parse_amount(text: str) -> Decimal` | section 7.5 grammar; raises `AmountError(code)` with `code` ∈ {`amount_grammar`, `amount_negative_zero`, `amount_scale`, `amount_range`}; scale > 4 is **refused, never rounded**. The scale-4 `quantize` runs under `FINANCE_CONTEXT`, whose `Inexact`/`Rounded` traps make a rounding quantize impossible by construction (it would raise, and the grammar has already refused every input that could) |
+| `money_sum(values: Iterable[Decimal]) -> Decimal` | starts from `Decimal("0.0000")` (exponent −4), so an empty sum is the storable `0.0000`, never `Decimal(0)` |
+| Negation / absolute value | no result is built by unary negation; `transfers_out` uses `copy_abs()`, differences use subtraction; every result passes through `_normalise_zero` (a zero result is `Decimal("0.0000")`, never `-0.0000`) before `is_storable_amount` |
 | `format_amount(value: Decimal) -> str` | `format(value, "f")` of a storable amount: always exactly 4 decimals, `-` only when < 0, never an exponent, never `-0.0000` (e.g. `"-150000.0000"`, `"0.0000"`) |
 | Arithmetic | `money_sum(values)` and every subtraction run under `FINANCE_CONTEXT = Context(prec=38, rounding=ROUND_HALF_EVEN, Emin=-999999, Emax=999999, traps=[InvalidOperation, DivisionByZero, Overflow, Underflow, Subnormal, Inexact, Rounded, FloatOperation])`. Sums of scale-4 values are exact, so `Inexact`/`Rounded` never fire on valid data; if they fire the computation raises (a bug, not a rounding). A result is then checked with `is_storable_amount`; `abs(result) ≥ AMOUNT_LIMIT` becomes metric reason `aggregate_out_of_range` (section 5), never a clamp |
 | Rounding | **Forbidden** in parsing, storage, equations, consolidation, hashing and the overview. **Only** `presentation_amount(value, currency) -> str` rounds: `value.quantize(Decimal(1).scaleb(-minor_units(currency)), rounding=ROUND_HALF_EVEN)` under a context without the `Inexact`/`Rounded` traps; a negative zero result is written without sign. Presentation strings are never summed, stored, hashed or compared; F-1 uses it only in tests; F-3 may use it for display |
@@ -183,7 +197,11 @@ for those perspectives and that `approvers` are the recognized approval actors.
 `source_system` and each approver match the identifier grammar (section 7.5); `perspectives`
 and `approvers` are non-empty. **F-1 has no production designation:** designations are an
 evaluator input supplied by tests only; F-2 persists operator designations (section 9) and
-until OD-06 none exists, so every F-3 answer is `source_not_integrated`.
+until OD-06 none exists, so every F-3 answer is `source_not_integrated`. The evaluator
+receives **active** designations only (F-2 filters revoked ones before calling it); 2
+designations naming the same `source_system` in 1 call are an input-contract violation and
+raise `ValueError` (F-2 keeps at most 1 active designation per system). Approver names and the
+source system are self-asserted export content (section 11).
 
 ### 3.5 Source run and source version
 
@@ -213,37 +231,65 @@ identified by `(source_system, source_version_ref, ref | transfer_ref)`.
 
 ### 3.7 Version resolution (immutability, supersession, spoofing)
 
-For a **scope key** `(source_system, period, perspective, currency, cost_basis)` and the
-admitted runs of that designated system:
+Inputs: the admitted and refused runs of 1 designated system S, after the request's
+`source_cutoff` filter (section 5.3 step 1). Definitions:
 
-1. **Conflict.** Two admitted versions with the same `(source_system, source_version_ref)`
-   and different `content_sha256` ⇒ every Project mapped from that system gets
-   `source_version_conflict` (the same ref may never carry 2 contents; a spoofed or edited
-   re-export is detected here). Identical `content_sha256` from 2 runs is the same version
-   (idempotent re-import).
-2. **Supersession** counts only from a version whose status is `approved` or `withdrawn`;
-   a `proposed` version **never** supersedes anything (F1-D18). Version X is superseded
-   when an `approved`/`withdrawn` version of the same scope key names X in `supersedes_ref`.
-3. **Heads** = versions of the scope key not superseded. Among heads:
-   - exactly 1 `approved` head and no `withdrawn` head ⇒ that version is **effective**;
-   - more than 1 `approved` head ⇒ `source_version_ambiguous`;
-   - a `withdrawn` head (and no approved head) ⇒ `withdrawn_source`;
-   - only `proposed` heads ⇒ `approval_missing`;
-   - no version of the scope key ⇒ section 5.3 step 6.
-4. `proposed` versions of the scope key are disclosed as `pending_source_versions`
-   (their `content_sha256`, sorted) and never feed a figure.
-5. **Approval checks** on the effective version: `approved_by ∉ designation.approvers` ⇒
-   `approval_actor_unrecognized`; `approved_at < cutoff_at` ⇒ `approval_stale` (an approval
-   cannot cover data cut off after it — F1-D17).
-6. **Refused runs.** A refused run whose `run_sequence` is greater than the `run_sequence`
-   of the run that admitted the effective version (or any refused run when there is no
-   effective version) adds its mapped reason to every Project mapped from that system:
-   parser `partial_export` ⇒ `partial_export`, parser `hash_mismatch` ⇒ `hash_mismatch`,
-   every other parser or admission code ⇒ `source_refused`. A refused run cannot say which
-   Projects it covered, so the rule is conservative by design. Older refused runs are only
-   counted (`denominator.refused_runs`).
-7. **Hash parity.** `source_content_sha256(run.version) != run.content_sha256` ⇒
-   `hash_mismatch` (tamper after admission; in F-2 a row-to-object readback mismatch).
+- A **version** is identified by its `content_sha256`; 2 or more admitted runs with equal
+  `content_sha256` carry the **same** version (idempotent re-import, including a re-export
+  whose rows differ only in order and so whose `file_sha256` differs).
+- The **admitting run** of a version is the admitted run with the **greatest
+  `run_sequence`** among the admitted runs carrying that `content_sha256` (R11-F05).
+- The **scope key** is `(S, period, perspective, currency, cost_basis)`.
+
+1. **Conflict (system-wide, terminal).** If 2 admitted versions of S have the same
+   `source_version_ref` and different `content_sha256` — in **any** period, perspective,
+   currency or basis — every Project mapped from S gets `source_version_conflict` for every
+   request, and resolution for S stops (no effective version, no further version reason). A
+   ref may never carry 2 contents. This detects an edited or spoofed re-export **only when
+   the other content was imported too** (section 11, F1-U10).
+2. **Supersession graph** over the versions of the scope key: an edge V → X when V is
+   `approved` or `withdrawn` and `X.source_version_ref == V.supersedes_ref` with X in the same
+   scope key. A `proposed` version **never** supersedes (F1-D18). A `supersedes_ref` naming no
+   version of the scope key (dangling, or a version of another scope key) creates no edge: a
+   dangling `approved` version stands on its own; a dangling `withdrawn` version withdraws
+   nothing it can name and stays a `withdrawn` head (fail-closed).
+3. **Heads** = versions of the scope key with no incoming edge. The table is exhaustive; `a`,
+   `w`, `p` count `approved`, `withdrawn`, `proposed` heads:
+
+   | Condition (checked in this order) | Outcome |
+   | --- | --- |
+   | no version of the scope key exists | 5.3 step 6 classification (the **only** route there) |
+   | the supersession graph of the scope key has a cycle | `source_version_ambiguous` |
+   | `a ≥ 2` | `source_version_ambiguous` |
+   | `a = 1` and `w ≥ 1` | `source_version_ambiguous` (an approved and a withdrawn head disagree) |
+   | `a = 1` and `w = 0` (any `p`) | that approved version is **effective** |
+   | `a = 0` and `w ≥ 1` (any `p`; also several withdrawn heads) | `withdrawn_source` |
+   | `a = 0`, `w = 0`, `p ≥ 1` | `approval_missing` |
+
+   Versions exist in every row below the first, so "versions of the scope key exist" never
+   produces a period/perspective/basis/currency mismatch or `source_version_missing`.
+4. `proposed` versions of the scope key are disclosed as `pending_source_versions` (their
+   `content_sha256`, sorted) and never feed a figure nor block one.
+5. **Approval consistency checks** on the effective version: `approved_by ∉
+   designation.approvers` ⇒ `approval_actor_unrecognized`; `approved_at < cutoff_at` ⇒
+   `approval_stale` (an approval cannot cover data cut off after it — F1-D17). These check
+   self-asserted export content against the designation; they do not authenticate it
+   (section 11).
+6. **Refused runs (poisoning).** A refused run of S whose `run_sequence` is greater than the
+   admitting run's `run_sequence` of the effective version — or any refused run of S when the
+   scope key has no effective version — adds its mapped reason to every Project mapped from S:
+   parser `partial_export` ⇒ `partial_export`, parser `hash_mismatch` ⇒ `hash_mismatch`, every
+   other parser or admission code ⇒ `source_refused`. A refused run cannot say which period,
+   perspective, currency or basis it covered, so the effect is **cross-scope by design**: a
+   refused file meant for `2026-11` blocks `2026-10` answers of S until recovery. **Recovery:**
+   the operator imports a good export again; every import appends a new run (F-2 keeps no
+   file-hash uniqueness, section 9.1), so re-importing the identical good file, or a
+   re-export with the same content, makes a newer admitting run and clears the poison. Older
+   refused runs are only counted (`denominator.refused_runs`). When the scope key has no
+   version at all, both this step's reasons and the 5.3 step 6 classification reason apply.
+7. **Hash parity.** For every admitted run carrying the effective version,
+   `source_content_sha256(run.version) != run.content_sha256` ⇒ `hash_mismatch` (tamper or
+   corruption after admission; in F-2 a row-to-object readback mismatch).
 
 ### 3.8 Project mapping (append-only review versions; never fuzzy)
 
@@ -254,7 +300,9 @@ alphanumerics) and is set exactly when `state` ∈ {`proposed`, `accepted`, `qua
 `None` when `rejected`. `match_basis` has the single member `operator_review`: there is no
 fuzzy, name, alias, similarity or automatic basis, and constructing one is impossible (closed
 enum). Revisions of one key are numbered 1..n without gaps; the **current** revision is the
-highest. A mapping change is a new revision, never an edit.
+highest. A mapping change is a new revision, never an edit. Revisions given to the evaluator
+with a gap or a duplicate `(source_system, external_project_id, revision)` are an
+input-contract violation and raise `ValueError` (never silently resolved; R11-F19).
 
 Per native Project `P` and designated `source_system` S:
 
@@ -363,7 +411,10 @@ For `owner_budget`, when `original_budget` and `current_budget` are both reporte
 `current_budget == original_budget + approved_changes + transfer_net` must hold exactly, else
 the Project has project reason `source_reconciliation_failed` (the source is internally
 inconsistent, or a movement was counted twice). Pending changes and pending transfers are
-excluded on both sides.
+excluded on both sides. **This identity is a synthetic-model assumption:** a real budget may
+carry other adjustments (e.g. reallocations without a transfer record) and would then fail
+every Project; whether the rule holds for a designated source is operator decision F1-O13
+(model default: the identity applies).
 
 ### 4.6 Scope transfers
 
@@ -392,7 +443,11 @@ transfer with 1 leg outside the scope is external and is not eliminated. Program
      the request perspective (section 3.8);
   2. program reason: a change-order `ref` or a `transfer_ref` appearing in more than 1
      effective version entering the answer, or a `ref` used as both a change-order ref and a
-     transfer ref across those versions.
+     transfer ref across those versions. The versions **entering the answer** are the
+     effective versions (section 3.7) of every designated system for the request scope key
+     that supplied a figure to at least 1 member Project. Independent systems that
+     legitimately reuse a ref give a fail-closed false positive, and the same change order
+     under 2 different refs in 2 systems is not detected (F1-U12).
 - Program identity, asserted in tests (not a reason): for `owner_budget`, when every term is
   reported, Σ `current_budget` = Σ `original_budget` + Σ `approved_changes` + Σ
   `transfer_net`.
@@ -403,12 +458,13 @@ transfer with 1 leg outside the scope is external and is not eliminated. Program
 
 ## 5. Completeness and the `NOT_REPORTABLE` evaluator
 
-### 5.1 `FinancialNotReportableReason` (closed, 28 members; sorted in every output)
+### 5.1 `FinancialNotReportableReason` (closed, 29 members; sorted in every output)
 
 | Reason | Level | Meaning |
 | --- | --- | --- |
 | `source_not_integrated` | program | no designation covers the request perspective |
 | `membership_unresolved` | program | the Program member set has unresolved members (S4 resolver input) |
+| `membership_truncated` | program | the S4 resolver reached a budget (`MAX_PROGRAM_PROJECTS = 100` or the edge budget), so `project_ids` is a partial set (R11-F06) |
 | `mapping_missing` | project | no accepted or pending mapping for the Project |
 | `mapping_unreviewed` | project | only a `proposed` mapping |
 | `mapping_quarantined` | project | current mapping `quarantined` |
@@ -455,10 +511,18 @@ Signature (exact; **no threshold, tolerance or materiality parameter exists**):
 Sequence[SourceDesignation], runs: Sequence[SourceRun], mappings:
 Sequence[ProjectMappingRevision]) -> FinancialOverview`.
 
-`FinancialScopeRequest(project_ids: tuple[str, ...]` (sorted, unique, 1..100),
-`unresolved_members: int ≥ 0, period, perspective, currency, cost_basis)`.
+`FinancialScopeRequest(project_ids: tuple[str, ...]` (sorted, unique, 1..100 — the S4
+`MAX_PROGRAM_PROJECTS` cap; more raises `ValueError`), `unresolved_members: int ≥ 0,
+membership_truncated: bool, period, perspective, currency, cost_basis, source_cutoff:
+datetime | None)`. `source_cutoff` is an aware UTC instant (F-3 normalizes the 07 RFC3339
+input to UTC) or `None` (R11-F07).
 
 1. Input order never matters: designations, runs and mappings are sorted canonically first.
+   Designations must be active and unique per system (section 3.4); mapping revisions must be
+   gap-free (section 3.8); a violation raises `ValueError`. When `source_cutoff` is set, every
+   admitted run whose version has `cutoff_at > source_cutoff` is removed **before** section
+   3.7 ("the answer as of that source cutoff"); refused runs are kept (their cutoff is
+   unknown, so the fail-closed poisoning of section 3.7 step 6 still applies).
 2. If no designation lists `request.perspective`: reportability `source_not_integrated`;
    every Project state `not_integrated` with reason `source_not_integrated`; every value
    `null`, `not_reportable`; stop.
@@ -468,8 +532,8 @@ Sequence[ProjectMappingRevision]) -> FinancialOverview`.
 4. Per Project, mapping resolution (section 3.8) across designated systems for the
    perspective.
 5. If mapped from exactly 1 system: take that system's resolution outcome; apply
-   section 3.7 steps 1, 5, 6, 7 reasons.
-6. If the scope key has no version at all, classify by the nearest existing versions of
+   section 3.7 steps 1, 3, 5, 6, 7 reasons.
+6. Only when the scope key has **no version at all** (section 3.7 step 3, first row), classify by the nearest existing versions of
    that system, in this order: same period+perspective+basis, other currency ⇒
    `currency_mismatch` + `fx_missing`; same period+perspective, other basis ⇒
    `basis_mismatch`; same period, other perspective ⇒ `perspective_mismatch`; other period
@@ -482,11 +546,12 @@ Sequence[ProjectMappingRevision]) -> FinancialOverview`.
 10. Program metric: `reported` with the aggregate (section 4.1) when every member's metric is
     `reported` and no program reason applies to it; otherwise `null` / `not_reportable` with
     the sorted union of member metric reasons, member project reasons and program reasons
-    (`membership_unresolved` when `unresolved_members > 0`, `double_count_detected`,
-    `aggregate_out_of_range`).
+    (`membership_unresolved` when `unresolved_members > 0`, `membership_truncated` when
+    `membership_truncated` is true, `double_count_detected`, `aggregate_out_of_range`).
 11. Reportability: `not_reportable` when any project-level or program-level reason exists,
     else `reportable` (metric-level reasons leave it `reportable` and are visible per
-    metric).
+    metric). `reportable` certifies **source integrity and coverage only** — it is never a
+    certified total (OD-08 still blocks those; F1-U11).
 
 **Materiality (OD-08 default).** Every gap is material. There is no threshold, no tolerance
 and no percentage; a looser rule is an operator risk acceptance (F1-O03) and would be a
@@ -498,7 +563,7 @@ signature).
 | Field | Type | Notes |
 | --- | --- | --- |
 | `calculation_version` | `"my-pa-finance-calc-v1"` | |
-| `request` | the request (period, perspective, currency, cost_basis, project_ids, unresolved_members) | |
+| `request` | the request (period, perspective, currency, cost_basis, project_ids, unresolved_members, membership_truncated, source_cutoff) | |
 | `reportability` | `FinancialReportability` | |
 | `reasons` | sorted tuple of every program- and project-level reason present | |
 | `program_metrics` | tuple of `FinancialMetricValue(metric, value: Decimal \| None, value_state: MetricValueState, reasons)` in catalogue order | `restricted` is never produced in F-1 (F-3 visibility) |
@@ -506,12 +571,41 @@ signature).
 | `transfer_eliminations` | tuple, sorted by `transfer_ref` | section 4.6 |
 | `source_versions` | sorted `content_sha256` of effective versions used | |
 | `pending_source_versions` | sorted `content_sha256` of proposed versions in scope | |
-| `source_cutoff_at` | earliest `cutoff_at` among effective versions used, or `null` | the common cutoff |
+| `source_cutoff_at` | the **earliest** `cutoff_at` among effective versions used, or `null` | every figure is at least as current as this instant |
 | `denominator` | `FinancialDenominator(member_projects, unresolved_members, projects_reportable, missing_source_count, refused_runs, projects_by_source_state: {6 states → int})` | integers; `missing_source_count` = members whose state ≠ `effective`; never hidden |
 
 S4 alignment: same `MetricValueState`, same rule that a total is `null` with sorted `reasons`
 rather than a substituted number, same denominator discipline. Divergences: a finance-own
 reason enum (F1-D05) and decimal string values (F1-D03).
+
+**Verified zero.** A `reported` value of `0.0000` is deliberately not flagged apart from any
+other reported value: no zero is ever substituted, so every reported value — zero included —
+is evidenced by a complete, approved, effective export (section 4.1). 07's `verified_zero`
+`coverage_state` is therefore implied by `value_state = reported`, `value = "0.0000"`.
+
+**07 output mapping (F1-D22).** Each field of 07 `programs.financial.overview` is mapped or
+dropped:
+
+| 07 field | This contract |
+| --- | --- |
+| `program_entity_id` | added by F-3 (F-1 takes `project_ids`) |
+| `period`, `perspective`, `currency` | `request` echo; `cost_basis` added (F1-D11) |
+| `reportability` | `reportability` (same 3 values) |
+| `measures[].metric_id` | `program_metrics[].metric` |
+| `measures[].grain` | dropped: Program grain is `program_metrics`, Project grain is `projects[].metrics` |
+| `measures[].value` | `value`, decimal string or `null` (F1-D03) |
+| `measures[].unit` | dropped: every money value is in the request `currency` |
+| `measures[].coverage_state` | `value_state` + `reasons` (F1-D04); `verified_zero` as above |
+| `measures[].dedupe_basis` | dropped: dedupe is fixed by section 4.7 (native Project id; change orders and transfers by ref) |
+| `measures[].source_run_ids` | dropped in F-1 (no persisted ids); top-level `source_versions` carries content digests; F-3 may add `fsver_` ids |
+| `measures[].as_of` | top-level `source_cutoff_at` |
+| `measures[].excluded_project_count` | `denominator.missing_source_count` |
+| `measures[].nonadditive_across_projects` | dropped: every catalogue metric is additive; gross transfers are handled by elimination (section 4.6) |
+| `transfer_eliminations` | as F1-D12 |
+| `source_versions` | content digests (F-3 may map to `fsver_` ids) |
+| `source_cutoff` (input) | `request.source_cutoff` (step 1) |
+| `source_cutoff` (output) | `source_cutoff_at` (earliest effective cutoff) |
+| `missing_source_count` | `denominator.missing_source_count` |
 
 ---
 
@@ -560,7 +654,11 @@ rows in a different order have different `file_sha256` and equal `content_sha256
 `source_version_from_object(obj) -> SourceVersion` is the strict inverse: exact key sets,
 closed values, amounts through `parse_amount`, every record rebuilt through its constructor;
 any deviation (unknown/missing key, JSON number where a string is required, `float`) raises
-`FinanceDecodeError` whose message carries nothing of the object. **Hash parity rule:**
+`FinanceDecodeError` whose message carries nothing of the object. Counts and integers are
+checked with `type(x) is int` (a `bool` is refused). Any JSON decoding of these objects (F-2
+readback, manifest goldens) uses `json.loads` with `parse_float`, `parse_int` for non-count
+positions and `parse_constant` hooks that refuse, because `json.loads` accepts `NaN` and
+`Infinity` by default (R11-F14). **Hash parity rule:**
 `source_content_sha256(source_version_from_object(source_version_object(v))) ==
 source_content_sha256(v)` for every admitted `v`, and F-2's readback of persisted rows must
 reproduce the stored `content_sha256` byte for byte.
@@ -687,8 +785,9 @@ limit no fixture reaches.
 - `cutoff_at` ≥ first instant of `period` ⇒ else `cutoff_before_period`.
 - `withdrawn` ⇒ `row_count` 0 ⇒ else `withdrawal_has_rows`; `supersedes_ref ==
   source_version_ref` ⇒ `supersedes_self`.
-- measure valid for the perspective and sign rules (section 3.2) ⇒ `measure_perspective_mismatch`,
-  `amount_sign`; a change order amount of zero ⇒ `change_order_zero`.
+- `account_line` measure valid for the perspective ⇒ `measure_perspective_mismatch`; its sign
+  per section 3.2 ⇒ `amount_sign` (account lines only); a change order amount of zero ⇒
+  `change_order_zero`. Transfer-leg signs are checked only below (`transfer_leg_sign`).
 - `ref` values unique across all records, and no `transfer_ref` equals any `ref` ⇒
   `duplicate_ref`.
 - account-line identity (section 3.6) unique ⇒ `duplicate_identity`.
@@ -703,7 +802,7 @@ limit no fixture reaches.
 `empty_input`, `too_large`, `bom_present`, `non_ascii`, `carriage_return`,
 `control_character`, `quote_character`, `partial_export`, `too_many_rows`, `line_too_long`,
 `format_unrecognized`, `duplicate_column`, `header_mismatch`, `field_count`,
-`cell_too_long`, `source_version_missing`, `source_version_duplicate`,
+`cell_too_long`, `source_version_not_first`, `source_version_duplicate`,
 `record_type_unknown`, `cell_missing`, `cell_not_empty`, `formula_injection`,
 `identifier_grammar`, `amount_grammar`, `amount_scale`, `amount_range`,
 `amount_negative_zero`, `amount_sign`, `period_grammar`, `timestamp_grammar`, `enum_value`,
@@ -735,8 +834,8 @@ reject, no partial acceptance**, ever.
 | V9 | line 1 ≠ format name | `format_unrecognized` (1) |
 | V10 | header: a repeated column name; header ≠ frozen | `duplicate_column`, `header_mismatch` (2) |
 | V11 | every line ≥ 3: 24 cells; each cell ≤ `max_cell_chars` | `field_count`, `cell_too_long` |
-| V12 | line 3 `record_type` is `source_version`; parse line 3 fully (requirements, formula, grammars) | `source_version_missing` (3), line-3 codes |
-| V13 | last line is an `end` record with valid `row_count`, no other `end`, both counts equal the actual count | `partial_export` (last line or the early `end`) |
+| V12 | line 3 `record_type` is `source_version`; parse line 3 fully (requirements, formula, grammars) | `source_version_not_first` (3), line-3 codes |
+| V13 | last line is an `end` record, no other `end`, both counts equal the actual count ⇒ else `partial_export` (last line or the early `end`); then the `end` line gets the full V15 treatment (requirements, formula, grammars), so a non-empty other cell is `cell_not_empty`, a formula `formula_injection`, each at line n (an `end` `row_count` outside the count grammar cannot equal the actual count and is `partial_export`) (R11-F13) | `partial_export`, then per-cell codes (n) |
 | V14 | SHA-256(body) = `body_sha256` | `hash_mismatch` (3) |
 | V15 | lines 4..n−1 in order: `record_type` (a second `source_version` ⇒ `source_version_duplicate`), requirements (`cell_missing`, `cell_not_empty`), formula, grammars | per cell (its line) |
 | V16 | section 7.7 cross-record rules, in the listed order | per rule (first offending line; transfer rules: the later leg's line) |
@@ -770,7 +869,13 @@ import path runs it in the worker child (F1-U01).
   `tests/unit/test_financial_source_fixtures.py` holds `FIXTURE_FILE_SHA256: Final[dict[str,
   str]]` (every fixture file and the manifest itself), asserts the directory file set equals
   it, and asserts by `ast` that no module under `tests/` other than the writer references
-  the writer's `write` entry point.
+  the writer's `write` entry point. Tests read fixtures with `Path.read_bytes()` only.
+- **Byte exactness (R11-F10).** I11-B adds to `.gitattributes` (an I11-B owned path) the line
+  `tests/fixtures/financial_source/** -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab,-indent-with-non-tab,-tab-in-indent`
+  so no checkout, `core.autocrlf` or merge normalises line endings and `git diff --check`
+  does not flag the deliberate CR, TAB, missing-final-LF and BOM cases. I11-B confirms with
+  `git diff --check` over the fixture paths; if any warning remains, the rule becomes
+  `tests/fixtures/financial_source/** binary` and the handoff records it.
 - Synthetic rule: every identifier cell starts with `syn-` or `SYN-`; native ids are
   `prj_SYNTHETIC0000000001`, `prj_SYNTHETIC0000000002`, `prj_SYNTHETIC0000000003`
   (called P1, P2, P3 below).
@@ -826,15 +931,20 @@ Designations used by scenarios: `syn-fin-a` (perspectives `owner_budget`,
 | `syn_reconciliation_failure.csv` | double count / inconsistent source | base rows; ref `SYN-V-2026-10-R`, `SYN-L-002` = `900000.0000` | admitted |
 | `syn_second_system.csv` | double coverage, repeated change order | `source_system syn-fin-c`, ref `SYN-V-2026-10-C`; SYN-P-100: `original_budget 1000000.0000`, `current_budget 1025000.0000`, change order `SYN-CO-1` approved `25000.0000`; `row_count 3` | admitted |
 | `syn_rounding_edges.csv` | half-way, max scale, max magnitude, overflow | ref `SYN-V-2026-10-Z`; SYN-P-300: `original_budget` `0.0050` × 3 (cost codes `SYN-CC-01001`, `SYN-CC-01002`, `SYN-CC-01003`), `current_budget` `0.0050` × 3 (same cost codes), `contingency` `9999999999999999.9999` (`SYN-CC-01001`) and `0.0001` (`SYN-CC-01002`); `row_count 8` | admitted |
+| `syn_spoofed_system_b.csv` | 2nd spoof with different bytes (recovery golden) | as `syn_spoofed_system.csv` with ref `SYN-V-2026-10-Y` | admitted by the parser; refused at admission `source_system_mismatch` |
+| `syn_cycle_a.csv` | supersession cycle | base rows; ref `SYN-V-2026-10-C1`, `supersedes_ref SYN-V-2026-10-C2` | admitted |
+| `syn_cycle_b.csv` | supersession cycle | base rows; ref `SYN-V-2026-10-C2`, `supersedes_ref SYN-V-2026-10-C1` | admitted |
+| `syn_withdrawal_dangling.csv` | withdrawal naming no version | as `syn_withdrawal.csv` with ref `SYN-V-2026-10-W2`, `supersedes_ref SYN-V-2026-10-NONE` | admitted |
 | `syn_partial_export.csv` | truncated export | base with the `end` line removed (file still ends with LF) | refused `partial_export`, line 18 |
-| `syn_tampered_body.csv` | tampered amount | base, then `SYN-L-003` = `400000.0001` after `body_sha256` was computed | refused `hash_mismatch`, line 3 |
+| `syn_tampered_body.csv` | body changed after its declared hash was written (accidental corruption; a deliberate forger recomputes the hash — section 11) | base, then `SYN-L-003` = `400000.0001` after `body_sha256` was computed | refused `hash_mismatch`, line 3 |
 | `syn_duplicate_identity.csv` | duplicate identity | base plus `SYN-L-099` with the identity of `SYN-L-001` (amount `1.0000`), counts and hash updated | refused `duplicate_identity`, line of `SYN-L-099` |
 
 ### 8.4 Malformed parser cases (`malformed/<code>__<variant>.csv`)
 
 Each is the base file with exactly 1 mutation, `body_sha256` and `row_count` recomputed after
 the mutation unless the mutation targets them. Expected: refused with the code in the name
-at the manifest's recorded line. The set is exactly:
+at the manifest's recorded line. The set is exactly these 52 files (so the fixture tree holds
+20 named files, 52 malformed files and the manifest: 73 files):
 
 | File | Mutation |
 | --- | --- |
@@ -851,7 +961,7 @@ at the manifest's recorded line. The set is exactly:
 | `header_mismatch__order.csv` | header columns 2 and 3 swapped |
 | `field_count__thousands.csv` | `SYN-L-001` amount `1,000,000.0000` |
 | `cell_too_long__base.csv` | `SYN-L-001` `wbs_package` = `SYN-` + 61 `A` (65 chars) |
-| `source_version_missing__base.csv` | lines 3 and 4 swapped |
+| `source_version_not_first__base.csv` | lines 3 and 4 swapped |
 | `source_version_duplicate__base.csv` | a copy of line 3 inserted as line 4 |
 | `record_type_unknown__base.csv` | `account_line` → `account_lines` on line 4 |
 | `cell_missing__cost_code.csv` | `SYN-L-001` `cost_code` empty |
@@ -897,6 +1007,11 @@ section 12.2.
 
 ### 8.5 Golden scenarios (manifest `scenarios`; request `2026-10`, `owner_budget`, `USD`, `gross` unless stated)
 
+The bracketed list after the reportability is the **complete sorted** overview `reasons`
+(every program- and project-level reason present); a Project named before a list scopes it to
+that Project, and the other members are `effective`. Metric-level reasons are listed per
+metric. Run sequence numbers are the listed order (1, 2, …).
+
 | # | Runs (sequence order) | Members | Expected reportability; reasons |
 | --- | --- | --- | --- |
 | S01 | at020 | P1, P2 | `reportable`; figures section 8.6 |
@@ -907,16 +1022,16 @@ section 12.2.
 | S06 | proposed | P1, P2 | `not_reportable`; [`approval_missing`]; `pending_source_versions` = [proposed hash] |
 | S07 | at020, proposed | P1, P2 | `reportable` (S01 figures); `pending_source_versions` = [proposed hash] |
 | S08 | at020, withdrawal | P1, P2 | `not_reportable`; [`withdrawn_source`] |
-| S09 | at020, version_conflict | P1, P2 | `not_reportable`; [`source_version_conflict`] |
+| S09 | at020, version_conflict | P1, P2 | `not_reportable`; [`source_version_conflict`] (terminal: no `source_version_ambiguous` although 2 approved heads exist) |
 | S10 | at020, spoofed (refused at admission) | P1, P2 | `not_reportable`; [`source_refused`]; `denominator.refused_runs = 1` |
 | S11 | spoofed, at020 | P1, P2 | `reportable` (refused run older than the effective version); `refused_runs = 1` |
 | S12 | unknown_actor | P1, P2 | `not_reportable`; [`approval_actor_unrecognized`] |
 | S13 | eac_conflict | P1, P2 | `reportable`; P1 `eac`/`variance` [`eac_basis_conflict`]; P2 `eac`/`variance` [`eac_incomplete`]; Program `eac`/`variance` both reasons |
 | S14 | reconciliation_failure | P1, P2 | `not_reportable`; P1 [`source_reconciliation_failed`] all `null`; P2 reported with S01 P2 figures |
 | S15 | at020 (`syn-fin-a`), second_system (`syn-fin-c`, mapping `syn-fin-c`/`SYN-P-100` → P1) | P1, P2 | `not_reportable`; P1 [`double_count_detected`]; program [`double_count_detected`] |
-| S16 | partial_export | P1, P2 | `not_reportable`; [`partial_export`] |
-| S17 | tampered_body | P1, P2 | `not_reportable`; [`hash_mismatch`] |
-| S18 | duplicate_identity | P1, P2 | `not_reportable`; [`source_refused`] |
+| S16 | partial_export | P1, P2 | `not_reportable`; [`partial_export`, `source_version_missing`] |
+| S17 | tampered_body | P1, P2 | `not_reportable`; [`hash_mismatch`, `source_version_missing`] |
+| S18 | duplicate_identity | P1, P2 | `not_reportable`; [`source_refused`, `source_version_missing`] |
 | S19 | at020, no designation | P1, P2 | `source_not_integrated`; every value `null`; denominator `member_projects 2` |
 | S20 | at020 | P1, P2 (period `2026-09`) | `not_reportable`; [`period_mismatch`] |
 | S21 | at020 | P1, P2 (`construction_contract`) | `not_reportable`; [`perspective_mismatch`] |
@@ -929,6 +1044,13 @@ section 12.2.
 | S28 | at020 | P1, P2, `unresolved_members 1` | `not_reportable`; program [`membership_unresolved`]; per-Project figures reported |
 | S29 | rounding_edges | P3 | `reportable`; `original_budget 0.0150`, `current_budget 0.0150`; `contingency` [`aggregate_out_of_range`]; `presentation_amount("0.0150", "USD") == "0.02"` while each line presents `"0.00"` |
 | S30 | (none) | P1 | `not_reportable`; [`source_version_missing`] |
+| S31 | spoofed, at020, spoofed_b, at020 (identical re-import) | P1, P2 | `reportable` (S01 figures): the admitting run of the at020 version is sequence 4 > 3; `refused_runs = 2` (recovery) |
+| S32 | spoofed, at020, spoofed_b | P1, P2 | `not_reportable`; [`source_refused`]; `refused_runs = 2` |
+| S33 | at020 | P1, P2 (period `2026-09`), plus a later refused partial_export | `not_reportable`; [`partial_export`, `period_mismatch`] — the refused run poisons across periods |
+| S34 | cycle_a, cycle_b | P1, P2 | `not_reportable`; [`source_version_ambiguous`] |
+| S35 | at020, withdrawal_dangling | P1, P2 | `not_reportable`; [`source_version_ambiguous`] (1 approved and 1 withdrawn head) |
+| S36 | at020 | P1, P2, `membership_truncated` true | `not_reportable`; [`membership_truncated`]; per-Project figures reported |
+| S37 | at020 | P1, P2, `source_cutoff 2026-10-30T00:00:00Z` | `not_reportable`; [`source_version_missing`] (the only version is cut off after the requested source cutoff) |
 
 ### 8.6 Golden values (exact decimal strings)
 
@@ -1007,8 +1129,8 @@ closed-value `CHECK`s for every section 3.2 vocabulary; timestamps `timestamptz`
 | Table | Key columns | Uniqueness / checks |
 | --- | --- | --- |
 | `financial_source_designations` (`fdes_`) | `designation_id`, `source_system`, `perspectives text[]`, `approvers text[]`, `decision_reference`, `designated_by`, `designated_at`, `revokes_designation_id` | operator-only writes; revocation is a new row |
-| `financial_source_runs` (`fsrun_`) | `run_id`, `designation_id`, `run_sequence`, `file_sha256`, `file_size`, `format_version`, `outcome`, `refusal_code`, `refusal_line`, `imported_by`, `imported_at` | unique `(principal_id, designation_id, file_sha256)`; unique `(principal_id, designation_id, run_sequence)`; outcome/refusal consistency CHECK |
-| `financial_source_versions` (`fsver_`) | `version_id`, `run_id` (unique), section 3.5 header fields, `body_sha256`, `content_sha256` | unique `(principal_id, source_system, source_version_ref, content_sha256)` (a second content under the same ref is stored and surfaces as `source_version_conflict`); approval-field CHECKs of section 3.5 |
+| `financial_source_runs` (`fsrun_`) | `run_id`, `designation_id`, `run_sequence`, `file_sha256`, `file_size`, `format_version`, `outcome`, `refusal_code`, `refusal_line`, `version_id` (nullable; composite FK to the version), `imported_by`, `imported_at` | unique `(principal_id, designation_id, run_sequence)`; **no** uniqueness on `file_sha256` (every import appends a run, so re-importing an identical good file clears poisoning — section 3.7 step 6); `outcome = 'admitted'` ⇔ `version_id IS NOT NULL` ⇔ `refusal_code IS NULL` CHECK; many runs → 1 version |
+| `financial_source_versions` (`fsver_`) | `version_id`, section 3.5 header fields, `body_sha256` of the first admitting run, `content_sha256` | unique `(principal_id, source_system, source_version_ref, content_sha256)`: an identical content from a later run reuses the row (idempotency lives at the version, not the file); a second content under the same ref is a new row and surfaces as `source_version_conflict`; approval-field CHECKs of section 3.5 |
 | `financial_project_mappings` (`fmap_`) | `mapping_id`, `source_system`, `external_project_id`, `revision`, `state`, `project_id`, `match_basis`, `reviewed_by`, `reviewed_at`, `reason` | unique `(principal_id, source_system, external_project_id, revision)`; `match_basis = 'operator_review'` CHECK; composite FK `(project_id, principal_id)` → `knowledge.projects (project_id, principal_id)`; revision gap-free trigger |
 | `financial_period_snapshots` (`fpsn_`) | `snapshot_id`, `version_id`, `external_project_id`, 3 counts, `slice_sha256` | unique `(principal_id, version_id, external_project_id)` |
 | `financial_account_lines` (`fline_`) | `line_id`, `version_id`, `ref`, external ids, `cost_code`, `wbs_package`, `measure`, `amount` | unique `(version_id, ref)`; unique `(version_id, external_project_id, coalesce(external_contract_id, ''), cost_code, wbs_package, measure)`; sign CHECK per measure |
@@ -1016,8 +1138,21 @@ closed-value `CHECK`s for every section 3.2 vocabulary; timestamps `timestamptz`
 | `financial_scope_transfers` (`fxfr_`) | `transfer_id`, `version_id`, `transfer_ref`, `cost_code`, `wbs_package`, `change_status` | unique `(version_id, transfer_ref)` |
 | `financial_transfer_legs` (`fleg_`) | `leg_id`, `transfer_id`, `ref`, `external_project_id`, `leg_side`, `amount` | unique `(transfer_id, leg_side)`; sign CHECK by side; `DEFERRABLE INITIALLY DEFERRED` constraint trigger: each transfer has exactly 2 legs, different projects, Σ = 0 at commit |
 
+**Schema and access obligations (F-2/F-3; R11-F02).** Every F-2 DDL and query names the
+tables schema-qualified as `knowledge.financial_*`; nothing is created in, granted through or
+read from schema `financial` or `procore`, and no F-2/F-3 module reads `financial.*` or
+`procore.*`. F-2 extends the scope guard with these checks.
+
+**Database privileges (R11-F16).** No `GRANT`/`REVOKE` and no MCP object grant in the F-2
+revision (the S5b-1/S6-2 precedent: tables owned by the migrating role). In the creator-bound
+grant mechanism of `src/my_pa/infrastructure/database/mcp_object_grants.py` all 9 tables are
+classified `excluded` (never `application_read`/`application_write`), and F-2 adds all 9
+`("knowledge", "financial_*")` pairs to `_PROTECTED`, so no later MCP database profile can
+expose them. Rows are written only by the import transaction of the application; they are read
+only through the F-3 read path.
+
 Only the import transaction writes rows; a version's lines, orders, transfers, legs and
-snapshots are inserted in the same transaction as the run, and the readback
+snapshots are inserted in the same transaction as the first run that admits it, and the readback
 `source_content_sha256(rows → SourceVersion)` must equal `content_sha256` before commit
 (hash parity), else the transaction aborts.
 
@@ -1040,16 +1175,19 @@ operator gate and does not designate a source.
 - **Import** is operator-only and attested-local (S5b-2 / ADR-016 precedent): input is the
   file bytes plus a `designation_id`; the application calls `parse_synthetic_finance` (or a
   future designated adapter producing the same `SourceVersion`), `admit_source_run`, then
-  persists. Duplicate `file_sha256` under a designation is idempotent. Whether the surface
-  is an operator-only capability (e.g. `financial_sources.import`) or an operator CLI
-  command is F1-O09. No client, ChatLLM or remote caller can import, approve, designate or
-  map.
+  persists. Every import appends a run; an identical content reuses its version row
+  (idempotency at the version). The surface is an **operator-only, attested-local
+  capability** (e.g. `financial_sources.import`), whose operator CLI and HTTP gateway entry
+  points are the same capability (R11 ruling Q1); it is **never** ChatLLM, remote MCP,
+  façade or web. F1-O09 stays open only for the operator to choose a CLI-only surface. No
+  client, ChatLLM or remote caller can import, approve, designate or map.
 - **Mapping review** (operator-only) appends a revision; there is no automatic proposal from
   names in F-2.
 - **Quarantine** of a wrong mapping: append a `quarantined` revision; every overview using it
   turns `mapping_quarantined`; nothing is deleted or rewritten.
 - **Recovery:** switch off (halts import and reads); immutable rows are retained; a wrong
-  version is superseded or withdrawn by a new source version, never edited; **no write to
+  version is superseded or withdrawn by a new source version, never edited; a poisoning
+  refused run is cleared by re-importing a good export (section 3.7 step 6); **no write to
   any source system ever**.
 - **AT-020 DB half:** `tests/integration/test_financial_scope_transfer.py` (database +
   integration) — owned by F-2; it imports the section 8.2 fixture into an isolated synthetic
@@ -1062,14 +1200,14 @@ operator gate and does not designate a source.
 
 | Item | Decision |
 | --- | --- |
-| Capability | `programs.financial.overview` (read, `programs.*` family next to `programs.overview`); payload `program_entity_id`, `period`, `perspective`, `currency`, **`cost_basis`** (F1-D11), optional `source_cutoff`; resolves members with the S4 resolver, then `evaluate_financial_overview` over persisted rows; response = section 5.4 with `program_entity_id` and money as decimal strings (`amount_decimal`, F1-D03) |
+| Capability | `programs.financial.overview` (read, `programs.*` family next to `programs.overview`); payload `program_entity_id`, `period`, `perspective`, `currency`, **`cost_basis`** (F1-D11), optional `source_cutoff` (RFC3339, normalized to UTC, passed as `request.source_cutoff`, section 5.3 step 1); resolves members with the S4 resolver (passing its unresolved count and truncation flag), then `evaluate_financial_overview` over persisted rows; response = section 5.4 with `program_entity_id` and money as decimal strings (`amount_decimal`, F1-D03) |
 | Per-Project read | none separate: per-Project figures are in the overview; a dedicated read is a later decision |
 | Operator status read | an operator-only read of designations, runs, refusals and the mapping queue (name fixed by F-3) |
-| Purpose | a new `program_financial_read` purpose (distinct from `program_reporting_read`) |
+| Purpose | a new `program_financial_read` purpose (distinct from `program_reporting_read`) — fixed here at contract level only (R11 ruling Q9); nothing is added to code in F-1 |
 | Switches | composed only when `MY_PA_FINANCIAL_SOURCE_ENABLED` **and** `MY_PA_PROGRAM_REPORTING_ENABLED` are on |
 | ChatLLM | `CHATLLM_OPERATOR_DECISION_REQUIRED` (withheld) until OD-06 and OD-08 are decided |
 | Remote MCP / façade / web | not in any default grant set; no façade entry; no web route — each an operator decision (F1-O10) |
-| Disclosure | `reportability`, every reason, the denominator, `source_versions`, `pending_source_versions`, `source_cutoff_at` are always returned; a `not_reportable` total is `null`, never `0`; without a designation the answer is `source_not_integrated` with empty measures (07 example) |
+| Disclosure | `reportable` is presented as source integrity and coverage only, never as a certified total (F1-U11); `reportability`, every reason, the denominator, `source_versions`, `pending_source_versions`, `source_cutoff_at` are always returned; a `not_reportable` total is `null`, never `0`; without a designation the answer is `source_not_integrated` with empty measures (07 example) |
 
 ---
 
@@ -1080,10 +1218,10 @@ operator gate and does not designate a source.
 | Parser abuse (size, row, line, cell bombs) | V2 size check before decoding; V8 row and line caps before splitting cells; 24 fixed cells ≤ 64 chars; linear; no nesting, no quoting, no entity expansion, no eval |
 | Encoding tricks | ASCII only; BOM, CR, TAB, control bytes, quotes refused file-wide |
 | Formula injection | section 7.5; the amount column is grammar-only |
-| Partial / truncated / tampered exports | `end` record, 2 row counts, final LF, body SHA-256; whole-file reject |
+| Partial / truncated / corrupted exports | `end` record, 2 row counts, final LF, body SHA-256; whole-file reject. The body SHA-256 is declared **inside the same file**: it detects truncation and accidental corruption, **not deliberate tampering** — anyone who edits the file can recompute it (F1-U10) |
 | Money correctness | Decimal only; `FloatOperation`, `Inexact`, `Rounded` trapped; scale 4 exact; rounding only in presentation; `NUMERIC(20,4)` range on input and on aggregates |
-| Authority | the source's `approved` is an assertion checked against the operator designation's approvers; a client can never mark approved, designate, import or map (F-2/F-3 policy); proposed versions never feed figures or supersede |
-| Spoofing | source system checked against the designation at admission; same ref with new content ⇒ `source_version_conflict`; external ids resolve only through operator-reviewed mappings; double coverage ⇒ `double_count_detected` |
+| Authority | `status`, `approved_by` and `approved_at` are **self-asserted export content**; the designation check is a **consistency check**, not authentication. Authenticity rests entirely on **provenance**: an operator-only import of a file the operator obtained from the designated source. There is no signature. A client can never mark approved, designate, import or map (F-2/F-3 policy); proposed versions never feed figures or supersede |
+| Spoofing | the file's `source_system` is checked against the designation at admission (a consistency check on a self-asserted string: a forged file naming `syn-fin-a` / `syn-approver-1` with a recomputed body hash is admitted and can be effective — only operator provenance prevents it, F1-U10); same ref with new content ⇒ `source_version_conflict`, which detects an edit **only when the original content was imported too**; external ids resolve only through operator-reviewed mappings; double coverage ⇒ `double_count_detected` |
 | Determinism | sorted inputs, canonical encoder, schema-prefixed digests, period from data only, no clock; property tests prove order independence |
 | Information leak | refusals carry code and line only; no logging or printing in the finance modules |
 
@@ -1095,15 +1233,15 @@ operator gate and does not designate a source.
 
 | Module | Tests (exact names) |
 | --- | --- |
-| `tests/unit/test_financial_money.py` | `test_amount_grammar_accepts_the_frozen_forms`; `test_amount_grammar_refuses_exponent_separators_and_locale`; `test_amount_refuses_negative_zero_leading_plus_and_leading_zeros`; `test_amount_scale_above_4_is_refused_never_rounded`; `test_amount_range_is_numeric_20_4`; `test_no_float_is_accepted_anywhere`; `test_money_sum_is_exact_and_traps_inexact`; `test_presentation_rounding_is_half_even_per_currency`; `test_unknown_currency_has_no_minor_units`; `test_format_amount_always_writes_4_places` |
-| `tests/unit/test_financial_domain.py` | `test_records_refuse_float_and_unquantized_amounts`; `test_mapping_match_basis_is_operator_review_only`; `test_current_mapping_is_the_highest_revision`; `test_effective_version_ignores_proposed_supersession`; `test_withdrawal_withdraws_the_superseded_version`; `test_two_approved_heads_are_ambiguous`; `test_same_ref_different_content_is_a_version_conflict`; `test_run_from_an_undesignated_system_is_refused`; `test_period_snapshot_slices_by_external_project` |
+| `tests/unit/test_financial_money.py` | `test_amount_grammar_accepts_the_frozen_forms`; `test_amount_grammar_refuses_exponent_separators_and_locale`; `test_amount_refuses_negative_zero_leading_plus_and_leading_zeros`; `test_amount_scale_above_4_is_refused_never_rounded`; `test_amount_range_is_numeric_20_4`; `test_no_float_is_accepted_anywhere`; `test_money_sum_is_exact_at_full_precision`; `test_money_sum_is_exact_and_traps_inexact`; `test_empty_sum_and_negated_zero_are_storable`; `test_presentation_rounding_is_half_even_per_currency`; `test_unknown_currency_has_no_minor_units`; `test_format_amount_always_writes_4_places` |
+| `tests/unit/test_financial_domain.py` | `test_records_refuse_float_and_unquantized_amounts`; `test_mapping_match_basis_is_operator_review_only`; `test_current_mapping_is_the_highest_revision`; `test_effective_version_ignores_proposed_supersession`; `test_withdrawal_withdraws_the_superseded_version`; `test_two_approved_heads_are_ambiguous`; `test_same_ref_different_content_is_a_version_conflict`; `test_run_from_an_undesignated_system_is_refused`; `test_period_snapshot_slices_by_external_project`; `test_supersession_cycle_is_ambiguous`; `test_approved_and_withdrawn_heads_are_ambiguous`; `test_several_withdrawn_heads_are_withdrawn_source`; `test_dangling_withdrawal_stays_a_withdrawn_head`; `test_conflict_is_system_wide_and_terminal`; `test_admitting_run_is_the_latest_carrying_the_content`; `test_mapping_revision_gap_is_an_input_error`; `test_duplicate_designation_is_an_input_error` |
 | `tests/unit/test_financial_equations.py` | `test_revised_contract_is_original_plus_approved_changes`; `test_pending_changes_never_enter_approved_figures`; `test_eac_is_actual_plus_ctc_or_source_eac_never_both`; `test_variance_requires_one_version_scope`; `test_owner_budget_reconciliation_identity`; `test_at020_owning_project_figures_balance`; `test_at020_consolidation_is_net_neutral`; `test_at020_transfer_is_eliminated_once`; `test_at020_pending_change_is_reported_separately`; `test_at020_unapproved_transfer_is_excluded`; `test_at020_currency_mismatch_is_not_consolidated`; `test_double_count_is_detected` |
-| `tests/unit/test_financial_reportability.py` | `test_no_designation_is_source_not_integrated`; `test_project_level_reason_nulls_every_metric_of_that_project`; `test_program_total_is_not_reportable_when_any_member_is`; `test_per_project_figures_survive_a_program_gap`; `test_no_zero_is_substituted`; `test_denominator_counts_every_member`; `test_evaluator_has_no_threshold_parameter`; `test_currency_mismatch_reports_fx_missing`; `test_refused_run_newer_than_effective_poisons_the_designation`; `test_membership_unresolved_blocks_program_totals_only`; `test_stale_approval_is_not_reportable`; `test_unrecognized_approver_is_not_reportable` |
-| `tests/unit/test_financial_canonical.py` | `test_content_hash_ignores_row_order`; `test_content_object_round_trips`; `test_decode_refuses_unknown_keys_and_numbers`; `test_hash_parity_detects_a_changed_amount`; `test_overview_digest_is_deterministic`; `test_slice_hash_covers_only_its_project` |
+| `tests/unit/test_financial_reportability.py` | `test_no_designation_is_source_not_integrated`; `test_project_level_reason_nulls_every_metric_of_that_project`; `test_program_total_is_not_reportable_when_any_member_is`; `test_per_project_figures_survive_a_program_gap`; `test_no_zero_is_substituted`; `test_denominator_counts_every_member`; `test_evaluator_has_no_threshold_parameter`; `test_currency_mismatch_reports_fx_missing`; `test_refused_run_newer_than_effective_poisons_the_designation`; `test_membership_unresolved_blocks_program_totals_only`; `test_stale_approval_is_not_reportable`; `test_unrecognized_approver_is_not_reportable`; `test_admitted_run_failing_hash_parity_is_hash_mismatch`; `test_identical_reimport_clears_poisoning`; `test_poisoning_crosses_periods`; `test_membership_truncated_blocks_program_totals_only`; `test_source_cutoff_excludes_later_versions`; `test_project_cap_is_the_s4_cap` |
+| `tests/unit/test_financial_canonical.py` | `test_content_hash_ignores_row_order`; `test_content_object_round_trips`; `test_decode_refuses_unknown_keys_and_numbers`; `test_hash_parity_detects_a_changed_amount`; `test_overview_digest_is_deterministic`; `test_slice_hash_covers_only_its_project`; `test_canonical_encoder_bytes_are_pinned`; `test_decode_refuses_bool_counts_and_nan` |
 | `tests/unit/test_financial_properties.py` | `test_seeded_balanced_transfers_consolidate_to_zero`; `test_seeded_pending_rows_never_move_approved_metrics`; `test_seeded_amount_strings_round_trip`; `test_seeded_body_mutations_are_refused`; `test_seeded_input_order_never_changes_the_overview`; `test_seeded_presentation_rounding_matches_integer_reference` |
-| `tests/unit/test_financial_source_parser.py` | `test_valid_fixture_parses_to_its_golden_version`; `test_each_malformed_fixture_refuses_with_its_code`; `test_refusal_carries_code_and_line_only`; `test_oversized_input_is_refused_before_decoding`; `test_too_many_rows_under_an_injected_limit`; `test_formula_injection_is_refused_in_text_cells_only`; `test_a_negative_amount_is_not_a_formula`; `test_partial_export_is_rejected_whole`; `test_tampered_body_is_a_hash_mismatch`; `test_parser_raises_only_type_error_for_non_bytes`; `test_period_is_data_never_ingest_time` |
-| `tests/unit/test_financial_source_fixtures.py` | `test_fixture_files_match_their_pinned_sha256`; `test_fixture_directory_equals_the_manifest`; `test_every_scenario_matches_its_golden`; `test_fixture_identifiers_are_synthetic`; `test_no_test_calls_the_fixture_writer` |
-| `tests/architecture/test_financial_source_scope.py` | `test_financial_crosswalk_names_real_tests`; `test_no_financial_capability_purpose_or_id_kind`; `test_no_financial_table_or_migration`; `test_financial_switch_has_no_consumer`; `test_financial_modules_are_imported_only_by_their_own_slice`; `test_financial_modules_import_only_their_allowed_roots`; `test_financial_modules_use_no_float_io_or_logging`; `test_programs_financial_overview_is_not_served` |
+| `tests/unit/test_financial_source_parser.py` | `test_valid_fixture_parses_to_its_golden_version`; `test_each_malformed_fixture_refuses_with_its_code`; `test_refusal_carries_code_and_line_only`; `test_oversized_input_is_refused_before_decoding`; `test_too_many_rows_under_an_injected_limit`; `test_formula_injection_is_refused_in_text_cells_only`; `test_a_negative_amount_is_not_a_formula`; `test_partial_export_is_rejected_whole`; `test_tampered_body_is_a_hash_mismatch`; `test_parser_raises_only_type_error_for_non_bytes`; `test_period_is_data_never_ingest_time`; `test_end_line_cells_are_validated`; `test_transfer_leg_sign_is_not_masked_by_amount_sign` |
+| `tests/unit/test_financial_source_fixtures.py` | `test_fixture_files_match_their_pinned_sha256`; `test_fixture_directory_equals_the_manifest`; `test_every_scenario_matches_its_golden`; `test_fixture_identifiers_are_synthetic`; `test_no_test_calls_the_fixture_writer`; `test_fixtures_are_not_text_normalised` (asserts `.gitattributes` carries the section 8.1 rule and that the CRLF, TAB, BOM and no-final-LF fixtures still hold those bytes) |
+| `tests/architecture/test_financial_source_scope.py` | `test_financial_crosswalk_names_real_tests`; `test_no_financial_capability_purpose_or_id_kind`; `test_no_financial_table_or_migration`; `test_financial_switch_has_no_consumer`; `test_financial_modules_are_imported_only_by_their_own_slice`; `test_financial_modules_import_only_their_allowed_roots`; `test_financial_modules_use_no_float_io_or_logging`; `test_programs_financial_overview_is_not_served`; `test_the_table_guard_does_not_match_legacy_names` |
 
 ### 12.2 Seeded property tests
 
@@ -1124,20 +1262,22 @@ integer-arithmetic half-even reference. Not exhaustive (F1-U07).
 | --- | --- |
 | `test_financial_crosswalk_names_real_tests` | every `test_*` named in section 12.1 and 12.5 is a function defined in the module of its row (S4 guard precedent) |
 | `test_no_financial_capability_purpose_or_id_kind` | no `Capability` or `Purpose` value contains `financ`; no `IdKind` value is one of the 9 planned prefixes and no member name contains `FINANCIAL` |
-| `test_no_financial_table_or_migration` | no table in `METADATA` matches `^financial_`; no file under `migrations/` matches `financial_(source\|project\|period\|account\|change\|scope\|transfer)` |
-| `test_financial_switch_has_no_consumer` | `MY_PA_FINANCIAL_SOURCE_ENABLED` and `financial_source_enabled` occur in no file under `src/`, `apps/`, `ops/`, `migrations/`, `web/src/` |
+| `test_no_financial_table_or_migration` | the exact 9 planned names with identifier boundaries — `(?<![A-Za-z0-9_])financial_(source_designations\|source_runs\|source_versions\|project_mappings\|period_snapshots\|account_lines\|change_orders\|scope_transfers\|transfer_legs)(?![A-Za-z0-9_])` — match no table name in `METADATA` and no text of `migrations/versions/*.py` or `migrations/sql/*.sql` (R11-F01) |
+| `test_the_table_guard_does_not_match_legacy_names` | positive control: the same pattern does **not** match the legacy names present at the basis (`procore_financial_change_orders`, `procore_financial_change_order_line_items`, `procore_financial_change_events`, `second_brain_financial_source_coverage_snapshots`, `raw_financial_source_payload_persisted`), and **does** match each of the 9 planned names written alone and schema-qualified (`knowledge.financial_source_runs`) — so the guard is shown to discriminate |
+| `test_financial_switch_has_no_consumer` | `MY_PA_FINANCIAL_SOURCE_ENABLED` and `financial_source_enabled` occur in no file under `src/`, `apps/`, `ops/`, `migrations/`, `web/src/`, nor in any `.env*` example file |
 | `test_financial_modules_are_imported_only_by_their_own_slice` | by `ast`, `my_pa.domain.project_controls.financial` is imported only by its own modules and `my_pa.infrastructure.financial`; `my_pa.infrastructure.financial` by nothing under `src/`, `apps/`, `ops/`, `migrations/` (tests only) |
 | `test_financial_modules_import_only_their_allowed_roots` | the 6 domain modules import only the standard library, `my_pa.domain.schedule.canonical` (name `canonical_json_bytes` only), `my_pa.domain.program.vocabulary` (name `MetricValueState` only) and each other; the 2 infrastructure modules additionally only the finance domain |
 | `test_financial_modules_use_no_float_io_or_logging` | in the 8 modules: no `float` name or float literal, no import of `logging`, `os`, `pathlib`, `io`, `socket`, `urllib`, `http`, `subprocess`, `pickle`, `xml`, `csv`, `json` (outside `canonical.py`'s use of the shared encoder), no call to `print`, `open`, `eval`, `exec`, `compile`, `__import__` |
-| `test_programs_financial_overview_is_not_served` | the string `programs.financial` occurs in no file under `src/`, `ops/`, `web/src/` |
+| `test_programs_financial_overview_is_not_served` | the strings `programs.financial` and `program_financial_read` occur in no file under `src/`, `apps/`, `ops/`, `migrations/`, `web/src/` (R11-F15) |
 
 ### 12.4 Prove-red plan (1 mutation at a time, revert after each, `git status` clean)
 
 | # | Guard | Single mutation | Test that must turn red (for that reason) |
 | --- | --- | --- | --- |
 | PR-01 | scale refused, not rounded | `parse_amount` quantizes a 5-place input | `test_amount_scale_above_4_is_refused_never_rounded` |
-| PR-02 | float refused | drop the `type(...) is Decimal` check in `is_storable_amount` | `test_no_float_is_accepted_anywhere` |
-| PR-03 | exact arithmetic | remove `Inexact` from `FINANCE_CONTEXT.traps` and lower `prec` to 10 | `test_money_sum_is_exact_and_traps_inexact` |
+| PR-02 | float refused | drop the `type(value) is Decimal` check in `is_storable_amount` | `test_no_float_is_accepted_anywhere`, which asserts `is_storable_amount(1.5) is False` with no exception (expected failure: `AttributeError` from a Decimal-only method called on the float) |
+| PR-03a | precision | set `FINANCE_CONTEXT.prec = 10` only | `test_money_sum_is_exact_at_full_precision` (input: `money_sum` of `9999999999999999.9999` 3 times; expected `29999999999999999.9997` exactly; expected failure: `Rounded` raised) |
+| PR-03b | inexact trap | remove `Inexact` **and** `Rounded` from the traps (1 named alternative; then run again removing only `Rounded`) | `test_money_sum_is_exact_and_traps_inexact` (input: `Decimal("1") / Decimal("3")` under `FINANCE_CONTEXT`; expected failure: no exception raised). Each alternative is run separately and reported |
 | PR-04 | presentation mode | `ROUND_HALF_UP` in `presentation_amount` | `test_presentation_rounding_is_half_even_per_currency` |
 | PR-05 | pending excluded | `approved_changes` includes `pending` | `test_pending_changes_never_enter_approved_figures` |
 | PR-06 | EAC exclusivity | EAC adds `source_eac` to the computed value when both exist | `test_eac_is_actual_plus_ctc_or_source_eac_never_both` |
@@ -1151,12 +1291,12 @@ integer-arithmetic half-even reference. Not exhaustive (F1-U07).
 | PR-14 | stale approval | drop the `approved_at < cutoff_at` rule | `test_stale_approval_is_not_reportable` |
 | PR-15 | refused run poisons | ignore refused runs | `test_refused_run_newer_than_effective_poisons_the_designation` |
 | PR-16 | hash order independence | sort `account_lines` by input order in the canonical object | `test_content_hash_ignores_row_order` |
-| PR-17 | hash parity | evaluator skips the parity recomputation | `test_hash_parity_detects_a_changed_amount` |
+| PR-17 | hash parity (evaluator) | `evaluate_financial_overview` skips the section 3.7 step 7 recomputation | `tests/unit/test_financial_reportability.py::test_admitted_run_failing_hash_parity_is_hash_mismatch` (input: an admitted S01 run whose stored `content_sha256` is the digest of `syn_version_conflict`'s content; expected failure: overview `reportable` instead of [`hash_mismatch`]) |
 | PR-18 | formula refusal | skip the formula check | `test_formula_injection_is_refused_in_text_cells_only` |
 | PR-19 | negative amount legitimate | apply the formula check to `amount` | `test_a_negative_amount_is_not_a_formula` |
 | PR-20 | body hash | skip V14 | `test_tampered_body_is_a_hash_mismatch` |
-| PR-21 | partial export | skip V13 count equality | `test_partial_export_is_rejected_whole` |
-| PR-22 | size before decode | move V2 after V4 with a decoding step | `test_oversized_input_is_refused_before_decoding` |
+| PR-21 | partial export (count) | skip V13 count equality only | `test_partial_export_is_rejected_whole`, which exercises `malformed/partial_export__count.csv` (expected failure: admitted, or refused with a later code, instead of `partial_export` at line 3) |
+| PR-22 | size before decode | move V2 after V4 | `test_oversized_input_is_refused_before_decoding` (input: `max_bytes + 1` bytes whose first bytes are non-ASCII `0xC3 0x96`; expected `too_large`; expected failure: `non_ascii` at line 1) |
 | PR-23 | fixture pin | change 1 byte of `syn_at020_owner_budget.csv` | `test_fixture_files_match_their_pinned_sha256` |
 | PR-24 | synthetic ids | rename `SYN-P-100` to `P-100` in 1 fixture (and its pin) | `test_fixture_identifiers_are_synthetic` |
 | PR-25 | no threshold | add `materiality: Decimal = Decimal(0)` to the evaluator | `test_evaluator_has_no_threshold_parameter` |
@@ -1167,6 +1307,14 @@ integer-arithmetic half-even reference. Not exhaustive (F1-U07).
 | PR-30 | allowed roots | import `my_pa.domain.lineage.vocabulary` in `model.py` | `test_financial_modules_import_only_their_allowed_roots` |
 | PR-31 | no IO | `import logging` in `synthetic_csv.py` | `test_financial_modules_use_no_float_io_or_logging` |
 | PR-32 | crosswalk | rename 1 crosswalk test | `test_financial_crosswalk_names_real_tests` |
+| PR-33 | legacy discrimination | drop the leading `(?<![A-Za-z0-9_])` boundary | `test_the_table_guard_does_not_match_legacy_names` (expected failure: `procore_financial_change_orders` matched) |
+| PR-34 | conflict terminal | let resolution continue after a conflict | `test_conflict_is_system_wide_and_terminal` (S09 gains `source_version_ambiguous`) |
+| PR-35 | cycle | compute heads without cycle detection | `test_supersession_cycle_is_ambiguous` |
+| PR-36 | admitting run | use the **least** `run_sequence` carrying the content | `test_identical_reimport_clears_poisoning` (S31) |
+| PR-37 | truncation gate | ignore `membership_truncated` | `test_membership_truncated_blocks_program_totals_only` |
+| PR-38 | source cutoff | ignore `request.source_cutoff` | `test_source_cutoff_excludes_later_versions` (S37) |
+| PR-39 | encoder pin | change the separators of the imported encoder in a scratch copy | `test_canonical_encoder_bytes_are_pinned` |
+| PR-40 | leg sign masking | apply `amount_sign` to transfer legs | `test_transfer_leg_sign_is_not_masked_by_amount_sign` |
 
 A prove-red that stays green is reported as redundancy, a masked test or an unreachable
 hazard, never as "covered".
@@ -1200,6 +1348,12 @@ hazard, never as "covered".
 | OD-06 nothing public or persistent | 12.3 | `tests/architecture/test_financial_source_scope.py::test_no_financial_table_or_migration`; `tests/architecture/test_financial_source_scope.py::test_programs_financial_overview_is_not_served` |
 | OD-08 default `NOT_REPORTABLE`, per-Project partial figures, denominator, no zero substitution, no threshold | 5 | `tests/unit/test_financial_reportability.py::test_per_project_figures_survive_a_program_gap`; `tests/unit/test_financial_reportability.py::test_denominator_counts_every_member`; `tests/unit/test_financial_reportability.py::test_evaluator_has_no_threshold_parameter` |
 | UB-009 no real source; synthetic only | 7, 8.1 | `tests/unit/test_financial_source_fixtures.py::test_fixture_identifiers_are_synthetic`; `tests/architecture/test_financial_source_scope.py::test_financial_switch_has_no_consumer` |
+| OD-08 truncated membership never reportable | 5.1, 5.3 | `tests/unit/test_financial_reportability.py::test_membership_truncated_blocks_program_totals_only` |
+| CR-011 version resolution total (cycles, mixed heads, dangling, system-wide conflict) | 3.7 | `tests/unit/test_financial_domain.py::test_supersession_cycle_is_ambiguous`; `tests/unit/test_financial_domain.py::test_approved_and_withdrawn_heads_are_ambiguous`; `tests/unit/test_financial_domain.py::test_conflict_is_system_wide_and_terminal` |
+| CR-011 recovery from a refused run | 3.7 step 6 | `tests/unit/test_financial_reportability.py::test_identical_reimport_clears_poisoning` |
+| 07 `source_cutoff` | 5.3 step 1 | `tests/unit/test_financial_reportability.py::test_source_cutoff_excludes_later_versions` |
+| CR-011 exact hash parity (evaluator) | 3.7 step 7 | `tests/unit/test_financial_reportability.py::test_admitted_run_failing_hash_parity_is_hash_mismatch`; `tests/unit/test_financial_canonical.py::test_canonical_encoder_bytes_are_pinned` |
+| Legacy names never match the planned-table guard | 12.3 | `tests/architecture/test_financial_source_scope.py::test_the_table_guard_does_not_match_legacy_names` |
 
 ---
 
@@ -1214,9 +1368,9 @@ hazard, never as "covered".
 | F1-D03 | 07 `value` integer/number; `amount_decimal` string only in eliminations | every money value is a decimal string with 4 places | JSON numbers lose exactness; no float anywhere |
 | F1-D04 | 07 `coverage_state` (8 values) | S4 `MetricValueState` + finance reasons | the repository's Program precedent (S4 D-11) |
 | F1-D05 | — | `FinancialNotReportableReason` separate from S4 `NotReportableReason` | the S4 set is closed and pinned by its scope guard |
-| F1-D06 | identity without basis/measure | identity adds `cost_basis` and `measure`; `cost_code`, `wbs_package` explicit | 2 measures of 1 cost code are distinct facts; basis changes meaning |
+| F1-D06 | identity `(source_system, external_account/project/contract/cost_code/scope, source_version, period, perspective, currency)` | identity adds `cost_basis` and `measure`; `cost_code`, `wbs_package` explicit; CR's `scope` is `wbs_package`; CR's `external_account` is **omitted** (the synthetic format has no account identifier separate from `cost_code`; a designated source with one needs a format revision) | 2 measures of 1 cost code are distinct facts; basis changes meaning (R11-F17) |
 | F1-D07 | 8 tables | 9 (adds `financial_source_designations`) | the operator designation must be durable and attributable |
-| F1-D08 | — | F-2 tables in schema `knowledge`, never in the legacy `financial` schema | the legacy schema is archived legacy data, not a designated source |
+| F1-D08 | — | F-2 tables schema-qualified `knowledge.financial_*`, never created in, granted through or read from schema `financial` or `procore` | the `financial` schema is a migrated legacy schema (67 objects: 28 `MIGRATE_DATA`, 20 `REBUILD_AND_VALIDATE`, 11 `ARCHIVE_LEGACY_SOURCE_ONLY`, 8 `REINITIALIZE_OPERATIONAL_STATE`; 65 `FINANCIAL_OPERATIONAL`, 2 personal), unanalysed, whose production row content is unverified, and which is not a designated source |
 | F1-D09 | buyout, billing, cash flow "only if source-backed" | not in v1 measures | no source backs them; adding a measure is a contract amendment |
 | F1-D10 | variance against "approved current budget" | contract perspective uses `revised_contract` | the contract perspective has no budget measure |
 | F1-D11 | 07 input without `cost_basis` | F-3 requires `cost_basis` | variance is defined only within 1 basis |
@@ -1229,7 +1383,10 @@ hazard, never as "covered".
 | F1-D18 | supersession undefined | proposed versions never supersede | unapproved data may not move the approved position |
 | F1-D19 | "never fuzzy autoaccept" | `MatchBasis` has 1 member `operator_review` | closed by type |
 | F1-D20 | — | `domain/schedule/currency.py` not reused | it is schedule publication currency, not money |
-| F1-D21 | "exact hash parity" | reuse the schedule ASCII encoder and schema-prefix idiom | 1 encoder; finance content is ASCII |
+| F1-D21 | "exact hash parity" | reuse the schedule ASCII encoder and schema-prefix idiom, pinned by a finance-owned byte vector (`test_canonical_encoder_bytes_are_pinned`) | 1 encoder; finance content is ASCII; a schedule-side change turns finance red (R11-F21) |
+| F1-D22 | 07 output fields `grain`, `unit`, `coverage_state`, `dedupe_basis`, `source_run_ids`, `as_of`, `excluded_project_count`, `nonadditive_across_projects`; input `source_cutoff` | mapped or dropped per the section 5.4 table; `source_cutoff` is `request.source_cutoff` | the F-1 evaluator defines every field it returns (R11-F07) |
+| F1-D23 | no truncation reason (the contract's first revision had 28 reasons) | 29: `membership_truncated` added | a truncated Program would otherwise be `reportable` (R11-F06) |
+| F1-D24 | parser code name | `source_version_not_first` (was `source_version_missing`) | the reason `source_version_missing` has a different meaning (R11-F22) |
 
 ### 13.2 Open operator decisions
 
@@ -1240,12 +1397,14 @@ hazard, never as "covered".
 | F1-O03 | Materiality thresholds (OD-08) | none; every gap material |
 | F1-O04 | FX authority, rate source and conversion policy | no FX; mismatch not reportable |
 | F1-O05 | Program consolidation perspective and elimination policy | per request perspective; internal transfers eliminated from gross movement only |
+| F1-O13 | Whether the owner-budget reconciliation identity (section 4.5, `current = original + approved changes + transfer_net`) holds for a designated source, or which other adjustments a real budget carries | model default: the identity applies; a real source failing it is `source_reconciliation_failed` on every Project until decided (R11-F19) |
 | F1-O06 | Reporting period calendar (calendar vs fiscal month) and cutoff convention | calendar month `YYYY-MM`, UTC |
 | F1-O07 | Default cost basis | none; the request names it |
 | F1-O08 | Who reviews mappings; quarantine procedure | operator only |
 | F1-O09 | Import surface: operator-only capability vs operator CLI | capability, attested-local, operator-only (S5b-2 precedent) |
 | F1-O10 | ChatLLM, remote MCP, façade and web exposure of finance reads | withheld |
 | F1-O11 | Retention of raw import files and refused runs | hashes and parsed rows only; no raw file stored |
+| F1-O12 | Whether the migrated legacy `financial` schema (`forecast_*`, `second_brain_financial_*`, `staffing_*`) or the legacy `procore.procore_financial_*` tables are an OD-06 candidate source | not a source; never read; needs its own analysis and designation; UB-009 stands |
 
 ### 13.3 Residuals
 
@@ -1259,21 +1418,56 @@ hazard, never as "covered".
 | F1-U06 | Hex digests are frozen by the I11-B implementer, not by this contract |
 | F1-U07 | Seeded property tests sample; they do not prove |
 | F1-U08 | `presentation_amount` has no production consumer until F-3 |
-| F1-U09 | The legacy `financial` schema (67 objects) is unanalysed; UB-009 stands |
+| F1-U09 | The migrated legacy `financial` schema (67 objects, 28 data-migration targets, so production may hold real financial rows — unverified) and the `procore.procore_financial_*` tables are unanalysed; UB-009 stands; flagged to the operator as F1-O12 |
+| F1-U10 | **No authenticity.** `body_sha256`, `source_system`, `status`, `approved_by` and `approved_at` are self-asserted inside the file; a deliberate forger recomputes the hash and names the designated system and approver. Authenticity rests entirely on operator-only import of an operator-obtained file (provenance); there is no signature. Same-ref conflict detects an edit only when the original content was imported first |
+| F1-U11 | `reportable` certifies source integrity and coverage only, never a certified total (OD-08); F-3 wording must say so |
+| F1-U12 | Cross-system double-count detection by ref is fail-closed against legitimate ref reuse by independent systems, and misses the same change order under different refs in 2 systems |
 
 ---
 
 ## 14. F-1 work split (proposal)
 
 2 sequential packages; B depends on A's public symbols. A single package was considered and
-rejected: 8 source modules, 9 test modules and 70+ fixture files exceed a reviewable diff, and
+rejected: 8 source modules, 9 test modules and 73 fixture files exceed a reviewable diff, and
 the parser/fixture half can be reviewed against frozen domain symbols.
 
 | Package | Owned paths | Deliverables |
 | --- | --- | --- |
-| **I11-A** pure domain | `src/my_pa/domain/project_controls/financial/` (6 modules); `tests/unit/test_financial_money.py`, `tests/unit/test_financial_domain.py`, `tests/unit/test_financial_equations.py`, `tests/unit/test_financial_reportability.py`, `tests/unit/test_financial_canonical.py`, `tests/unit/test_financial_properties.py` | sections 3–6; tests build versions in Python (no fixture files); AT-020 domain assertions from the section 8.2 values written inline; prove-red PR-01–PR-17, PR-25 |
-| **I11-B** parser, fixtures, guard, pins | `src/my_pa/infrastructure/financial/` (2 modules); `tests/fixtures/financial_source/`, `tests/fixtures/financial_source_writer.py`; `tests/unit/test_financial_source_parser.py`, `tests/unit/test_financial_source_fixtures.py`, `tests/architecture/test_financial_source_scope.py`; the count pins in `docs/plans/mcv-completion-plan.md` and `docs/plans/relationship-intelligence-implementation-plan.md`; `tests/ci_shard_weights.json` | sections 7, 8, 12.3; manifest and `FIXTURE_FILE_SHA256` frozen; prove-red PR-18–PR-24, PR-26–PR-32; re-measure every section 2 R-17 figure |
+| **I11-A** pure domain | `src/my_pa/domain/project_controls/financial/` (6 modules); `tests/unit/test_financial_money.py`, `tests/unit/test_financial_domain.py`, `tests/unit/test_financial_equations.py`, `tests/unit/test_financial_reportability.py`, `tests/unit/test_financial_canonical.py`, `tests/unit/test_financial_properties.py` | sections 3–6; tests build versions in Python (no fixture files); AT-020 domain assertions from the section 8.2 values written inline; prove-red PR-01–PR-17, PR-25, PR-34–PR-38; **at its own head** re-measures the R-17 figures (494 → 500 source, 953 → 959 test) in both contended `docs/plans` files and the claimed FAST/mypy figures, re-weighs `tests/ci_shard_weights.json` and runs `python -m tests.ci_shard verify` (owned paths add those 3 files) |
+| **I11-B** parser, fixtures, guard, pins | `src/my_pa/infrastructure/financial/` (2 modules); `tests/fixtures/financial_source/`, `tests/fixtures/financial_source_writer.py`; `.gitattributes` (section 8.1 rule only); `tests/unit/test_financial_source_parser.py`, `tests/unit/test_financial_source_fixtures.py`, `tests/architecture/test_financial_source_scope.py`; the count pins in `docs/plans/mcv-completion-plan.md` and `docs/plans/relationship-intelligence-implementation-plan.md`; `tests/ci_shard_weights.json` | sections 7, 8, 12.3; manifest and `FIXTURE_FILE_SHA256` frozen; prove-red PR-18–PR-24, PR-26–PR-33, PR-39, PR-40; at its own head re-measures the R-17 figures (500 → 502, 959 → 962), the claimed counts and the shard weights |
 
 Either implementer that finds this contract wrong against code reality stops at that point and
 reports a proposed amendment; trivial naming resolutions are allowed and listed in the
 handoff.
+
+---
+
+## 15. Design review R11 — finding → fix map (revision R11-1)
+
+R11 (PASS_WITH_REQUIRED_CHANGES at `6c00e671`) findings and where each is resolved:
+
+| Finding | Severity | Fix |
+| --- | --- | --- |
+| R11-F01 | major | 12.3 `test_no_financial_table_or_migration`: exact 9 names with identifier boundaries over `migrations/versions/*.py` and `migrations/sql/*.sql` plus `METADATA`; positive control `test_the_table_guard_does_not_match_legacy_names`; PR-33 |
+| R11-F02 | major | R-10 rewritten (migrated legacy schema, dispositions, sensitivity, families, unverified production rows), R-10a Procore financial tables, F1-D08, F1-O12, F1-U09, 9.1 schema and access obligations; ADR-018 Context |
+| R11-F03 | major | 3.7 rewritten: exhaustive head table (cycle, approved + withdrawn, several withdrawn, dangling withdrawal), conflict system-wide and terminal; domain tests; goldens S34, S35 |
+| R11-F04 | major | 8.5 S16–S18 list both reasons; the reason column is declared the complete sorted list; S09 terminal note |
+| R11-F05 | major | 3.7 admitting run = greatest `run_sequence` carrying the content; cross-scope poisoning stated; recovery by re-import; 9.1 runs → version many-to-1, no file-hash uniqueness; goldens S31–S33; PR-36 |
+| R11-F06 | major | reason `membership_truncated` (29), request field, S4 cap; S36; PR-37; F1-D23 |
+| R11-F07 | major | `request.source_cutoff` defined (5.3 step 1); 07 output mapping table (5.4, F1-D22); verified-zero note; S37; PR-38 |
+| R11-F08 | major | section 11 Authority/Spoofing/Partial rows reworded; 8.3 tampered row; 3.7 steps 1 and 5; F1-U10; ADR-018 decision 2 |
+| R11-F09 | major | R-17 and section 14: each package re-measures its own pins, claimed counts and shard weights (I11-A 500/959, I11-B 502/962) |
+| R11-F10 | major | 8.1 `.gitattributes` rule owned by I11-B; `test_fixtures_are_not_text_normalised`; `read_bytes` only |
+| R11-F11 | major | PR-02, PR-03a/b, PR-17 (evaluator test), PR-21 (`partial_export__count.csv`), PR-22 rewritten with named inputs and expected failures |
+| R11-F12 | minor | 3.2 and 7.7: `amount_sign` for account lines only; `test_transfer_leg_sign_is_not_masked_by_amount_sign`; PR-40 |
+| R11-F13 | minor | V13 applies the full V15 checks to the `end` line; `test_end_line_cells_are_validated` |
+| R11-F14 | minor | 3.3 rows for `money_sum` start, negation/`copy_abs`/zero normalisation, `parse_amount` quantize note; 6.2 decoder note; `test_empty_sum_and_negated_zero_are_storable`, `test_decode_refuses_bool_counts_and_nan` |
+| R11-F15 | minor | 12.3 `test_programs_financial_overview_is_not_served` scans `apps/` and `migrations/` and forbids `program_financial_read`; switch guard covers `.env*` examples |
+| R11-F16 | major | 9.1 database privileges: no GRANT/REVOKE, all 9 tables `excluded` and added to `_PROTECTED` |
+| R11-F17 | minor | F1-D06 records the omitted `external_account` and `scope` → `wbs_package` |
+| R11-F18 | minor | 3.4 active designations only, 1 per system (`ValueError`); 4.7 versions entering the answer; F1-U12 |
+| R11-F19 | minor | 4.5 assumption + F1-O13 (model default); 3.8 mapping gaps/duplicates raise `ValueError` |
+| R11-F20 | major | header status, ADR-018 Status, ADR index, architecture index and source index rows: Proposed — not accepted |
+| R11-F21 | minor | `test_canonical_encoder_bytes_are_pinned` (12.1, 12.5, PR-39, F1-D21) |
+| R11-F22 | nit | malformed count 52, fixture tree 73; parser code `source_version_not_first` (F1-D24); `source_cutoff_at` described as the earliest cutoff |
+| Rulings Q1–Q11 | — | Q1: 9.4 operator-only attested-local capability, never ChatLLM/remote/façade/web; Q6: `reportable` is never a certified total (header, 5.3 step 11, section 10, F1-U11, ADR-018); Q9: purpose and dual switch fixed at contract level only (section 10); Q2–Q5, Q7, Q8, Q10, Q11 accepted with their conditions met by the fixes above |

@@ -36,6 +36,7 @@ from my_pa.application.service import (
     _PROGRAM_REPORTING_CAPABILITIES,
     _REPORT_TRANSFER_UPLOAD_CAPABILITIES,
     _SCHEDULE_CAPABILITIES,
+    _SCHEDULE_SCENARIO_CAPABILITIES,
 )
 from my_pa.bootstrap.gateway import build_gateway_runtime
 from my_pa.bootstrap.settings import DATABASE_URL_SCHEME, Settings
@@ -533,6 +534,8 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     250: "Two hundred and fifty",
     # Reports Modernization WP06: its five transfer additions, 250 -> 255.
     255: "Two hundred and fifty-five",
+    # Schedule Scenarios S6-3: the 26 plane names, 255 -> 281.
+    281: "Two hundred and eighty-one",
 }
 
 
@@ -675,14 +678,17 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
         # CPM Workbench S5b-2: the Schedule names, behind `MY_PA_SCHEDULE_ENABLED`
         # (default off), an explicit name set.
         or capability in _SCHEDULE_CAPABILITIES
+        # Schedule Scenarios S6-3: the 26 plane names, behind
+        # `MY_PA_SCHEDULE_SCENARIOS_ENABLED` on top of that switch (default off).
+        or capability in _SCHEDULE_SCENARIO_CAPABILITIES
         # Reports Modernization WP06: the four transfer uploads, served only with
         # a report content store and the transfer staging (unset by default).
         or capability in _REPORT_TRANSFER_UPLOAD_CAPABILITIES
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert implemented == 255
-    assert len(withheld_families) == 131
+    assert implemented == 281
+    assert len(withheld_families) == 157
     assert unwired == set()
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
@@ -745,7 +751,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # default grows by one); its four uploads are an eighth withheld family
     # (composed only with the content store and the transfer staging), so the
     # withheld figure grows by four.
-    assert default == 124 and total == 255 and withheld == 131
+    assert default == 124 and total == 281 and withheld == 157
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured

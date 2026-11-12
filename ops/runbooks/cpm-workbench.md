@@ -277,3 +277,120 @@ string.
 | Q7 vocabulary at head | after | `pg_get_constraintdef` of `a_record_link_pair_is_admitted`, `a_record_link_from_family_is_known`, `a_schedule_publication_role_is_known` | an S6 relation or family missing, or `reference` still admitted |
 | Q8 runtime reach | after | `has_table_privilege(current_user, …)` | `SELECT`/`INSERT` lacking on any of the 11 tables, or `UPDATE` on `schedule_scenario_write_requests` |
 | Q9 plane objects | after | `pg_class`, `pg_proc`, `pg_trigger` | a plane table, one of the 15 plane functions, or trigger G10 absent |
+
+## 9. Schedule Scenarios capabilities, switch and client exposure (S6-3)
+
+**UNEXECUTED / OPERATOR-GATED. Nothing in this section was run against any real system.**
+S6-3 (schedule scenarios contract
+[section 15](../../docs/architecture/schedule-scenarios-contract.md), runbook plan section
+15.17) adds 26 capabilities (6 client writes, 4 operator baseline decisions, 16 reads) and 3
+purposes, served only while `MY_PA_SCHEDULE_ENABLED` **and**
+`MY_PA_SCHEDULE_SCENARIOS_ENABLED` are both on; revision B `b77334135653` (audit vocabulary
+only); the ChatLLM data profile `chatllm-data-v13`; and the 6 Schedule lineage families. The
+package's executed results are in contract section 15.19. Every command below is
+operator-run; an agent performs none of them.
+
+1. **Order.**
+   1. S6-2 revision A (`2a90f91dd786`, section 8) is applied. The operator reports
+      production at `4c37731671fc`, which includes it; this runbook did not verify it.
+   2. **Revision B** (`b77334135653`, `down_revision = "4c37731671fc"`). Take a backup. It
+      restates the 2 audit CHECKs (`capability_is_known`, `purpose_is_known`) on
+      `knowledge.audit_events` under `ACCESS EXCLUSIVE`, held to commit: every authorized
+      request writes `audit_events`, so **the gateway pauses** for the window (and so does
+      every worker that audits). Run Q0 and Q10 before (`--phase before`), and Q0 and Q11
+      after (`--phase after`), with the commands below. A `55P03` (`lock_not_available`)
+      abort leaves the database at `4c37731671fc`; it is clean and retryable in a quieter
+      window. **Go/no-go:** the scratch-cluster window (section 15.19: 0.68 s at 100,000
+      rows / 16.7 MB and 1.54 s at 1,000,000 rows / 167.2 MB, upgrade wall clock) scaled by
+      Q10's `reltuples` and `pg_relation_size` on the production host, times the section
+      14.14 host factor of 10. **Go** when that is at most 2 s; otherwise run the upgrade
+      once on a restored copy on the server host, timed, and go only when it takes at most
+      2 s.
+   3. Deploy the S6-3 build with `MY_PA_SCHEDULE_SCENARIOS_ENABLED` **absent** (the plane is
+      then off: every scenario name is `unsupported`, the 6 lineage families are withheld,
+      and v13 desires exactly the v12 set).
+   4. Set `MY_PA_SCHEDULE_ENABLED=true` (if not already) and
+      `MY_PA_SCHEDULE_SCENARIOS_ENABLED=true` on the gateway **and** on the schedule worker
+      (the worker hands `scenario_plane_effective` to the auto-match hook only with both);
+      restart both.
+
+   ```sh
+   # Before revision b77334135653, as the runtime role (Q0-Q5 and Q10; read Q10's report).
+   .venv/bin/python ops/postgres/schedule_scenarios_predeploy_check.py --phase before
+   # After it; pass the Q5 digest the before run printed (Q0, Q5-Q9 and Q11).
+   .venv/bin/python ops/postgres/schedule_scenarios_predeploy_check.py --phase after \
+       --before-acl-sha256 <digest>
+   ```
+
+2. **Commissioning (operator-run, not run).** For each ChatLLM client run `profile-diff`,
+   then `profile-plan`, then `profile-apply` at `chatllm-data-v13` (the
+   [`managed-knowledge-context.md`](managed-knowledge-context.md) form):
+
+   ```sh
+   python apps/cli/remote_mcp.py profile-diff --oauth-client-id "$CLIENT" --scope my-pa.read \
+       --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v13
+   python apps/cli/remote_mcp.py profile-plan --oauth-client-id "$CLIENT" --scope my-pa.read \
+       --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v13
+   # operator-gated; only after the go/no-go below
+   python apps/cli/remote_mcp.py profile-apply --oauth-client-id "$CLIENT" --scope my-pa.read \
+       --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v13 --apply
+   ```
+
+   **Go/no-go is a set rule, not a count** (R10-F05, R10-N02): (i) the diff shows **no
+   removal** (nothing revoked or replaced); (ii) every add is in {the 22 below} ∪ {the 6
+   S5b-2 reads `schedule_series.list`, `schedule_publications.list`,
+   `schedule_publications.read`, `schedule_activities.list`, `schedule_activities.history`,
+   `schedule_changes.list` (purpose `schedule_read`)} ∪ {the 11 `chatllm-data-v12` Reports
+   names `reports.publish`, `reports.update`, `reports.history`, `reports.archive`,
+   `reports.delete`, `reports.restore`, `reports.transfer.begin`, `reports.transfer.append`,
+   `reports.transfer.finalize`, `reports.transfer.abort`, `reports.transfer.read_chunk`};
+   (iii) all 22 are present. Anything else is a stop. Expected cases: **22** adds (the client
+   holds the 6 S5b-2 reads and was applied at v12), **28** (never profiled with
+   `MY_PA_SCHEDULE_ENABLED` on; production today: that switch is absent), **33** (holds the
+   6 reads, never applied at v12: the Reports commissioning still pending in production),
+   **39** (neither). v13 with `MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires exactly the v12
+   set, so a pending Reports commissioning uses v13 after this build.
+
+   The 22: writes `schedule_scenarios.create`, `schedule_scenario_versions.create`,
+   `schedule_cpm_runs.create`, `schedule_scenario_outputs.record`,
+   `schedule_baselines.propose`, `schedule_baselines.withdraw` (purpose
+   `schedule_analysis_authoring`, `--write`); reads `schedule_scenarios.list`,
+   `schedule_scenarios.read`, `schedule_scenario_versions.read`,
+   `schedule_scenario_versions.activities`, `schedule_scenario_versions.relationships`,
+   `schedule_scenario_versions.changes`, `schedule_cpm_runs.read`,
+   `schedule_cpm_runs.activities`, `schedule_scenario_outputs.list`,
+   `schedule_scenario_outputs.read`, `schedule_series.current`,
+   `schedule_series.match_decisions`, `schedule_baselines.list`, `schedule_baselines.read`,
+   `schedule_baselines.governing`, `schedule_baselines.compare` (purpose
+   `schedule_analysis_read`).
+
+   For a non-ChatLLM remote client (the ChatGPT connector), grant the same 22 with
+   `apps/cli/remote_mcp.py grant` (one per name, `--write` for the 6 writes) and set its
+   writes flag (`set-client-writes --writes-enabled`); grant the S5b-2 Schedule reads too if
+   the client lacks them. The Schedule lineage families need only the lineage grants the
+   client already holds (plus each family's read grant to see that family's records).
+   **Never** grant the 4 operator names `schedule_baselines.approve`,
+   `schedule_baselines.reject`, `schedule_baselines.revoke`,
+   `schedule_baselines.set_governing`: an active grant on one is
+   `UNEXPECTED_CONTROL_PLANE_GRANT`, and they are never remotely published.
+
+3. **Read-only checks.** Q0-Q11 (`ops/postgres/schedule_scenarios_predeploy_check.py`) as the
+   runtime role (step 1). After enablement, `capabilities.get` (operator) lists the 26 as
+   available, and a granted remote client's `tools/list` (or `my_pa.describe` with feature
+   `schedule` on the compact facade) shows the 22 and never the 4. Neither changes anything.
+4. **Measurements the operator owns.** S6-2-U07: the maximal matcher read under J on the
+   server host, by an intake import against a Project with 50 Series (stop if it approaches
+   the 30 s `statement_timeout`). S6-2-U12: count 1 extra connection per concurrently
+   computing Principal per process against `max_connections`. S6-U06/U16: CPM timing and
+   calendar cache memory on the server host.
+5. **Rollback.** Turn the switches off (no row changes; every scenario read and write is
+   `unsupported`, the 6 lineage families are withheld, and existing links to them stay
+   confirmable and endable). Downgrade revision B only while no `audit_events` row names a
+   plane capability or purpose: the downgrade refuses (`restrict_violation`) otherwise.
+   Never delete audit history to make it pass.
+6. **Warnings.** Revoking a Baseline is final for its publication, which can never be
+   approved again (S6-U15). A change set larger than about 740 KiB cannot be sent
+   (`MAX_REQUEST_BYTES` 762,288 bytes); clients split it across versions (S6-3-U01), and a
+   very large criticality or Monte Carlo output may not fit at all.
+7. **Operator-gated and not performed by an agent:** revisions A and B, both switches,
+   every `profile-apply` and `grant`, the measurements, and the deployment.

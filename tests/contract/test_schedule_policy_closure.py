@@ -224,12 +224,13 @@ def _commands(scene: Scene) -> dict[Capability, object]:
 def _capability_enum(scene: Scene) -> None:
     del scene
     members = list(Capability)
-    assert [(member.name, member.value) for member in members[-7:]] == [
+    # Schedule Scenarios S6-3 appends its 26 plane names after the 7.
+    assert [(member.name, member.value) for member in members[-33:-26]] == [
         (name, value) for name, value, _, _ in _TABLE
     ]
     # Reports Modernization WP03 declares its five beside `reports.publish`, and
     # WP05b its four custody names after them, and WP06 its five transfer names.
-    assert len(members) == 255
+    assert len(members) == 281
 
 
 def _purpose_enum(scene: Scene) -> None:
@@ -237,12 +238,17 @@ def _purpose_enum(scene: Scene) -> None:
     members = list(Purpose)
     # Reports Modernization WP03 appends `report_lifecycle` after the two, and
     # WP05b `report_hold` and `report_retention` after it.
-    assert [(member.name, member.value) for member in members[-5:-3]] == [
+    # Schedule Scenarios S6-3 appends its 3 plane purposes after those.
+    assert [(member.name, member.value) for member in members[-8:-6]] == [
         ("SCHEDULE_IMPORT", "schedule_import"),
         ("SCHEDULE_READ", "schedule_read"),
     ]
-    assert members[-3:] == [Purpose.REPORT_LIFECYCLE, Purpose.REPORT_HOLD, Purpose.REPORT_RETENTION]
-    assert len(members) == 65
+    assert members[-6:-3] == [
+        Purpose.REPORT_LIFECYCLE,
+        Purpose.REPORT_HOLD,
+        Purpose.REPORT_RETENTION,
+    ]
+    assert len(members) == 68
 
 
 def _operator_only(scene: Scene) -> None:
@@ -328,7 +334,7 @@ def _remote_write(scene: Scene) -> None:
 
 def _chatllm_policy(scene: Scene) -> None:
     del scene
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
     for capability in READS:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL, capability
@@ -507,8 +513,11 @@ def test_import_is_control_plane_excluded() -> None:
 
 
 def test_v11_targets() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
-    assert len(CHATLLM_CAPABILITY_POLICY) == 255
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    # Schedule Scenarios S6-3 (chatllm-data-v13): the 22 plane names compose only
+    # with `schedule_scenarios` too, off here, so every target below is
+    # unchanged (`test_v13_targets` has the scenario targets).
+    assert len(CHATLLM_CAPABILITY_POLICY) == 281
     # chatllm-data-v12 (Reports Modernization): `reports.publish`, the 5 report
     # management names and the 5 `reports.transfer.*` names (`DATA_REQUIRED`)
     # add 11 everywhere.
@@ -523,7 +532,8 @@ def test_v11_targets() -> None:
     )
     default_all = _planes(constraints=True, lineage=True, program_reporting=True, schedule=True)
     assert len(_desired(default_all)) == 147
-    assert len(_every_composition()) == 512
+    # The `schedule_scenarios` flag doubles the compositions, 512 -> 1,024.
+    assert len(_every_composition()) == 1024
 
 
 def test_planner_desires_schedule_reads_only_with_the_switch() -> None:

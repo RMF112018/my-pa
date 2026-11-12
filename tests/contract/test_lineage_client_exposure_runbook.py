@@ -54,6 +54,7 @@ from my_pa.domain.lineage.vocabulary import (
     ATTESTED_LINEAGE_WRITE_CAPABILITIES,
     LINEAGE_BACKFILL_CAPABILITIES,
     LINEAGE_FAMILY_READS,
+    SCHEDULE_RECORD_FAMILIES,
     RecordFamily,
 )
 
@@ -278,6 +279,11 @@ def _expected_companions() -> dict[Capability, tuple[str, bool]]:
     for family, reads in LINEAGE_FAMILY_READS.items():
         if family is RecordFamily.SITUATION:
             continue  # issues.read / issues.list are among the 34
+        if family in SCHEDULE_RECORD_FAMILIES:
+            # Schedule Scenarios S6-3 (schedule scenarios contract section
+            # 15.11.1): the 6 Schedule families' reads are the Schedule plane's
+            # own names, granted with that plane (its runbook), not P1 companions.
+            continue
         for name in reads:
             capability = Capability(name)
             expected[capability] = (chatllm_grant_purpose(capability).value, False)
@@ -316,10 +322,10 @@ def test_the_documented_companion_table_equals_the_family_reads_and_composite_gr
 #: "v9 adds", "v9's ...", "a client converged on v9").
 _V9: Final = "chatllm-data-v9"
 _V10: Final = "chatllm-data-v10"
-#: The current version (CPM Workbench S5b-2 and then Reports Modernization moved
-#: it on from `chatllm-data-v10`, which the 6 files keep as the version that
-#: added the lineage plane).
-_CURRENT: Final = "chatllm-data-v12"
+#: The current version (CPM Workbench S5b-2, Reports Modernization and then
+#: Schedule Scenarios S6-3 moved it on from `chatllm-data-v10`, which the 6
+#: files keep as the version that added the lineage plane).
+_CURRENT: Final = "chatllm-data-v13"
 _V9_HISTORICAL: Final = re.compile(
     r"since `chatllm-data-v9`|`chatllm-data-v9` adds|`chatllm-data-v9`'s|"
     r"converged on `chatllm-data-v9`"

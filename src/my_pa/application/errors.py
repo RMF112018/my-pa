@@ -746,6 +746,54 @@ class SafeDetail(StrEnum):
     TRANSFER_STATE = "transfer_state"
     TRANSFER_INCOMPLETE = "transfer_incomplete"
     TRANSFER_QUOTA = "transfer_quota"
+    #: Schedule Scenarios S6-3 (schedule-scenarios contract section 15.7.1): the
+    #: plane subjects and fields. `CHANGE_SET_<OP_ERROR>` is one S6-1
+    #: `ChangeOpError` of a refused change set (`change_set_` + its value; the op
+    #: index is not disclosed, S6-U09); `CONTENT_SIZE` a new canonical content
+    #: over its bound; `STORAGE_QUOTA`, `SCENARIO_WRITE_BUDGET` and
+    #: `SCENARIO_REFUSAL_BUDGET` the `rate_limited` subjects of the section 8.3
+    #: client-channel bounds; `CPM_RUN` a busy compute lease (`conflict`) or the
+    #: hourly CPM-units bound (`rate_limited`); `GOVERNING` the governing chain.
+    #: `EXPECTED_VERSION`, `LABEL`, `EFFECTIVE_FROM`, `REASON`, `VERSION_ID`,
+    #: `STATUS`, `PUBLICATION_ID`, `PROJECT_ID`, `SERIES_ID` and the paging and
+    #: lineage details are reused (S6-3-D07).
+    SCENARIO_ID = "scenario_id"
+    FROM_VERSION_ID = "from_version_id"
+    FROM_BASELINE_ID = "from_baseline_id"
+    CPM_RUN_ID = "cpm_run_id"
+    CPM_RUN = "cpm_run"
+    OUTPUT_ID = "output_id"
+    OUTPUT = "output"
+    CHANGE_SET = "change_set"
+    CHANGE_SET_UNKNOWN_OP = "change_set_unknown_op"
+    CHANGE_SET_INVALID_FIELD = "change_set_invalid_field"
+    CHANGE_SET_KEY_EXISTS = "change_set_key_exists"
+    CHANGE_SET_KEY_ABSENT = "change_set_key_absent"
+    CHANGE_SET_SOURCE_KEY_REFUSED = "change_set_source_key_refused"
+    CHANGE_SET_RELATIONSHIP_EXISTS = "change_set_relationship_exists"
+    CHANGE_SET_RELATIONSHIP_ABSENT = "change_set_relationship_absent"
+    CHANGE_SET_SELF_LOOP = "change_set_self_loop"
+    CHANGE_SET_CALENDAR_ABSENT = "change_set_calendar_absent"
+    CHANGE_SET_CALENDAR_IN_USE = "change_set_calendar_in_use"
+    CHANGE_SET_CONSTRAINT_CONFLICT = "change_set_constraint_conflict"
+    CHANGE_SET_PROGRESS_INVALID = "change_set_progress_invalid"
+    CHANGE_SET_BOUND_EXCEEDED = "change_set_bound_exceeded"
+    CHANGE_SET_CONTENT_INVALID = "change_set_content_invalid"
+    CONTENT_SIZE = "content_size"
+    MINUTES_PER_SOURCE_UNIT = "minutes_per_source_unit"
+    CALENDAR = "calendar"
+    DATA_DATE_TIME = "data_date_time"
+    NOTE = "note"
+    SERIES_AUTO = "series_auto"
+    BASELINE_ID = "baseline_id"
+    BASELINE_TYPE = "baseline_type"
+    APPROVAL_REFERENCE = "approval_reference"
+    SUPERSEDES_BASELINE_ID = "supersedes_baseline_id"
+    GOVERNING = "governing"
+    STORAGE_QUOTA = "storage_quota"
+    SCENARIO_WRITE_BUDGET = "scenario_write_budget"
+    SCENARIO_REFUSAL_BUDGET = "scenario_refusal_budget"
+    CRITICAL_ONLY = "critical_only"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

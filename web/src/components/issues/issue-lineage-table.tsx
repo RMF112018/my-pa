@@ -26,7 +26,7 @@ import {
 export const LINEAGE_PAGE_SIZE = 25;
 export const LINEAGE_UNAVAILABLE = "The lineage is unavailable.";
 
-/** S1/S2 relation words plus S3's "related to" (section 7.6). */
+/** S1/S2 relation words plus S3's "related to" (section 7.6) and the 3 Schedule Scenarios S6-3 relations. */
 const RELATION_WORDS: Readonly<Record<AssociationView["relation_type"], string>> = {
   issue_member: "member of",
   originated_from: "originated from",
@@ -36,6 +36,9 @@ const RELATION_WORDS: Readonly<Record<AssociationView["relation_type"], string>>
   blocks: "blocks",
   created_to_resolve: "created to resolve",
   related_context: "related to",
+  concerns: "concerns",
+  delays: "delays",
+  mitigates: "mitigates",
 };
 
 /** `anchorLabel` already words an archived Capture; these are the other availabilities. */

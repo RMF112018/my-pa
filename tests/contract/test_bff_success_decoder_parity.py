@@ -129,6 +129,9 @@ from my_pa.contracts.v1.record_lineage import (
     LineagePathEdgeView,
     LineageView,
     RecordRefView,
+    ScenarioNodeSummary,
+    ScenarioVersionNodeSummary,
+    ScheduleBaselineNodeSummary,
     VirtualEdgeView,
 )
 from my_pa.contracts.v1.reveal import RevealView
@@ -248,6 +251,8 @@ from my_pa.domain.reports.vocabulary import (
     StorageKind,
     TransferState,
 )
+from my_pa.domain.schedule.baselines import BaselineStatus
+from my_pa.domain.schedule.scenario.model import VersionLabel
 from my_pa.domain.search.query import RankCategory, SearchMatch, label_for_media_type
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.situation.situation import Project, ProjectState
@@ -1840,12 +1845,20 @@ LINEAGE_ISSUE_ID: Final = "sit_aaaaaaaa11111111"
 LINEAGE_TASK_ID: Final = "tsk_aaaaaaaa11111111"
 LINEAGE_MEETING_ID: Final = "mtg_aaaaaaaa11111111"
 LINEAGE_NOTE_VERSION_ID: Final = "mnote_aaaaaaaa11111111"
+LINEAGE_SCENARIO_ID: Final = "sscn_aaaaaaaa11111111"
+LINEAGE_SCENARIO_VERSION_ID: Final = "sscv_aaaaaaaa11111111"
+LINEAGE_BASELINE_ID: Final = "sbl_aaaaaaaa11111111"
 LINEAGE_NOTE_BODY: Final = "Synthetic note: pour the north slab after the inspection."
 
 
 def _lineage_service() -> tuple[ApplicationService, Authorization]:
     service = object.__new__(ApplicationService)
     service._lineage_enabled = True
+    # Schedule Scenarios S6-3 lockstep (schedule scenarios contract section
+    # 15.11.4): a lineage read asks whether the plane is effective to withhold
+    # its 6 families; this stub composes no Schedule plane, so they are withheld.
+    service._schedule_enabled = False
+    service._schedule_unit_of_work = None
     # S3 section 6.1 lockstep: a lineage read re-checks the caller's grant set
     # (`None`: the local caller, which sees every family).
     authorization = cast(
@@ -1947,11 +1960,70 @@ def _records_lineage() -> dict[str, Any]:
                     edge="virtual", edge_type=NativeVirtualEdge.MEETING_NOTE_VERSION_OF
                 ),
             ),
+            # Schedule Scenarios S6-3 (schedule scenarios contract section
+            # 15.11.3a): Schedule nodes carry their `schedule` summary (a
+            # proposal's `null` label and type kept), and a Schedule virtual edge
+            # joins 2 nodes of the answer.
+            LineageNodeView(
+                family=RecordFamily.SCENARIO,
+                record_id=LINEAGE_SCENARIO_ID,
+                depth=1,
+                reached_from=task,
+                reached_via=LineagePathEdgeView(edge="typed", link_id="irl_cccccccc33333333"),
+                schedule=ScenarioNodeSummary(
+                    data_class="schedule_scenario",
+                    authority="client_authored",
+                    authoritative=False,
+                    reportable=False,
+                    trust="model_proposed",
+                    origin_kind="publication",
+                ),
+            ),
+            LineageNodeView(
+                family=RecordFamily.SCENARIO_VERSION,
+                record_id=LINEAGE_SCENARIO_VERSION_ID,
+                depth=1,
+                reached_from=task,
+                reached_via=LineagePathEdgeView(edge="typed", link_id="irl_dddddddd44444444"),
+                schedule=ScenarioVersionNodeSummary(
+                    data_class="schedule_scenario",
+                    authority="client_authored",
+                    authoritative=False,
+                    reportable=False,
+                    trust="model_proposed",
+                    version_no=2,
+                    version_label=VersionLabel.WHAT_IF,
+                ),
+            ),
+            LineageNodeView(
+                family=RecordFamily.SCHEDULE_BASELINE,
+                record_id=LINEAGE_BASELINE_ID,
+                depth=1,
+                reached_from=task,
+                reached_via=LineagePathEdgeView(edge="typed", link_id="irl_eeeeeeee55555555"),
+                schedule=ScheduleBaselineNodeSummary(
+                    data_class="schedule_baseline",
+                    authority="proposed",
+                    authoritative=False,
+                    reportable=False,
+                    trust="model_proposed",
+                    status=BaselineStatus.PROPOSED,
+                    label=None,
+                    effective_type=None,
+                ),
+            ),
         ),
         typed_edges=(membership, origin),
         virtual_native_edges=(
             VirtualEdgeView(
                 edge_type=NativeVirtualEdge.MEETING_NOTE_VERSION_OF, from_ref=note, to_ref=meeting
+            ),
+            VirtualEdgeView(
+                edge_type=NativeVirtualEdge.SCENARIO_VERSION_OF,
+                from_ref=RecordRefView(
+                    family=RecordFamily.SCENARIO_VERSION, record_id=LINEAGE_SCENARIO_VERSION_ID
+                ),
+                to_ref=RecordRefView(family=RecordFamily.SCENARIO, record_id=LINEAGE_SCENARIO_ID),
             ),
         ),
         complete_state=LineageCompleteness.COMPLETE,

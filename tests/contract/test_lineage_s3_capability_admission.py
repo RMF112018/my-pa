@@ -238,7 +238,7 @@ def test_s3_capabilities_are_operator_decision_required() -> None:
         assert policy.exclusion_rationale is None
         assert not is_operator_only(capability)
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
 
 
 def test_backfill_capabilities_are_operator_only_and_control_plane_excluded() -> None:
@@ -421,7 +421,7 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     # CPM Workbench S5b-2 appends its 2 purposes after S4's (contract 3.12),
     # and Reports Modernization WP03 its `report_lifecycle` after those, and
     # WP05b `report_hold` and `report_retention` after that.
-    assert published[-10:] == [
+    assert published[-13:] == [
         *basis_tail,
         "lineage_backfill",
         "program_reporting_read",
@@ -430,6 +430,10 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
         "report_lifecycle",
         "report_hold",
         "report_retention",
+        # Schedule Scenarios S6-3: its 3 plane purposes after those.
+        "schedule_analysis_authoring",
+        "schedule_analysis_read",
+        "schedule_baseline_approval",
     ]
 
 
@@ -567,6 +571,12 @@ _S31_VIEW_ADDITIONS: Final[dict[str, frozenset[str]]] = {
     "ProjectLinkView": _S31_LABELS,
     "HandoffView": _S31_LABELS,
 }
+#: Schedule Scenarios S6-3 (schedule scenarios contract section 15.11.3a item 1, an
+#: admitted lockstep edit): the optional `schedule` node summary, serialized only
+#: on a node of one of the 6 Schedule families; every existing key is unchanged.
+_S63_VIEW_ADDITIONS: Final[dict[str, frozenset[str]]] = {
+    "LineageNodeView": frozenset({"schedule"}),
+}
 
 
 def test_s1_and_s2_views_keep_every_key() -> None:
@@ -585,8 +595,10 @@ def test_s1_and_s2_views_keep_every_key() -> None:
     for name, basis in _S2_BASIS_VIEW_KEYS.items():
         keys = frozenset(views[name].model_fields)
         assert basis <= keys, f"{name} lost {sorted(basis - keys)}"
-        assert keys - basis == _S3_VIEW_ADDITIONS.get(name, frozenset()) | _S31_VIEW_ADDITIONS.get(
-            name, frozenset()
+        assert keys - basis == (
+            _S3_VIEW_ADDITIONS.get(name, frozenset())
+            | _S31_VIEW_ADDITIONS.get(name, frozenset())
+            | _S63_VIEW_ADDITIONS.get(name, frozenset())
         ), name
 
 

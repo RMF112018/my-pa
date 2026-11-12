@@ -99,6 +99,9 @@ class ChatLLMCompositionPlanes:
     #: CPM Workbench S5b-2 (chatllm-data-v11): `MY_PA_SCHEDULE_ENABLED`. Default
     #: off, as the switch is; needs no other plane.
     schedule: bool = False
+    #: Schedule Scenarios S6-3 (chatllm-data-v13): `MY_PA_SCHEDULE_SCENARIOS_ENABLED`,
+    #: which stacks on the Schedule switch. Default off, as the switch is.
+    schedule_scenarios: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +226,10 @@ def _prerequisite_holds(
         # which exists in every composition the planner models -- it is absent
         # only in a restricted-profile composition).
         return planes.schedule
+    if prerequisite is ChatLLMCompositionPrerequisite.SCHEDULE_SCENARIOS:
+        # The service's own condition: the plane is effective only with both
+        # switches (`ApplicationService._scenario_plane`).
+        return planes.schedule and planes.schedule_scenarios
     raise RuntimeError(f"unknown ChatLLM composition prerequisite: {prerequisite!r}")
 
 

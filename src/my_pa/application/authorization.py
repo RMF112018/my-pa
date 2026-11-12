@@ -59,6 +59,7 @@ from my_pa.application.commands import (
     AddIssueProjectLink,
     AppendReportTransfer,
     ApplyConstraintSync,
+    ApproveScheduleBaseline,
     ArchiveCapture,
     ArchiveEntity,
     ArchiveGeneralReport,
@@ -78,6 +79,7 @@ from my_pa.application.commands import (
     CloseProject,
     Command,
     CommitIntelligenceArtifact,
+    CompareScheduleBaseline,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
     ConfirmIssueMembership,
@@ -108,6 +110,9 @@ from my_pa.application.commands import (
     CreatePublishedConstraint,
     CreateRelationshipMemory,
     CreateReportType,
+    CreateScheduleCpmRun,
+    CreateScheduleScenario,
+    CreateScheduleScenarioVersion,
     CreateSituation,
     CreateTask,
     CreateTaskComment,
@@ -181,9 +186,17 @@ from my_pa.application.commands import (
     ListReportTypes,
     ListReviewCases,
     ListScheduleActivities,
+    ListScheduleBaselines,
     ListScheduleChanges,
+    ListScheduleCpmRunActivities,
     ListSchedulePublications,
+    ListScheduleScenarioActivities,
+    ListScheduleScenarioChanges,
+    ListScheduleScenarioOutputs,
+    ListScheduleScenarioRelationships,
+    ListScheduleScenarios,
     ListScheduleSeries,
+    ListScheduleSeriesMatchDecisions,
     ListSituations,
     ListSources,
     ListTaskComments,
@@ -198,6 +211,7 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
+    ProposeScheduleBaseline,
     PublishConstraint,
     PublishGeneralReport,
     PullGoodNotesWork,
@@ -211,6 +225,7 @@ from my_pa.application.commands import (
     ReadConstraintSyncDelta,
     ReadConstraintSyncState,
     ReadGoodNotes,
+    ReadGoverningScheduleBaseline,
     ReadIntelligenceArtifact,
     ReadIssue,
     ReadIssueClosureReadiness,
@@ -231,13 +246,21 @@ from my_pa.application.commands import (
     ReadReportManifest,
     ReadReportTransferChunk,
     ReadScheduleActivityHistory,
+    ReadScheduleBaseline,
+    ReadScheduleCpmRun,
     ReadSchedulePublication,
+    ReadScheduleScenario,
+    ReadScheduleScenarioOutput,
+    ReadScheduleScenarioVersion,
+    ReadScheduleSeriesCurrent,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordIssueHandoff,
+    RecordScheduleScenarioOutput,
     RecordTask,
     ReinstateRecordAssociation,
+    RejectScheduleBaseline,
     ReleaseReportHold,
     ReopenConstraint,
     ReopenIssue,
@@ -269,6 +292,7 @@ from my_pa.application.commands import (
     ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
+    RevokeScheduleBaseline,
     SearchCaptures,
     SearchCommitments,
     SearchCommitmentsV2,
@@ -282,6 +306,7 @@ from my_pa.application.commands import (
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
+    SetGoverningScheduleBaseline,
     SetReportRetention,
     SplitEntity,
     StartGsqsB0,
@@ -305,6 +330,7 @@ from my_pa.application.commands import (
     VoidConstraint,
     WaitingOn,
     WaitingOnV2,
+    WithdrawScheduleBaseline,
 )
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.audit.events import audit_event_for
@@ -823,6 +849,34 @@ def _requested_scope(
             | ListScheduleActivities()
             | ReadScheduleActivityHistory()
             | ListScheduleChanges()
+            # Schedule Scenarios S6-3: the same partition's plane rows; no source
+            # is named.
+            | CreateScheduleScenario()
+            | CreateScheduleScenarioVersion()
+            | CreateScheduleCpmRun()
+            | RecordScheduleScenarioOutput()
+            | ProposeScheduleBaseline()
+            | WithdrawScheduleBaseline()
+            | ApproveScheduleBaseline()
+            | RejectScheduleBaseline()
+            | RevokeScheduleBaseline()
+            | SetGoverningScheduleBaseline()
+            | ListScheduleScenarios()
+            | ReadScheduleScenario()
+            | ReadScheduleScenarioVersion()
+            | ListScheduleScenarioActivities()
+            | ListScheduleScenarioRelationships()
+            | ListScheduleScenarioChanges()
+            | ReadScheduleCpmRun()
+            | ListScheduleCpmRunActivities()
+            | ListScheduleScenarioOutputs()
+            | ReadScheduleScenarioOutput()
+            | ReadScheduleSeriesCurrent()
+            | ListScheduleSeriesMatchDecisions()
+            | ListScheduleBaselines()
+            | ReadScheduleBaseline()
+            | ReadGoverningScheduleBaseline()
+            | CompareScheduleBaseline()
         ):
             return frozenset()
         case CreateCapture():

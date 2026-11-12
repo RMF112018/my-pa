@@ -87,7 +87,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the 255 capabilities.
+the 281 capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -170,6 +170,7 @@ exactly the cycle above, at exactly five concurrent requests.
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -209,6 +210,9 @@ from my_pa.contracts.ports import (
     ReportContentNamespace,
     ReportContentStore,
     ReportTransferStaging,
+    ScenarioCpmRunner,
+    ScenarioRecordBuilders,
+    ScenarioUnitOfWork,
     ScheduleUnitOfWork,
     UnitOfWork,
 )
@@ -253,6 +257,15 @@ from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.program_reads import SqlAlchemyProgramReadUnitOfWork
 from my_pa.infrastructure.persistence.registry import configured_source_roots
 from my_pa.infrastructure.persistence.schedule import SqlAlchemyScheduleUnitOfWork
+from my_pa.infrastructure.persistence.schedule_cpm_lease import (
+    compute_and_store_cpm_run,
+    dispose_lease_engines,
+)
+from my_pa.infrastructure.persistence.schedule_scenarios import (
+    SqlAlchemyScenarioUnitOfWork,
+    new_scenario_output,
+    new_scenario_version,
+)
 from my_pa.infrastructure.persistence.tables import (
     entity_reenrichment_subjects,
     entity_reenrichment_version_watermarks,
@@ -1077,6 +1090,8 @@ class GatewayRuntime:
         self.audit_engine.dispose()
         if self.program_read_engine is not None:
             self.program_read_engine.dispose()
+        # Schedule Scenarios S6-3 (contract section 15.8): the CPM lease engines.
+        dispose_lease_engines()
 
     def run_reenrichment_once(
         self,
@@ -1228,6 +1243,33 @@ def build_gateway_runtime(
         schedule_factory if settings.schedule_enabled and data_engine is None else None
     )
 
+    # Schedule Scenarios S6-3 (schedule-scenarios contract section 15.8): the plane
+    # unit of work and the CPM runner (the work engine bound to the leased
+    # compute), composed only while the plane is effective -- both switches on
+    # and no restricted `data_engine`. This module is the only one (with
+    # `apps/worker.py` reaching the jobs module) that imports the plane
+    # persistence; the application reaches it through these two ports.
+    scenario_plane_effective = (
+        settings.schedule_enabled and settings.schedule_scenarios_enabled and data_engine is None
+    )
+
+    def scenario_factory() -> ScenarioUnitOfWork:
+        return SqlAlchemyScenarioUnitOfWork(work_engine)
+
+    scenario_unit_of_work: Callable[[], ScenarioUnitOfWork] | None = (
+        scenario_factory if scenario_plane_effective else None
+    )
+    scenario_cpm_runner: ScenarioCpmRunner | None = (
+        functools.partial(compute_and_store_cpm_run, work_engine)
+        if scenario_plane_effective
+        else None
+    )
+    scenario_record_builders = (
+        ScenarioRecordBuilders(new_version=new_scenario_version, new_output=new_scenario_output)
+        if scenario_plane_effective
+        else None
+    )
+
     # The same conjunction `ApplicationService.available_capabilities` applies,
     # spelled once here so the review surface turns on with the plane's own
     # capability names rather than separately. A memory binds its subject to an
@@ -1335,6 +1377,12 @@ def build_gateway_runtime(
             # Schedule factory composed above (`None` when off or restricted).
             schedule_enabled=settings.schedule_enabled,
             schedule_unit_of_work=schedule_unit_of_work,
+            # Schedule Scenarios S6-3 (contract section 15.8): the plane switch and
+            # the 3 plane ports composed above (`None` unless effective).
+            schedule_scenarios_enabled=settings.schedule_scenarios_enabled,
+            scenario_unit_of_work=scenario_unit_of_work,
+            scenario_cpm_runner=scenario_cpm_runner,
+            scenario_record_builders=scenario_record_builders,
             # KLP-WP-04 (R6 section 6.1): the second service gate's allowlist.
             knowledge_discovery_client_ids=settings.knowledge_discovery_oauth_client_id_set(),
             # KLP-WP-04 slice C (R6 section 3.2): the operator-review allowlist the

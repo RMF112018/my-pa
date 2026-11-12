@@ -11,8 +11,12 @@ else: `record_links`, `record_link_revisions`, `record_link_revision_evidence`
 and `record_link_heads`. Read and shared, never written: `situations`,
 `meetings`, `meeting_note_versions`, `tasks`, `commitments`,
 `project_constraints`, `capture_versions`, and the Capture lifecycle
-projection. The request rows and the evidence anchors are the Issue
-repository's (`infrastructure.persistence.issues`), on the same connection.
+projection. Read, never shared or written (Schedule Scenarios S6-3, schedule
+scenarios contract sections 15.11.2-15.11.3): the 6 Schedule endpoint tables
+and the rows their linkability reads (`schedule_rows`,
+`schedule_intake_series`, `schedule_baseline_events`). The request rows and
+the evidence anchors are the Issue repository's
+(`infrastructure.persistence.issues`), on the same connection.
 
 **`rebuild_link_heads`** -- `record_link_heads` is a derived projection with no
 in-place repair: its trigger admits only the next revision and refuses every
@@ -28,7 +32,8 @@ rewrite: repair is an operator-gated migration.
 `matching_partition_criterion`. The Principal is only ever a parameter.
 
 **Locks** are section 6.2's and the application sequences them: endpoints and
-Capture versions `FOR SHARE`; the identity advisory lock
+Capture versions `FOR SHARE` (a Schedule family endpoint is read without a row
+lock, S6-3-D21); the identity advisory lock
 (`LINEAGE_ADVISORY_NAMESPACE`, the two-key form, so it shares no key space with
 any single-key advisory lock in `src/`); S2's `principal_id || ':blocks'` key
 on the same namespace, which every `blocks` assert takes before its cycle
@@ -74,6 +79,7 @@ from my_pa.contracts.ports import (
     LineageNoteVersionRef,
     LineageReadTimeoutError,
     LineageResolvedRecord,
+    LineageScheduleFacts,
     LinkHeadRecord,
     LinkRevisionRecord,
     RecordLineageRepository,
@@ -95,6 +101,12 @@ from my_pa.domain.lineage.vocabulary import (
     RecordLinkKind,
     RelationType,
     SituationKind,
+)
+from my_pa.domain.schedule.baselines import (
+    BaselineAction,
+    BaselineEvent,
+    BaselineType,
+    baseline_status,
 )
 from my_pa.infrastructure.persistence.capture_lifecycle import latest_lifecycles
 from my_pa.infrastructure.persistence.issues import _run, anchor_from_row
@@ -120,6 +132,15 @@ from my_pa.infrastructure.persistence.tables import (
     record_link_revision_evidence,
     record_link_revisions,
     record_links,
+    schedule_activities,
+    schedule_baseline_events,
+    schedule_baselines,
+    schedule_intake_series,
+    schedule_publications,
+    schedule_rows,
+    schedule_scenario_outputs,
+    schedule_scenario_versions,
+    schedule_scenarios,
     situations,
     tasks,
 )
@@ -147,7 +168,32 @@ _NATIVE: Final[Mapping[RecordFamily, tuple[Table, str]]] = {
     RecordFamily.COMMITMENT: (commitments, "commitment_id"),
     RecordFamily.CONSTRAINT: (project_constraints, "constraint_id"),
     RecordFamily.CAPTURE_VERSION: (capture_versions, "version_id"),
+    # Schedule Scenarios S6-3 (schedule scenarios contract section 15.11.3).
+    RecordFamily.SCHEDULE_PUBLICATION: (schedule_publications, "publication_id"),
+    RecordFamily.SCHEDULE_ACTIVITY: (schedule_activities, "schedule_activity_id"),
+    RecordFamily.SCHEDULE_BASELINE: (schedule_baselines, "baseline_id"),
+    RecordFamily.SCENARIO: (schedule_scenarios, "scenario_id"),
+    RecordFamily.SCENARIO_VERSION: (schedule_scenario_versions, "version_id"),
+    RecordFamily.SCENARIO_OUTPUT: (schedule_scenario_outputs, "output_id"),
 }
+
+#: Schedule Scenarios S6-3 (section 15.11.2, S6-3-D21): the families
+#: `share_endpoint` reads with a plain `SELECT`. Every fact they carry is fixed
+#: once linkable or moves only toward linkable, and `FOR SHARE` would need an
+#: `UPDATE` privilege the runtime role is not guaranteed on these tables.
+_UNLOCKED_FAMILIES: Final = frozenset(
+    {
+        RecordFamily.SCHEDULE_PUBLICATION,
+        RecordFamily.SCHEDULE_ACTIVITY,
+        RecordFamily.SCHEDULE_BASELINE,
+        RecordFamily.SCENARIO,
+        RecordFamily.SCENARIO_VERSION,
+        RecordFamily.SCENARIO_OUTPUT,
+    }
+)
+
+#: The terminal publication statuses a Schedule endpoint is linkable under.
+_LINKABLE_PUBLICATION_STATUSES: Final = ("complete", "partial")
 
 
 #: S3 section 3: the head states that hold an identity and are traversed, as
@@ -257,8 +303,79 @@ _HEAD_COLUMNS: Final = (
 )
 
 
+def _not_intake(outer: Table) -> ColumnElement[bool]:
+    """No intake row names `outer`'s Series (correlated; the partitions match)."""
+    intake = schedule_intake_series
+    return ~(
+        select(intake.c.series_id)
+        .where(
+            matching_partition_criterion(intake, outer),
+            intake.c.series_id == outer.c.series_id,
+        )
+        .exists()
+    )
+
+
+def _activity_is_visible() -> ColumnElement[bool]:
+    """S5b-1 U-03: an accepted row of a `complete`/`partial` publication links the activity."""
+    rows, pubs, activities = schedule_rows, schedule_publications, schedule_activities
+    return (
+        select(rows.c.row_id)
+        .select_from(
+            rows.join(
+                pubs,
+                and_(
+                    matching_partition_criterion(pubs, rows),
+                    pubs.c.publication_id == rows.c.publication_id,
+                    pubs.c.accepted_parser_run_id == rows.c.parser_run_id,
+                ),
+            )
+        )
+        .where(
+            matching_partition_criterion(rows, activities),
+            rows.c.schedule_activity_id == activities.c.schedule_activity_id,
+            pubs.c.status.in_(_LINKABLE_PUBLICATION_STATUSES),
+        )
+        .exists()
+    )
+
+
+def _baseline_has(action: str) -> ColumnElement[bool]:
+    """The Baseline's event chain holds an `action` event (read in the same statement)."""
+    events, baselines = schedule_baseline_events, schedule_baselines
+    return (
+        select(events.c.event_id)
+        .where(
+            matching_partition_criterion(events, baselines),
+            events.c.baseline_id == baselines.c.baseline_id,
+            events.c.action == action,
+        )
+        .exists()
+    )
+
+
+def _schedule_columns(family: RecordFamily) -> tuple[Any, ...]:
+    """Section 15.11.2: a Schedule family's linkability facts, as labelled columns."""
+    if family is RecordFamily.SCHEDULE_PUBLICATION:
+        pubs = schedule_publications
+        linkable: ColumnElement[bool] = and_(
+            pubs.c.status.in_(_LINKABLE_PUBLICATION_STATUSES), _not_intake(pubs)
+        )
+        return (linkable.label("schedule_linkable"),)
+    if family is RecordFamily.SCHEDULE_ACTIVITY:
+        activities = schedule_activities
+        linkable = and_(_activity_is_visible(), _not_intake(activities))
+        return (linkable.label("schedule_linkable"),)
+    if family is RecordFamily.SCHEDULE_BASELINE:
+        approved = and_(_baseline_has("approve"), ~_baseline_has("revoke"))
+        return (literal(True).label("schedule_linkable"), approved.label("baseline_approved"))
+    return (literal(True).label("schedule_linkable"),)
+
+
 def _endpoint_columns(family: RecordFamily) -> tuple[Any, ...]:
     """The native columns one endpoint family's `LineageEndpoint` carries."""
+    if family in _UNLOCKED_FAMILIES:
+        return _schedule_columns(family)
     if family is RecordFamily.SITUATION:
         return (situations.c.kind, situations.c.state)
     if family is RecordFamily.TASK:
@@ -330,6 +447,13 @@ def _to_endpoint(family: RecordFamily, record_id: str, row: Row[Any]) -> Lineage
             capture_id=mapping["capture_id"],
             classification=mapping["classification"],
         )
+    if family in _UNLOCKED_FAMILIES:
+        return LineageEndpoint(
+            family=family,
+            record_id=record_id,
+            schedule_linkable=bool(mapping["schedule_linkable"]),
+            baseline_approved=bool(mapping.get("baseline_approved", False)),
+        )
     return LineageEndpoint(family=family, record_id=record_id)
 
 
@@ -366,7 +490,9 @@ class SqlRecordLineageRepository(RecordLineageRepository):
             select(table.c[column], *_endpoint_columns(family)).where(table.c[column] == record_id),
             table,
             capture_context(principal_id),
-        ).with_for_update(read=True)
+        )
+        if family not in _UNLOCKED_FAMILIES:
+            statement = statement.with_for_update(read=True)
         row = _run(lambda: self._connection.execute(statement).one_or_none())
         if row is None:
             return None
@@ -875,6 +1001,217 @@ class SqlRecordLineageRepository(RecordLineageRepository):
                 )
             )
         return {meeting_id: tuple(versions) for meeting_id, versions in found.items()}
+
+    def schedule_node_facts(
+        self,
+        principal_id: str,
+        refs: Collection[RecordRef],
+        native_cut_at: datetime | None,
+    ) -> Mapping[RecordRef, LineageScheduleFacts]:
+        """Section 15.11.3a: the node summary and virtual-edge columns, plain `SELECT`s."""
+        by_family: dict[RecordFamily, list[str]] = {}
+        for ref in refs:
+            if ref.family in _UNLOCKED_FAMILIES:
+                by_family.setdefault(ref.family, []).append(ref.record_id)
+        found: dict[RecordRef, LineageScheduleFacts] = {}
+        for family, identifiers in sorted(by_family.items()):
+            wanted = sorted(set(identifiers))
+            for facts in self._schedule_facts(principal_id, family, wanted, native_cut_at):
+                found[facts.ref] = facts
+        return found
+
+    def _schedule_facts(
+        self,
+        principal_id: str,
+        family: RecordFamily,
+        wanted: list[str],
+        native_cut_at: datetime | None,
+    ) -> list[LineageScheduleFacts]:
+        def ref(record_id: str) -> RecordRef:
+            return RecordRef(family=family, record_id=record_id)
+
+        if family is RecordFamily.SCHEDULE_PUBLICATION:
+            pubs = schedule_publications
+            rows = self._rows(
+                select(
+                    pubs.c.publication_id,
+                    pubs.c.status,
+                    pubs.c.data_date,
+                    (~_not_intake(pubs)).label("intake"),
+                ).where(_mine(pubs, principal_id), pubs.c.publication_id.in_(wanted))
+            )
+            return [
+                LineageScheduleFacts(
+                    ref=ref(row.publication_id),
+                    data_date=row.data_date,
+                    publication_status=row.status,
+                    intake=bool(row.intake),
+                )
+                for row in rows
+            ]
+        if family is RecordFamily.SCHEDULE_ACTIVITY:
+            activities = schedule_activities
+            rows = self._rows(
+                select(activities.c.schedule_activity_id, activities.c.published_activity_id).where(
+                    _mine(activities, principal_id),
+                    activities.c.schedule_activity_id.in_(wanted),
+                )
+            )
+            return [
+                LineageScheduleFacts(
+                    ref=ref(row.schedule_activity_id),
+                    published_activity_id=row.published_activity_id,
+                )
+                for row in rows
+            ]
+        if family is RecordFamily.SCHEDULE_BASELINE:
+            return self._baseline_facts(principal_id, wanted, native_cut_at)
+        if family is RecordFamily.SCENARIO:
+            scenarios = schedule_scenarios
+            rows = self._rows(
+                select(
+                    scenarios.c.scenario_id,
+                    scenarios.c.origin_kind,
+                    scenarios.c.origin_publication_id,
+                    scenarios.c.origin_baseline_id,
+                    scenarios.c.origin_version_id,
+                ).where(_mine(scenarios, principal_id), scenarios.c.scenario_id.in_(wanted))
+            )
+            return [
+                LineageScheduleFacts(
+                    ref=ref(row.scenario_id),
+                    origin_kind=row.origin_kind,
+                    origin_publication_id=row.origin_publication_id,
+                    origin_baseline_id=row.origin_baseline_id,
+                    origin_version_id=row.origin_version_id,
+                )
+                for row in rows
+            ]
+        if family is RecordFamily.SCENARIO_VERSION:
+            versions = schedule_scenario_versions
+            rows = self._rows(
+                select(
+                    versions.c.version_id,
+                    versions.c.scenario_id,
+                    versions.c.version_no,
+                    versions.c.label,
+                    versions.c.parent_version_id,
+                ).where(_mine(versions, principal_id), versions.c.version_id.in_(wanted))
+            )
+            return [
+                LineageScheduleFacts(
+                    ref=ref(row.version_id),
+                    scenario_id=row.scenario_id,
+                    version_no=row.version_no,
+                    version_label=row.label,
+                    parent_version_id=row.parent_version_id,
+                )
+                for row in rows
+            ]
+        outputs = schedule_scenario_outputs
+        rows = self._rows(
+            select(
+                outputs.c.output_id, outputs.c.kind, outputs.c.iterations, outputs.c.version_id
+            ).where(_mine(outputs, principal_id), outputs.c.output_id.in_(wanted))
+        )
+        return [
+            LineageScheduleFacts(
+                ref=ref(row.output_id),
+                output_kind=row.kind,
+                iterations=row.iterations,
+                output_version_id=row.version_id,
+            )
+            for row in rows
+        ]
+
+    def _baseline_facts(
+        self, principal_id: str, wanted: list[str], native_cut_at: datetime | None
+    ) -> list[LineageScheduleFacts]:
+        """Section 15.11.3a item 6: S6-1 `baseline_status` over the events recorded by `N`."""
+        baselines, events, pubs = (
+            schedule_baselines,
+            schedule_baseline_events,
+            schedule_publications,
+        )
+        named = self._rows(
+            select(
+                baselines.c.baseline_id, baselines.c.project_id, baselines.c.publication_id
+            ).where(_mine(baselines, principal_id), baselines.c.baseline_id.in_(wanted))
+        )
+        facts: list[LineageScheduleFacts] = []
+        for project_id in sorted({row.project_id for row in named}):
+            chain = self._rows(
+                select(events)
+                .where(_mine(events, principal_id), events.c.project_id == project_id)
+                .order_by(events.c.seq)
+            )
+            # The chain as recorded at N: its prefix up to the cut (seq follows
+            # `recorded_at`; the prefix keeps `baseline_status`'s gapless rule).
+            recorded: list[Row[Any]] = []
+            for row in chain:
+                if native_cut_at is not None and row.recorded_at > native_cut_at:
+                    break
+                recorded.append(row)
+            folded = [
+                BaselineEvent(
+                    seq=row.seq,
+                    baseline_id=row.baseline_id,
+                    publication_id=row.publication_id,
+                    action=BaselineAction(row.action),
+                    recorded_at=row.recorded_at,
+                    type=None if row.type is None else BaselineType(row.type),
+                    label=row.label,
+                    effective_from=row.effective_from,
+                    supersedes_baseline_id=row.supersedes_baseline_id,
+                    proposal_ordinal=row.proposal_ordinal,
+                )
+                for row in recorded
+            ]
+            publication_ids = sorted({event.publication_id for event in folded})
+            eligible_at_cut = [
+                _mine(pubs, principal_id),
+                pubs.c.publication_id.in_(publication_ids),
+                pubs.c.status.in_(_LINKABLE_PUBLICATION_STATUSES),
+                _not_intake(pubs),
+            ]
+            if native_cut_at is not None:
+                eligible_at_cut.append(pubs.c.completed_at <= native_cut_at)
+            eligible = (
+                frozenset(
+                    str(row.publication_id)
+                    for row in self._rows(select(pubs.c.publication_id).where(*eligible_at_cut))
+                )
+                if publication_ids
+                else frozenset()
+            )
+            views = baseline_status(folded, eligible_publication_ids=eligible)
+            supersedes = {
+                event.baseline_id: event.supersedes_baseline_id
+                for event in folded
+                if event.action is BaselineAction.APPROVE
+            }
+            for row in named:
+                if row.project_id != project_id:
+                    continue
+                view = views.get(row.baseline_id)
+                if view is None:
+                    # No event recorded by the cut: the Baseline did not exist then.
+                    continue
+                facts.append(
+                    LineageScheduleFacts(
+                        ref=RecordRef(
+                            family=RecordFamily.SCHEDULE_BASELINE, record_id=row.baseline_id
+                        ),
+                        baseline_status=view.status.value,
+                        baseline_label=view.label,
+                        baseline_effective_type=(
+                            None if view.effective_type is None else view.effective_type.value
+                        ),
+                        baseline_publication_id=row.publication_id,
+                        supersedes_baseline_id=supersedes.get(row.baseline_id),
+                    )
+                )
+        return facts
 
     def links_in_issue_context(
         self, principal_id: str, issue_id: str, inside: Collection[RecordRef]

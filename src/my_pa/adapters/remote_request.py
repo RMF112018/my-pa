@@ -72,12 +72,15 @@ def is_remote_idempotent(capability: Capability) -> bool:
 
     Record lineage S3.1 (S3.1 contract section 7.13, D-17): the server-replay
     writes, and every lineage write (`LINEAGE_WRITE_CAPABILITIES`), whose
-    server-derived key a remote caller's identical retry reuses. Every other
+    server-derived key a remote caller's identical retry reuses. Schedule
+    Scenarios S6-3 (S6-3-D06): the 6 client-usable plane writes too, whose
+    client-bound stamped key replays a client's identical retry. Every other
     keyed write keeps its unchanged annotation (a pre-existing residual).
     """
     return (
         capability in _SERVER_REPLAY_REMOTE_CAPABILITIES
         or capability.value in LINEAGE_WRITE_CAPABILITIES
+        or capability in _CLIENT_BOUND_SCENARIO_WRITES
     )
 
 
@@ -395,6 +398,18 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_HOLD_PLACE,
         Capability.REPORTS_HOLD_RELEASE,
         Capability.REPORTS_RETENTION_SET,
+        # Schedule Scenarios S6-3 (S6-3-D06): the 6 client-usable plane writes
+        # require the key their plane request ledger arbitrates
+        # (`(principal_id, capability, idempotency_key)`), so the server stamps
+        # it; a distinct optional `client_intent_id` derives a distinct key (the
+        # Reports deliberate-repeat precedent). Also client-bound
+        # (`_CLIENT_BOUND_SCENARIO_WRITES`).
+        Capability.SCHEDULE_SCENARIOS_CREATE,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE,
+        Capability.SCHEDULE_CPM_RUNS_CREATE,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD,
+        Capability.SCHEDULE_BASELINES_PROPOSE,
+        Capability.SCHEDULE_BASELINES_WITHDRAW,
         # **No keyless proposal or identity-correction write is here, and the reason is this set's
         # mechanism rather than a judgement about how replayable they are.**
         # Membership makes `compose_remote_arguments` derive a key and *insert it
@@ -458,11 +473,28 @@ _CLIENT_BOUND_REPORT_WRITES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_TRANSFER_BEGIN,
     }
 )
+#: Schedule Scenarios S6-3 (schedule-scenarios contract sections 6.7, 15.12.2,
+#: R8-F09, S6-3-D06): the 6 client-usable plane writes. Every remote client acts
+#: for the one operator Principal, so an unbound key would let client B's
+#: identical request replay client A's scenario, version, run, output or
+#: proposal; binding the client makes 2 clients' identical payloads 2 rows while
+#: one client's own retry replays.
+_CLIENT_BOUND_SCENARIO_WRITES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.SCHEDULE_SCENARIOS_CREATE,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE,
+        Capability.SCHEDULE_CPM_RUNS_CREATE,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD,
+        Capability.SCHEDULE_BASELINES_PROPOSE,
+        Capability.SCHEDULE_BASELINES_WITHDRAW,
+    }
+)
 _CLIENT_BOUND_KEY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability
     for capability in _IDEMPOTENT_REMOTE_CAPABILITIES
     if capability.value in OPEN_LINEAGE_WRITE_CAPABILITIES
     or capability in _CLIENT_BOUND_REPORT_WRITES
+    or capability in _CLIENT_BOUND_SCENARIO_WRITES
 )
 
 #: When more than one permitted purpose remains after grant intersection, the

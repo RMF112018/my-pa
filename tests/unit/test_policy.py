@@ -523,6 +523,34 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.REPORTS_TRANSFER_FINALIZE, Purpose.REPORT_AUTHORING),
         (Capability.REPORTS_TRANSFER_ABORT, Purpose.REPORT_AUTHORING),
         (Capability.REPORTS_TRANSFER_READ_CHUNK, Purpose.REPORT_READ),
+        # Schedule Scenarios S6-3: 26 names, each under exactly one of the 3 new
+        # plane purposes.
+        (Capability.SCHEDULE_SCENARIOS_CREATE, Purpose.SCHEDULE_ANALYSIS_AUTHORING),
+        (Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE, Purpose.SCHEDULE_ANALYSIS_AUTHORING),
+        (Capability.SCHEDULE_CPM_RUNS_CREATE, Purpose.SCHEDULE_ANALYSIS_AUTHORING),
+        (Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD, Purpose.SCHEDULE_ANALYSIS_AUTHORING),
+        (Capability.SCHEDULE_BASELINES_PROPOSE, Purpose.SCHEDULE_ANALYSIS_AUTHORING),
+        (Capability.SCHEDULE_BASELINES_WITHDRAW, Purpose.SCHEDULE_ANALYSIS_AUTHORING),
+        (Capability.SCHEDULE_BASELINES_APPROVE, Purpose.SCHEDULE_BASELINE_APPROVAL),
+        (Capability.SCHEDULE_BASELINES_REJECT, Purpose.SCHEDULE_BASELINE_APPROVAL),
+        (Capability.SCHEDULE_BASELINES_REVOKE, Purpose.SCHEDULE_BASELINE_APPROVAL),
+        (Capability.SCHEDULE_BASELINES_SET_GOVERNING, Purpose.SCHEDULE_BASELINE_APPROVAL),
+        (Capability.SCHEDULE_SCENARIOS_LIST, Purpose.SCHEDULE_ANALYSIS_READ),
+        (Capability.SCHEDULE_SCENARIOS_READ, Purpose.SCHEDULE_ANALYSIS_READ),
+        (Capability.SCHEDULE_SCENARIO_VERSIONS_READ, Purpose.SCHEDULE_ANALYSIS_READ),
+        (Capability.SCHEDULE_SCENARIO_VERSIONS_ACTIVITIES, Purpose.SCHEDULE_ANALYSIS_READ),
+        (Capability.SCHEDULE_SCENARIO_VERSIONS_RELATIONSHIPS, Purpose.SCHEDULE_ANALYSIS_READ),
+        (Capability.SCHEDULE_SCENARIO_VERSIONS_CHANGES, Purpose.SCHEDULE_ANALYSIS_READ),
+        (Capability.SCHEDULE_CPM_RUNS_READ, Purpose.SCHEDULE_ANALYSIS_READ),
+        (Capability.SCHEDULE_CPM_RUNS_ACTIVITIES, Purpose.SCHEDULE_ANALYSIS_READ),
+        (Capability.SCHEDULE_SCENARIO_OUTPUTS_LIST, Purpose.SCHEDULE_ANALYSIS_READ),
+        (Capability.SCHEDULE_SCENARIO_OUTPUTS_READ, Purpose.SCHEDULE_ANALYSIS_READ),
+        (Capability.SCHEDULE_SERIES_CURRENT, Purpose.SCHEDULE_ANALYSIS_READ),
+        (Capability.SCHEDULE_SERIES_MATCH_DECISIONS, Purpose.SCHEDULE_ANALYSIS_READ),
+        (Capability.SCHEDULE_BASELINES_LIST, Purpose.SCHEDULE_ANALYSIS_READ),
+        (Capability.SCHEDULE_BASELINES_READ, Purpose.SCHEDULE_ANALYSIS_READ),
+        (Capability.SCHEDULE_BASELINES_GOVERNING, Purpose.SCHEDULE_ANALYSIS_READ),
+        (Capability.SCHEDULE_BASELINES_COMPARE, Purpose.SCHEDULE_ANALYSIS_READ),
     }
 )
 
@@ -624,8 +652,10 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # exactly one of the pair: 250 capabilities, 65 purposes, 252 pairs.
     # Reports Modernization WP06 adds 5 names, each under one existing purpose,
     # and no purpose: 255 capabilities, 65 purposes, 257 pairs.
-    assert len(PERMITTED_PAIRS) == 257
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 257 == 16318
+    # Schedule Scenarios S6-3 adds 26 names and 3 purposes, each name under
+    # exactly one of the 3: 281 capabilities, 68 purposes, 283 pairs.
+    assert len(PERMITTED_PAIRS) == 283
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 283 == 18825
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

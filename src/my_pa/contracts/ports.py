@@ -323,14 +323,17 @@ from my_pa.domain.schedule import (
     StableScheduleActivity,
 )
 from my_pa.domain.schedule.baselines import (
+    BaselineAction,
     BaselineEvent,
     BaselineRefusal,
     BaselineRequest,
+    BaselineType,
     GoverningEvent,
 )
 from my_pa.domain.schedule.compare import ScheduleComparisonRow
+from my_pa.domain.schedule.currency import CurrencyPublication
 from my_pa.domain.schedule.plane import PlaneProvenance, PlaneResultKind
-from my_pa.domain.schedule.scenario.cpm import CpmStatus
+from my_pa.domain.schedule.scenario.cpm import CpmResult, CpmStatus
 from my_pa.domain.schedule.scenario.model import ScenarioContent, VersionLabel
 from my_pa.domain.schedule.scenario.outputs import OutputKind
 from my_pa.domain.schedule.scenario.snapshot import SnapshotReport
@@ -519,6 +522,7 @@ __all__ = [
     "LineageNoteVersionRef",
     "LineageReadTimeoutError",
     "LineageResolvedRecord",
+    "LineageScheduleFacts",
     "LineageSourceVersion",
     "LineageWriteRequestRecord",
     "LineageWriterBudget",
@@ -9907,6 +9911,20 @@ class ScheduleRepository(ABC):
         `SERIES_NOT_FOUND`.
         """
 
+    @abstractmethod
+    def intake_publication_ids(
+        self, principal_id: str, publication_ids: Collection[str]
+    ) -> Mapping[str, str | None]:
+        """Schedule Scenarios S6-3 (section 15.6.2): the named intake publications.
+
+        Each owned intake publication among `publication_ids`, mapped to its
+        recorded series-match decision id (`None` while none is recorded).
+        """
+
+    @abstractmethod
+    def intake_series_ids(self, principal_id: str, series_ids: Collection[str]) -> frozenset[str]:
+        """Schedule Scenarios S6-3 (section 15.6.2): the named owned intake Series."""
+
     # -- worker transactions (each begins with the lease) ----------------------
 
     @abstractmethod
@@ -10482,6 +10500,58 @@ class SeriesMatchRecord:
     resulting_publication_id: str | None
     admission_refusal: str | None
     admission_skipped: str | None
+    #: Schedule Scenarios S6-3 (S6-3-D10): when the decision was recorded, the
+    #: `schedule_series.match_decisions` keyset position.
+    created_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StoredBaselineEvent:
+    """One `schedule_baseline_events` row with its provenance (S6-3 reads, section 15.6.2)."""
+
+    event_id: str
+    seq: int
+    action: BaselineAction
+    publication_id: str
+    recorded_at: datetime
+    reason: str
+    type: BaselineType | None
+    label: str | None
+    approval_reference: str | None
+    effective_from: date | None
+    supersedes_baseline_id: str | None
+    approved_at_import: bool | None
+    provenance: PlaneProvenance
+
+
+@dataclass(frozen=True, slots=True)
+class StoredGoverningEvent:
+    """One `schedule_governing_events` row with its provenance (S6-3 replays)."""
+
+    governing_event_id: str
+    project_id: str
+    baseline_id: str
+    seq: int
+    recorded_at: datetime
+    reason: str
+    provenance: PlaneProvenance
+
+
+@dataclass(frozen=True, slots=True)
+class StoredBaseline:
+    """One Baseline row (section 14.3.3 columns) and its own events, oldest first.
+
+    Schedule Scenarios S6-3 (S6-3-D10): the row's lifecycle status is derived
+    from the whole Project chain (`baseline_chain`), never stored.
+    """
+
+    baseline_id: str
+    project_id: str
+    series_id: str
+    publication_id: str
+    type: BaselineType
+    created_at: datetime
+    events: tuple[StoredBaselineEvent, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -10721,6 +10791,95 @@ class ScenarioRepository(ABC):
     ) -> SeriesMatchRecord | None:
         """The recorded decision of one intake publication, or `None`."""
 
+    # -- S6-3 reads (S6-3-D10, section 15.14; Principal-partitioned) ------------
+
+    @abstractmethod
+    def list_scenarios(
+        self,
+        principal_id: str,
+        project_id: str,
+        series_id: str | None,
+        *,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[StoredScenario, ...]:
+        """The Project's (or one Series') Scenarios by `(created_at, scenario_id)` desc."""
+
+    @abstractmethod
+    def list_versions(
+        self,
+        principal_id: str,
+        scenario_id: str,
+        *,
+        before_version_no: int | None,
+        limit: int,
+    ) -> tuple[StoredScenarioVersion, ...]:
+        """One Scenario's versions by `version_no` desc, below `before_version_no`."""
+
+    @abstractmethod
+    def list_outputs(
+        self,
+        principal_id: str,
+        version_id: str,
+        *,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[StoredScenarioOutput, ...]:
+        """One version's outputs by `(created_at, output_id)` desc."""
+
+    @abstractmethod
+    def list_match_decisions(
+        self,
+        principal_id: str,
+        project_id: str,
+        *,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[SeriesMatchRecord, ...]:
+        """The Project's series-match decisions by `(created_at, decision_id)` desc."""
+
+    @abstractmethod
+    def list_baselines(
+        self,
+        principal_id: str,
+        project_id: str,
+        series_id: str | None,
+        *,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[StoredBaseline, ...]:
+        """The Project's (or one Series') Baselines by `(created_at, baseline_id)` desc."""
+
+    @abstractmethod
+    def get_baseline(self, principal_id: str, baseline_id: str) -> StoredBaseline | None:
+        """One Baseline and its events, or `None`."""
+
+    @abstractmethod
+    def get_baseline_event(self, principal_id: str, event_id: str) -> StoredBaseline | None:
+        """The Baseline (with its events) one baseline event belongs to, or `None`."""
+
+    @abstractmethod
+    def get_governing_event(
+        self, principal_id: str, governing_event_id: str
+    ) -> StoredGoverningEvent | None:
+        """One governing event, or `None`."""
+
+    @abstractmethod
+    def eligible_publication_ids(self, principal_id: str, project_id: str) -> frozenset[str]:
+        """The Project's non-intake publications whose stored status is complete/partial."""
+
+    @abstractmethod
+    def currency_publications(
+        self, principal_id: str, series_id: str
+    ) -> tuple[CurrencyPublication, ...] | None:
+        """A Series' publications for section 11.3; `None` for absent, foreign or intake."""
+
+    @abstractmethod
+    def publication_state(
+        self, principal_id: str, publication_id: str
+    ) -> tuple[SchedulePublicationStatus, bool] | None:
+        """`(stored status, is_intake)` of one owned publication, or `None`."""
+
 
 class ScenarioUnitOfWork(ABC):
     """One transaction over the plane tables, and the 2 repositories on its connection.
@@ -10751,6 +10910,51 @@ class ScenarioUnitOfWork(ABC):
     @abstractmethod
     def schedules(self) -> ScheduleRepository:
         """The S5 Schedule repository on the same connection."""
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioRecordBuilders:
+    """The plane's pure record builders, injected by the composition root (S6-3).
+
+    `new_version(content, *, label, note=None, snapshot=None, ops=None,
+    applied=None)` canonicalizes, bounds and compresses one version, and
+    `new_output(validated, *, distribution_spec)` one client-asserted output,
+    both outside any transaction (S6-2-D14). They live in the plane persistence
+    (`infrastructure.persistence.schedule_scenarios`), which the application
+    may not import; `bootstrap/gateway.py` hands them over here.
+    """
+
+    new_version: Callable[..., NewScenarioVersion]
+    new_output: Callable[..., NewScenarioOutput]
+
+
+class ScenarioCpmRunner(Protocol):
+    """`compute_and_store_cpm_run` with its engine bound (section 15.14, S6-3-D10).
+
+    The composition root (`bootstrap/gateway.py`) binds the work engine, so the
+    application reaches the leased compute without importing the plane
+    persistence. `admit_write(repository, principal_id, new_bytes)` is the
+    client write-budget check, called before the leased compute with
+    `new_bytes=None` (only on the compute path: nothing stored yet) and again
+    in the write transaction with the bytes the write stores (0 for a
+    natural-key hit); `admit_compute(used, requested)` is the hourly
+    CPM-units check, called under the lease.
+    """
+
+    def __call__(
+        self,
+        principal_id: str,
+        version_id: str,
+        *,
+        capability_key: str,
+        request_digest: str,
+        writer: PlaneProvenance,
+        admit_compute: Callable[[int, int], None],
+        admit_write: Callable[[ScenarioRepository, str, int | None], None] = ...,
+        compute: Callable[[ScenarioContent], CpmResult] = ...,
+        clock: Callable[[], datetime] = ...,
+    ) -> CpmRunWritten:
+        """Replay, a natural-key hit, or one leased compute and its write."""
 
 
 # --- WP-MTG-02 Meeting records ports -----------------------------------------
@@ -11645,6 +11849,14 @@ class LineageEndpoint:
     #: `project_id`, read under the same `FOR SHARE`.
     created_at: datetime | None = None
     project_id: str | None = None
+    #: Schedule Scenarios S6-3 (schedule scenarios contract section 15.11.2),
+    #: read with a plain `SELECT` (no row lock, S6-3-D21): whether a Schedule
+    #: family row is linkable now (a terminal `complete`/`partial`, non-intake
+    #: publication; a visible activity of a non-intake Series; an existing
+    #: Baseline or plane row), and whether a Baseline is approved and not
+    #: revoked (an `originated_from` from it needs that).
+    schedule_linkable: bool = False
+    baseline_approved: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -11795,6 +12007,43 @@ class LineageResolvedRecord:
         return self.meeting_id if self.meeting_id is not None else self.capture_id
 
 
+@dataclass(frozen=True, slots=True)
+class LineageScheduleFacts:
+    """The read-only facts of one Schedule-family lineage node (schedule scenarios
+    contract section 15.11.3a, items 1, 2 and 6).
+
+    The node summary (`data_date`, `publication_status`, `intake` for a
+    publication; `published_activity_id` for an activity; `baseline_status`,
+    `baseline_label`, `baseline_effective_type` for a Baseline as of the native
+    cut; `origin_kind` for a Scenario; `version_no`, `version_label` for a
+    version; `output_kind`, `iterations` for an output) and the far endpoints of
+    its native virtual edges (never serialized on the node). Values are the
+    stored tokens; the application renders and labels them.
+    """
+
+    ref: RecordRef
+    data_date: date | None = None
+    publication_status: str | None = None
+    intake: bool = False
+    published_activity_id: str | None = None
+    baseline_status: str | None = None
+    baseline_label: str | None = None
+    baseline_effective_type: str | None = None
+    baseline_publication_id: str | None = None
+    supersedes_baseline_id: str | None = None
+    origin_kind: str | None = None
+    origin_publication_id: str | None = None
+    origin_baseline_id: str | None = None
+    origin_version_id: str | None = None
+    scenario_id: str | None = None
+    version_no: int | None = None
+    version_label: str | None = None
+    parent_version_id: str | None = None
+    output_kind: str | None = None
+    iterations: int | None = None
+    output_version_id: str | None = None
+
+
 class RecordLineageRepository(ABC):
     """Record links, their revisions, evidence and heads, and the reverse read.
 
@@ -11818,7 +12067,10 @@ class RecordLineageRepository(ABC):
 
         A Situation of either kind answers (the application refuses a context
         one as not linkable); a Capture version's root is shared first by the
-        caller (`IssueRepository.share_capture_root`).
+        caller (`IssueRepository.share_capture_root`). The 6 Schedule
+        families are read with a plain `SELECT` and no row lock (schedule
+        scenarios contract section 15.11.2, S6-3-D21): each fact they carry is
+        fixed once linkable or moves only toward linkable.
         """
 
     @abstractmethod
@@ -11961,6 +12213,24 @@ class RecordLineageRepository(ABC):
         self, principal_id: str, meeting_ids: Collection[str]
     ) -> Mapping[str, tuple[LineageNoteVersionRef, ...]]:
         """Each named Meeting's note versions, `version_number` ascending."""
+
+    def schedule_node_facts(
+        self,
+        principal_id: str,
+        refs: Collection[RecordRef],
+        native_cut_at: datetime | None,
+    ) -> Mapping[RecordRef, LineageScheduleFacts]:
+        """Each named owned Schedule-family record's node facts (section 15.11.3a).
+
+        Plain `SELECT`s, Principal-partitioned, no lock. A Baseline's status,
+        label, effective type and superseded Baseline are folded from its
+        Project's events recorded at or before `native_cut_at` (all of them
+        when `None`), with a publication eligible iff `complete`/`partial`, not
+        intake and completed at or before the cut. A source with no Schedule
+        family answers nothing (the default).
+        """
+        del principal_id, refs, native_cut_at
+        return {}
 
     # --- the knowledge clock (S3 contract sections 3.4, 4.2 and 6.2) -------------
 

@@ -32,7 +32,8 @@ refused on construction, not silently dropped.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+from types import MappingProxyType
 from typing import Any, Final, Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -44,6 +45,7 @@ from my_pa.domain.lineage.model import MAX_ISSUE_TITLE_CHARACTERS
 from my_pa.domain.lineage.vocabulary import (
     MAX_ASSERTING_CLIENT_ID_CHARACTERS,
     MAX_RELATED_SEEDS,
+    NATIVE_VIRTUAL_EDGE_ENDPOINTS,
     RECORD_FAMILY_ID_KINDS,
     AcceptanceBasis,
     EvidenceAvailability,
@@ -59,6 +61,10 @@ from my_pa.domain.lineage.vocabulary import (
     RelationType,
     SourceVersionKind,
 )
+from my_pa.domain.schedule.baselines import BaselineStatus, BaselineType
+from my_pa.domain.schedule.model import SchedulePublicationStatus
+from my_pa.domain.schedule.scenario.model import VersionLabel
+from my_pa.domain.schedule.scenario.outputs import OutputKind
 
 __all__ = [
     "ASSERTING_CLIENT_ID",
@@ -75,6 +81,13 @@ __all__ = [
     "RecordRefView",
     "RelatedRecordView",
     "RelatedRecordsView",
+    "ScenarioNodeSummary",
+    "ScenarioOutputNodeSummary",
+    "ScenarioVersionNodeSummary",
+    "ScheduleActivityNodeSummary",
+    "ScheduleBaselineNodeSummary",
+    "ScheduleNodeSummary",
+    "SchedulePublicationNodeSummary",
     "VirtualEdgeView",
 ]
 
@@ -218,6 +231,122 @@ class LineageIssueMatch(StrictModel):
         return validate_identifier(value, IdKind.SITUATION)
 
 
+# --- Schedule node summaries (schedule scenarios contract section 15.11.3a item 1) ------
+#
+# One strict model per Schedule family, carried as a node's `schedule` key and
+# only on a node of that family. Each carries exactly its labels and summary
+# fields -- no name, no client-authored text, no provenance, no identifier of
+# another record -- and `reportable` is always `false` (OD-08). Every key is
+# always serialized, `null` included (`LineageNodeView.to_canonical_dict`).
+
+
+class SchedulePublicationNodeSummary(StrictModel):
+    """A Schedule publication node: source-bound, never authoritative."""
+
+    data_class: Literal["schedule_publication"]
+    authority: Literal["source_bound_derived"]
+    authoritative: Literal[False]
+    reportable: Literal[False]
+    trust: Literal["source_bound_derived"]
+    data_date: date | None
+    status: SchedulePublicationStatus
+    series_kind: Literal["standard", "intake"]
+
+
+class ScheduleActivityNodeSummary(StrictModel):
+    """A Stable Activity node: its exact published Activity ID (its identity key)."""
+
+    data_class: Literal["schedule_activity"]
+    authority: Literal["source_bound_derived"]
+    authoritative: Literal[False]
+    reportable: Literal[False]
+    trust: Literal["source_bound_derived"]
+    published_activity_id: str = Field(min_length=1, max_length=256)
+
+
+class ScheduleBaselineNodeSummary(StrictModel):
+    """A Baseline node as of the native cut, labelled as the plane read labels it."""
+
+    data_class: Literal["schedule_baseline"]
+    authority: Literal["operator_approved", "proposed"]
+    authoritative: bool
+    reportable: Literal[False]
+    trust: Literal["model_proposed"]
+    status: BaselineStatus
+    label: str | None = Field(min_length=1, max_length=32)
+    effective_type: BaselineType | None
+
+    @model_validator(mode="after")
+    def _check(self) -> ScheduleBaselineNodeSummary:
+        approved = self.effective_type is not None
+        if (self.authority == "operator_approved") is not approved:
+            raise ValueError(
+                "a Baseline is operator_approved exactly when it has an effective type"
+            )
+        if self.authoritative is not (self.status is BaselineStatus.APPROVED):
+            raise ValueError("only an effective Baseline is authoritative")
+        return self
+
+
+class ScenarioNodeSummary(StrictModel):
+    """A Scenario node: client-authored, never authoritative."""
+
+    data_class: Literal["schedule_scenario"]
+    authority: Literal["client_authored"]
+    authoritative: Literal[False]
+    reportable: Literal[False]
+    trust: Literal["model_proposed"]
+    origin_kind: Literal["publication", "version"]
+
+
+class ScenarioVersionNodeSummary(StrictModel):
+    """A Scenario version node: its number and version label."""
+
+    data_class: Literal["schedule_scenario"]
+    authority: Literal["client_authored"]
+    authoritative: Literal[False]
+    reportable: Literal[False]
+    trust: Literal["model_proposed"]
+    version_no: int = Field(ge=1)
+    version_label: VersionLabel
+
+
+class ScenarioOutputNodeSummary(StrictModel):
+    """A Scenario output node: client-asserted, never authoritative."""
+
+    data_class: Literal["schedule_scenario_output"]
+    authority: Literal["client_asserted"]
+    authoritative: Literal[False]
+    reportable: Literal[False]
+    trust: Literal["model_proposed"]
+    kind: OutputKind
+    iterations: int = Field(ge=1)
+
+
+type ScheduleNodeSummary = (
+    SchedulePublicationNodeSummary
+    | ScheduleActivityNodeSummary
+    | ScheduleBaselineNodeSummary
+    | ScenarioNodeSummary
+    | ScenarioVersionNodeSummary
+    | ScenarioOutputNodeSummary
+)
+
+#: Each Schedule family's one summary model (validated against the node's family).
+SCHEDULE_NODE_SUMMARY_MODELS: Final[MappingProxyType[RecordFamily, type[StrictModel]]] = (
+    MappingProxyType(
+        {
+            RecordFamily.SCHEDULE_PUBLICATION: SchedulePublicationNodeSummary,
+            RecordFamily.SCHEDULE_ACTIVITY: ScheduleActivityNodeSummary,
+            RecordFamily.SCHEDULE_BASELINE: ScheduleBaselineNodeSummary,
+            RecordFamily.SCENARIO: ScenarioNodeSummary,
+            RecordFamily.SCENARIO_VERSION: ScenarioVersionNodeSummary,
+            RecordFamily.SCENARIO_OUTPUT: ScenarioOutputNodeSummary,
+        }
+    )
+)
+
+
 class LineagePathEdgeView(StrictModel):
     """How a node was first reached (S3 section 7.1, `LineagePathStep.reached_via`).
 
@@ -237,6 +366,10 @@ class LineagePathEdgeView(StrictModel):
             validate_identifier(self.link_id, IdKind.RECORD_LINK)
         elif self.edge_type is None or self.link_id is not None:
             raise ValueError("a virtual path step names its edge type only")
+        elif self.edge_type is not NativeVirtualEdge.MEETING_NOTE_VERSION_OF:
+            # Schedule scenarios contract section 15.11.3a item 3: a Schedule
+            # virtual edge is emitted between reached nodes, never traversed.
+            raise ValueError("only the note-version edge is a virtual path step")
         return self
 
     def to_canonical_dict(self) -> dict[str, Any]:
@@ -262,6 +395,9 @@ class LineageNodeView(StrictModel):
     availability: Literal["available", "archived"] | None = None
     reached_from: RecordRefView | None = None
     reached_via: LineagePathEdgeView | None = None
+    #: Schedule scenarios contract section 15.11.3a item 1: present iff the node
+    #: is of a Schedule family, with exactly that family's summary model.
+    schedule: ScheduleNodeSummary | None = None
 
     @model_validator(mode="after")
     def _check(self) -> LineageNodeView:
@@ -279,15 +415,23 @@ class LineageNodeView(StrictModel):
             raise ValueError("only a Capture version node carries an availability")
         if (self.reached_from is None) is not (self.reached_via is None):
             raise ValueError("a path step names both its parent and its edge, or neither")
+        model = SCHEDULE_NODE_SUMMARY_MODELS.get(self.family)
+        if model is None:
+            if self.schedule is not None:
+                raise ValueError("only a Schedule-family node carries a schedule summary")
+        elif type(self.schedule) is not model:
+            raise ValueError("a Schedule-family node carries exactly its family's summary")
         return self
 
     def to_canonical_dict(self) -> dict[str, Any]:
         """The JSON-mode representation without the keys this family does not carry.
 
-        The two path keys are always present (`null` on the root).
+        The two path keys are always present (`null` on the root). A Schedule
+        node's `schedule` object is inserted from its own dump, which keeps its
+        `null` keys (section 15.11.3a item 1).
         """
         document = self.model_dump(
-            mode="json", exclude_none=True, exclude={"reached_from", "reached_via"}
+            mode="json", exclude_none=True, exclude={"reached_from", "reached_via", "schedule"}
         )
         document["reached_from"] = (
             None if self.reached_from is None else self.reached_from.to_canonical_dict()
@@ -295,11 +439,14 @@ class LineageNodeView(StrictModel):
         document["reached_via"] = (
             None if self.reached_via is None else self.reached_via.to_canonical_dict()
         )
+        if self.schedule is not None:
+            document["schedule"] = self.schedule.model_dump(mode="json", exclude_none=False)
         return document
 
 
 class VirtualEdgeView(StrictModel):
-    """One native note-version edge, derived from `meeting_note_versions`."""
+    """One native edge, derived from native rows (`meeting_note_versions`, or a
+    Schedule plane row's column, schedule scenarios contract section 15.11.3a)."""
 
     edge_type: NativeVirtualEdge
     from_ref: RecordRefView = Field(serialization_alias="from")
@@ -307,11 +454,10 @@ class VirtualEdgeView(StrictModel):
 
     @model_validator(mode="after")
     def _check(self) -> VirtualEdgeView:
-        if (
-            self.from_ref.family is not RecordFamily.MEETING_NOTE_VERSION
-            or self.to_ref.family is not RecordFamily.MEETING
-        ):
-            raise ValueError("a note-version edge runs from a note version to its Meeting")
+        if (self.from_ref.family, self.to_ref.family) != NATIVE_VIRTUAL_EDGE_ENDPOINTS[
+            self.edge_type
+        ]:
+            raise ValueError("a native edge runs between exactly its two endpoint families")
         return self
 
     def to_canonical_dict(self) -> dict[str, Any]:

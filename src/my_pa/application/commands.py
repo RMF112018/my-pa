@@ -408,14 +408,20 @@ from my_pa.domain.reports.vocabulary import (
 from my_pa.domain.schedule import (
     InvalidScheduleSeriesNameError,
     ScheduleBaselineKind,
+    ScheduleImportApproval,
     ScheduleImportRequest,
     SchedulePublicationRole,
     SchedulePublicationStatus,
     ScheduleRowType,
     ScheduleSeriesName,
+    normalize_display_text,
     normalize_series_name,
 )
+from my_pa.domain.schedule.baselines import BaselineStatus, BaselineType
 from my_pa.domain.schedule.compare import ScheduleChangeKind
+from my_pa.domain.schedule.plane import is_intake_name_key
+from my_pa.domain.schedule.scenario.model import MAX_CHANGE_SET_OPS, VersionLabel
+from my_pa.domain.schedule.scenario.snapshot import MAX_MINUTES_PER_SOURCE_UNIT
 from my_pa.domain.search.query import MAX_QUERY_CHARACTERS, SearchQuery, SearchQueryError
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
@@ -14793,10 +14799,15 @@ class AssertRecordAssociation:
             "to_record": _RECORD_REF_SCHEMA,
             "relation_type": {
                 "type": "string",
+                # Schedule Scenarios S6-3 (schedule scenarios contract section
+                # 15.11.1) adds `concerns`, `delays` and `mitigates`.
                 "enum": [
                     "blocks",
+                    "concerns",
+                    "delays",
                     "discusses",
                     "escalated_from",
+                    "mitigates",
                     "originated_from",
                     "related_context",
                 ],
@@ -16880,10 +16891,14 @@ def _schedule_date_range(low: str | None, high: str | None) -> None:
 class ImportSchedulePublication:
     """Admit one enrolled schedule PDF version as a publication of a Schedule Series and queue its parse (attested local operator: CLI or HTTP gateway only).
 
-    `schedule_publications.import`: names the Series by id or by a new or
-    existing name (exactly one), the caller's own enrollment, the enrolled
-    object and its exact version, and an explicit role. Fetches no bytes; the
-    contained parse runs on the `schedule` worker plane.
+    `schedule_publications.import`: names the Series by id, by a new or
+    existing name, or (`series_auto`, Schedule Scenarios plane only) asks the
+    worker to match one (exactly one), the caller's own enrollment, the
+    enrolled object and its exact version, and an explicit role. Role
+    `baseline` designates and approves an operator Baseline in the same act and
+    needs `baseline_kind`, `approval_reference`, `effective_from` and `reason`
+    (Schedule Scenarios plane only). Fetches no bytes; the contained parse runs
+    on the `schedule` worker plane.
     """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.SCHEDULE_PUBLICATIONS_IMPORT
@@ -16899,6 +16914,13 @@ class ImportSchedulePublication:
     baseline_kind: str | None = None
     expected_data_date: str | None = None
     supersedes_publication_id: str | None = None
+    #: Schedule Scenarios S6-3 (contract section 15.9): the automatic Series form
+    #: and the import-time approval fields, all defaulted.
+    series_auto: bool = False
+    series_name_if_new: str | None = None
+    approval_reference: str | None = None
+    effective_from: str | None = None
+    reason: str | None = None
 
     def __post_init__(self) -> None:
         _idempotency_key(self.idempotency_key)
@@ -16908,12 +16930,42 @@ class ImportSchedulePublication:
         self.import_request()
 
     def import_request(self) -> ScheduleImportRequest:
-        """The S5b-1 admission request this command states (contract section 3.6)."""
+        """The S5b-1 admission request this command states (contract section 3.6).
+
+        Schedule scenarios contract section 15.9, in order: the Series form, the
+        intake names, the automatic form, the retired values (by the enum
+        lockstep), then the role's own fields. Whether the plane is effective is
+        not knowable here: `ScheduleApplication.import_publication` gates the
+        automatic form and an approval after the E-10/E-12 refusals.
+        """
         _schedule_id(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
-        if (self.series_id is None) == (self.series_name is None):
+        auto: object = self.series_auto
+        if type(auto) is not bool:
+            raise InvalidRequestError(SafeDetail.SERIES_AUTO)
+        named = (self.series_id is not None, self.series_name is not None, self.series_auto)
+        if sum(named) != 1:
             raise InvalidRequestError(SafeDetail.SERIES_ID)
+        if self.series_name_if_new is not None and not self.series_auto:
+            raise InvalidRequestError(SafeDetail.SERIES_AUTO)
         _optional_schedule_id(self.series_id, IdKind.SCHEDULE_SERIES, SafeDetail.SERIES_ID)
         name = None if self.series_name is None else _schedule_series_name(self.series_name)
+        if_new = (
+            None
+            if self.series_name_if_new is None
+            else _schedule_series_name(self.series_name_if_new)
+        )
+        for given in (name, if_new):
+            if given is not None and is_intake_name_key(given.key):
+                # Section 11.2 step 2: an intake Series is the worker's alone.
+                raise InvalidRequestError(SafeDetail.SERIES_NAME)
+        approval_fields = (self.approval_reference, self.effective_from, self.reason)
+        if self.series_auto and (
+            self.publication_role != SchedulePublicationRole.UPDATE.value
+            or self.baseline_kind is not None
+            or any(value is not None for value in approval_fields)
+            or self.supersedes_publication_id is not None
+        ):
+            raise InvalidRequestError(SafeDetail.SERIES_AUTO)
         _schedule_id(self.enrollment_id, IdKind.ENROLLMENT, SafeDetail.ENROLLMENT_ID)
         _schedule_id(self.source_object_id, IdKind.SOURCE_OBJECT, SafeDetail.SOURCE_OBJECT_ID)
         _schedule_id(self.source_version_id, IdKind.VERSION, SafeDetail.SOURCE_VERSION_ID)
@@ -16923,17 +16975,10 @@ class ImportSchedulePublication:
         if role is None:
             # Section 3.11: the role is explicit; nothing defaults it.
             raise InvalidRequestError(SafeDetail.PUBLICATION_ROLE)
-        if role is SchedulePublicationRole.BASELINE:
-            # Schedule scenarios contract S6-2-D04: from S6-2 until S6-3 adds
-            # the section 12.3 approval fields, a baseline import is refused
-            # whatever the switches (the request record requires an approval).
-            raise InvalidRequestError(SafeDetail.PUBLICATION_ROLE)
         kind = _schedule_choice(
             self.baseline_kind, tuple(ScheduleBaselineKind), SafeDetail.BASELINE_KIND
         )
-        if kind is not None:
-            # Only a baseline names its kind, and no baseline reaches here (D04).
-            raise InvalidRequestError(SafeDetail.BASELINE_KIND)
+        approval = self._approval(role, kind)
         expected = _schedule_date(self.expected_data_date, SafeDetail.EXPECTED_DATA_DATE)
         _optional_schedule_id(
             self.supersedes_publication_id,
@@ -16955,6 +17000,42 @@ class ImportSchedulePublication:
             expected_data_date=expected,
             supersedes_publication_id=self.supersedes_publication_id,
             idempotency_key=key,
+            series_auto=self.series_auto,
+            series_name_if_new=if_new,
+            approval=approval,
+        )
+
+    def _approval(
+        self, role: SchedulePublicationRole, kind: ScheduleBaselineKind | None
+    ) -> ScheduleImportApproval | None:
+        """Section 15.9: role `baseline` needs all 4 fields; role `update` none of them."""
+        if role is SchedulePublicationRole.UPDATE:
+            if kind is not None:
+                raise InvalidRequestError(SafeDetail.BASELINE_KIND)
+            for value, detail in (
+                (self.approval_reference, SafeDetail.APPROVAL_REFERENCE),
+                (self.effective_from, SafeDetail.EFFECTIVE_FROM),
+                (self.reason, SafeDetail.REASON),
+            ):
+                if value is not None:
+                    raise InvalidRequestError(detail)
+            return None
+        if kind is None:
+            raise InvalidRequestError(SafeDetail.BASELINE_KIND)
+        _scenario_text(
+            self.approval_reference,
+            MAX_APPROVAL_REFERENCE_INPUT_CHARACTERS,
+            SafeDetail.APPROVAL_REFERENCE,
+            optional=False,
+        )
+        effective = _schedule_date(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        if effective is None:
+            raise InvalidRequestError(SafeDetail.EFFECTIVE_FROM)
+        _scenario_text(self.reason, MAX_SCENARIO_TEXT_CHARACTERS, SafeDetail.REASON, optional=False)
+        return ScheduleImportApproval(
+            approval_reference=normalize_display_text(str(self.approval_reference)),
+            effective_from=effective,
+            reason=normalize_display_text(str(self.reason)),
         )
 
 
@@ -17141,6 +17222,818 @@ class ListScheduleChanges:
         _schedule_id(
             self.from_publication_id, IdKind.SCHEDULE_PUBLICATION, SafeDetail.FROM_PUBLICATION_ID
         )
+        _schedule_id(
+            self.to_publication_id, IdKind.SCHEDULE_PUBLICATION, SafeDetail.TO_PUBLICATION_ID
+        )
+        kind: object = self.change_kind
+        if kind is not None and kind not in SCHEDULE_CHANGE_KIND_VALUES:
+            raise invalid_choice(SafeDetail.CHANGE_KIND, SCHEDULE_CHANGE_KIND_VALUES)
+        _schedule_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+# Schedule Scenarios S6-3 (schedule-scenarios contract sections 6.1, 15.5). Every
+# command is a frozen dataclass built by `_BUILDERS` as `Command(**payload)`; an
+# unknown or missing key is `invalid_request` with no detail. `__post_init__`
+# checks types, identifier kinds, lengths and closed sets only: the 3 heavy
+# documents (`calendars`, `change_set`, `document`) are typed `object`, checked
+# here for their JSON type alone, and decoded by the handler after the refusal
+# bound (section 15.10). A request is limited to `MAX_REQUEST_BYTES` (762,288
+# bytes) on every transport (S6-3-D12, S6-3-U01).
+
+#: Section 15.5: names 1..200, descriptions, notes and reasons 1..2,000, an
+#: approval reference 1..500 normalized characters.
+MAX_SCENARIO_NAME_CHARACTERS: Final = 200
+MAX_SCENARIO_TEXT_CHARACTERS: Final = 2_000
+MAX_APPROVAL_REFERENCE_INPUT_CHARACTERS: Final = 500
+#: Section 2.10: at most 500 versions per Scenario, so the CAS head is 1..499.
+MAX_EXPECTED_HEAD_VERSION_NO: Final = 499
+#: Section 2.7: a snapshot names 1..32 calendars.
+MAX_SNAPSHOT_CALENDARS: Final = 32
+_DATA_DATE_TIME: Final = re.compile(r"\A([01][0-9]|2[0-3]):([0-5][0-9])\Z")
+_SCENARIO_STRING_LIMIT: Final = 1_000_000
+
+
+def _scenario_text(
+    value: object, bound: int, detail: SafeDetail, *, optional: bool = False
+) -> None:
+    """A display text, normalized (NFC, whitespace runs to one space), 1..`bound` long."""
+    if value is None and optional:
+        return
+    if not isinstance(value, str) or len(value) > _SCENARIO_STRING_LIMIT:
+        raise InvalidRequestError(detail)
+    if not 1 <= len(normalize_display_text(value)) <= bound:
+        raise InvalidRequestError(detail)
+
+
+def _scenario_bool(value: object, detail: SafeDetail) -> None:
+    if type(value) is not bool:
+        raise InvalidRequestError(detail)
+
+
+def _scenario_int(value: object, low: int, high: int, detail: SafeDetail) -> None:
+    if type(value) is not int or not low <= value <= high:
+        raise InvalidRequestError(detail)
+
+
+def _scenario_key(value: object) -> None:
+    """The plane idempotency key `^[A-Za-z0-9_-]{8,128}$` (server-stamped remotely)."""
+    if not isinstance(value, str) or _SCHEDULE_IDEMPOTENCY_KEY.fullmatch(value) is None:
+        raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+
+
+def _scenario_intent(value: object) -> None:
+    """Section 15.5: an optional `client_intent_id` (the Reports pattern)."""
+    if value is not None and (
+        not isinstance(value, str) or CLIENT_INTENT_ID_PATTERN.fullmatch(value) is None
+    ):
+        raise InvalidRequestError(SafeDetail.CLIENT_INTENT_ID)
+
+
+def _scenario_instant(value: object, detail: SafeDetail) -> None:
+    """An RFC 3339 instant with an offset; the value never reaches a message."""
+    if value is None:
+        return
+    accepted = False
+    if isinstance(value, str) and len(value) <= 64 and "T" in value:
+        try:
+            parsed = datetime.fromisoformat(value)
+            accepted = parsed.tzinfo is not None
+        except ValueError:
+            pass
+    if not accepted:
+        raise InvalidRequestError(detail)
+
+
+#: Section 15.5: the 5 field names that make a snapshot (absent on a fork).
+SCENARIO_SNAPSHOT_FIELDS: Final = (
+    "minutes_per_source_unit",
+    "calendars",
+    "default_calendar",
+    "data_date_time",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateScheduleScenario:
+    """Create a Schedule Scenario whose version 1 is a snapshot of one eligible publication or approved baseline, or a copy of an existing scenario version.
+
+    `schedule_scenarios.create`: exactly one origin. From a publication or an
+    approved, effective baseline the snapshot needs `minutes_per_source_unit`,
+    1 to 32 `calendars`, their `default_calendar` and an optional
+    `data_date_time` (`HH:MM`, default `00:00`); a copy of a version takes none
+    of them. Scenario data is client-authored, non-authoritative and never
+    reportable.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_SCENARIOS_CREATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "calendars": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAX_SNAPSHOT_CALENDARS,
+                "items": {"type": "object"},
+            },
+            "label": {"type": "string", "enum": [member.value for member in VersionLabel]},
+            "data_date_time": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"},
+        }
+    )
+
+    name: str
+    label: str
+    idempotency_key: str
+    from_publication_id: str | None = None
+    from_baseline_id: str | None = None
+    from_version_id: str | None = None
+    description: str | None = None
+    minutes_per_source_unit: int | None = None
+    calendars: object = None
+    default_calendar: str | None = None
+    data_date_time: str | None = None
+    note: str | None = None
+    client_intent_id: str | None = None
+    user_directed: bool = False
+
+    def __post_init__(self) -> None:
+        origins = (self.from_publication_id, self.from_baseline_id, self.from_version_id)
+        if sum(origin is not None for origin in origins) != 1:
+            raise InvalidRequestError(SafeDetail.FROM_PUBLICATION_ID)
+        _optional_schedule_id(
+            self.from_publication_id, IdKind.SCHEDULE_PUBLICATION, SafeDetail.FROM_PUBLICATION_ID
+        )
+        _optional_schedule_id(
+            self.from_baseline_id, IdKind.SCHEDULE_BASELINE, SafeDetail.FROM_BASELINE_ID
+        )
+        _optional_schedule_id(
+            self.from_version_id, IdKind.SCHEDULE_SCENARIO_VERSION, SafeDetail.FROM_VERSION_ID
+        )
+        _scenario_text(self.name, MAX_SCENARIO_NAME_CHARACTERS, SafeDetail.NAME, optional=False)
+        _scenario_text(
+            self.description,
+            MAX_SCENARIO_TEXT_CHARACTERS,
+            SafeDetail.DESCRIPTION,
+            optional=True,
+        )
+        _schedule_text(self.label, SafeDetail.LABEL)
+        if _schedule_choice(self.label, tuple(VersionLabel), SafeDetail.LABEL) is None:
+            raise InvalidRequestError(SafeDetail.LABEL)
+        _scenario_text(self.note, MAX_SCENARIO_TEXT_CHARACTERS, SafeDetail.NOTE, optional=True)
+        if self.from_version_id is not None:
+            # A fork copies the source version's content: no snapshot field.
+            if self.minutes_per_source_unit is not None:
+                raise InvalidRequestError(SafeDetail.MINUTES_PER_SOURCE_UNIT)
+            if self.calendars is not None or self.default_calendar is not None:
+                raise InvalidRequestError(SafeDetail.CALENDAR)
+            if self.data_date_time is not None:
+                raise InvalidRequestError(SafeDetail.DATA_DATE_TIME)
+        else:
+            _scenario_int(
+                self.minutes_per_source_unit,
+                1,
+                MAX_MINUTES_PER_SOURCE_UNIT,
+                SafeDetail.MINUTES_PER_SOURCE_UNIT,
+            )
+            calendars: object = self.calendars
+            if not isinstance(calendars, list) or not 1 <= len(calendars) <= MAX_SNAPSHOT_CALENDARS:
+                raise InvalidRequestError(SafeDetail.CALENDAR)
+            default: object = self.default_calendar
+            if not isinstance(default, str) or not default or len(default) > 32:
+                raise InvalidRequestError(SafeDetail.CALENDAR)
+            moment: object = self.data_date_time
+            if moment is not None and (
+                not isinstance(moment, str) or _DATA_DATE_TIME.fullmatch(moment) is None
+            ):
+                raise InvalidRequestError(SafeDetail.DATA_DATE_TIME)
+        _idempotency_key(self.idempotency_key)
+        _scenario_key(self.idempotency_key)
+        _scenario_intent(self.client_intent_id)
+        _user_directed(self.user_directed)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateScheduleScenarioVersion:
+    """Append one immutable version to a Scenario by applying a bounded change set to its current head version.
+
+    `schedule_scenario_versions.create`: `expected_head_version_no` is the head
+    the change set was written against (a moved head is
+    `conflict(expected_version)`); 1 to 5,000 ops are applied in order and a
+    refused op names its error, never its index. A whole request is limited to
+    762,288 bytes on every transport, so split a large change set across
+    versions.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "change_set": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAX_CHANGE_SET_OPS,
+                "items": {"type": "object"},
+            },
+            "label": {"type": "string", "enum": [member.value for member in VersionLabel]},
+        }
+    )
+
+    scenario_id: str
+    expected_head_version_no: int
+    label: str
+    change_set: object
+    idempotency_key: str
+    note: str | None = None
+    client_intent_id: str | None = None
+    user_directed: bool = False
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.scenario_id, IdKind.SCHEDULE_SCENARIO, SafeDetail.SCENARIO_ID)
+        _scenario_int(
+            self.expected_head_version_no,
+            1,
+            MAX_EXPECTED_HEAD_VERSION_NO,
+            SafeDetail.EXPECTED_VERSION,
+        )
+        _schedule_text(self.label, SafeDetail.LABEL)
+        if _schedule_choice(self.label, tuple(VersionLabel), SafeDetail.LABEL) is None:
+            raise InvalidRequestError(SafeDetail.LABEL)
+        _scenario_text(self.note, MAX_SCENARIO_TEXT_CHARACTERS, SafeDetail.NOTE, optional=True)
+        if not isinstance(self.change_set, list):
+            raise InvalidRequestError(SafeDetail.CHANGE_SET)
+        _idempotency_key(self.idempotency_key)
+        _scenario_key(self.idempotency_key)
+        _scenario_intent(self.client_intent_id)
+        _user_directed(self.user_directed)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateScheduleCpmRun:
+    """Run the deterministic server CPM engine over one scenario version and store its result (replays the existing run for the same version and engine).
+
+    `schedule_cpm_runs.create`: engine `my-pa-cpm-v1`; one compute per
+    Principal at a time. The run is server-computed from client-authored logic:
+    non-authoritative and never reportable.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_CPM_RUNS_CREATE
+
+    version_id: str
+    idempotency_key: str
+    client_intent_id: str | None = None
+    user_directed: bool = False
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.version_id, IdKind.SCHEDULE_SCENARIO_VERSION, SafeDetail.VERSION_ID)
+        _idempotency_key(self.idempotency_key)
+        _scenario_key(self.idempotency_key)
+        _scenario_intent(self.client_intent_id)
+        _user_directed(self.user_directed)
+
+
+@dataclass(frozen=True, slots=True)
+class RecordScheduleScenarioOutput:
+    """Record a client-computed (client-asserted) analysis output such as Monte Carlo percentiles, bound to one scenario version.
+
+    `schedule_scenario_outputs.record`: the `schedule-scenario-output-v1`
+    document names its `version_id`, that version's `content_sha256` and,
+    optionally, a computed `base_cpm_run_id` of it; the server checks shape,
+    bounds and binding only, and stores it `client_asserted`. A whole request
+    is limited to 762,288 bytes on every transport, so an output document must
+    stay under about 740 KiB (a criticality or Monte Carlo output of a network
+    above roughly 10,000 activities may not fit).
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"document": {"type": "object"}}
+    )
+
+    document: object
+    idempotency_key: str
+    client_intent_id: str | None = None
+    user_directed: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.document, dict):
+            raise InvalidRequestError(SafeDetail.OUTPUT)
+        _idempotency_key(self.idempotency_key)
+        _scenario_key(self.idempotency_key)
+        _scenario_intent(self.client_intent_id)
+        _user_directed(self.user_directed)
+
+
+_BASELINE_TYPE_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": {"type": "string", "enum": [member.value for member in BaselineType]}}
+)
+
+
+def _baseline_type(value: object, *, optional: bool = False) -> None:
+    if value is None and optional:
+        return
+    _schedule_text(value, SafeDetail.BASELINE_TYPE)
+    if _schedule_choice(value, tuple(BaselineType), SafeDetail.BASELINE_TYPE) is None:
+        raise InvalidRequestError(SafeDetail.BASELINE_TYPE)
+
+
+def _scenario_reason(value: object) -> None:
+    _scenario_text(value, MAX_SCENARIO_TEXT_CHARACTERS, SafeDetail.REASON, optional=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ProposeScheduleBaseline:
+    """Propose one eligible publication as a Project baseline; a proposal is not a baseline until the operator approves it.
+
+    `schedule_baselines.propose`: `type` is `contract` (the prime contract
+    schedule) or `approved_update` (an approved rebaseline, change or time
+    extension). A proposal is labelled `proposed`, never authoritative, never
+    governing; only the attested local operator approves, rejects or revokes.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_BASELINES_PROPOSE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = _BASELINE_TYPE_SCHEMA
+
+    publication_id: str
+    type: str
+    reason: str
+    idempotency_key: str
+    client_intent_id: str | None = None
+    user_directed: bool = False
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.publication_id, IdKind.SCHEDULE_PUBLICATION, SafeDetail.PUBLICATION_ID)
+        _baseline_type(self.type, optional=False)
+        _scenario_reason(self.reason)
+        _idempotency_key(self.idempotency_key)
+        _scenario_key(self.idempotency_key)
+        _scenario_intent(self.client_intent_id)
+        _user_directed(self.user_directed)
+
+
+@dataclass(frozen=True, slots=True)
+class WithdrawScheduleBaseline:
+    """Withdraw a pending baseline proposal (its proposer's channel or the operator).
+
+    `schedule_baselines.withdraw`: a client withdraws only its own channel's
+    proposals; the attested local operator may withdraw any.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_BASELINES_WITHDRAW
+
+    baseline_id: str
+    reason: str
+    idempotency_key: str
+    client_intent_id: str | None = None
+    user_directed: bool = False
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.baseline_id, IdKind.SCHEDULE_BASELINE, SafeDetail.BASELINE_ID)
+        _scenario_reason(self.reason)
+        _idempotency_key(self.idempotency_key)
+        _scenario_key(self.idempotency_key)
+        _scenario_intent(self.client_intent_id)
+        _user_directed(self.user_directed)
+
+
+@dataclass(frozen=True, slots=True)
+class ApproveScheduleBaseline:
+    """Approve a pending baseline proposal, or designate and approve a publication directly (attested local operator only).
+
+    `schedule_baselines.approve`: exactly one of `baseline_id` (a pending
+    proposal; `type` defaults to the proposed type) and `publication_id` (a
+    direct approval, `type` required; a pending proposal of that publication is
+    adopted). A publication is approved at most once ever.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_BASELINES_APPROVE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = _BASELINE_TYPE_SCHEMA
+
+    approval_reference: str
+    effective_from: str
+    reason: str
+    idempotency_key: str
+    baseline_id: str | None = None
+    publication_id: str | None = None
+    type: str | None = None
+    supersedes_baseline_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.baseline_id is None) == (self.publication_id is None):
+            raise InvalidRequestError(SafeDetail.BASELINE_ID)
+        _optional_schedule_id(self.baseline_id, IdKind.SCHEDULE_BASELINE, SafeDetail.BASELINE_ID)
+        _optional_schedule_id(
+            self.publication_id, IdKind.SCHEDULE_PUBLICATION, SafeDetail.PUBLICATION_ID
+        )
+        _baseline_type(self.type, optional=self.publication_id is None)
+        _scenario_text(
+            self.approval_reference,
+            MAX_APPROVAL_REFERENCE_INPUT_CHARACTERS,
+            SafeDetail.APPROVAL_REFERENCE,
+            optional=False,
+        )
+        _schedule_date(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        if self.effective_from is None:
+            raise InvalidRequestError(SafeDetail.EFFECTIVE_FROM)
+        _optional_schedule_id(
+            self.supersedes_baseline_id, IdKind.SCHEDULE_BASELINE, SafeDetail.SUPERSEDES_BASELINE_ID
+        )
+        _scenario_reason(self.reason)
+        _idempotency_key(self.idempotency_key)
+        _scenario_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class RejectScheduleBaseline:
+    """Reject a pending baseline proposal (attested local operator only).
+
+    `schedule_baselines.reject`: the proposal becomes `rejected`; no label is
+    consumed.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_BASELINES_REJECT
+
+    baseline_id: str
+    reason: str
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.baseline_id, IdKind.SCHEDULE_BASELINE, SafeDetail.BASELINE_ID)
+        _scenario_reason(self.reason)
+        _idempotency_key(self.idempotency_key)
+        _scenario_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class RevokeScheduleBaseline:
+    """Revoke an approved, non-governing baseline; final for its publication, which can never be approved again (attested local operator only).
+
+    `schedule_baselines.revoke`: revoking the governing baseline is
+    `conflict(governing)`. Revocation is final: recovery means approving a
+    different publication (S6-U15).
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_BASELINES_REVOKE
+
+    baseline_id: str
+    reason: str
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.baseline_id, IdKind.SCHEDULE_BASELINE, SafeDetail.BASELINE_ID)
+        _scenario_reason(self.reason)
+        _idempotency_key(self.idempotency_key)
+        _scenario_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class SetGoverningScheduleBaseline:
+    """Designate which approved baseline governs the Project (attested local operator only).
+
+    `schedule_baselines.set_governing`: `expected_governing_baseline_id` is the
+    governing baseline the caller saw (`null` for none); a different current
+    designation is `conflict(governing)`.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_BASELINES_SET_GOVERNING
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"expected_governing_baseline_id": {"type": ["string", "null"]}}
+    )
+
+    project_id: str
+    baseline_id: str
+    expected_governing_baseline_id: str | None
+    reason: str
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _schedule_id(self.baseline_id, IdKind.SCHEDULE_BASELINE, SafeDetail.BASELINE_ID)
+        _optional_schedule_id(
+            self.expected_governing_baseline_id, IdKind.SCHEDULE_BASELINE, SafeDetail.GOVERNING
+        )
+        _scenario_reason(self.reason)
+        _idempotency_key(self.idempotency_key)
+        _scenario_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleScenarios:
+    """List a Project's (or one Series') Schedule Scenarios, newest first.
+
+    `schedule_scenarios.list`: each Scenario's origin and provenance; client
+    ids are shown to a local reader only.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_SCENARIOS_LIST
+
+    project_id: str
+    series_id: str | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _optional_schedule_id(self.series_id, IdKind.SCHEDULE_SERIES, SafeDetail.SERIES_ID)
+        _schedule_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadScheduleScenario:
+    """Read one Scenario and a page of its versions, newest first.
+
+    `schedule_scenarios.read`: each version's number, label, note, counts,
+    digests and provenance.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_SCENARIOS_READ
+
+    scenario_id: str
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.scenario_id, IdKind.SCHEDULE_SCENARIO, SafeDetail.SCENARIO_ID)
+        _schedule_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadScheduleScenarioVersion:
+    """Read one scenario version's metadata, settings, calendars, counts and digests.
+
+    `schedule_scenario_versions.read`: not its activities (use
+    `schedule_scenario_versions.activities`).
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_SCENARIO_VERSIONS_READ
+
+    version_id: str
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.version_id, IdKind.SCHEDULE_SCENARIO_VERSION, SafeDetail.VERSION_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleScenarioActivities:
+    """List one scenario version's activities in key order.
+
+    `schedule_scenario_versions.activities`: each activity's durations,
+    calendar, constraints, progress, distribution and published reference.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_SCENARIO_VERSIONS_ACTIVITIES
+
+    version_id: str
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.version_id, IdKind.SCHEDULE_SCENARIO_VERSION, SafeDetail.VERSION_ID)
+        _schedule_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleScenarioRelationships:
+    """List one scenario version's relationships in predecessor, successor order.
+
+    `schedule_scenario_versions.relationships`: each relationship's type and
+    lag in minutes.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_SCENARIO_VERSIONS_RELATIONSHIPS
+
+    version_id: str
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.version_id, IdKind.SCHEDULE_SCENARIO_VERSION, SafeDetail.VERSION_ID)
+        _schedule_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleScenarioChanges:
+    """List the change-set ops that produced one scenario version, in applied order.
+
+    `schedule_scenario_versions.changes`: version 1 (a snapshot or a copy) has
+    no change set and lists none.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_SCENARIO_VERSIONS_CHANGES
+
+    version_id: str
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.version_id, IdKind.SCHEDULE_SCENARIO_VERSION, SafeDetail.VERSION_ID)
+        _schedule_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadScheduleCpmRun:
+    """Read one server CPM run: status, summary, issues, open ends and critical paths.
+
+    `schedule_cpm_runs.read`: from the stored result, verified on read; the
+    per-activity rows are `schedule_cpm_runs.activities`.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_CPM_RUNS_READ
+
+    cpm_run_id: str
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.cpm_run_id, IdKind.SCHEDULE_CPM_RUN, SafeDetail.CPM_RUN_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleCpmRunActivities:
+    """List one CPM run's per-activity dates, floats and criticality in key order.
+
+    `schedule_cpm_runs.activities`: `critical_only` keeps the critical
+    activities, before paging.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_CPM_RUNS_ACTIVITIES
+
+    cpm_run_id: str
+    critical_only: bool = False
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.cpm_run_id, IdKind.SCHEDULE_CPM_RUN, SafeDetail.CPM_RUN_ID)
+        _scenario_bool(self.critical_only, SafeDetail.CRITICAL_ONLY)
+        _schedule_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleScenarioOutputs:
+    """List one scenario version's client-asserted outputs, newest first.
+
+    `schedule_scenario_outputs.list`: each output's kind, iterations, digests
+    and provenance; `schedule_scenario_outputs.read` returns the document.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_SCENARIO_OUTPUTS_LIST
+
+    version_id: str
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.version_id, IdKind.SCHEDULE_SCENARIO_VERSION, SafeDetail.VERSION_ID)
+        _schedule_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadScheduleScenarioOutput:
+    """Read one client-asserted output in full.
+
+    `schedule_scenario_outputs.read`: the verified stored document, labelled
+    `client_asserted`.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_SCENARIO_OUTPUTS_READ
+
+    output_id: str
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.output_id, IdKind.SCHEDULE_SCENARIO_OUTPUT, SafeDetail.OUTPUT_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadScheduleSeriesCurrent:
+    """Read a Series' derived current standard update and its same-Data-Date ambiguity.
+
+    `schedule_series.current`: effective baseline publications and superseded
+    publications are never current; use this, not `latest_update`.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_SERIES_CURRENT
+
+    series_id: str
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.series_id, IdKind.SCHEDULE_SERIES, SafeDetail.SERIES_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleSeriesMatchDecisions:
+    """List a Project's series auto-match decisions with their candidates and scores, newest first.
+
+    `schedule_series.match_decisions`: each decision's outcome, reason,
+    candidates, target Series and resulting publication.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_SERIES_MATCH_DECISIONS
+
+    project_id: str
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _schedule_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleBaselines:
+    """List a Project's baselines and proposals with lifecycle status, governing flag and provenance.
+
+    `schedule_baselines.list`: newest first; optionally one Series and one
+    status. A proposal is never shown as a baseline.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_BASELINES_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"status": {"type": "string", "enum": [member.value for member in BaselineStatus]}}
+    )
+
+    project_id: str
+    series_id: str | None = None
+    status: str | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _optional_schedule_id(self.series_id, IdKind.SCHEDULE_SERIES, SafeDetail.SERIES_ID)
+        _schedule_text(self.status, SafeDetail.STATUS)
+        _schedule_choice(self.status, tuple(BaselineStatus), SafeDetail.STATUS)
+        _schedule_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadScheduleBaseline:
+    """Read one baseline or proposal with its full event history and provenance.
+
+    `schedule_baselines.read`: status, proposed and effective type, label,
+    `effective_from`, superseded and governing flags, and every event.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_BASELINES_READ
+
+    baseline_id: str
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.baseline_id, IdKind.SCHEDULE_BASELINE, SafeDetail.BASELINE_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadGoverningScheduleBaseline:
+    """Read the Project's governing baseline now or as of an instant.
+
+    `schedule_baselines.governing`: "as recorded" -- the designation in force
+    at `as_of` by recording time, never by `effective_from`; `null` when none.
+    """
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_BASELINES_GOVERNING
+
+    project_id: str
+    as_of: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _scenario_instant(self.as_of, SafeDetail.AS_OF)
+
+
+@dataclass(frozen=True, slots=True)
+class CompareScheduleBaseline:
+    """Compare an approved baseline's publication with a later publication of the same Series (the exact per-activity delta).
+
+    `schedule_baselines.compare`: delta algorithm
+    `cpm-workbench-full-delta-v1`, labelled with the baseline's label, type and
+    provenance; a proposal or a non-effective baseline is refused.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_BASELINES_COMPARE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"change_kind": {"type": "string", "enum": list(SCHEDULE_CHANGE_KIND_VALUES)}}
+    )
+
+    baseline_id: str
+    to_publication_id: str
+    change_kind: str | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.baseline_id, IdKind.SCHEDULE_BASELINE, SafeDetail.BASELINE_ID)
         _schedule_id(
             self.to_publication_id, IdKind.SCHEDULE_PUBLICATION, SafeDetail.TO_PUBLICATION_ID
         )
@@ -17407,6 +18300,32 @@ type Command = (
     | ListScheduleActivities
     | ReadScheduleActivityHistory
     | ListScheduleChanges
+    | CreateScheduleScenario
+    | CreateScheduleScenarioVersion
+    | CreateScheduleCpmRun
+    | RecordScheduleScenarioOutput
+    | ProposeScheduleBaseline
+    | WithdrawScheduleBaseline
+    | ApproveScheduleBaseline
+    | RejectScheduleBaseline
+    | RevokeScheduleBaseline
+    | SetGoverningScheduleBaseline
+    | ListScheduleScenarios
+    | ReadScheduleScenario
+    | ReadScheduleScenarioVersion
+    | ListScheduleScenarioActivities
+    | ListScheduleScenarioRelationships
+    | ListScheduleScenarioChanges
+    | ReadScheduleCpmRun
+    | ListScheduleCpmRunActivities
+    | ListScheduleScenarioOutputs
+    | ReadScheduleScenarioOutput
+    | ReadScheduleSeriesCurrent
+    | ListScheduleSeriesMatchDecisions
+    | ListScheduleBaselines
+    | ReadScheduleBaseline
+    | ReadGoverningScheduleBaseline
+    | CompareScheduleBaseline
 )
 
 

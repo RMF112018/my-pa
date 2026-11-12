@@ -20,7 +20,12 @@ answers `not_found` with its own subject and nothing is written.
 existence check: a context Situation and an archived Task are
 `invalid_request` / `endpoint`; a Capture version whose root is archived is
 `denied` / `capture_withdrawn`, and one that is neither `synthetic_test` nor
-`private_local` is `invalid_request` / `endpoint`.
+`private_local` is `invalid_request` / `endpoint`. Schedule Scenarios S6-3
+(schedule scenarios contract section 15.11.2): a Schedule family endpoint that
+is not `schedule_linkable` is `invalid_request` / `endpoint`, and
+`require_schedule_relation` refuses an `originated_from` from a Baseline that
+is not approved (`invalid_request` / `relation_type`). The 6 Schedule
+families are read without a row lock (S6-3-D21).
 
 **The relation matrix and its evidence rules** (`relation_kind`,
 `require_relation_evidence`) are section 3.1, `invalid_request` /
@@ -85,6 +90,7 @@ from my_pa.domain.lineage.model import (
 )
 from my_pa.domain.lineage.vocabulary import (
     RELATION_MATRIX,
+    SCHEDULE_RECORD_FAMILIES,
     EvidenceRole,
     EvidenceSourceFamily,
     RecordFamily,
@@ -118,6 +124,7 @@ __all__ = [
     "require_linkable",
     "require_open_issues",
     "require_relation_evidence",
+    "require_schedule_relation",
 ]
 
 #: The admitted keys of one `EvidenceAnchorInput` document (section 7.1).
@@ -524,6 +531,10 @@ _EXACT_ROLE_RULES: Final[Mapping[RelationType, EvidenceRole]] = {
     RelationType.BLOCKS: EvidenceRole.CORROBORATES,
     # S3 section 3.1.
     RelationType.RELATED_CONTEXT: EvidenceRole.CORROBORATES,
+    # Schedule Scenarios S6-3 (schedule scenarios contract sections 5.2 and
+    # 15.11.2): a cited causal or recovery claim; `concerns` needs none.
+    RelationType.DELAYS: EvidenceRole.CORROBORATES,
+    RelationType.MITIGATES: EvidenceRole.CORROBORATES,
 }
 
 
@@ -543,7 +554,9 @@ def require_relation_evidence(
     S2 (section 3.1): `delegated_from` and `escalated_from` need an `origin`
     anchor on an exact version (`immutable_version`), `blocks` a
     `corroborates` one; `created_to_resolve` admits any set. S3 (section 3.1):
-    `related_context` needs an exact `corroborates` anchor. This is the rule
+    `related_context` needs an exact `corroborates` anchor. Schedule
+    Scenarios S6-3 (section 5.2): `delays` and `mitigates` need an exact
+    `corroborates` anchor too; `concerns` admits any set. This is the rule
     a correction re-applies (R2-F07); the assert-time rules are the
     composite's and `records.associations.assert`'s.
     """
@@ -815,6 +828,26 @@ def require_linkable(issues: IssueRepository, principal_id: str, endpoint: Linea
             raise DeniedError(SafeDetail.CAPTURE_WITHDRAWN)
         if endpoint.classification not in _ADMITTED_CLASSIFICATIONS:
             raise InvalidRequestError(SafeDetail.ENDPOINT)
+    elif endpoint.family in SCHEDULE_RECORD_FAMILIES and not endpoint.schedule_linkable:
+        # Schedule Scenarios S6-3 (section 15.11.2): a publication that is not
+        # a terminal `complete`/`partial` one or is intake, or an activity that
+        # is not visible or whose Series is intake.
+        raise InvalidRequestError(SafeDetail.ENDPOINT)
+
+
+def require_schedule_relation(relation: RelationType, from_endpoint: LineageEndpoint) -> None:
+    """Schedule Scenarios S6-3 (section 15.11.2, RR1-F08): the relation-level Baseline rule.
+
+    An `originated_from` from a `schedule_baseline` is admitted only while the
+    Baseline is approved and not revoked, read in the statement that shared it
+    (`invalid_request` / `relation_type`): approval evidence names an approval.
+    """
+    if (
+        relation is RelationType.ORIGINATED_FROM
+        and from_endpoint.family is RecordFamily.SCHEDULE_BASELINE
+        and not from_endpoint.baseline_approved
+    ):
+        raise InvalidRequestError(SafeDetail.RELATION_TYPE)
 
 
 def admit_evidence_set(

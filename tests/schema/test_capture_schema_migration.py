@@ -28,8 +28,8 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with two hundred and fifty-five capabilities and
-sixty-five purposes now declared in the domain. If this reddens, the freeze has been undone
+emits what it emitted on the day it merged, with two hundred and eighty-one capabilities and
+sixty-eight purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -73,6 +73,7 @@ from tests.schema.knowledge_schema_ahead_contract import (
     admitted_ahead,
 )
 from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
+from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
@@ -714,6 +715,9 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "reports.transfer.finalize",
         "reports.transfer.abort",
         "reports.transfer.read_chunk",
+        # Schedule Scenarios S6-3, admitted by revision B (`b77334135653`) with the
+        # domain declaring every name in the same change.
+        *S63_CAPABILITIES,
     }
 )
 

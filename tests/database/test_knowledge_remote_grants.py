@@ -276,9 +276,11 @@ def test_profile_apply_installs_the_create_grant_with_its_purpose(
         # Record lineage P1: the profile tooling reads both lineage switches
         # too; off, their defaults. CPM Workbench S5b-2 adds the schedule
         # switch the same tooling reads (`_planes_from_settings`); off, its default.
+        # Schedule Scenarios S6-3 (chatllm-data-v13) adds the scenario switch; off.
         lineage_enabled=False,
         program_reporting_enabled=False,
         schedule_enabled=False,
+        schedule_scenarios_enabled=False,
         knowledge_discovery_oauth_client_id_set=frozenset,
         knowledge_operator_review_oauth_client_id_set=frozenset,
         chatllm_gateway_oauth_client_id_set=frozenset,

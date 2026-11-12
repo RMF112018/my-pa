@@ -157,6 +157,8 @@ def _planes_from_settings(settings: Settings) -> ChatLLMCompositionPlanes:
         program_reporting=settings.program_reporting_enabled,
         # CPM Workbench S5b-2 (chatllm-data-v11): the Schedule reads likewise.
         schedule=settings.schedule_enabled,
+        # Schedule Scenarios S6-3 (chatllm-data-v13): the 22 plane names likewise.
+        schedule_scenarios=settings.schedule_scenarios_enabled,
     )
 
 

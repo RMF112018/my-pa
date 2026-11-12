@@ -79,6 +79,7 @@ from tests.contract.test_transport_parity import (
     staged_mention,
     staged_project_entity,
 )
+from tests.schedule_scenario_samples import SCHEDULE_SCENARIO_CAPABILITIES, scenario_payloads
 from tests.wire import Reply, Wire, serve
 
 from my_pa.adapters.http import (
@@ -345,6 +346,8 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.SCHEDULE_ACTIVITIES_LIST,
         Capability.SCHEDULE_ACTIVITIES_HISTORY,
         Capability.SCHEDULE_CHANGES_LIST,
+        # Schedule Scenarios S6-3: the 26 plane names (scopeless, plane switch off).
+        *SCHEDULE_SCENARIO_CAPABILITIES,
     }
 )
 
@@ -1740,6 +1743,8 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "from_publication_id": "spub_wirepublic001",
             "to_publication_id": "spub_wirepublic002",
         },
+        # Schedule Scenarios S6-3: synthetic plane samples.
+        **scenario_payloads("wire"),
     }
 
 
@@ -2490,6 +2495,8 @@ SCOPED_CAPABILITIES = [
         Capability.SCHEDULE_ACTIVITIES_LIST,
         Capability.SCHEDULE_ACTIVITIES_HISTORY,
         Capability.SCHEDULE_CHANGES_LIST,
+        # Schedule Scenarios S6-3: the 26 plane names (scopeless, plane switch off).
+        *SCHEDULE_SCENARIO_CAPABILITIES,
     }
 ]
 
@@ -2811,6 +2818,24 @@ ISSUE_AUTHORING_EXEMPTION = frozenset(
     }
 )
 
+#: Schedule Scenarios S6-3's three plane creates the substring proxy refuses --
+#: `schedule_scenarios.create`, `schedule_scenario_versions.create` and
+#: `schedule_cpm_runs.create` -- on the same reading: they append the acting
+#: Principal's own immutable plane rows and reach no source provider and no
+#: enrollment. The 3 `schedule_scenario_outputs.` names trip the proxy only on
+#: the substring "put" in "outputs": a client-asserted output is recorded,
+#: listed and read in the Principal's own plane, and no source moves.
+SCHEDULE_SCENARIO_AUTHORING_EXEMPTION = frozenset(
+    {
+        Capability.SCHEDULE_SCENARIOS_CREATE,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE,
+        Capability.SCHEDULE_CPM_RUNS_CREATE,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_LIST,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_READ,
+    }
+)
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
@@ -2863,6 +2888,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | REPORT_TYPE_AUTHORING_EXEMPTION
         | GENERAL_REPORT_MANAGEMENT_EXEMPTION
         | ISSUE_AUTHORING_EXEMPTION
+        | SCHEDULE_SCENARIO_AUTHORING_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(IMPLEMENTED_CAPABILITIES) - len(exempt)

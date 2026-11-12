@@ -109,8 +109,9 @@ def test_the_two_vocabularies_are_the_sizes_this_package_states() -> None:
     # Reports Modernization WP02: `reports.publish`, and no purpose. WP03: its 5
     # names and `report_lifecycle`. WP05b: its 4 custody names, `report_hold` and
     # `report_retention`. WP06: its 5 transfer names, and no purpose.
-    assert len(Capability) == 255
-    assert len(Purpose) == 65
+    # Schedule Scenarios S6-3: its 26 plane names and their 3 purposes.
+    assert len(Capability) == 281
+    assert len(Purpose) == 68
 
 
 def test_no_public_migration_capability_exists() -> None:

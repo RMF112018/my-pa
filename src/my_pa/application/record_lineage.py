@@ -71,7 +71,7 @@ import time
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from my_pa.application.errors import (
     ConflictError,
@@ -90,6 +90,7 @@ from my_pa.application.lineage_endpoints import (
     require_linkable,
     require_open_issues,
     require_relation_evidence,
+    require_schedule_relation,
 )
 from my_pa.application.lineage_rate import require_client_write_budget
 from my_pa.application.lineage_visibility import (
@@ -106,6 +107,7 @@ from my_pa.contracts.ports import (
     LineageNoteVersionRef,
     LineageReadTimeoutError,
     LineageResolvedRecord,
+    LineageScheduleFacts,
     LineageWriteRequestRecord,
     LinkHeadRecord,
     LinkRevisionRecord,
@@ -118,6 +120,7 @@ from my_pa.contracts.ports import (
 from my_pa.contracts.v1.record_lineage import (
     MAX_ISSUE_MEMBERSHIPS,
     MAX_MATCHING_ISSUES,
+    SCHEDULE_NODE_SUMMARY_MODELS,
     AssociationView,
     EvidenceAnchorView,
     LineageIssueMatch,
@@ -129,6 +132,7 @@ from my_pa.contracts.v1.record_lineage import (
     RecordRefView,
     RelatedRecordsView,
     RelatedRecordView,
+    ScheduleNodeSummary,
     VirtualEdgeView,
 )
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
@@ -176,7 +180,9 @@ from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
 from my_pa.domain.lineage.vocabulary import (
     COMPOSITE_ONLY_RELATIONS,
     LINEAGE_RELATED_DIGEST_PREFIX,
+    NATIVE_VIRTUAL_EDGE_ENDPOINTS,
     RECORD_FAMILY_ID_KINDS,
+    SCHEDULE_RECORD_FAMILIES,
     AcceptanceBasis,
     EvidenceAvailability,
     EvidenceSourceFamily,
@@ -805,6 +811,9 @@ class RecordLineageApplication:
         require_open_issues(locked)
         for ref in (request.from_ref, request.to_ref):
             require_linkable(issues, principal_id, locked.endpoints[ref])
+        # Schedule Scenarios S6-3 (section 15.11.2): approval evidence from an
+        # approved Baseline only.
+        require_schedule_relation(request.relation_type, locked.endpoints[request.from_ref])
         anchors = admit_evidence_set(issues, principal_id, locked.evidence)
         require_relation_evidence(request.relation_type, request.from_ref, request.to_ref, anchors)
         blocks: tuple[RecordRef, RecordRef] | None = None
@@ -1878,6 +1887,12 @@ class _CurrentReader:
         del root_ids
         return frozenset()
 
+    def schedule_facts(
+        self, refs: Collection[RecordRef]
+    ) -> Mapping[RecordRef, LineageScheduleFacts]:
+        """Schedule node facts now (no native cut)."""
+        return self.source.schedule_node_facts(self.owner, refs, None)
+
 
 class _AsOfReader(_CurrentReader):
     """S3 section 7.2 step 2: links and Issue revisions at the cut, notes at `N`."""
@@ -1912,6 +1927,12 @@ class _AsOfReader(_CurrentReader):
 
     def restricted_roots(self, root_ids: Collection[str]) -> frozenset[str]:
         return self.source.restricted_capture_roots(self.owner, root_ids)
+
+    def schedule_facts(
+        self, refs: Collection[RecordRef]
+    ) -> Mapping[RecordRef, LineageScheduleFacts]:
+        """Schedule node facts as of `N` (schedule scenarios contract 15.11.3a item 6)."""
+        return self.source.schedule_node_facts(self.owner, refs, self.native_cut_at)
 
 
 def _pair_extension(
@@ -1997,6 +2018,8 @@ class _Graph:
         self.notes: dict[str, tuple[RecordRef, ...]] = {}
         self.note_numbers: dict[RecordRef, int] = {}
         self.issue_states: dict[str, LineageIssueAsOf | None] = {}
+        self.schedule_facts: dict[RecordRef, LineageScheduleFacts] = {}
+        self.schedule: dict[RecordRef, ScheduleNodeSummary] = {}
         self.root = root
 
     def out_of_time(self) -> bool:
@@ -2242,10 +2265,22 @@ def _one_hop(graph: _Graph, max_depth: int) -> None:
 
 
 def _virtual_edges(graph: _Graph, nodes: Collection[RecordRef]) -> list[VirtualEdgeView]:
+    """The note-version edges, then the Schedule edges (section 15.11.3a item 4).
+
+    Both are admitted through the whole-query edge budget; when it refuses,
+    emission stops.
+    """
+    notes, stopped = _note_edges(graph, nodes)
+    if stopped:
+        return notes
+    return [*notes, *_schedule_edges(graph, nodes)]
+
+
+def _note_edges(graph: _Graph, nodes: Collection[RecordRef]) -> tuple[list[VirtualEdgeView], bool]:
     """Every `meeting_note_version_of` edge touching a reached node, by version number.
 
     Only note versions within the native cut (S3 section 3.4); a whole-query
-    edge budget applies.
+    edge budget applies. The flag is whether the budget stopped emission.
     """
     meetings: set[str] = set()
     for ref in nodes:
@@ -2263,7 +2298,7 @@ def _virtual_edges(graph: _Graph, nodes: Collection[RecordRef]) -> list[VirtualE
             if meeting not in nodes and note not in nodes:
                 continue
             if not graph.budget.admit(edges=1, size=256):
-                return [edge for _, _, edge in sorted(edges, key=lambda item: item[:2])]
+                return [edge for _, _, edge in sorted(edges, key=lambda item: item[:2])], True
             edges.append(
                 (
                     meeting_id,
@@ -2275,7 +2310,159 @@ def _virtual_edges(graph: _Graph, nodes: Collection[RecordRef]) -> list[VirtualE
                     ),
                 )
             )
-    return [edge for _, _, edge in sorted(edges, key=lambda item: item[:2])]
+    return [edge for _, _, edge in sorted(edges, key=lambda item: item[:2])], False
+
+
+def _schedule_edge_targets(facts: LineageScheduleFacts) -> list[tuple[NativeVirtualEdge, str]]:
+    """Section 15.11.3a item 2: each native edge a Schedule node's row names."""
+    named: list[tuple[NativeVirtualEdge, str | None]] = [
+        (NativeVirtualEdge.SCENARIO_VERSION_OF, facts.scenario_id),
+        (NativeVirtualEdge.SCENARIO_VERSION_PARENT, facts.parent_version_id),
+        (NativeVirtualEdge.SCENARIO_BASED_ON_PUBLICATION, facts.origin_publication_id),
+        (NativeVirtualEdge.SCENARIO_BASED_ON_BASELINE, facts.origin_baseline_id),
+        (NativeVirtualEdge.SCENARIO_FORKED_FROM_VERSION, facts.origin_version_id),
+        (NativeVirtualEdge.SCENARIO_OUTPUT_OF, facts.output_version_id),
+        (NativeVirtualEdge.SCHEDULE_BASELINE_DESIGNATES, facts.baseline_publication_id),
+        (NativeVirtualEdge.SCHEDULE_BASELINE_SUPERSEDES, facts.supersedes_baseline_id),
+    ]
+    return [
+        (edge_type, target)
+        for edge_type, target in named
+        if target is not None and NATIVE_VIRTUAL_EDGE_ENDPOINTS[edge_type][0] is facts.ref.family
+    ]
+
+
+def _schedule_edges(graph: _Graph, nodes: Collection[RecordRef]) -> list[VirtualEdgeView]:
+    """Section 15.11.3a items 3 and 4: Schedule edges between nodes of this answer only.
+
+    Emitted, never traversed: an edge whose far endpoint is not a node (not
+    reached, invisible or withheld) is not emitted, so no unreached record is
+    named. Sorted by edge type, then the two endpoints.
+    """
+    candidates: list[tuple[tuple[str, str, str, str, str], VirtualEdgeView]] = []
+    for ref in nodes:
+        facts = graph.schedule_facts.get(ref)
+        if facts is None:
+            continue
+        for edge_type, target in _schedule_edge_targets(facts):
+            far = RecordRef(family=NATIVE_VIRTUAL_EDGE_ENDPOINTS[edge_type][1], record_id=target)
+            if far not in nodes:
+                continue
+            key = (
+                edge_type.value,
+                ref.family.value,
+                ref.record_id,
+                far.family.value,
+                far.record_id,
+            )
+            candidates.append(
+                (
+                    key,
+                    VirtualEdgeView(
+                        edge_type=edge_type, from_ref=_ref_view(ref), to_ref=_ref_view(far)
+                    ),
+                )
+            )
+    emitted: list[VirtualEdgeView] = []
+    for _, edge in sorted(candidates, key=lambda item: item[0]):
+        if not graph.budget.admit(edges=1, size=256):
+            break
+        emitted.append(edge)
+    return emitted
+
+
+_SOURCE_BOUND: Final = "source_bound_derived"
+_MODEL_PROPOSED: Final = "model_proposed"
+
+
+def _schedule_summary(facts: LineageScheduleFacts) -> ScheduleNodeSummary:
+    """Section 15.11.3a item 1: one Schedule node's labelled summary, from its facts.
+
+    Validated by the family's own strict model, so a missing or extra key fails.
+    """
+    family = facts.ref.family
+    document: dict[str, object]
+    if family is RecordFamily.SCHEDULE_PUBLICATION or family is RecordFamily.SCHEDULE_ACTIVITY:
+        document = {
+            "data_class": family.value,
+            "authority": _SOURCE_BOUND,
+            "authoritative": False,
+            "trust": _SOURCE_BOUND,
+        }
+        if family is RecordFamily.SCHEDULE_PUBLICATION:
+            document |= {
+                "data_date": facts.data_date,
+                "status": facts.publication_status,
+                "series_kind": "intake" if facts.intake else "standard",
+            }
+        else:
+            document["published_activity_id"] = facts.published_activity_id
+    elif family is RecordFamily.SCHEDULE_BASELINE:
+        # Exactly the plane read's `_baseline_labels`: `operator_approved` by the
+        # effective type, `authoritative` only while effective (`approved`).
+        document = {
+            "data_class": "schedule_baseline",
+            "authority": (
+                "operator_approved" if facts.baseline_effective_type is not None else "proposed"
+            ),
+            "authoritative": facts.baseline_status == "approved",
+            "trust": _MODEL_PROPOSED,
+            "status": facts.baseline_status,
+            "label": facts.baseline_label,
+            "effective_type": facts.baseline_effective_type,
+        }
+    elif family is RecordFamily.SCENARIO_OUTPUT:
+        document = {
+            "data_class": "schedule_scenario_output",
+            "authority": "client_asserted",
+            "authoritative": False,
+            "trust": _MODEL_PROPOSED,
+            "kind": facts.output_kind,
+            "iterations": facts.iterations,
+        }
+    else:
+        document = {
+            "data_class": "schedule_scenario",
+            "authority": "client_authored",
+            "authoritative": False,
+            "trust": _MODEL_PROPOSED,
+        }
+        if family is RecordFamily.SCENARIO:
+            document["origin_kind"] = facts.origin_kind
+        else:
+            document |= {"version_no": facts.version_no, "version_label": facts.version_label}
+    document["reportable"] = False
+    summary = SCHEDULE_NODE_SUMMARY_MODELS[family].model_validate(document)
+    return cast("ScheduleNodeSummary", summary)
+
+
+def _load_schedule(
+    graph: _Graph, nodes: Sequence[RecordRef]
+) -> tuple[set[RecordRef], set[RecordRef]]:
+    """Section 15.11.3a items 1, 5 and 6: each Schedule node's facts and summary.
+
+    Returns the Schedule nodes with no facts (dropped, as a node that no longer
+    resolves) and those whose summary the byte budget refused (dropped, the
+    budget exhausted): a summary is admitted with its node and never adds one.
+    """
+    wanted = [ref for ref in nodes if ref.family in SCHEDULE_RECORD_FAMILIES]
+    if not wanted:
+        return set(), set()
+    found = graph.reader.schedule_facts(wanted)
+    missing: set[RecordRef] = set()
+    refused: set[RecordRef] = set()
+    for ref in wanted:
+        facts = found.get(ref)
+        if facts is None:
+            missing.add(ref)
+            continue
+        summary = _schedule_summary(facts)
+        if not graph.budget.admit(size=_size(summary.model_dump(mode="json"))):
+            refused.add(ref)
+            continue
+        graph.schedule_facts[ref] = facts
+        graph.schedule[ref] = summary
+    return missing, refused
 
 
 def _path_view(step: tuple[RecordRef, _Via] | None) -> dict[str, Any]:
@@ -2308,6 +2495,7 @@ def _node_view(graph: _Graph, ref: RecordRef) -> LineageNodeView:
             if ref.family is RecordFamily.CAPTURE_VERSION
             else None
         ),
+        schedule=graph.schedule.get(ref),
         **_path_view(graph.paths.get(ref)),
     )
 
@@ -2479,11 +2667,15 @@ def bounded_lineage(
     fresh = source.resolve_records(principal_id, reached)
     dropped = {ref for ref in reached if ref not in fresh}
     graph.resolved.update(fresh)
-    nodes = [ref for ref in reached if ref not in dropped]
+    # Section 15.11.3a: each Schedule node's summary, as of the native cut.
+    missing, refused = _load_schedule(graph, [ref for ref in reached if ref not in dropped])
+    dropped |= missing
+    gone = dropped | refused
+    nodes = [ref for ref in reached if ref not in gone]
     heads = [
         head
         for head in graph.links.values()
-        if head.link.from_ref not in dropped and head.link.to_ref not in dropped
+        if head.link.from_ref not in gone and head.link.to_ref not in gone
     ]
     virtual = _virtual_edges(graph, set(nodes))
     if graph.budget.exhausted:
@@ -2612,7 +2804,14 @@ _POSITION: Final = re.compile(r"\A(?P<kind>[nev]):(?P<rest>.+)\Z")
 
 
 def _lineage_position(value: object) -> bool:
-    """Section 5: `n:<family>:<record_id>`, `e:<link_id>` or `v:<note_version_id>`."""
+    """Section 5: `n:<family>:<record_id>`, `e:<link_id>` or `v:<note_version_id>`.
+
+    Amended by the schedule scenarios contract (section 15.11.3a item 5,
+    R10-T01): `v:` may instead name a Schedule edge,
+    `v:<edge_type>:<from.family>:<from.record_id>:<to.family>:<to.record_id>`,
+    with a Schedule edge type, its two endpoint families and each id valid for
+    its family.
+    """
     if not isinstance(value, str):
         return False
     matched = _POSITION.fullmatch(value)
@@ -2626,10 +2825,29 @@ def _lineage_position(value: object) -> bool:
             validate_identifier(record_id, RECORD_FAMILY_ID_KINDS[family])
         elif kind == "e":
             validate_identifier(rest, IdKind.RECORD_LINK)
+        elif ":" in rest:
+            return _schedule_edge_position(rest)
         else:
             validate_identifier(rest, IdKind.MEETING_NOTE_VERSION)
     except ValueError:
         return False
+    return True
+
+
+def _schedule_edge_position(rest: str) -> bool:
+    """A Schedule edge's position after `v:` (section 15.11.3a item 5)."""
+    parts = rest.split(":")
+    if len(parts) != 5:
+        return False
+    edge_token, from_token, from_id, to_token, to_id = parts
+    edge_type = NativeVirtualEdge(edge_token)
+    if edge_type is NativeVirtualEdge.MEETING_NOTE_VERSION_OF:
+        return False
+    from_family, to_family = RecordFamily(from_token), RecordFamily(to_token)
+    if (from_family, to_family) != NATIVE_VIRTUAL_EDGE_ENDPOINTS[edge_type]:
+        return False
+    validate_identifier(from_id, RECORD_FAMILY_ID_KINDS[from_family])
+    validate_identifier(to_id, RECORD_FAMILY_ID_KINDS[to_family])
     return True
 
 
@@ -2638,7 +2856,13 @@ def _item_key(item: LineageNodeView | AssociationView | VirtualEdgeView) -> str:
         return f"n:{item.family.value}:{item.record_id}"
     if isinstance(item, AssociationView):
         return f"e:{item.link_id}"
-    return f"v:{item.from_ref.record_id}"
+    if item.edge_type is NativeVirtualEdge.MEETING_NOTE_VERSION_OF:
+        return f"v:{item.from_ref.record_id}"
+    # Section 15.11.3a item 5 (R10-S01): a Schedule edge's source is not unique.
+    return (
+        f"v:{item.edge_type.value}:{item.from_ref.family.value}:{item.from_ref.record_id}"
+        f":{item.to_ref.family.value}:{item.to_ref.record_id}"
+    )
 
 
 def _item_document(item: LineageNodeView | AssociationView | VirtualEdgeView) -> object:
@@ -3168,11 +3392,15 @@ def bounded_related(
     fresh = source.resolve_records(principal_id, reached)
     dropped = {ref for ref in reached if ref not in fresh}
     graph.resolved.update(fresh)
-    nodes = [ref for ref in reached if ref not in dropped]
+    # Section 15.11.3a: each Schedule node's summary, as of the native cut.
+    missing, refused = _load_schedule(graph, [ref for ref in reached if ref not in dropped])
+    dropped |= missing
+    gone = dropped | refused
+    nodes = [ref for ref in reached if ref not in gone]
     heads = [
         head
         for head in graph.links.values()
-        if head.link.from_ref not in dropped and head.link.to_ref not in dropped
+        if head.link.from_ref not in gone and head.link.to_ref not in gone
     ]
     virtual = _virtual_edges(graph, set(nodes))
     if graph.budget.exhausted:
@@ -3188,7 +3416,8 @@ def bounded_related(
         codes.add(LineageCompleteness.RESTRICTED_EVIDENCE)
     records = tuple(
         RelatedRecordView(
-            **_node_view(graph, ref).model_dump(),
+            **_node_view(graph, ref).model_dump(exclude={"schedule"}),
+            schedule=graph.schedule.get(ref),
             seeds=tuple(sorted(state.seeds_of[ref])),
             issue_ids=tuple(sorted(state.issues_of.get(ref, ())))[:MAX_MATCHING_ISSUES],
         )

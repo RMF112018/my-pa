@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v12"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v13"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -43,6 +43,9 @@ class ChatLLMCompositionPrerequisite(StrEnum):
     #: CPM Workbench S5b-2 (chatllm-data-v11): the Schedule switch
     #: (`MY_PA_SCHEDULE_ENABLED`); needs no other plane.
     SCHEDULE = "SCHEDULE"
+    #: Schedule Scenarios S6-3 (chatllm-data-v13): `MY_PA_SCHEDULE_SCENARIOS_ENABLED`,
+    #: which stacks on the Schedule switch.
+    SCHEDULE_SCENARIOS = "SCHEDULE_SCENARIOS"
     NONE = "NONE"
 
 
@@ -330,6 +333,32 @@ _DATA_CONDITIONAL: Final[frozenset[Capability]] = frozenset(
         Capability.SCHEDULE_ACTIVITIES_LIST,
         Capability.SCHEDULE_ACTIVITIES_HISTORY,
         Capability.SCHEDULE_CHANGES_LIST,
+        # Schedule Scenarios S6-3 (chatllm-data-v13; schedule-scenarios contract
+        # section 15.12.1): the 22 client-usable plane names, conditional on
+        # `MY_PA_SCHEDULE_ENABLED` and `MY_PA_SCHEDULE_SCENARIOS_ENABLED` by
+        # explicit name (`SCHEDULE_SCENARIO_DATA_NAMES`).
+        Capability.SCHEDULE_SCENARIOS_CREATE,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE,
+        Capability.SCHEDULE_CPM_RUNS_CREATE,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD,
+        Capability.SCHEDULE_BASELINES_PROPOSE,
+        Capability.SCHEDULE_BASELINES_WITHDRAW,
+        Capability.SCHEDULE_SCENARIOS_LIST,
+        Capability.SCHEDULE_SCENARIOS_READ,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_READ,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_ACTIVITIES,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_RELATIONSHIPS,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CHANGES,
+        Capability.SCHEDULE_CPM_RUNS_READ,
+        Capability.SCHEDULE_CPM_RUNS_ACTIVITIES,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_LIST,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_READ,
+        Capability.SCHEDULE_SERIES_CURRENT,
+        Capability.SCHEDULE_SERIES_MATCH_DECISIONS,
+        Capability.SCHEDULE_BASELINES_LIST,
+        Capability.SCHEDULE_BASELINES_READ,
+        Capability.SCHEDULE_BASELINES_GOVERNING,
+        Capability.SCHEDULE_BASELINES_COMPARE,
     }
 )
 
@@ -393,6 +422,15 @@ _CONTROL_PLANE_EXCLUDED: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_HOLD_RELEASE,
         Capability.REPORTS_RETENTION_SET,
         Capability.REPORTS_RETENTION_GET,
+        # Schedule Scenarios S6-3 (schedule-scenarios contract sections 12.3,
+        # 15.3; operator decision 2026-11-03): the 4 baseline decisions are
+        # attested to the local operator surface. Excluded, so an active grant on
+        # one is `UNEXPECTED_CONTROL_PLANE_GRANT`; publication withholds them as
+        # operator kind (`_OPERATOR_ONLY`).
+        Capability.SCHEDULE_BASELINES_APPROVE,
+        Capability.SCHEDULE_BASELINES_REJECT,
+        Capability.SCHEDULE_BASELINES_REVOKE,
+        Capability.SCHEDULE_BASELINES_SET_GOVERNING,
     }
 )
 
@@ -495,6 +533,37 @@ SCHEDULE_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
+#: Schedule Scenarios S6-3 (chatllm-data-v13): the 22 client-usable plane names
+#: (6 writes, 16 reads), composed only by `MY_PA_SCHEDULE_ENABLED` and
+#: `MY_PA_SCHEDULE_SCENARIOS_ENABLED`. Explicit names, matched before any prefix
+#: rule. The 4 operator baseline decisions are excluded and never composed.
+SCHEDULE_SCENARIO_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.SCHEDULE_SCENARIOS_CREATE,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE,
+        Capability.SCHEDULE_CPM_RUNS_CREATE,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD,
+        Capability.SCHEDULE_BASELINES_PROPOSE,
+        Capability.SCHEDULE_BASELINES_WITHDRAW,
+        Capability.SCHEDULE_SCENARIOS_LIST,
+        Capability.SCHEDULE_SCENARIOS_READ,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_READ,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_ACTIVITIES,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_RELATIONSHIPS,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CHANGES,
+        Capability.SCHEDULE_CPM_RUNS_READ,
+        Capability.SCHEDULE_CPM_RUNS_ACTIVITIES,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_LIST,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_READ,
+        Capability.SCHEDULE_SERIES_CURRENT,
+        Capability.SCHEDULE_SERIES_MATCH_DECISIONS,
+        Capability.SCHEDULE_BASELINES_LIST,
+        Capability.SCHEDULE_BASELINES_READ,
+        Capability.SCHEDULE_BASELINES_GOVERNING,
+        Capability.SCHEDULE_BASELINES_COMPARE,
+    }
+)
+
 _COMPATIBILITY_REPLACEMENTS: Final[Mapping[Capability, Capability]] = MappingProxyType(
     {
         Capability.CONTINUITY_TASKS_CREATE: Capability.TASKS_CREATE,
@@ -520,6 +589,12 @@ _LINEAGE_ATTESTED_EXCLUSION: Final = (
 _REPORT_CUSTODY_EXCLUSION: Final = (
     "operator-only report holds and retention; attested to the local operator surface "
     "(operator decision 2026-11-05)"
+)
+
+#: Schedule Scenarios S6-3 (contract section 15.3): the 4 operator baseline decisions.
+_SCHEDULE_BASELINE_APPROVAL_EXCLUSION: Final = (
+    "attested operator baseline approval; the attested local operator only "
+    "(operator decision 2026-11-03)"
 )
 
 _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
@@ -557,6 +632,10 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.REPORTS_HOLD_RELEASE: _REPORT_CUSTODY_EXCLUSION,
         Capability.REPORTS_RETENTION_SET: _REPORT_CUSTODY_EXCLUSION,
         Capability.REPORTS_RETENTION_GET: _REPORT_CUSTODY_EXCLUSION,
+        Capability.SCHEDULE_BASELINES_APPROVE: _SCHEDULE_BASELINE_APPROVAL_EXCLUSION,
+        Capability.SCHEDULE_BASELINES_REJECT: _SCHEDULE_BASELINE_APPROVAL_EXCLUSION,
+        Capability.SCHEDULE_BASELINES_REVOKE: _SCHEDULE_BASELINE_APPROVAL_EXCLUSION,
+        Capability.SCHEDULE_BASELINES_SET_GOVERNING: _SCHEDULE_BASELINE_APPROVAL_EXCLUSION,
     }
 )
 
@@ -593,6 +672,8 @@ def _prerequisite_of(
         return ChatLLMCompositionPrerequisite.PROGRAM_REPORTING
     if capability in SCHEDULE_DATA_NAMES:
         return ChatLLMCompositionPrerequisite.SCHEDULE
+    if capability in SCHEDULE_SCENARIO_DATA_NAMES:
+        return ChatLLMCompositionPrerequisite.SCHEDULE_SCENARIOS
     value = capability.value
     if value.startswith("documents."):
         return ChatLLMCompositionPrerequisite.MANAGED_DOCUMENTS

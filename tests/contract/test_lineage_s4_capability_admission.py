@@ -204,7 +204,8 @@ def test_s4_capabilities_are_operator_decision_required_reads() -> None:
     # since S3.1 adds its 4) never holds an S4 name.
     assert not declared & _LINEAGE_CAPABILITIES
     assert len(_LINEAGE_CAPABILITIES) == 34
-    assert len(list(Capability)) == 255
+    # Schedule Scenarios S6-3: 255 -> 281.
+    assert len(list(Capability)) == 281
     for capability in declared:
         name = capability.value
         assert capability in _SCOPELESS
@@ -229,7 +230,7 @@ def test_s4_registers_no_report_type_and_issues_no_grant() -> None:
     # P1 client exposure (operator directive 2026-10-26): every S4 name is in
     # `DATA_CONDITIONAL`, so the profile planner -- never a bootstrap source --
     # plans its grant; the data profile moved to v10 with it.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
     assert all(
         CHATLLM_CAPABILITY_POLICY[capability].classification
         is ChatLLMCapabilityClass.DATA_CONDITIONAL
@@ -337,7 +338,8 @@ def test_the_program_purpose_admits_exactly_the_program_reads() -> None:
     # No Program read may be reached through `report_read` (or any other purpose).
     for name in _PROGRAM_READS:
         assert permitted_purposes(Capability(name)) == frozenset({Purpose.PROGRAM_REPORTING_READ})
-    assert len(list(Purpose)) == 65
+    # Schedule Scenarios S6-3: 65 -> 68.
+    assert len(list(Purpose)) == 68
 
 
 def test_create_database_engine_keeps_its_default_checkout_timeout() -> None:

@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import fixtures from "../fixtures/python/success.json";
-import { ACCEPTANCE_BASES, decodeRecordsLineage, ISSUE_STATES, LINK_LIFECYCLE_STATES, RELATION_TYPES } from "./records.lineage";
+import {
+  ACCEPTANCE_BASES, decodeRecordsLineage, ISSUE_STATES, LINK_LIFECYCLE_STATES, NATIVE_VIRTUAL_EDGE_ENDPOINTS,
+  NATIVE_VIRTUAL_EDGES, RECORD_FAMILIES, RELATION_TYPES, SCHEDULE_AUTHORITIES, SCHEDULE_DATA_CLASSES,
+  SCHEDULE_TRUST_LEVELS,
+} from "./records.lineage";
 
 const canonical = fixtures["records.lineage"];
 type Json = Record<string, unknown>;
@@ -77,11 +81,13 @@ describe("records.lineage strict canonical success", () => {
   it("decodes the S2 relation types and a closed Issue", () => {
     // The closed sets are exactly the server vocabulary (S2 section 7.4); the
     // Python side of the equality is `test_record_lineage_s2_scope.py`. S3 widens
-    // the server vocabulary by `related_context` (S3 section 3.1), in lockstep.
+    // the server vocabulary by `related_context` (S3 section 3.1), and Schedule
+    // Scenarios S6-3 by `concerns`, `delays` and `mitigates`, in lockstep.
     expect([...RELATION_TYPES]).toEqual([
       "issue_member", "originated_from", "discusses",
       "delegated_from", "escalated_from", "blocks", "created_to_resolve",
       "related_context",
+      "concerns", "delays", "mitigates",
     ]);
     expect([...ISSUE_STATES]).toEqual(["open", "active", "suspended", "closed"]);
     for (const [relation, from, to] of [
@@ -218,5 +224,80 @@ describe("records.lineage strict canonical success", () => {
       const value = payload(); delete (value.typed_edges as Json[])[1]![key];
       expect(decode(value).ok, key).toBe(false);
     }
+  });
+
+  it("decodes the S6-3 Schedule node summaries and virtual edges, and nothing else", () => {
+    // Schedule scenarios contract section 15.11.3a: the closed sets are exactly
+    // the server vocabulary (`NATIVE_VIRTUAL_EDGE_ENDPOINTS`, the node labels of
+    // section 15.6.3); every summary key is present, `null` included.
+    expect([...NATIVE_VIRTUAL_EDGES]).toEqual(Object.keys(NATIVE_VIRTUAL_EDGE_ENDPOINTS));
+    expect(NATIVE_VIRTUAL_EDGES).toHaveLength(9);
+    expect([...SCHEDULE_DATA_CLASSES]).toEqual([
+      "schedule_publication", "schedule_activity", "schedule_baseline", "schedule_scenario", "schedule_scenario_output",
+    ]);
+    expect([...SCHEDULE_AUTHORITIES]).toContain("source_bound_derived");
+    expect([...SCHEDULE_TRUST_LEVELS]).toEqual(["source_bound_derived", "model_proposed"]);
+    const id = (family: string): string => ({
+      schedule_publication: "spub_aaaaaaaa11111111", schedule_activity: "sact_aaaaaaaa11111111",
+      schedule_baseline: "sbl_aaaaaaaa11111111", scenario: "sscn_aaaaaaaa11111111",
+      scenario_version: "sscv_aaaaaaaa11111111", scenario_output: "ssco_aaaaaaaa11111111",
+      meeting_note_version: "mnote_aaaaaaaa11111111", meeting: "mtg_aaaaaaaa11111111",
+    } as Record<string, string>)[family] ?? "x";
+    const model = { authoritative: false, reportable: false, trust: "model_proposed" };
+    const source = { authority: "source_bound_derived", authoritative: false, reportable: false, trust: "source_bound_derived" };
+    const summaries: Record<string, Json> = {
+      schedule_publication: { data_class: "schedule_publication", ...source, data_date: "2026-05-04", status: "complete", series_kind: "standard" },
+      schedule_activity: { data_class: "schedule_activity", ...source, published_activity_id: "A100" },
+      schedule_baseline: { data_class: "schedule_baseline", authority: "proposed", ...model, status: "proposed", label: null, effective_type: null },
+      scenario: { data_class: "schedule_scenario", authority: "client_authored", ...model, origin_kind: "publication" },
+      scenario_version: { data_class: "schedule_scenario", authority: "client_authored", ...model, version_no: 2, version_label: "what_if" },
+      scenario_output: { data_class: "schedule_scenario_output", authority: "client_asserted", ...model, kind: "monte_carlo", iterations: 1000 },
+    };
+    const withNode = (family: string, schedule: Json | undefined): Json => {
+      const value = payload();
+      const node: Json = {
+        family, record_id: id(family), depth: 1,
+        reached_from: value.root, reached_via: { edge: "typed", link_id: "irl_aaaaaaaa11111111" },
+      };
+      if (schedule !== undefined) node.schedule = schedule;
+      (value.nodes as Json[]).push(node);
+      return value;
+    };
+    for (const [family, schedule] of Object.entries(summaries)) {
+      const value = withNode(family, schedule);
+      expect(decode(value), family).toEqual({ ok: true, value });
+      // Required on its family, exact keys, never another family's summary.
+      expect(decode(withNode(family, undefined)).ok, family).toBe(false);
+      expect(decode(withNode(family, { ...schedule, name: "Synthetic" })).ok, family).toBe(false);
+      expect(decode(withNode(family, { ...schedule, reportable: true })).ok, family).toBe(false);
+      for (const key of Object.keys(schedule)) {
+        const missing = { ...schedule }; delete missing[key];
+        expect(decode(withNode(family, missing)).ok, `${family}.${key}`).toBe(false);
+      }
+      for (const [other, otherSchedule] of Object.entries(summaries)) {
+        if (other !== family) expect(decode(withNode(family, otherSchedule)).ok, `${family}<-${other}`).toBe(false);
+      }
+    }
+    expect(decode(withNode("task", summaries.scenario)).ok).toBe(false);
+    // A revoked Baseline keeps its type and label; `operator_approved` iff typed.
+    const revoked = { ...summaries.schedule_baseline, authority: "operator_approved", status: "revoked", label: "BL-1", effective_type: "contract" };
+    expect(decode(withNode("schedule_baseline", revoked)).ok).toBe(true);
+    expect(decode(withNode("schedule_baseline", { ...revoked, authority: "proposed" })).ok).toBe(false);
+    expect(decode(withNode("schedule_baseline", { ...revoked, authoritative: true })).ok).toBe(false);
+    expect(decode(withNode("schedule_baseline", { ...revoked, status: "approved", authoritative: true })).ok).toBe(true);
+    // Every Schedule edge between exactly its two families; a Schedule edge is never a path step.
+    for (const [edgeType, [from, to]] of Object.entries(NATIVE_VIRTUAL_EDGE_ENDPOINTS)) {
+      for (const source of RECORD_FAMILIES) {
+        const value = payload();
+        value.virtual_native_edges = [{ edge_type: edgeType, from: { family: source, record_id: id(source) }, to: { family: to, record_id: id(to) } }];
+        expect(decode(value).ok, `${edgeType}:${source}`).toBe(source === from && id(source) !== "x");
+      }
+      if (edgeType !== "meeting_note_version_of") {
+        const step = payload(); (step.nodes as Json[])[1]!.reached_via = { edge: "virtual", edge_type: edgeType };
+        expect(decode(step).ok, edgeType).toBe(false);
+      }
+    }
+    const unknownEdge = payload(); ((unknownEdge.virtual_native_edges as Json[])[0]!).edge_type = "scenario_child_of";
+    expect(decode(unknownEdge).ok).toBe(false);
   });
 });

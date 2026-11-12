@@ -322,7 +322,7 @@ def test_no_s1_capability_is_in_the_chatllm_data_profile() -> None:
     assert declared <= desired_effective_capabilities(composed_on)
     assert declared <= desired_effective_capabilities(composed_on, knowledge_manager=True)
     # A data-class member moved, so the profile version did too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
 
 
 # ---- request shapes ---------------------------------------------------------

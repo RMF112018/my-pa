@@ -1128,6 +1128,37 @@ class Capability(StrEnum):
     SCHEDULE_ACTIVITIES_LIST = "schedule_activities.list"
     SCHEDULE_ACTIVITIES_HISTORY = "schedule_activities.history"
     SCHEDULE_CHANGES_LIST = "schedule_changes.list"
+    #: Schedule Scenarios S6-3 (schedule-scenarios contract sections 6.1, 15.3):
+    #: 6 client-usable plane writes, 4 attested-operator-only baseline writes
+    #: and 16 plane reads. All 26 are scopeless and withheld unless the plane is
+    #: effective (`MY_PA_SCHEDULE_ENABLED` and `MY_PA_SCHEDULE_SCENARIOS_ENABLED`,
+    #: section 15.8).
+    SCHEDULE_SCENARIOS_CREATE = "schedule_scenarios.create"
+    SCHEDULE_SCENARIO_VERSIONS_CREATE = "schedule_scenario_versions.create"
+    SCHEDULE_CPM_RUNS_CREATE = "schedule_cpm_runs.create"
+    SCHEDULE_SCENARIO_OUTPUTS_RECORD = "schedule_scenario_outputs.record"
+    SCHEDULE_BASELINES_PROPOSE = "schedule_baselines.propose"
+    SCHEDULE_BASELINES_WITHDRAW = "schedule_baselines.withdraw"
+    SCHEDULE_BASELINES_APPROVE = "schedule_baselines.approve"
+    SCHEDULE_BASELINES_REJECT = "schedule_baselines.reject"
+    SCHEDULE_BASELINES_REVOKE = "schedule_baselines.revoke"
+    SCHEDULE_BASELINES_SET_GOVERNING = "schedule_baselines.set_governing"
+    SCHEDULE_SCENARIOS_LIST = "schedule_scenarios.list"
+    SCHEDULE_SCENARIOS_READ = "schedule_scenarios.read"
+    SCHEDULE_SCENARIO_VERSIONS_READ = "schedule_scenario_versions.read"
+    SCHEDULE_SCENARIO_VERSIONS_ACTIVITIES = "schedule_scenario_versions.activities"
+    SCHEDULE_SCENARIO_VERSIONS_RELATIONSHIPS = "schedule_scenario_versions.relationships"
+    SCHEDULE_SCENARIO_VERSIONS_CHANGES = "schedule_scenario_versions.changes"
+    SCHEDULE_CPM_RUNS_READ = "schedule_cpm_runs.read"
+    SCHEDULE_CPM_RUNS_ACTIVITIES = "schedule_cpm_runs.activities"
+    SCHEDULE_SCENARIO_OUTPUTS_LIST = "schedule_scenario_outputs.list"
+    SCHEDULE_SCENARIO_OUTPUTS_READ = "schedule_scenario_outputs.read"
+    SCHEDULE_SERIES_CURRENT = "schedule_series.current"
+    SCHEDULE_SERIES_MATCH_DECISIONS = "schedule_series.match_decisions"
+    SCHEDULE_BASELINES_LIST = "schedule_baselines.list"
+    SCHEDULE_BASELINES_READ = "schedule_baselines.read"
+    SCHEDULE_BASELINES_GOVERNING = "schedule_baselines.governing"
+    SCHEDULE_BASELINES_COMPARE = "schedule_baselines.compare"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1248,6 +1279,14 @@ _OPERATOR_ONLY: frozenset[AuthorizedCapability] = frozenset(
         Capability.REPORTS_HOLD_RELEASE,
         Capability.REPORTS_RETENTION_SET,
         Capability.REPORTS_RETENTION_GET,
+        # Schedule Scenarios S6-3 (contract sections 12.3, 15.3; operator decision
+        # 2026-11-03): baseline approval, rejection, revocation and the governing
+        # designation are the attested local operator's alone (the handlers call
+        # `attested_lineage_authority`), so they are never published remotely.
+        Capability.SCHEDULE_BASELINES_APPROVE,
+        Capability.SCHEDULE_BASELINES_REJECT,
+        Capability.SCHEDULE_BASELINES_REVOKE,
+        Capability.SCHEDULE_BASELINES_SET_GOVERNING,
     }
 )
 
@@ -1793,6 +1832,45 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.SCHEDULE_ACTIVITIES_LIST: frozenset({Purpose.SCHEDULE_READ}),
         Capability.SCHEDULE_ACTIVITIES_HISTORY: frozenset({Purpose.SCHEDULE_READ}),
         Capability.SCHEDULE_CHANGES_LIST: frozenset({Purpose.SCHEDULE_READ}),
+        # Schedule Scenarios S6-3 (contract section 6.1): 3 purposes of their own --
+        # client analysis authoring, the plane reads and the operator's baseline
+        # approval.
+        Capability.SCHEDULE_SCENARIOS_CREATE: frozenset({Purpose.SCHEDULE_ANALYSIS_AUTHORING}),
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE: frozenset(
+            {Purpose.SCHEDULE_ANALYSIS_AUTHORING}
+        ),
+        Capability.SCHEDULE_CPM_RUNS_CREATE: frozenset({Purpose.SCHEDULE_ANALYSIS_AUTHORING}),
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD: frozenset(
+            {Purpose.SCHEDULE_ANALYSIS_AUTHORING}
+        ),
+        Capability.SCHEDULE_BASELINES_PROPOSE: frozenset({Purpose.SCHEDULE_ANALYSIS_AUTHORING}),
+        Capability.SCHEDULE_BASELINES_WITHDRAW: frozenset({Purpose.SCHEDULE_ANALYSIS_AUTHORING}),
+        Capability.SCHEDULE_BASELINES_APPROVE: frozenset({Purpose.SCHEDULE_BASELINE_APPROVAL}),
+        Capability.SCHEDULE_BASELINES_REJECT: frozenset({Purpose.SCHEDULE_BASELINE_APPROVAL}),
+        Capability.SCHEDULE_BASELINES_REVOKE: frozenset({Purpose.SCHEDULE_BASELINE_APPROVAL}),
+        Capability.SCHEDULE_BASELINES_SET_GOVERNING: frozenset(
+            {Purpose.SCHEDULE_BASELINE_APPROVAL}
+        ),
+        Capability.SCHEDULE_SCENARIOS_LIST: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
+        Capability.SCHEDULE_SCENARIOS_READ: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
+        Capability.SCHEDULE_SCENARIO_VERSIONS_READ: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
+        Capability.SCHEDULE_SCENARIO_VERSIONS_ACTIVITIES: frozenset(
+            {Purpose.SCHEDULE_ANALYSIS_READ}
+        ),
+        Capability.SCHEDULE_SCENARIO_VERSIONS_RELATIONSHIPS: frozenset(
+            {Purpose.SCHEDULE_ANALYSIS_READ}
+        ),
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CHANGES: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
+        Capability.SCHEDULE_CPM_RUNS_READ: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
+        Capability.SCHEDULE_CPM_RUNS_ACTIVITIES: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_LIST: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_READ: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
+        Capability.SCHEDULE_SERIES_CURRENT: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
+        Capability.SCHEDULE_SERIES_MATCH_DECISIONS: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
+        Capability.SCHEDULE_BASELINES_LIST: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
+        Capability.SCHEDULE_BASELINES_READ: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
+        Capability.SCHEDULE_BASELINES_GOVERNING: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
+        Capability.SCHEDULE_BASELINES_COMPARE: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -2005,6 +2083,18 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ISSUES_PROJECT_LINKS_CONFIRM,
         # CPM Workbench S5b-2: the import inserts a publication and queues its job.
         Capability.SCHEDULE_PUBLICATIONS_IMPORT,
+        # Schedule Scenarios S6-3 (S6-3-D05): the 10 plane writes; the 16 reads
+        # stay out.
+        Capability.SCHEDULE_SCENARIOS_CREATE,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE,
+        Capability.SCHEDULE_CPM_RUNS_CREATE,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD,
+        Capability.SCHEDULE_BASELINES_PROPOSE,
+        Capability.SCHEDULE_BASELINES_WITHDRAW,
+        Capability.SCHEDULE_BASELINES_APPROVE,
+        Capability.SCHEDULE_BASELINES_REJECT,
+        Capability.SCHEDULE_BASELINES_REVOKE,
+        Capability.SCHEDULE_BASELINES_SET_GOVERNING,
     }
 )
 
@@ -2138,6 +2228,14 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # CPM Workbench S5b-2: the import inserts a publication (and at most a
         # new Series) and one job; it never rewrites an existing publication.
         Capability.SCHEDULE_PUBLICATIONS_IMPORT,
+        # Schedule Scenarios S6-3 (S6-3-D05): create, append, CPM run, output and
+        # propose only insert immutable rows. Withdraw and the 4 operator writes
+        # decide a proposal's or Baseline's lifecycle or the governing designation.
+        Capability.SCHEDULE_SCENARIOS_CREATE,
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE,
+        Capability.SCHEDULE_CPM_RUNS_CREATE,
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD,
+        Capability.SCHEDULE_BASELINES_PROPOSE,
     }
 )
 

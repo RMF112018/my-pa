@@ -1,13 +1,14 @@
-"""Schedule Scenarios S6-2: nothing public exists yet, and the plane stays where it was put.
+"""Schedule Scenarios S6-2: the plane stays where it was put.
 
 Contract `docs/architecture/schedule-scenarios-contract.md` sections 9.2,
 14.8, 14.9 and 14.11.2 (FAST, by AST and by import):
 
-* no plane capability, purpose, lineage family or relation is public before
-  S6-3, and no transport, application or composition module reaches the plane;
-* `ScenarioUnitOfWork` is not on the general `UnitOfWork`, `ApplicationService`
-  or the composition root;
-* the worker passes no effective-plane bit (S6-2-D12);
+* (the S6-2 pins that kept the plane names private were replaced in lockstep
+  by S6-3, R3-28: the capabilities, purposes, composition-root rule and worker
+  wiring by package I10-A in `test_schedule_scenarios_capability_scope.py`, the
+  lineage families, relations and generation by package I10-B in
+  `tests/unit/test_schedule_lineage_vocabulary.py`);
+* `ScenarioUnitOfWork` is not on the general `UnitOfWork`;
 * the plane modules write no S5 table except through the S5 admission;
 * the pre-deploy module's `QUARANTINED` registration cannot widen (RR2-F01).
 
@@ -17,22 +18,10 @@ Each detector is run over a planted violation as its own control.
 from __future__ import annotations
 
 import ast
-import inspect
 from pathlib import Path
 from typing import Final
 
 from my_pa.contracts import ports
-from my_pa.domain.identity.operation import Capability
-from my_pa.domain.identity.purpose import Purpose
-from my_pa.domain.lineage.vocabulary import (
-    LINEAGE_READ_GENERATION,
-    SCHEDULE_LINEAGE_FAMILY_ID_KINDS,
-    SCHEDULE_LINEAGE_RELATIONS,
-    RecordFamily,
-    RelationType,
-)
-from my_pa.domain.schedule.plane import PLANE_WRITE_CAPABILITIES
-from my_pa.infrastructure.jobs.schedule import process_schedule_publication
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 PACKAGE: Final = ROOT / "src" / "my_pa"
@@ -97,28 +86,6 @@ def _reaches_the_plane(tree: ast.AST) -> list[str]:
     )
 
 
-def test_no_plane_name_is_public_before_s63() -> None:
-    """Section 9.2 "No capability": S6-3 adds every public name with its validators."""
-    public = {member.value for member in Capability}
-    assert not public & PLANE_WRITE_CAPABILITIES
-    assert not [name for name in public if name.startswith(PLANE_NAME_PREFIXES)]
-    assert not [member.value for member in Purpose if "scenario" in member.value]
-    families = {member.value for member in RecordFamily}
-    assert not families & set(SCHEDULE_LINEAGE_FAMILY_ID_KINDS)
-    assert not {member.value for member in RelationType} & set(SCHEDULE_LINEAGE_RELATIONS)
-    assert LINEAGE_READ_GENERATION == 1
-    reaching = {
-        str(path.relative_to(ROOT)): found
-        for surface in PUBLIC_SURFACES
-        for path in sorted(surface.rglob("*.py"))
-        if (found := _reaches_the_plane(_tree(path)))
-    }
-    assert reaching == {}, reaching
-    # The control: an application module importing the plane is seen.
-    planted = ast.parse("from my_pa.infrastructure.persistence import schedule_scenarios\n")
-    assert _reaches_the_plane(planted) == ["my_pa.infrastructure.persistence.schedule_scenarios"]
-
-
 def _class_mentions(tree: ast.Module, class_name: str, token: str) -> bool:
     for node in tree.body:
         if isinstance(node, ast.ClassDef) and node.name == class_name:
@@ -127,34 +94,22 @@ def _class_mentions(tree: ast.Module, class_name: str, token: str) -> bool:
 
 
 def test_scenario_unit_of_work_is_not_on_the_general_unit_of_work() -> None:
-    """S6-2 composes nothing: the plane unit of work stands alone (section 14.8.1)."""
+    """The plane unit of work stands alone (section 14.8.1).
+
+    S6-3 composes it as a factory of its own (section 15.8): `ApplicationService`
+    and the composition root name it, never the general `UnitOfWork`.
+    """
     assert not issubclass(ports.ScenarioUnitOfWork, ports.UnitOfWork)
     assert not issubclass(ports.UnitOfWork, ports.ScenarioUnitOfWork)
     assert not hasattr(ports.UnitOfWork, "scenarios")
     assert not _class_mentions(_tree(PACKAGE / "contracts" / "ports.py"), "UnitOfWork", "Scenario")
-    for module in (
-        PERSISTENCE / "unit_of_work.py",
-        PACKAGE / "application" / "service.py",
-        *sorted((PACKAGE / "bootstrap").rglob("*.py")),
-    ):
-        source = module.read_text(encoding="utf-8")
-        assert "ScenarioUnitOfWork" not in source, module
-        assert "ScenarioRepository" not in source, module
+    source = (PERSISTENCE / "unit_of_work.py").read_text(encoding="utf-8")
+    assert "ScenarioUnitOfWork" not in source
+    assert "ScenarioRepository" not in source
     planted = ast.parse(
         "class UnitOfWork:\n    @property\n    def scenarios(self) -> ScenarioRepository: ...\n"
     )
     assert _class_mentions(planted, "UnitOfWork", "Scenario")
-
-
-def test_worker_passes_no_effective_plane() -> None:
-    """S6-2-D12: the hook's bit defaults off and `apps/worker.py` passes nothing."""
-    parameter = inspect.signature(process_schedule_publication).parameters[
-        "scenario_plane_effective"
-    ]
-    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY and parameter.default is False
-    worker = (ROOT / "apps" / "worker.py").read_text(encoding="utf-8")
-    assert "scenario_plane_effective" not in worker
-    assert "process_schedule_publication)" in worker  # registered bare, as in S5b-2
 
 
 def _s5_writes(tree: ast.AST) -> list[str]:

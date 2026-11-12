@@ -70,6 +70,11 @@ _COMPOSED_DEPENDENCY_ATTRIBUTES: Final[frozenset[str]] = frozenset(
         # `MY_PA_REPORT_CONTENT_ROOT` (a root, not a switch).
         "_report_content_store",
         "_report_transfer_staging",
+        # Schedule Scenarios S6-3 (contract section 15.8): the 3 plane ports,
+        # composed by `bootstrap/gateway.py` from the plane switch below.
+        "_scenario_unit_of_work",
+        "_scenario_cpm_runner",
+        "_scenario_record_builders",
     }
 )
 
@@ -179,7 +184,7 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
     """
     variables = _switch_variables()
     assert variables, "no switch narrows the published surface, so this module proves nothing"
-    assert len(variables) == 10, (
+    assert len(variables) == 11, (
         "the published surface is narrowed by a different number of switches than "
         f"this guard knows about: {sorted(variables)}"
     )
@@ -199,6 +204,8 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
         "program_reporting_enabled",
         # CPM Workbench S5b-2 (contract section 3.1): the Schedule switch.
         "schedule_enabled",
+        # Schedule Scenarios S6-3 (contract section 15.8): the plane switch.
+        "schedule_scenarios_enabled",
     }
 
 

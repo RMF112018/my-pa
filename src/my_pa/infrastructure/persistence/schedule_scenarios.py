@@ -53,6 +53,7 @@ from sqlalchemy import (
     literal,
     null,
     select,
+    tuple_,
     update,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -86,7 +87,10 @@ from my_pa.contracts.ports import (
     ScheduleRepository,
     SeriesMatchRecord,
     SeriesMatchUndecided,
+    StoredBaseline,
+    StoredBaselineEvent,
     StoredCpmRun,
+    StoredGoverningEvent,
     StoredScenario,
     StoredScenarioOutput,
     StoredScenarioVersion,
@@ -516,6 +520,25 @@ def _to_event(row: RowMapping) -> BaselineEvent:
     )
 
 
+def _to_stored_event(row: RowMapping) -> StoredBaselineEvent:
+    kind = row["type"]
+    return StoredBaselineEvent(
+        event_id=row["event_id"],
+        seq=row["seq"],
+        action=BaselineAction(row["action"]),
+        publication_id=row["publication_id"],
+        recorded_at=row["recorded_at"],
+        reason=row["reason"],
+        type=None if kind is None else BaselineType(kind),
+        label=row["label"],
+        approval_reference=row["approval_reference"],
+        effective_from=row["effective_from"],
+        supersedes_baseline_id=row["supersedes_baseline_id"],
+        approved_at_import=row["approved_at_import"],
+        provenance=_provenance(row),
+    )
+
+
 def _candidate_object(candidate: MatchCandidate) -> dict[str, object]:
     return {
         "series_id": candidate.series_id,
@@ -555,6 +578,7 @@ def _to_decision(row: RowMapping) -> SeriesMatchRecord:
         resulting_publication_id=row["resulting_publication_id"],
         admission_refusal=row["admission_refusal"],
         admission_skipped=row["admission_skipped"],
+        created_at=row["created_at"],
     )
 
 
@@ -2202,6 +2226,278 @@ class SqlScenarioRepository(ScenarioRepository):
             .one()
         )
         return _to_decision(stored)
+
+    # ---- S6-3 reads (S6-3-D10, section 15.14) -------------------------------------------
+
+    def list_scenarios(
+        self,
+        principal_id: str,
+        project_id: str,
+        series_id: str | None,
+        *,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[StoredScenario, ...]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        scenarios = schedule_scenarios
+        statement = select(scenarios).where(
+            _mine(scenarios, principal_id), scenarios.c.project_id == project_id
+        )
+        if series_id is not None:
+            statement = statement.where(scenarios.c.series_id == series_id)
+        if after is not None:
+            statement = statement.where(
+                tuple_(scenarios.c.created_at, scenarios.c.scenario_id)
+                < tuple_(*(literal(value) for value in after))
+            )
+        found = self._connection.execute(
+            statement.order_by(scenarios.c.created_at.desc(), scenarios.c.scenario_id.desc()).limit(
+                limit
+            )
+        ).mappings()
+        return tuple(_to_scenario(row) for row in found)
+
+    def list_versions(
+        self,
+        principal_id: str,
+        scenario_id: str,
+        *,
+        before_version_no: int | None,
+        limit: int,
+    ) -> tuple[StoredScenarioVersion, ...]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        versions = schedule_scenario_versions
+        statement = select(*_version_columns()).where(
+            _mine(versions, principal_id), versions.c.scenario_id == scenario_id
+        )
+        if before_version_no is not None:
+            statement = statement.where(versions.c.version_no < before_version_no)
+        found = self._connection.execute(
+            statement.order_by(versions.c.version_no.desc()).limit(limit)
+        ).mappings()
+        return tuple(_to_version(row) for row in found)
+
+    def list_outputs(
+        self,
+        principal_id: str,
+        version_id: str,
+        *,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[StoredScenarioOutput, ...]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        outputs = schedule_scenario_outputs
+        statement = select(*_output_columns()).where(
+            _mine(outputs, principal_id), outputs.c.version_id == version_id
+        )
+        if after is not None:
+            statement = statement.where(
+                tuple_(outputs.c.created_at, outputs.c.output_id)
+                < tuple_(*(literal(value) for value in after))
+            )
+        found = self._connection.execute(
+            statement.order_by(outputs.c.created_at.desc(), outputs.c.output_id.desc()).limit(limit)
+        ).mappings()
+        return tuple(_to_output(row) for row in found)
+
+    def list_match_decisions(
+        self,
+        principal_id: str,
+        project_id: str,
+        *,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[SeriesMatchRecord, ...]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        decisions = schedule_series_match_decisions
+        statement = select(decisions).where(
+            _mine(decisions, principal_id), decisions.c.project_id == project_id
+        )
+        if after is not None:
+            statement = statement.where(
+                tuple_(decisions.c.created_at, decisions.c.decision_id)
+                < tuple_(*(literal(value) for value in after))
+            )
+        found = self._connection.execute(
+            statement.order_by(decisions.c.created_at.desc(), decisions.c.decision_id.desc()).limit(
+                limit
+            )
+        ).mappings()
+        return tuple(_to_decision(row) for row in found)
+
+    def _stored_baselines(
+        self, principal_id: str, rows: Sequence[RowMapping]
+    ) -> tuple[StoredBaseline, ...]:
+        """Each Baseline row with its own events, oldest first (one events read)."""
+        if not rows:
+            return ()
+        events = schedule_baseline_events
+        found = self._connection.execute(
+            select(events)
+            .where(
+                _mine(events, principal_id),
+                events.c.baseline_id.in_(sorted({str(row["baseline_id"]) for row in rows})),
+            )
+            .order_by(events.c.seq)
+        ).mappings()
+        by_baseline: dict[str, list[StoredBaselineEvent]] = {}
+        for event in found:
+            by_baseline.setdefault(str(event["baseline_id"]), []).append(_to_stored_event(event))
+        return tuple(
+            StoredBaseline(
+                baseline_id=row["baseline_id"],
+                project_id=row["project_id"],
+                series_id=row["series_id"],
+                publication_id=row["publication_id"],
+                type=BaselineType(row["type"]),
+                created_at=row["created_at"],
+                events=tuple(by_baseline.get(str(row["baseline_id"]), ())),
+            )
+            for row in rows
+        )
+
+    def list_baselines(
+        self,
+        principal_id: str,
+        project_id: str,
+        series_id: str | None,
+        *,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[StoredBaseline, ...]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        baselines = schedule_baselines
+        statement = select(baselines).where(
+            _mine(baselines, principal_id), baselines.c.project_id == project_id
+        )
+        if series_id is not None:
+            statement = statement.where(baselines.c.series_id == series_id)
+        if after is not None:
+            statement = statement.where(
+                tuple_(baselines.c.created_at, baselines.c.baseline_id)
+                < tuple_(*(literal(value) for value in after))
+            )
+        rows = list(
+            self._connection.execute(
+                statement.order_by(
+                    baselines.c.created_at.desc(), baselines.c.baseline_id.desc()
+                ).limit(limit)
+            ).mappings()
+        )
+        return self._stored_baselines(principal_id, rows)
+
+    def get_baseline(self, principal_id: str, baseline_id: str) -> StoredBaseline | None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        row = self._baseline_row(principal_id, baseline_id)
+        return None if row is None else self._stored_baselines(principal_id, [row])[0]
+
+    def get_baseline_event(self, principal_id: str, event_id: str) -> StoredBaseline | None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        events = schedule_baseline_events
+        baseline_id = self._connection.execute(
+            select(events.c.baseline_id).where(
+                _mine(events, principal_id), events.c.event_id == event_id
+            )
+        ).scalar_one_or_none()
+        return None if baseline_id is None else self.get_baseline(principal_id, str(baseline_id))
+
+    def get_governing_event(
+        self, principal_id: str, governing_event_id: str
+    ) -> StoredGoverningEvent | None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        governing = schedule_governing_events
+        row = (
+            self._connection.execute(
+                select(governing).where(
+                    _mine(governing, principal_id),
+                    governing.c.governing_event_id == governing_event_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        return StoredGoverningEvent(
+            governing_event_id=row["governing_event_id"],
+            project_id=row["project_id"],
+            baseline_id=row["baseline_id"],
+            seq=row["seq"],
+            recorded_at=row["recorded_at"],
+            reason=row["reason"],
+            provenance=_provenance(row),
+        )
+
+    def eligible_publication_ids(self, principal_id: str, project_id: str) -> frozenset[str]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        pubs = schedule_publications
+        found = self._connection.execute(
+            select(pubs.c.publication_id).where(
+                _mine(pubs, principal_id),
+                pubs.c.project_id == project_id,
+                pubs.c.status.in_(_ELIGIBLE),
+                self._not_intake(principal_id),
+            )
+        ).scalars()
+        return frozenset(str(value) for value in found)
+
+    def _is_intake_series(self, principal_id: str, series_id: str) -> bool:
+        intake = schedule_intake_series
+        return (
+            self._connection.execute(
+                select(intake.c.series_id).where(
+                    _mine(intake, principal_id), intake.c.series_id == series_id
+                )
+            ).first()
+            is not None
+        )
+
+    def currency_publications(
+        self, principal_id: str, series_id: str
+    ) -> tuple[CurrencyPublication, ...] | None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        series = schedule_series
+        owned = self._connection.execute(
+            select(series.c.series_id).where(
+                _mine(series, principal_id), series.c.series_id == series_id
+            )
+        ).first()
+        if owned is None or self._is_intake_series(principal_id, series_id):
+            return None
+        pubs = schedule_publications
+        rows = self._connection.execute(
+            select(
+                pubs.c.publication_id,
+                pubs.c.status,
+                pubs.c.data_date,
+                pubs.c.admitted_at,
+                pubs.c.supersedes_publication_id,
+            )
+            .where(_mine(pubs, principal_id), pubs.c.series_id == series_id)
+            .order_by(pubs.c.admitted_at, pubs.c.publication_id)
+        ).all()
+        return tuple(
+            CurrencyPublication(
+                publication_id=row.publication_id,
+                status=SchedulePublicationStatus(row.status),
+                data_date=row.data_date,
+                admitted_at=row.admitted_at,
+                supersedes_publication_id=row.supersedes_publication_id,
+            )
+            for row in rows
+        )
+
+    def publication_state(
+        self, principal_id: str, publication_id: str
+    ) -> tuple[SchedulePublicationStatus, bool] | None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        publication = self._publication(principal_id, publication_id)
+        if publication is None:
+            return None
+        return (
+            SchedulePublicationStatus(publication["status"]),
+            self._is_intake_series(principal_id, str(publication["series_id"])),
+        )
 
 
 def _version_columns() -> tuple[Any, ...]:

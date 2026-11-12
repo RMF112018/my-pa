@@ -25,6 +25,7 @@ __all__ = [
     "INTAKE_SERIES_PREFIX",
     "MATCH_INTEGRITY_REFUSAL",
     "MAX_CPM_RESULT_BYTES",
+    "OPERATOR_PROPOSAL_BUCKET",
     "PLANE_ACCEPTANCE_BASES",
     "PLANE_ATTESTED_DECISION_CHANNELS",
     "PLANE_AUTHORITY_CLASSES",
@@ -183,6 +184,13 @@ def writer_bucket(decision_channel: str, asserting_client_id: str | None) -> str
     if decision_channel in PLANE_ATTESTED_DECISION_CHANNELS:
         return None
     return decision_channel + "\x1f" + (asserting_client_id or "")
+
+
+#: Section 15.4 (S6-3-O01, S6-3-D15): the writer bucket an attested operator's
+#: proposal is counted in. No client bucket can equal it: every client bucket
+#: carries U+001F (`writer_bucket`), so the 10-per-bucket cap never binds the
+#: operator, while the 50-per-Project cap counts every pending proposal.
+OPERATOR_PROPOSAL_BUCKET: Final = "operator"
 
 
 def intake_series_name(request_digest: str) -> ScheduleSeriesName:

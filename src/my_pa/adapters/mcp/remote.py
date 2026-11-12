@@ -107,6 +107,14 @@ _WRITE_PURPOSES: Final = frozenset(
         # Modernization WP08), so a new capability under the purpose stays a write.
         Purpose.REPORT_HOLD,
         Purpose.REPORT_RETENTION,
+        # Schedule Scenarios S6-3 (schedule-scenarios contract section 15.12.2):
+        # the 6 client-usable plane writes' purpose -- without it they would be
+        # classified remote reads, published while writes are disabled and routed
+        # to `my_pa.read` -- and the operator-only baseline approval's, which is
+        # never published remotely; this keeps those 4 writes if a later
+        # publication rule ever reached them. `schedule_analysis_read` stays out.
+        Purpose.SCHEDULE_ANALYSIS_AUTHORING,
+        Purpose.SCHEDULE_BASELINE_APPROVAL,
         Purpose.RELATIONSHIP_MEMORY_AUTHORING,
         Purpose.ENTITY_OBSERVATION_INGEST,
         Purpose.ENTITY_AUTHORING,

@@ -55,7 +55,7 @@ def manifest(implemented: frozenset[Capability] = EVERYTHING) -> CapabilityManif
 
 def test_manifest_lists_every_capability_exactly_once() -> None:
     names = [status.name for status in manifest().capabilities]
-    assert len(names) == len(Capability) == 255
+    assert len(names) == len(Capability) == 281
     assert set(names) == set(Capability)
     assert len(set(names)) == len(names)
 
@@ -321,6 +321,33 @@ def test_capability_names_match_the_published_contract() -> None:
         "schedule_activities.list",
         "schedule_activities.history",
         "schedule_changes.list",
+        # Schedule Scenarios S6-3 (schedule-scenarios contract section 6.1).
+        "schedule_scenarios.create",
+        "schedule_scenario_versions.create",
+        "schedule_cpm_runs.create",
+        "schedule_scenario_outputs.record",
+        "schedule_baselines.propose",
+        "schedule_baselines.withdraw",
+        "schedule_baselines.approve",
+        "schedule_baselines.reject",
+        "schedule_baselines.revoke",
+        "schedule_baselines.set_governing",
+        "schedule_scenarios.list",
+        "schedule_scenarios.read",
+        "schedule_scenario_versions.read",
+        "schedule_scenario_versions.activities",
+        "schedule_scenario_versions.relationships",
+        "schedule_scenario_versions.changes",
+        "schedule_cpm_runs.read",
+        "schedule_cpm_runs.activities",
+        "schedule_scenario_outputs.list",
+        "schedule_scenario_outputs.read",
+        "schedule_series.current",
+        "schedule_series.match_decisions",
+        "schedule_baselines.list",
+        "schedule_baselines.read",
+        "schedule_baselines.governing",
+        "schedule_baselines.compare",
     }
 
 
@@ -402,6 +429,13 @@ def test_the_operator_only_set_is_enrollment_and_governed_identity_correction() 
         Capability.REPORTS_HOLD_RELEASE,
         Capability.REPORTS_RETENTION_SET,
         Capability.REPORTS_RETENTION_GET,
+        # Schedule Scenarios S6-3 (contract sections 12.3, 15.3): baseline
+        # approval, rejection, revocation and the governing designation are
+        # attested to the local operator surface on the same D-16 departure.
+        Capability.SCHEDULE_BASELINES_APPROVE,
+        Capability.SCHEDULE_BASELINES_REJECT,
+        Capability.SCHEDULE_BASELINES_REVOKE,
+        Capability.SCHEDULE_BASELINES_SET_GOVERNING,
     }
     assert is_operator_only(Capability.SOURCES_ENROLL)
     assert is_operator_only(Capability.ENTITIES_MERGE_PREVIEW)

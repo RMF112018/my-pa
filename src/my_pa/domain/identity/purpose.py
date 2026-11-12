@@ -492,3 +492,15 @@ class Purpose(StrEnum):
     # `reports.retention.get`. Every one of those names is operator-only.
     REPORT_HOLD = "report_hold"
     REPORT_RETENTION = "report_retention"
+    # Schedule Scenarios S6-3 (schedule-scenarios contract section 6.1), on
+    # `D-91`: would reuse widen the grant? `schedule_read` and `schedule_import`
+    # would: the plane holds client-authored scenario logic, server CPM results,
+    # client-asserted outputs and baseline proposals, none of which a source-bound
+    # schedule purpose names, and the operator's baseline approval decides what
+    # every comparison is measured against. 3 purposes of their own, each implied
+    # by no other: `schedule_analysis_authoring` for exactly the 6 client-usable
+    # plane writes, `schedule_analysis_read` for exactly the 16 plane reads and
+    # `schedule_baseline_approval` for exactly the 4 operator-only baseline writes.
+    SCHEDULE_ANALYSIS_AUTHORING = "schedule_analysis_authoring"
+    SCHEDULE_ANALYSIS_READ = "schedule_analysis_read"
+    SCHEDULE_BASELINE_APPROVAL = "schedule_baseline_approval"

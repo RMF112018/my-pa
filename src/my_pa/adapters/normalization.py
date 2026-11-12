@@ -44,6 +44,13 @@ misleads the next reader more than a duplicated constant would. Enforcing it is
 still each transport's own act — HTTP refuses on the declared `content-length`
 before reading, and the other two measure a document the protocol has already
 delivered — but the number they enforce is one number.
+
+Schedule Scenarios S6-3 (schedule-scenarios contract S6-3-D12, S6-3-U01) is a
+deliberate exception to "the largest request": a scenario change set (bounded at
+4,194,304 canonical bytes) or a client-asserted output document (1,048,576)
+larger than about 740 KiB is not admitted by this bound on any transport, and
+the plane requests are not part of its derivation. Raising the bound is a
+separate transport decision; clients split change sets across versions.
 """
 
 from __future__ import annotations
@@ -73,6 +80,7 @@ from my_pa.application.commands import (
     AddIssueProjectLink,
     AppendReportTransfer,
     ApplyConstraintSync,
+    ApproveScheduleBaseline,
     ArchiveCapture,
     ArchiveEntity,
     ArchiveGeneralReport,
@@ -92,6 +100,7 @@ from my_pa.application.commands import (
     CloseProject,
     Command,
     CommitIntelligenceArtifact,
+    CompareScheduleBaseline,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
     ConfirmIssueMembership,
@@ -123,6 +132,9 @@ from my_pa.application.commands import (
     CreatePublishedConstraint,
     CreateRelationshipMemory,
     CreateReportType,
+    CreateScheduleCpmRun,
+    CreateScheduleScenario,
+    CreateScheduleScenarioVersion,
     CreateSituation,
     CreateTask,
     CreateTaskComment,
@@ -196,9 +208,17 @@ from my_pa.application.commands import (
     ListReportTypes,
     ListReviewCases,
     ListScheduleActivities,
+    ListScheduleBaselines,
     ListScheduleChanges,
+    ListScheduleCpmRunActivities,
     ListSchedulePublications,
+    ListScheduleScenarioActivities,
+    ListScheduleScenarioChanges,
+    ListScheduleScenarioOutputs,
+    ListScheduleScenarioRelationships,
+    ListScheduleScenarios,
     ListScheduleSeries,
+    ListScheduleSeriesMatchDecisions,
     ListSituations,
     ListSources,
     ListTaskComments,
@@ -213,6 +233,7 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
+    ProposeScheduleBaseline,
     PublishConstraint,
     PublishGeneralReport,
     PullGoodNotesWork,
@@ -226,6 +247,7 @@ from my_pa.application.commands import (
     ReadConstraintSyncDelta,
     ReadConstraintSyncState,
     ReadGoodNotes,
+    ReadGoverningScheduleBaseline,
     ReadIntelligenceArtifact,
     ReadIssue,
     ReadIssueClosureReadiness,
@@ -246,13 +268,21 @@ from my_pa.application.commands import (
     ReadReportManifest,
     ReadReportTransferChunk,
     ReadScheduleActivityHistory,
+    ReadScheduleBaseline,
+    ReadScheduleCpmRun,
     ReadSchedulePublication,
+    ReadScheduleScenario,
+    ReadScheduleScenarioOutput,
+    ReadScheduleScenarioVersion,
+    ReadScheduleSeriesCurrent,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordIssueHandoff,
+    RecordScheduleScenarioOutput,
     RecordTask,
     ReinstateRecordAssociation,
+    RejectScheduleBaseline,
     ReleaseReportHold,
     ReopenConstraint,
     ReopenIssue,
@@ -285,6 +315,7 @@ from my_pa.application.commands import (
     ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
+    RevokeScheduleBaseline,
     SearchCaptures,
     SearchCommitments,
     SearchCommitmentsV2,
@@ -298,6 +329,7 @@ from my_pa.application.commands import (
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
+    SetGoverningScheduleBaseline,
     SetReportRetention,
     SplitEntity,
     StartGsqsB0,
@@ -321,6 +353,7 @@ from my_pa.application.commands import (
     VoidConstraint,
     WaitingOn,
     WaitingOnV2,
+    WithdrawScheduleBaseline,
 )
 from my_pa.application.errors import (
     InvalidRequestError,
@@ -471,7 +504,9 @@ _ENVELOPE_BYTES: Final = 32 * 128 + 8 * 1024
 #: nothing is lost by bounding it here.
 #:
 #: It lives beside `normalize` rather than in a transport because it is derived
-#: from the contract; see the module docstring.
+#: from the contract; see the module docstring. The Schedule Scenarios plane's
+#: change sets and output documents are deliberately not part of the derivation
+#: (S6-3-D12): their domain bounds exceed it, and this bound is not raised.
 MAX_REQUEST_BYTES: Final = MAX_ENROLLMENT_ITEMS * _IDENTIFIER_JSON_BYTES + _ENVELOPE_BYTES
 
 
@@ -3183,6 +3218,58 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
             **payload
         ),
         Capability.SCHEDULE_CHANGES_LIST: lambda payload: ListScheduleChanges(**payload),
+        # Schedule Scenarios S6-3 (contract section 15.5): every field as sent;
+        # the heavy documents stay opaque JSON until the handler.
+        Capability.SCHEDULE_SCENARIOS_CREATE: lambda payload: CreateScheduleScenario(**payload),
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE: lambda payload: CreateScheduleScenarioVersion(
+            **payload
+        ),
+        Capability.SCHEDULE_CPM_RUNS_CREATE: lambda payload: CreateScheduleCpmRun(**payload),
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD: lambda payload: RecordScheduleScenarioOutput(
+            **payload
+        ),
+        Capability.SCHEDULE_BASELINES_PROPOSE: lambda payload: ProposeScheduleBaseline(**payload),
+        Capability.SCHEDULE_BASELINES_WITHDRAW: lambda payload: WithdrawScheduleBaseline(**payload),
+        Capability.SCHEDULE_BASELINES_APPROVE: lambda payload: ApproveScheduleBaseline(**payload),
+        Capability.SCHEDULE_BASELINES_REJECT: lambda payload: RejectScheduleBaseline(**payload),
+        Capability.SCHEDULE_BASELINES_REVOKE: lambda payload: RevokeScheduleBaseline(**payload),
+        Capability.SCHEDULE_BASELINES_SET_GOVERNING: lambda payload: SetGoverningScheduleBaseline(
+            **payload
+        ),
+        Capability.SCHEDULE_SCENARIOS_LIST: lambda payload: ListScheduleScenarios(**payload),
+        Capability.SCHEDULE_SCENARIOS_READ: lambda payload: ReadScheduleScenario(**payload),
+        Capability.SCHEDULE_SCENARIO_VERSIONS_READ: lambda payload: ReadScheduleScenarioVersion(
+            **payload
+        ),
+        Capability.SCHEDULE_SCENARIO_VERSIONS_ACTIVITIES: lambda payload: (
+            ListScheduleScenarioActivities(**payload)
+        ),
+        Capability.SCHEDULE_SCENARIO_VERSIONS_RELATIONSHIPS: lambda payload: (
+            ListScheduleScenarioRelationships(**payload)
+        ),
+        Capability.SCHEDULE_SCENARIO_VERSIONS_CHANGES: lambda payload: ListScheduleScenarioChanges(
+            **payload
+        ),
+        Capability.SCHEDULE_CPM_RUNS_READ: lambda payload: ReadScheduleCpmRun(**payload),
+        Capability.SCHEDULE_CPM_RUNS_ACTIVITIES: lambda payload: ListScheduleCpmRunActivities(
+            **payload
+        ),
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_LIST: lambda payload: ListScheduleScenarioOutputs(
+            **payload
+        ),
+        Capability.SCHEDULE_SCENARIO_OUTPUTS_READ: lambda payload: ReadScheduleScenarioOutput(
+            **payload
+        ),
+        Capability.SCHEDULE_SERIES_CURRENT: lambda payload: ReadScheduleSeriesCurrent(**payload),
+        Capability.SCHEDULE_SERIES_MATCH_DECISIONS: lambda payload: (
+            ListScheduleSeriesMatchDecisions(**payload)
+        ),
+        Capability.SCHEDULE_BASELINES_LIST: lambda payload: ListScheduleBaselines(**payload),
+        Capability.SCHEDULE_BASELINES_READ: lambda payload: ReadScheduleBaseline(**payload),
+        Capability.SCHEDULE_BASELINES_GOVERNING: lambda payload: ReadGoverningScheduleBaseline(
+            **payload
+        ),
+        Capability.SCHEDULE_BASELINES_COMPARE: lambda payload: CompareScheduleBaseline(**payload),
     }
 )
 

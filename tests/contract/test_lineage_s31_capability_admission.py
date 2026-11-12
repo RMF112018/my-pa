@@ -293,9 +293,10 @@ def test_s31_capabilities_are_operator_decision_required() -> None:
     # Modernization's `reports.publish` and five management names are
     # `DATA_REQUIRED` since chatllm-data-v12).
     assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
-    assert len(Capability) == 255
+    # Schedule Scenarios S6-3: its 26 plane names (no operator decision among them).
+    assert len(Capability) == 281
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
 
 
 def test_switch_off_withholds_every_s31_capability(scene: Scene) -> None:
@@ -518,7 +519,7 @@ def test_no_s31_capability_is_in_the_chatllm_data_profile() -> None:
             desired_effective_capabilities(composed_off, knowledge_manager=knowledge_manager)
             & lineage_plane
         )
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v12"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
 
 
 # ---- client guidance (section 7.12) ----------------------------------------------
@@ -760,8 +761,9 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
     # CPM Workbench S5b-2 appends its 2 purposes after them (contract 3.12),
     # and Reports Modernization WP03 its `report_lifecycle` after those, and
     # WP05b `report_hold` and `report_retention` after that.
-    assert len(published) == len(Purpose) == 65
-    assert published[-7:] == [
+    # Schedule Scenarios S6-3 appends its 3 plane purposes after those.
+    assert len(published) == len(Purpose) == 68
+    assert published[-10:] == [
         "lineage_backfill",
         "program_reporting_read",
         "schedule_import",
@@ -769,6 +771,9 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
         "report_lifecycle",
         "report_hold",
         "report_retention",
+        "schedule_analysis_authoring",
+        "schedule_analysis_read",
+        "schedule_baseline_approval",
     ]
     # Every non-lineage tool's annotations are untouched by the S3.1 hint.
     for tool in TOOLS:

@@ -442,6 +442,11 @@ def test_the_related_digest_is_stable_and_excludes_read_stamps(runtime: S31Runti
         "blocks",
         "created_to_resolve",
         "related_context",
+        # Schedule Scenarios S6-3 (schedule scenarios contract section 15.11.1):
+        # the default filter is every relation, so it names the 3 new ones.
+        "concerns",
+        "delays",
+        "mitigates",
     ]
     assert first["related_sha256"] == _digest_of(
         first,

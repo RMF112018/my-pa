@@ -75,6 +75,13 @@ _FEATURE_BY_FAMILY: Final[Mapping[str, str]] = {
     "schedule_publications": "schedule",
     "schedule_activities": "schedule",
     "schedule_changes": "schedule",
+    # Schedule Scenarios S6-3 (contract section 15.12.3): the 5 plane families;
+    # `schedule_series.current` and `.match_decisions` are `schedule_series`.
+    "schedule_scenarios": "schedule",
+    "schedule_scenario_versions": "schedule",
+    "schedule_cpm_runs": "schedule",
+    "schedule_scenario_outputs": "schedule",
+    "schedule_baselines": "schedule",
 }
 
 _WRAPPER_SCHEMA: Final[dict[str, Any]] = {

@@ -59,6 +59,12 @@ const FAMILY_WORDS: Readonly<Record<RecordRef["family"], string>> = {
   commitment: "a Commitment",
   constraint: "a Constraint",
   capture_version: "a Capture version",
+  schedule_publication: "a schedule publication",
+  schedule_activity: "a schedule activity",
+  schedule_baseline: "a schedule baseline",
+  scenario: "a schedule scenario",
+  scenario_version: "a schedule scenario version",
+  scenario_output: "a schedule scenario output",
 };
 
 function sameRef(left: RecordRef, right: RecordRef): boolean {

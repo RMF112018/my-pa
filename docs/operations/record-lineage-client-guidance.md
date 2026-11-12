@@ -13,10 +13,18 @@ serving process composes them, and the same 34 are the grant set for the ChatGPT
 connector; Issue close and reopen, the 3 `confirm` capabilities and `records.backfill.*`
 stay withheld from every client. The operator's procedure is in
 [`remote-mcp-cloudflare.md`](../../ops/runbooks/remote-mcp-cloudflare.md#record-lineage-client-exposure-p1).
-The current profile, `chatllm-data-v12` (Reports Modernization), adds only the 11
-standalone Reports names (`reports.publish`, the 5 report management names and the 5
-`reports.transfer.*` names); `chatllm-data-v11` (CPM Workbench S5b-2) added only the 6
-Schedule reads on `MY_PA_SCHEDULE_ENABLED`. Neither changes anything for lineage.
+The current profile is `chatllm-data-v13` (Schedule Scenarios S6-3) adds the 22 client-usable Schedule
+Scenarios names (6 writes under `schedule_analysis_authoring`, 16 reads under
+`schedule_analysis_read`) as `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_ENABLED` and
+`MY_PA_SCHEDULE_SCENARIOS_ENABLED` together, and keeps the 4 operator baseline decisions
+(`schedule_baselines.approve`, `.reject`, `.revoke`, `.set_governing`)
+`CONTROL_PLANE_EXCLUDED`. v13 with `MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires exactly
+the v12 set, so a pending Reports commissioning uses v13 after this build. Its schedule lineage guidance is the section
+"Schedule scenarios and schedule lineage" below. `chatllm-data-v12` (Reports Modernization)
+added only the 11 standalone Reports names (`reports.publish`, the 5 report management
+names and the 5 `reports.transfer.*` names); `chatllm-data-v11` (CPM Workbench S5b-2)
+added only the 6 Schedule reads on `MY_PA_SCHEDULE_ENABLED`. Neither changed anything for
+lineage.
 
 Lineage records **why** records belong together: an Issue and its members, a Commitment
 and the exact note passage it came from, a Task that blocks another. A connected client
@@ -159,3 +167,42 @@ artifact's `reports.manifest`, which a remote reader can read in full only while
 a `records.lineage.related` grant and sees the seeds' families and every family the
 committer could see when the server recomputed the read (all 7 lineage families for a
 report committed locally); a downstream report inherits that requirement.
+
+## Schedule scenarios and schedule lineage
+
+Schedule Scenarios S6-3 ([contract](../architecture/schedule-scenarios-contract.md)
+sections 9.4 and 15.12.5; `chatllm-data-v13`) is served only while both
+`MY_PA_SCHEDULE_ENABLED` and `MY_PA_SCHEDULE_SCENARIOS_ENABLED` are on; otherwise every
+scenario name is `unsupported` and the 6 schedule lineage families are withheld.
+
+- **Scenarios.** Create a scenario version for a what-if, an updated forecast or a
+  simulation input (`schedule_scenarios.create`, `schedule_scenario_versions.create`);
+  run the server CPM on a version (`schedule_cpm_runs.create`); record a Monte Carlo or
+  sensitivity result **you** computed as a client-asserted output
+  (`schedule_scenario_outputs.record`). The server never runs a simulation for you.
+- **Commit schedule lineage.** Commit scenario and schedule lineage records when you
+  identify a relationship (a scenario `concerns` an Issue, a Constraint `delays` an
+  activity, a Task `mitigates` a Constraint) or when the user instructs you, citing exact
+  evidence for `delays` and `mitigates` (at least one exact-version `corroborates`
+  anchor). Use those records when you search, report and suggest. Lineage needs no
+  operator attestation, but a `client_identified` link holds an Issue's close until the
+  operator confirms it.
+- **Labels.** Never present `MODEL_PROPOSED` (`trust: "model_proposed"`) as
+  "AI-generated": it means the server did not verify the logic. Scenario, CPM and output
+  data are non-authoritative and never reportable (`reportable: false`); they never enter
+  certified Program reporting.
+- **Baselines.** A baseline proposal (`schedule_baselines.propose`) is not a baseline.
+  Only the operator approves, rejects, revokes or sets the governing baseline, and
+  revocation is final for its publication. Use `schedule_series.current` (not
+  `latest_update`) for the current standard update.
+- **Lineage reads.** A schedule node of `records.lineage` or `records.lineage.related`
+  carries a `schedule` summary (its labels and a few fields, never a name or client text).
+  A lineage or related read never expands through a schedule virtual edge (they are
+  emitted only between records already in the answer), unlike `meeting_note_version_of`,
+  which is traversed and emitted when either endpoint is reached — reach a Scenario's
+  versions or a Baseline's publication through the plane reads
+  (`schedule_scenarios.read`, `schedule_baselines.read`).
+- **Size.** A request is limited to 762,288 bytes in all (`MAX_REQUEST_BYTES`), so a change
+  set is split across versions and an output document must stay under about 740 KiB (a
+  criticality or Monte Carlo output of a network above roughly 10,000 activities may not
+  fit).

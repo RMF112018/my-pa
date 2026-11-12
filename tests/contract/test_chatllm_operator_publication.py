@@ -110,6 +110,12 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
         Capability.REPORTS_HOLD_RELEASE.value,
         Capability.REPORTS_RETENTION_SET.value,
         Capability.REPORTS_RETENTION_GET.value,
+        # Schedule Scenarios S6-3 (contract section 15.12.2): the 4 attested
+        # operator baseline writes are never remotely published.
+        Capability.SCHEDULE_BASELINES_APPROVE.value,
+        Capability.SCHEDULE_BASELINES_REJECT.value,
+        Capability.SCHEDULE_BASELINES_REVOKE.value,
+        Capability.SCHEDULE_BASELINES_SET_GOVERNING.value,
     }
     # The deployed 190 remain individually present after main added report types
     # and record lineage S1 added the `issues.`, `records.` and `meetings.notes.` names.

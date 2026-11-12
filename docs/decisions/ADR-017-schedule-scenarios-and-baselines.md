@@ -1,7 +1,11 @@
 # ADR-017: Schedule Scenarios, server CPM and operator-approved baselines
 
 - **Status:** Proposed — directive-selected by the operator on 2026-11-03; not ratified for
-  production. Nothing is implemented, merged, migrated, granted or deployed. Its switch
+  production. S6-1 is merged (#348) and S6-2 is merged (#349); S6-3 (packages I10-A, I10-B
+  and I10-C: the 26 plane capability names, revision B `b77334135653`, the lineage families and read
+  shapes, ChatLLM `chatllm-data-v13`, the facade and the runbook) is implemented on the branch
+  `feat/schedule-scenarios-capabilities` and not merged. Nothing is migrated, granted or
+  deployed. Its switch
   `MY_PA_SCHEDULE_SCENARIOS_ENABLED` is default off and effective only together with
   `MY_PA_SCHEDULE_ENABLED`. Live migration, grants, `profile-apply`, enabling either switch
   and any certified use remain operator gates.
@@ -68,7 +72,10 @@ is current, and hold an authoritative baseline per Project.
    Every output naming a baseline shows its provenance.
 7. **Off by default, closed everywhere**: 26 capabilities and 3 purposes on every closed
    policy surface; client-usable names ChatLLM `DATA_CONDITIONAL` (data profile
-   `chatllm-data-v12`), operator-only approvals `CONTROL_PLANE_EXCLUDED` and attested-local.
+   `chatllm-data-v13`; the contract's S6-3-D03 amendment: Reports Modernization took v12),
+   operator-only approvals `CONTROL_PLANE_EXCLUDED` and attested-local. v13 with
+   `MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires exactly the v12 set, so a pending Reports
+   commissioning uses v13 after this build.
 
 ## Supersession of ADR-016 (only these points)
 

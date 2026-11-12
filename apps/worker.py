@@ -62,7 +62,10 @@ accept.
   finalization are written in short lease-checked transactions within a 240 s
   budget. The plane is refused (exit 2, before an engine is built) unless
   `MY_PA_SCHEDULE_ENABLED` is on, and with a `--lease-seconds` below 300, which
-  is the budget plus the parse reserve. Generic PDF extraction on the
+  is the budget plus the parse reserve. Schedule Scenarios S6-3: the job handler
+  is bound with `scenario_plane_effective` -- both `MY_PA_SCHEDULE_ENABLED` and
+  `MY_PA_SCHEDULE_SCENARIOS_ENABLED` on -- so the intake series-match hook admits
+  a decided match only while the plane is effective. Generic PDF extraction on the
   `enrollment` plane stays `unsupported`.
 
 Three planes and one loop for the job planes: `run_worker` is parameterised over
@@ -94,6 +97,7 @@ it idles, and the counts it prints say so.
 from __future__ import annotations
 
 import argparse
+import functools
 import signal
 import sys
 import threading
@@ -308,6 +312,16 @@ def _run(args: argparse.Namespace) -> int:
         return 2
     engine = create_database_engine(settings.parsed_database_url(), statement_timeout_ms=30_000)
     plane, handler = _JOB_PLANES[args.plane]
+    if args.plane == "schedule":
+        # Schedule Scenarios S6-3 (contract section 15.8, S6-2-D12): the
+        # series-match hook admits a decided match only while the plane is
+        # effective; the scenario switch alone never starts a worker.
+        handler = functools.partial(
+            process_schedule_publication,
+            scenario_plane_effective=(
+                settings.schedule_enabled and settings.schedule_scenarios_enabled
+            ),
+        )
     owner = issue_worker_owner()
     stop = threading.Event()
     _install_stop_handlers(stop)

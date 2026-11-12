@@ -330,6 +330,14 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
                 "issues.handoffs.correct",
                 "issues.work.create_task",
                 "issues.work.create_commitment",
+                # Schedule Scenarios S6-3 (contract section 15.5, S6-3-D16): the
+                # same unverified boolean claim on the 6 client-usable plane writes.
+                "schedule_scenarios.create",
+                "schedule_scenario_versions.create",
+                "schedule_cpm_runs.create",
+                "schedule_scenario_outputs.record",
+                "schedule_baselines.propose",
+                "schedule_baselines.withdraw",
             )
         ),
         ("context.feedback", "target_id"),
@@ -759,7 +767,9 @@ def test_the_location_scan_would_catch_one() -> None:
     # `associated_with` filter members on `reports.list` and `reports.search`.
     # Plus WP05's declared `uncompressed_byte_count` / `uncompressed_sha256` on
     # `reports.publish` content and `reports.update` patch content ("unc").
-    assert len(EXEMPT_PROPERTIES) == 68
+    # Plus Schedule Scenarios S6-3's 6 client-usable plane writes' boolean
+    # `user_directed` claim.
+    assert len(EXEMPT_PROPERTIES) == 74
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

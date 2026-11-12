@@ -51,6 +51,7 @@ from tests.conftest import (
     staged_general_report,
     staged_search,
 )
+from tests.schedule_scenario_samples import SCHEDULE_SCENARIO_CAPABILITIES, scenario_commands
 
 from my_pa.application.commands import (
     AbortReportTransfer,
@@ -1643,6 +1644,8 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.SCHEDULE_CHANGES_LIST: ListScheduleChanges(
             from_publication_id="spub_policypublic001", to_publication_id="spub_policypublic002"
         ),
+        # Schedule Scenarios S6-3: synthetic plane commands.
+        **scenario_commands("policy"),
     }
 
 
@@ -2151,6 +2154,8 @@ SCOPED_CAPABILITIES = [
         Capability.SCHEDULE_ACTIVITIES_LIST,
         Capability.SCHEDULE_ACTIVITIES_HISTORY,
         Capability.SCHEDULE_CHANGES_LIST,
+        # Schedule Scenarios S6-3: the 26 plane names, also in `_SCOPELESS`.
+        *SCHEDULE_SCENARIO_CAPABILITIES,
     }
 ]
 
@@ -2509,6 +2514,8 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.SCHEDULE_ACTIVITIES_LIST,
         Capability.SCHEDULE_ACTIVITIES_HISTORY,
         Capability.SCHEDULE_CHANGES_LIST,
+        # Schedule Scenarios S6-3: the 26 plane names, also in `_SCOPELESS`.
+        *SCHEDULE_SCENARIO_CAPABILITIES,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

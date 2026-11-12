@@ -195,9 +195,11 @@ _ENUM_COLUMNS: Final[Mapping[str, type[StrEnum]]] = MappingProxyType(
     }
 )
 _FORMULA_PREFIXES: Final = frozenset("=+-@")
-_PERIOD: Final = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")
+#: Section 7.5 (FR11-F01): years 1000-9999 only; `0000` is a grammar refusal, never a
+#: `datetime` error later.
+_PERIOD: Final = re.compile(r"[1-9][0-9]{3}-(0[1-9]|1[0-2])")
 _TIMESTAMP: Final = re.compile(
-    r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z"
+    r"([1-9][0-9]{3})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z"
 )
 _COUNT: Final = re.compile(r"0|[1-9][0-9]{0,5}")
 _TIMESTAMP_FORMAT: Final = "%Y-%m-%dT%H:%M:%SZ"

@@ -6,6 +6,7 @@ database + integration half is F-2's `tests/integration/test_financial_scope_tra
 
 from __future__ import annotations
 
+import random
 from dataclasses import replace
 from decimal import Decimal
 
@@ -351,3 +352,29 @@ def test_double_count_is_detected() -> None:
         change_orders=(order("SYN-CO-77", "SYN-P-100", ChangeStatus.APPROVED, "25000.0000"),),
     )
     assert not repeats_a_ref_across_versions([VERSIONS["at020"], unrelated])
+
+
+def test_reconciliation_has_no_tolerance() -> None:
+    """FR11-F02 (OD-08): a gap of 1 ten-thousandth is material; no tolerance exists anywhere."""
+    original, approved, net = d("1000000.0000"), d("25000.0000"), d("-150000.0000")
+    assert owner_budget_reconciles(original, d("875000.0000"), approved, net)
+    assert not owner_budget_reconciles(original, d("875000.0001"), approved, net)
+    assert not owner_budget_reconciles(original, d("874999.9999"), approved, net)
+    for seed in range(200):
+        rng = random.Random(seed)  # noqa: S311 - deterministic test data, not a secret
+        gap = Decimal(rng.randint(1, 100000) * rng.choice((-1, 1))).scaleb(-4)  # 0.0001..10
+        current = money_sum((d("875000.0000"), gap))
+        assert not owner_budget_reconciles(original, current, approved, net), seed
+    # Evaluator level: S14 with SYN-L-002 = 875000.0001 instead of 900000.0000.
+    base = VERSIONS["at020"]
+    lines = tuple(
+        replace(line, amount=d("875000.0001")) if line.ref == "SYN-L-002" else line
+        for line in base.account_lines
+    )
+    gap_version = replace(base, source_version_ref="SYN-V-2026-10-R1", account_lines=lines)
+    overview = evaluate([admit(gap_version, 1)], request(P1, P2))
+    assert overview.reportability.value == "not_reportable"
+    assert reasons(overview) == ["source_reconciliation_failed"]
+    assert project_reasons(overview, P1) == ["source_reconciliation_failed"]
+    assert set(figures(overview, P1).values()) == {None}
+    assert figures(overview, P2) == S01_P2

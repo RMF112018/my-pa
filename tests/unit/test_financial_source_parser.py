@@ -364,3 +364,55 @@ def test_seeded_file_body_mutations_are_refused() -> None:
         assert outcome.refusal_code is not None
         codes.add(outcome.refusal_code.value)
     assert "hash_mismatch" in codes
+
+
+# --- FR11 corrective vectors ------------------------------------------------------------
+
+
+def test_year_zero_is_a_grammar_refusal_never_an_exception() -> None:
+    """FR11-F01: a 4-digit year starts at 1000; `0000` never reaches `datetime`."""
+    # The reviewer's input: only line 3's period changes (the body hash is unaffected).
+    data = _read(BASE).replace(b",2026-10,", b",0000-01,", 1)
+    assert _refusal(parse_synthetic_finance(data)) == ("period_grammar", 3)
+    for period in ("0000-01", "0999-12", "0000-13"):
+        assert _refusal(parse_synthetic_finance(_mutated(3, period=period))) == (
+            "period_grammar",
+            3,
+        )
+    for column in ("cutoff_at", "approved_at"):
+        for text in ("0000-10-31T23:59:59Z", "0999-10-31T23:59:59Z"):
+            outcome = parse_synthetic_finance(_mutated(3, **{column: text}))
+            assert _refusal(outcome) == ("timestamp_grammar", 3)
+    admitted = parse_synthetic_finance(_mutated(3, period="1000-01")).admitted
+    assert admitted is not None and admitted.period == "1000-01"
+
+
+def test_timestamp_calendar_validity_is_a_grammar_refusal() -> None:
+    """FR11-F04: a well-shaped but impossible instant is `timestamp_grammar`, never an escape."""
+    impossible = (
+        "2026-02-30T23:59:59Z",
+        "2025-02-29T12:00:00Z",
+        "2026-04-31T00:00:00Z",
+        "2026-13-01T00:00:00Z",
+        "2026-10-31T24:00:00Z",
+        "2026-10-31T23:60:00Z",
+        "2026-10-31T23:59:60Z",
+    )
+    for column in ("cutoff_at", "approved_at"):
+        for text in impossible:
+            outcome = parse_synthetic_finance(_mutated(3, **{column: text}))
+            assert _refusal(outcome) == ("timestamp_grammar", 3), (column, text)
+    leap = parse_synthetic_finance(_mutated(3, approved_at="2028-02-29T12:00:00Z")).admitted
+    assert leap is not None
+
+
+def test_a_zero_credit_leg_is_a_sign_refusal() -> None:
+    """FR11-F12: section 7.7 `credit > 0`; a zero credit is `transfer_leg_sign`, not unbalanced."""
+    assert _refusal(parse_synthetic_finance(_mutated(18, amount="0.0000"))) == (
+        "transfer_leg_sign",
+        18,
+    )
+    assert _refusal(parse_synthetic_finance(_mutated(17, amount="0.0000"))) == (
+        "transfer_leg_sign",
+        18,
+    )

@@ -31,6 +31,7 @@ from tests.fixtures.financial_domain import (
     P2,
     P3,
     VERSIONS,
+    admit,
     evaluate,
     figures,
     instant,
@@ -41,6 +42,7 @@ from tests.fixtures.financial_domain import (
     run,
     runs,
     scenario,
+    version,
 )
 
 R = FinancialNotReportableReason
@@ -518,3 +520,15 @@ def test_s04_and_s29_golden_values() -> None:
     assert [r.value for r in contingency.reasons] == ["aggregate_out_of_range"]
     assert presentation_amount(parse_amount("0.0150"), "USD") == "0.02"
     assert presentation_amount(parse_amount("0.0050"), "USD") == "0.00"
+
+
+def test_approval_at_the_cutoff_is_not_stale() -> None:
+    """FR11-F03 (F1-D17): stale is `approved_at < cutoff_at`; equality is not stale."""
+    cutoff = "2026-10-31T23:59:59Z"
+    at_cutoff = version("SYN-V-2026-10-T", approved_at=cutoff)
+    overview = evaluate([admit(at_cutoff, 1)], request(P1, P2))
+    assert overview.reportability.value == "reportable"
+    assert reasons(overview) == []
+    one_second_before = version("SYN-V-2026-10-T", approved_at="2026-10-31T23:59:58Z")
+    overview = evaluate([admit(one_second_before, 1)], request(P1, P2))
+    assert reasons(overview) == ["approval_stale"]

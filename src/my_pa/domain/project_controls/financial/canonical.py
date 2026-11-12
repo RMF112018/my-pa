@@ -66,7 +66,7 @@ SOURCE_SCHEMA: Final = "my-pa-finance-source-v1"
 SLICE_SCHEMA: Final = "my-pa-finance-slice-v1"
 OVERVIEW_SCHEMA: Final = "my-pa-finance-overview-v1"
 
-_TIMESTAMP: Final = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+_TIMESTAMP: Final = re.compile(r"[1-9][0-9]{3}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 _TIMESTAMP_FORMAT: Final = "%Y-%m-%dT%H:%M:%SZ"
 
 _VERSION_KEYS: Final = frozenset(

@@ -7,13 +7,17 @@ Contract sections 3.4-3.10. Versions are built in Python
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 
 from my_pa.domain.project_controls.financial.canonical import (
+    FinanceDecodeError,
     period_snapshot,
     source_content_sha256,
+    source_version_from_object,
+    source_version_object,
 )
 from my_pa.domain.project_controls.financial.model import (
     AccountLine,
@@ -31,6 +35,7 @@ from my_pa.domain.project_controls.financial.model import (
     ScopeTransfer,
     SourceDesignation,
     TransferLeg,
+    require_instant,
 )
 from my_pa.domain.project_controls.financial.reportability import (
     VersionResolution,
@@ -276,3 +281,39 @@ def test_run_sequence_must_be_unique_per_system() -> None:
     # The same sequence under another system is allowed.
     other = replace(run("second_system", 1), run_ref="syn-run-c1")
     assert evaluate([first, other], request(P1)).reportability.value == "reportable"
+
+
+def test_period_and_instants_have_four_digit_years() -> None:
+    """FR11-F01/F07: a year below 1000 is outside the grammar, never a `datetime` error later."""
+    base = VERSIONS["at020"]
+    for period in ("0000-01", "0999-12"):
+        with pytest.raises(ValueError):
+            replace(base, period=period)
+    assert replace(base, period="1000-01").period == "1000-01"
+    for year in (1, 999):
+        with pytest.raises(ValueError):
+            require_instant(datetime(year, 1, 1, tzinfo=UTC))
+    assert require_instant(datetime(1000, 1, 1, tzinfo=UTC)).year == 1000
+    obj = source_version_object(base)
+    for key, text in (
+        ("cutoff_at", "0999-10-31T23:59:59Z"),
+        ("approved_at", "0000-11-05T15:00:00Z"),
+    ):
+        with pytest.raises(FinanceDecodeError):
+            source_version_from_object({**obj, key: text})
+    with pytest.raises((FinanceDecodeError, ValueError)):
+        source_version_from_object({**obj, "period": "0000-10"})
+
+
+def test_quarantined_mapping_precedes_proposed() -> None:
+    """FR11-F05 (section 3.8): with no accepted key, a current quarantined key outranks proposed."""
+    quarantined = mapping("SYN-P-200", P2, state=MappingState.QUARANTINED)
+    proposed = mapping("SYN-P-201", P2, state=MappingState.PROPOSED)
+    for supplied in ((quarantined, proposed), (proposed, quarantined)):
+        current = current_mapping_revisions(supplied)
+        resolution = resolve_project_mapping(P2, [FIN_A], current)
+        assert resolution.reasons == frozenset({FinancialNotReportableReason.MAPPING_QUARANTINED})
+        mappings = (mapping("SYN-P-100", P1), *supplied)
+        overview = evaluate(runs("at020"), request(P1, P2), mappings=mappings)
+        (p2,) = (p for p in overview.projects if p.project_id == P2)
+        assert [r.value for r in p2.reasons] == ["mapping_quarantined"]

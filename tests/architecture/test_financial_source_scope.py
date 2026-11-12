@@ -15,7 +15,7 @@ guards over the committed tree:
   nothing.
 * **Isolation.** The finance domain is imported only by its own slice, the
   parser by nothing outside tests; the 8 modules import only their allowed roots
-  and use no float, IO, logging, printing or dynamic code. `json` is allowed
+  and use no float, IO, logging, printing, clock or dynamic code. `json` is allowed
   only in the domain `canonical.py` (its refusing decoder, F1-D32).
 * **The evaluator signature is pinned** (section 5.3): exactly 5 required
   parameters ending with `quarantined_run_refs: frozenset[str]`; no threshold.
@@ -110,8 +110,11 @@ BANNED_IMPORTS: Final = frozenset(
         "xml",
         "csv",
         "json",
+        "time",
     }
 )
+#: FR11-F06 (section 12.3 amendment): no clock -- no `time` import and no clock read.
+CLOCK_ATTRIBUTES: Final = frozenset({"now", "utcnow", "today", "fromtimestamp", "utcfromtimestamp"})
 #: F1-D32: the shared encoder's refusing decoder lives in `canonical.py` only.
 JSON_ALLOWED_IN: Final = f"{DOMAIN_DIR}/canonical.py"
 BANNED_CALLS: Final = frozenset({"print", "open", "eval", "exec", "compile", "__import__"})
@@ -323,6 +326,8 @@ def test_financial_modules_use_no_float_io_or_logging() -> None:
                 offenders.append(f"{path}:{node.lineno} float")
             elif isinstance(node, ast.Constant) and type(node.value) in (float, complex):
                 offenders.append(f"{path}:{node.lineno} float literal")
+            elif isinstance(node, ast.Attribute) and node.attr in CLOCK_ATTRIBUTES:
+                offenders.append(f"{path}:{node.lineno} clock .{node.attr}")
             elif (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)

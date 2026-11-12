@@ -278,7 +278,8 @@ MAX_FINANCIAL_PROJECTS: Final = 100
 IDENTIFIER_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 #: Section 3.8: a native Project id.
 PROJECT_ID_PATTERN: Final = re.compile(r"prj_[A-Za-z0-9]{8,64}")
-_PERIOD: Final = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")
+#: Section 7.5 (FR11-F01): the year is 1000-9999, so year 0000 is a grammar refusal.
+_PERIOD: Final = re.compile(r"[1-9][0-9]{3}-(0[1-9]|1[0-2])")
 _SHA256: Final = re.compile(r"[0-9a-f]{64}")
 
 _BOTH: Final = frozenset(FinancialPerspective)
@@ -451,6 +452,8 @@ def require_instant(value: object) -> datetime:
         raise ValueError("instant must be aware UTC")
     if value.microsecond != 0:
         raise ValueError("instant must have whole seconds")
+    if value.year < 1000:
+        raise ValueError("instant year must have 4 digits")
     return value
 
 

@@ -1,0 +1,12 @@
+my-pa-synthetic-finance-v1
+record_type,ref,source_system,source_version_ref,period,cutoff_at,status,approved_by,approved_at,supersedes_ref,perspective,currency,cost_basis,external_project_id,external_contract_id,cost_code,wbs_package,measure,amount,change_status,transfer_ref,leg_side,row_count,body_sha256
+source_version,,syn-fin-a,SYN-V-2026-10-Q,2026-10,2026-10-31T23:59:59Z,approved,syn-approver-1,2026-11-05T15:00:00Z,,owner_budget,USD,gross,,,,,,,,,,8,5ae713c7fe7bef1af3813653740d16bfeb0bfbf1500ebd0f15a2ed98029ee6f7
+account_line,SYN-L-Q01,,,,,,,,,,USD,,SYN-P-100,,SYN-CC-03300,SYN-WBS-CONC,original_budget,1000000.0000,,,,,
+account_line,SYN-L-Q02,,,,,,,,,,USD,,SYN-P-100,,SYN-CC-03300,SYN-WBS-CONC,current_budget,1000000.0000,,,,,
+account_line,SYN-L-Q03,,,,,,,,,,USD,,SYN-P-100,,SYN-CC-03300,SYN-WBS-CONC,actual_cost,400000.0000,,,,,
+account_line,SYN-L-Q04,,,,,,,,,,USD,,SYN-P-100,,SYN-CC-03300,SYN-WBS-CONC,forecast_cost_to_complete,450000.0000,,,,,
+account_line,SYN-L-Q05,,,,,,,,,,USD,,SYN-P-100,,SYN-CC-03300,SYN-WBS-CONC,source_eac,860000.0000,,,,,
+account_line,SYN-L-Q06,,,,,,,,,,USD,,SYN-P-200,,SYN-CC-03300,SYN-WBS-CONC,original_budget,500000.0000,,,,,
+account_line,SYN-L-Q07,,,,,,,,,,USD,,SYN-P-200,,SYN-CC-03300,SYN-WBS-CONC,current_budget,500000.0000,,,,,
+account_line,SYN-L-Q08,,,,,,,,,,USD,,SYN-P-200,,SYN-CC-03300,SYN-WBS-CONC,actual_cost,100000.0000,,,,,
+end,,,,,,,,,,,,,,,,,,,,,,8,

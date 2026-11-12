@@ -1,0 +1,873 @@
+{
+  "files": {
+    "malformed/amount_grammar__exponent.csv": {
+      "file_sha256": "262c197114a003010c904dd891289ddc88a28e3299cae30f3c82e51bee4c5b54",
+      "outcome": "refused",
+      "refusal_code": "amount_grammar",
+      "refusal_line": 4,
+      "size": 2146
+    },
+    "malformed/amount_grammar__formula.csv": {
+      "file_sha256": "a32f3608581f5e9b3cae6252ce3acc6f9be6e27f33853146c68b4aedbf001f21",
+      "outcome": "refused",
+      "refusal_code": "amount_grammar",
+      "refusal_line": 4,
+      "size": 2151
+    },
+    "malformed/amount_grammar__leading_zero.csv": {
+      "file_sha256": "2dab89ea4443d918433e04be8b275fc6f5940792a4ab6ce82937dc6bfaa0e08f",
+      "outcome": "refused",
+      "refusal_code": "amount_grammar",
+      "refusal_line": 4,
+      "size": 2156
+    },
+    "malformed/amount_grammar__plus.csv": {
+      "file_sha256": "7d32375d932f4152d163284d6f65f7e7187cba74b777e0e5e8d265e11e8fc384",
+      "outcome": "refused",
+      "refusal_code": "amount_grammar",
+      "refusal_line": 4,
+      "size": 2156
+    },
+    "malformed/amount_negative_zero__base.csv": {
+      "file_sha256": "82a45a9db1986d23468c4a691d813c7e3dea25ea221b06ac6093218682491a3a",
+      "outcome": "refused",
+      "refusal_code": "amount_negative_zero",
+      "refusal_line": 15,
+      "size": 2152
+    },
+    "malformed/amount_range__base.csv": {
+      "file_sha256": "b0faa24fca709fd40fe852c92099a7d4a9f03bb3078b7c6757ee758c7dee4dab",
+      "outcome": "refused",
+      "refusal_code": "amount_range",
+      "refusal_line": 4,
+      "size": 2165
+    },
+    "malformed/amount_scale__base.csv": {
+      "file_sha256": "20d2ee59d95ac362f070b13e342b24348f196eceac360699fc91999b8fd5d0bd",
+      "outcome": "refused",
+      "refusal_code": "amount_scale",
+      "refusal_line": 4,
+      "size": 2156
+    },
+    "malformed/amount_sign__base.csv": {
+      "file_sha256": "adf7255064296cf2c8eb0b3900fb59700711e145a5b40a0f7783dc905c7bf132",
+      "outcome": "refused",
+      "refusal_code": "amount_sign",
+      "refusal_line": 6,
+      "size": 2156
+    },
+    "malformed/bom_present__base.csv": {
+      "file_sha256": "3697ccfefb7ef7f5060386fdb59c0e6bf33677f01d5aa468d2476b92d5b7ea83",
+      "outcome": "refused",
+      "refusal_code": "bom_present",
+      "refusal_line": 1,
+      "size": 2158
+    },
+    "malformed/carriage_return__crlf.csv": {
+      "file_sha256": "74490c2c8c7da4542af0446e2ae22f48c344992867a0476b3c524073ca6065d8",
+      "outcome": "refused",
+      "refusal_code": "carriage_return",
+      "refusal_line": 1,
+      "size": 2174
+    },
+    "malformed/cell_missing__cost_code.csv": {
+      "file_sha256": "6519390553ffbe2e897f4aaa1ddeaa1c1f1283192b851f711594969d90569a4e",
+      "outcome": "refused",
+      "refusal_code": "cell_missing",
+      "refusal_line": 4,
+      "size": 2143
+    },
+    "malformed/cell_not_empty__measure.csv": {
+      "file_sha256": "7766cd190dcd9d84ee5fbb4aa8133ea49250be2f92b3c49275a4dd961c076c9e",
+      "outcome": "refused",
+      "refusal_code": "cell_not_empty",
+      "refusal_line": 15,
+      "size": 2166
+    },
+    "malformed/cell_too_long__base.csv": {
+      "file_sha256": "3d2a6ddc44dc44ebf9077c5137275a724e30f174739f70c4beaf913db7de4843",
+      "outcome": "refused",
+      "refusal_code": "cell_too_long",
+      "refusal_line": 4,
+      "size": 2208
+    },
+    "malformed/change_order_zero__base.csv": {
+      "file_sha256": "e5648abb90b13398ffe6c504c358a80d1ba8601d932e50db338f6cd1546e528b",
+      "outcome": "refused",
+      "refusal_code": "change_order_zero",
+      "refusal_line": 16,
+      "size": 2151
+    },
+    "malformed/control_character__tab.csv": {
+      "file_sha256": "19b763d9be9478b00b432b11950bdd25c3d0b9d5f180eca77d71ab2f51456aeb",
+      "outcome": "refused",
+      "refusal_code": "control_character",
+      "refusal_line": 4,
+      "size": 2156
+    },
+    "malformed/count_grammar__base.csv": {
+      "file_sha256": "a46985e175aac29fbeaba098923fd268580aef0aa385fa9f76d0818bb645cdbd",
+      "outcome": "refused",
+      "refusal_code": "count_grammar",
+      "refusal_line": 3,
+      "size": 2156
+    },
+    "malformed/currency_grammar__lowercase.csv": {
+      "file_sha256": "0f106404a8818e7e1cd58c2a90df635479433ce3e134001677f2c3376e06019a",
+      "outcome": "refused",
+      "refusal_code": "currency_grammar",
+      "refusal_line": 3,
+      "size": 2155
+    },
+    "malformed/currency_unknown__base.csv": {
+      "file_sha256": "d2b5e049bc07145bc60d4d1f54bdcd50bb490b2ca45a33848bc21f8685fb1b8c",
+      "outcome": "refused",
+      "refusal_code": "currency_unknown",
+      "refusal_line": 3,
+      "size": 2155
+    },
+    "malformed/cutoff_before_period__base.csv": {
+      "file_sha256": "645b8230ae065f47d367b9ca94255833bb1ec156c48f29d3ec37bdaef2b4eb61",
+      "outcome": "refused",
+      "refusal_code": "cutoff_before_period",
+      "refusal_line": 3,
+      "size": 2155
+    },
+    "malformed/digest_grammar__base.csv": {
+      "file_sha256": "44400819d283bc8f9113a8bc5f4062a599a1a0601659f2ac07cd56cad8fe9a59",
+      "outcome": "refused",
+      "refusal_code": "digest_grammar",
+      "refusal_line": 3,
+      "size": 2155
+    },
+    "malformed/duplicate_column__base.csv": {
+      "file_sha256": "e890f04a3a971b86fa8ac85d2166ae8e8de16e44ad14667b3cf737266a468e81",
+      "outcome": "refused",
+      "refusal_code": "duplicate_column",
+      "refusal_line": 2,
+      "size": 2163
+    },
+    "malformed/duplicate_ref__base.csv": {
+      "file_sha256": "cd771a81a1058bee2e1470b2078d26c876b9affe5d7e16ad2fa10d8e4700c65e",
+      "outcome": "refused",
+      "refusal_code": "duplicate_ref",
+      "refusal_line": 5,
+      "size": 2155
+    },
+    "malformed/empty_input__base.csv": {
+      "file_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome": "refused",
+      "refusal_code": "empty_input",
+      "refusal_line": null,
+      "size": 0
+    },
+    "malformed/enum_value__perspective.csv": {
+      "file_sha256": "53dabba1f96f3176b298a21abba1688d25ab35963f243bc75207878d4eb683eb",
+      "outcome": "refused",
+      "refusal_code": "enum_value",
+      "refusal_line": 3,
+      "size": 2155
+    },
+    "malformed/field_count__thousands.csv": {
+      "file_sha256": "2b5b46cb30827d34e250ef61ed9633f8accbdb300d71c3f9aba557c77692f7fb",
+      "outcome": "refused",
+      "refusal_code": "field_count",
+      "refusal_line": 4,
+      "size": 2157
+    },
+    "malformed/format_unrecognized__base.csv": {
+      "file_sha256": "065afe8dd1710dfdfc2ae4d9c3a70545cc77c87b085a7fd85ff83a38431398a2",
+      "outcome": "refused",
+      "refusal_code": "format_unrecognized",
+      "refusal_line": 1,
+      "size": 2155
+    },
+    "malformed/formula_injection__at.csv": {
+      "file_sha256": "6d5551b4b8914f99b22f9ce8b8c77f09e4eebcd1f21ba4df850b3042c9e891c2",
+      "outcome": "refused",
+      "refusal_code": "formula_injection",
+      "refusal_line": 4,
+      "size": 2152
+    },
+    "malformed/formula_injection__equals.csv": {
+      "file_sha256": "e1e4c0d71dd6f584e87d9f36ff97c50a6dd2c36e07b2f62d1b8525d634aba440",
+      "outcome": "refused",
+      "refusal_code": "formula_injection",
+      "refusal_line": 4,
+      "size": 2152
+    },
+    "malformed/formula_injection__minus.csv": {
+      "file_sha256": "0b9f34eb62c2655883f05c659ce62ff801ee73ea5ee373728ee0dd87261ae1ea",
+      "outcome": "refused",
+      "refusal_code": "formula_injection",
+      "refusal_line": 4,
+      "size": 2152
+    },
+    "malformed/formula_injection__plus.csv": {
+      "file_sha256": "cc5a4b921c68afdd5b21baac607d1d4a2e2ce1fe43ddb6f888b21ca60582d106",
+      "outcome": "refused",
+      "refusal_code": "formula_injection",
+      "refusal_line": 4,
+      "size": 2152
+    },
+    "malformed/header_mismatch__order.csv": {
+      "file_sha256": "6137839f18f1b3679264e53a89834880032dacf7f8e6896eec49b5ee010a9eb1",
+      "outcome": "refused",
+      "refusal_code": "header_mismatch",
+      "refusal_line": 2,
+      "size": 2155
+    },
+    "malformed/identifier_grammar__space.csv": {
+      "file_sha256": "30ffc45808217cde1d4d00d53d906bfa42cc2f0167b4f9813df6e024564d9837",
+      "outcome": "refused",
+      "refusal_code": "identifier_grammar",
+      "refusal_line": 4,
+      "size": 2149
+    },
+    "malformed/line_currency_mismatch__base.csv": {
+      "file_sha256": "a6c51d268918acc8361a0ae1b5b94e50b5f867a96370ad937bdccc7c69ae98b4",
+      "outcome": "refused",
+      "refusal_code": "line_currency_mismatch",
+      "refusal_line": 4,
+      "size": 2155
+    },
+    "malformed/measure_perspective_mismatch__base.csv": {
+      "file_sha256": "7361f250561b6f44c3a1f9108c3b03c1b975601d44b0f97780d44a8347d5d9f2",
+      "outcome": "refused",
+      "refusal_code": "measure_perspective_mismatch",
+      "refusal_line": 4,
+      "size": 2157
+    },
+    "malformed/non_ascii__cell.csv": {
+      "file_sha256": "877e5f2ae03018a33774f0debf35b7e739d296b25a326e41df8810c1908bbad2",
+      "outcome": "refused",
+      "refusal_code": "non_ascii",
+      "refusal_line": 4,
+      "size": 2156
+    },
+    "malformed/partial_export__count.csv": {
+      "file_sha256": "59554cf587a44799b0e857f6960c799fb4d76160a379d0617e755bb1700304ec",
+      "outcome": "refused",
+      "refusal_code": "partial_export",
+      "refusal_line": 3,
+      "size": 2155
+    },
+    "malformed/partial_export__no_final_lf.csv": {
+      "file_sha256": "229689ed779717e6787652844808594e81d26043f6f28fd2078f90829cd06f56",
+      "outcome": "refused",
+      "refusal_code": "partial_export",
+      "refusal_line": 19,
+      "size": 2154
+    },
+    "malformed/period_grammar__base.csv": {
+      "file_sha256": "6892a2203fa7f56c114083afcc42a21fd95b62401852a9f49be110838d4206d9",
+      "outcome": "refused",
+      "refusal_code": "period_grammar",
+      "refusal_line": 3,
+      "size": 2155
+    },
+    "malformed/quote_character__quoted.csv": {
+      "file_sha256": "2de6ab320e86304dd198e3b436429377500d7e2d82ec57b3bfafb0ac5d302f14",
+      "outcome": "refused",
+      "refusal_code": "quote_character",
+      "refusal_line": 4,
+      "size": 2157
+    },
+    "malformed/record_type_unknown__base.csv": {
+      "file_sha256": "919990f44bce2d0ef4ea4e57690fea6f47e1a701378c64c95bbc694580c33dfe",
+      "outcome": "refused",
+      "refusal_code": "record_type_unknown",
+      "refusal_line": 4,
+      "size": 2156
+    },
+    "malformed/source_version_duplicate__base.csv": {
+      "file_sha256": "26a65040266aa2edf0c62a028f7c7f07ce6be6b57e97caaf22149850a7f08de8",
+      "outcome": "refused",
+      "refusal_code": "source_version_duplicate",
+      "refusal_line": 4,
+      "size": 2306
+    },
+    "malformed/source_version_not_first__base.csv": {
+      "file_sha256": "40d3e3a567d744df14a5dda21fc769df3161b72ded156f154886b347cbb20d03",
+      "outcome": "refused",
+      "refusal_code": "source_version_not_first",
+      "refusal_line": 3,
+      "size": 2155
+    },
+    "malformed/supersedes_self__base.csv": {
+      "file_sha256": "0d48d925fbbe9ad38196447da6d62e3bdf0dc195dab03a162777f717381d8803",
+      "outcome": "refused",
+      "refusal_code": "supersedes_self",
+      "refusal_line": 3,
+      "size": 2170
+    },
+    "malformed/timestamp_grammar__offset.csv": {
+      "file_sha256": "d1e02e143e172fdc47c2d94112da91a1cb398b68bd393401f89d5e98fd3d7e54",
+      "outcome": "refused",
+      "refusal_code": "timestamp_grammar",
+      "refusal_line": 3,
+      "size": 2160
+    },
+    "malformed/transfer_leg_count__base.csv": {
+      "file_sha256": "208fb5d604af9e6b28fb17ab688c0fe66789f4a42bb0d9e06b3f0ada309e7c49",
+      "outcome": "refused",
+      "refusal_code": "transfer_leg_count",
+      "refusal_line": 17,
+      "size": 2042
+    },
+    "malformed/transfer_leg_sides__base.csv": {
+      "file_sha256": "2b6a7cc56b04de4298d295457b779717fd2eb10a845db73304a2d73068352c39",
+      "outcome": "refused",
+      "refusal_code": "transfer_leg_sides",
+      "refusal_line": 18,
+      "size": 2154
+    },
+    "malformed/transfer_leg_sign__base.csv": {
+      "file_sha256": "02e79f6f63791e1bdbc65f63fd3ccbdec5b64876921d10f64c7129f0695bffc4",
+      "outcome": "refused",
+      "refusal_code": "transfer_leg_sign",
+      "refusal_line": 18,
+      "size": 2155
+    },
+    "malformed/transfer_same_project__base.csv": {
+      "file_sha256": "8c63d2e46741819878dcf88f2f9beba00dde2d195730720e8483f7f2a4c0eae0",
+      "outcome": "refused",
+      "refusal_code": "transfer_same_project",
+      "refusal_line": 18,
+      "size": 2155
+    },
+    "malformed/transfer_scope_mismatch__base.csv": {
+      "file_sha256": "47a1e13762c152e78a9fdcd13f81321175179bba94ce7955a9474223697fc67f",
+      "outcome": "refused",
+      "refusal_code": "transfer_scope_mismatch",
+      "refusal_line": 18,
+      "size": 2156
+    },
+    "malformed/transfer_status_mismatch__base.csv": {
+      "file_sha256": "cefb72b86e14badfa4380962dba4ecaa4414fbdfbad12efee1ac67ec7013f0a3",
+      "outcome": "refused",
+      "refusal_code": "transfer_status_mismatch",
+      "refusal_line": 18,
+      "size": 2154
+    },
+    "malformed/transfer_unbalanced__base.csv": {
+      "file_sha256": "a67f235e86b27b688725994d6480ec2ed6b21670ee08e452c86c8bef70f99e77",
+      "outcome": "refused",
+      "refusal_code": "transfer_unbalanced",
+      "refusal_line": 18,
+      "size": 2155
+    },
+    "malformed/withdrawal_has_rows__base.csv": {
+      "file_sha256": "a872283f90b71568ce15e2313fb41fb103ccf5c8bb5c865d3914cb96bdd83c0a",
+      "outcome": "refused",
+      "refusal_code": "withdrawal_has_rows",
+      "refusal_line": 3,
+      "size": 2171
+    },
+    "syn_at020_owner_budget.csv": {
+      "content_sha256": "ae7b8de3bc2551718b6bf40d3e99457cec6e28e4b8661d4af68529a545a73e07",
+      "domain_key": "at020",
+      "file_sha256": "3cce099d9e72cf358671783f6c17905497d65ce4b5c2ea1f0daff4226b726503",
+      "outcome": "admitted",
+      "size": 2155
+    },
+    "syn_contract_perspective.csv": {
+      "content_sha256": "6f216122ae4e467269dacf20d3056095ab1c08a8d7697a06414a7a8318f4cc5b",
+      "domain_key": "contract",
+      "file_sha256": "d1175d515ad1ee3460f9def3235dc55e9f91abddf1e38a53e105a31e54cd55d5",
+      "outcome": "admitted",
+      "size": 1213
+    },
+    "syn_cycle_a.csv": {
+      "content_sha256": "0594f365524cd8c01a1807f3fbe3116dc87e5702763ceced1ff534dfdf298d4a",
+      "domain_key": "cycle_a",
+      "file_sha256": "f3f85e69f8515e270f0a77742141e0f7d601c7727fb897eabf3dfcaa886a034f",
+      "outcome": "admitted",
+      "size": 2172
+    },
+    "syn_cycle_b.csv": {
+      "content_sha256": "f935359787051b4ccda2613747d0e90167eb5e7f139eec6b708a9c1aa4195cc6",
+      "domain_key": "cycle_b",
+      "file_sha256": "c7caabc51f0ab1ee49a332cce3e18116fe1475da7ab0716945e72786030286fb",
+      "outcome": "admitted",
+      "size": 2172
+    },
+    "syn_duplicate_identity.csv": {
+      "domain_key": "duplicate_identity",
+      "file_sha256": "cb0f0ab149c1bae6aad373e3c1b28a33abb1d7af5aa15c3edf5e44e854059974",
+      "outcome": "refused",
+      "refusal_code": "duplicate_identity",
+      "refusal_line": 19,
+      "size": 2257
+    },
+    "syn_eac_conflict.csv": {
+      "content_sha256": "d0499f41a6ee5626cd0720afdf1226697ac4f80ae60aa117a719d308e8590ecd",
+      "domain_key": "eac_conflict",
+      "file_sha256": "fb104a1ba65975cef823ad80dbb5294ccd348cf6d8e177f467f6d256b00a1a1a",
+      "outcome": "admitted",
+      "size": 1404
+    },
+    "syn_p200_eur.csv": {
+      "content_sha256": "6a5e814252d78b0cd28e3aac34b04492fc094ab388f195954ef52e1ef672887b",
+      "domain_key": "p200_eur",
+      "file_sha256": "b0b016dbbed1da1a549983b47ae73b3ac02cd84540484d2f1ba066e4b90ecdf2",
+      "outcome": "admitted",
+      "size": 983
+    },
+    "syn_p300_second_system.csv": {
+      "content_sha256": "9e637984872ed6207c7a74011e1adf1ed03fd4249f068ee3c0ae38c048d74936",
+      "domain_key": "p300_second_system",
+      "file_sha256": "3696961024d0634e927dad97ea4b3082f1999d0469b576ca4095df58b140a679",
+      "outcome": "admitted",
+      "size": 862
+    },
+    "syn_partial_export.csv": {
+      "domain_key": "partial_export",
+      "file_sha256": "b9711a80c40cce0c82a5992475a41be18e65d328f01ddabdc08deb4da6fb8642",
+      "outcome": "refused",
+      "refusal_code": "partial_export",
+      "refusal_line": 18,
+      "size": 2126
+    },
+    "syn_period_2026_11.csv": {
+      "content_sha256": "df7d2863c88455091eeec3cf63cf632459b8aa5c7e41ad571cbab35b69d4c3a5",
+      "domain_key": "period_2026_11",
+      "file_sha256": "1dee3152fb547f0d8087d649b5a6dbd2586ffd5e530e23c82a56a18816c3f4e9",
+      "outcome": "admitted",
+      "size": 2155
+    },
+    "syn_proposed.csv": {
+      "content_sha256": "a3d885e39d3680da976a3a0697c89bb25b6e06b96133fb5f2a490784a615026d",
+      "domain_key": "proposed",
+      "file_sha256": "45d478c7e0177bc8622a43ece863ae1a3703cf2f6021df485dab91a71bebba18",
+      "outcome": "admitted",
+      "size": 2136
+    },
+    "syn_reconciliation_failure.csv": {
+      "content_sha256": "92f9103a4e146f20853a37234d3c75220498d0e21e72545972b6e961bff29bdc",
+      "domain_key": "reconciliation_failure",
+      "file_sha256": "942d76603d532d020daa311ca057efa307ff44118ee5e026cb2537b668e9e951",
+      "outcome": "admitted",
+      "size": 2155
+    },
+    "syn_rounding_edges.csv": {
+      "content_sha256": "abd380ec3f02961509b82c5140d69d4c10a8347087fc3315af96747498779820",
+      "domain_key": "rounding_edges",
+      "file_sha256": "7cc6a9f0ba8f4c2fab071dfdec611aa778037cee4503b89c226f1c582f788106",
+      "outcome": "admitted",
+      "size": 1371
+    },
+    "syn_second_system.csv": {
+      "content_sha256": "688553679d2dd8c85b63096c44d016d63d5213d735130624d0f8b5be6de1f4e2",
+      "domain_key": "second_system",
+      "file_sha256": "e147cbfde98e09efb8a02cb3d2bdecbe67bf25f01103475be8d1983806b4e363",
+      "outcome": "admitted",
+      "size": 864
+    },
+    "syn_spoofed_system.csv": {
+      "content_sha256": "4c234afa8f5f84bb2617e7d5b8e05a346aec75953aa048d56f562b25de21be6c",
+      "domain_key": "spoofed",
+      "file_sha256": "d63a45b6d1d884ff8a3a61ccfc4b8dccc1af3b76161314d9f7591f367a7aa9f9",
+      "outcome": "admitted",
+      "size": 2155
+    },
+    "syn_spoofed_system_b.csv": {
+      "content_sha256": "7ab331de7aadef0b15a48f1a9bcec2f54cbc2e5cc04a01ffa6cf1ddb7df125f3",
+      "domain_key": "spoofed_b",
+      "file_sha256": "c154e9a2091df7724d842bf3d53e391569343f127611f1024ba76ed8cef41f47",
+      "outcome": "admitted",
+      "size": 2155
+    },
+    "syn_stale_approval.csv": {
+      "content_sha256": "803fd53f8165af6ebd0f041680c847116025c675f02ca38a0421cbfc9028db34",
+      "domain_key": "stale",
+      "file_sha256": "8215d4baffe4237ab979a9f362875cf7b7516ddce5045c9b5599da9883a6f271",
+      "outcome": "admitted",
+      "size": 2155
+    },
+    "syn_tampered_body.csv": {
+      "domain_key": "tampered_body",
+      "file_sha256": "d63120a36a94bb4cabea9403682c8f4d7aa848c8684fbfeab163d06f4e9517bd",
+      "outcome": "refused",
+      "refusal_code": "hash_mismatch",
+      "refusal_line": 3,
+      "size": 2155
+    },
+    "syn_unknown_actor.csv": {
+      "content_sha256": "9c9fac0c8517db101905d6527a63f330164c4283d419eb70faef663428f27e64",
+      "domain_key": "unknown_actor",
+      "file_sha256": "39da78e9d523cdc2eb9e2d102ec1677b6a3ee52ab2440393e3992ef0545a9376",
+      "outcome": "admitted",
+      "size": 2155
+    },
+    "syn_version_conflict.csv": {
+      "content_sha256": "941f04e04ea1c692b271460e7e792ba47481d3d8fa0fd8f4cf71c9d34c4fce8b",
+      "domain_key": "version_conflict",
+      "file_sha256": "618c85f6e62720819c0a77acb3bb8875266c59ec9d900d47b7d968ba3c8db581",
+      "outcome": "admitted",
+      "size": 2155
+    },
+    "syn_version_conflict_late.csv": {
+      "content_sha256": "489c9aa76a23e139f2ab04a5def0ab0c660be0121a8f6f77285042dbffba181e",
+      "domain_key": "version_conflict_late",
+      "file_sha256": "a0ba7527c3ca04fd400237b891fe5a1cc7c793bb54404dc71fd19f2399300822",
+      "outcome": "admitted",
+      "size": 2155
+    },
+    "syn_withdrawal.csv": {
+      "content_sha256": "e00a728828fb794a171b8ba9aa271b0ff7d8b5c1ef9f4805f03700130958c3e6",
+      "domain_key": "withdrawal",
+      "file_sha256": "65f28fa9d41713d309acccdbc8c173ae052c903a20f2ff8c7912d54322d0a33c",
+      "outcome": "admitted",
+      "size": 567
+    },
+    "syn_withdrawal_dangling.csv": {
+      "content_sha256": "ef34437fe53effd943582eaba4c747ec995d49d8e30b3dc5c7ec0c3a398ee882",
+      "domain_key": "withdrawal_dangling",
+      "file_sha256": "4284b64022d60147bdcf8cc153d8185c8eb6e7bcc7ded6e49249ddf498efa6e5",
+      "outcome": "admitted",
+      "size": 571
+    }
+  },
+  "format": "my-pa-synthetic-finance-v1",
+  "scenarios": {
+    "S01": {
+      "overview_sha256": "9638c5f1e84d62c85c85164626277d9ed6b8a347fc65d564dda2cdb988272876",
+      "program_reasons": [],
+      "reasons": [],
+      "reportability": "reportable"
+    },
+    "S02": {
+      "overview_sha256": "a4fd682905d98ec9a625d6a5ede741910dd62e9c51d5675ef43b7b4413bc84e3",
+      "program_reasons": [],
+      "reasons": [],
+      "reportability": "reportable"
+    },
+    "S03": {
+      "overview_sha256": "e641b14fb8443742adde828eec0c2fc6e902d1a4b7ab38a4bd9df08b9eea14d1",
+      "program_reasons": [],
+      "reasons": [
+        "currency_mismatch",
+        "fx_missing"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S04": {
+      "overview_sha256": "c122c1d7833b463106af44e8cf50a26497383c08ca2838e799a13ed901627ccc",
+      "program_reasons": [],
+      "reasons": [],
+      "reportability": "reportable"
+    },
+    "S05": {
+      "overview_sha256": "fe0e560aeb01e46e46ce56f1e921552aeb7e6b82301d83cfd0b22717b1111fc6",
+      "program_reasons": [],
+      "reasons": [
+        "approval_stale"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S06": {
+      "overview_sha256": "71569bca355430a9b0dbd417267e7882f81f37e13cff573beb908db5ba49352c",
+      "program_reasons": [],
+      "reasons": [
+        "approval_missing"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S07": {
+      "overview_sha256": "5f1debd2d7270c3ee4cd1c23b014cb2938fff9b2a061fc4495eaa7c943ce2f4d",
+      "program_reasons": [],
+      "reasons": [],
+      "reportability": "reportable"
+    },
+    "S08": {
+      "overview_sha256": "acbb4dc973b4a5d6b73326ba4d60691412fdf85c8e8e8ee442b0867b49e9b4fc",
+      "program_reasons": [],
+      "reasons": [
+        "withdrawn_source"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S09": {
+      "overview_sha256": "65a09410ddaf17fd1c8a736d623e054cd5733e52defbf5bc857196ad2873d1fe",
+      "program_reasons": [],
+      "reasons": [
+        "source_version_conflict"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S10": {
+      "overview_sha256": "f05a85ba139617d75b82ec9c58563154883047a7dd33686b361576011a967557",
+      "program_reasons": [],
+      "reasons": [
+        "source_refused"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S11": {
+      "overview_sha256": "7de60114250d8c9d81fca175ee396d09382e40af1ee555a7de793f4ca784a00c",
+      "program_reasons": [],
+      "reasons": [],
+      "reportability": "reportable"
+    },
+    "S12": {
+      "overview_sha256": "f74057fc412d85e72910c5310a6ab6596f9e6f4c126c9e9b1e1cd09e15ce8eee",
+      "program_reasons": [],
+      "reasons": [
+        "approval_actor_unrecognized"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S13": {
+      "overview_sha256": "b99102a110e53e57bf45a44e435be826388488cb44c4f3b2bdf7282f6121a5bc",
+      "program_reasons": [],
+      "reasons": [],
+      "reportability": "reportable"
+    },
+    "S14": {
+      "overview_sha256": "9fb18b922cbfbbc22f1e55a28bd3fb90477986db6ebcfb171394dc1ea1954e01",
+      "program_reasons": [],
+      "reasons": [
+        "source_reconciliation_failed"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S15": {
+      "overview_sha256": "7469fe616a73f61bd4e650b6267786f5fc1f03b0debbfecab19d71075da6ec77",
+      "program_reasons": [
+        "double_count_detected"
+      ],
+      "reasons": [
+        "double_count_detected"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S16": {
+      "overview_sha256": "3e7c1c8d1cfbd83b14bd2179ed6af456385c2a9b05d6f4846df1df1428bfb195",
+      "program_reasons": [],
+      "reasons": [
+        "partial_export",
+        "source_version_missing"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S17": {
+      "overview_sha256": "517ccaef2d6bdc87e0f078aa3003dbc2f23e3555a736f575f18f59bcdacc5ce1",
+      "program_reasons": [],
+      "reasons": [
+        "hash_mismatch",
+        "source_version_missing"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S18": {
+      "overview_sha256": "529bd5f7cae0417c030f1e6fcd2a86972957695cf15e7dd6b64e8313cf9ef3d8",
+      "program_reasons": [],
+      "reasons": [
+        "source_refused",
+        "source_version_missing"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S19": {
+      "overview_sha256": "e37331fa573ae8bc8281b2833a9cbe3cdfc1bd96cea87e72a9631787f88000c5",
+      "program_reasons": [
+        "source_not_integrated"
+      ],
+      "reasons": [
+        "source_not_integrated"
+      ],
+      "reportability": "source_not_integrated"
+    },
+    "S20": {
+      "overview_sha256": "179ac2ad6a97c6fa80b894abdf34d2e872f937376139708ec8f87e5c44b55091",
+      "program_reasons": [],
+      "reasons": [
+        "period_mismatch"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S21": {
+      "overview_sha256": "cc596d7b2c197e3c582790108d507aea4f64389024a8cace066cd72cafa6c5d6",
+      "program_reasons": [],
+      "reasons": [
+        "perspective_mismatch"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S22": {
+      "overview_sha256": "54eaeae98056c348b281c8e215b738b290feb4e08c9e6d42ba4c38c13cadd705",
+      "program_reasons": [],
+      "reasons": [
+        "basis_mismatch"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S23": {
+      "overview_sha256": "1a7fd8cfad15179555d3a14192c0366943649fd4be8c408c54b69b83a6aa305c",
+      "program_reasons": [],
+      "reasons": [
+        "mapping_unreviewed"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S24": {
+      "overview_sha256": "73ea2feab4964d633e74fe554c2d5e4c0adb5d6cf51ad74950b8800588ee8a64",
+      "program_reasons": [],
+      "reasons": [
+        "mapping_quarantined"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S25": {
+      "overview_sha256": "362a4defbb1af95f0536ce192e01558a45473c966e7317ab52a38c1035cf1689",
+      "program_reasons": [],
+      "reasons": [
+        "mapping_ambiguous"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S26": {
+      "overview_sha256": "0c2bd72fb8528323b814c1a9a3a269ce58fe5f2cbc72359f7f2d1479352e983a",
+      "program_reasons": [],
+      "reasons": [
+        "mapping_missing"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S27": {
+      "overview_sha256": "9cc5f315ed86912a09f680e2eb4a97dc48bc6758b04fcce822301464213b9101",
+      "program_reasons": [],
+      "reasons": [
+        "missing_project"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S28": {
+      "overview_sha256": "5b3e8fd0391e7ea29bb9ee9588cc1d29804609dec6ecb42c02ec722a5541a52c",
+      "program_reasons": [
+        "membership_unresolved"
+      ],
+      "reasons": [
+        "membership_unresolved"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S29": {
+      "overview_sha256": "d8eb2bab3af557ba963aea4dcb55445c75c8a7de6976ee27fbb05aeda4cd8d04",
+      "program_reasons": [],
+      "reasons": [],
+      "reportability": "reportable"
+    },
+    "S30": {
+      "overview_sha256": "d2cfc46410fb51ea33fb096fbd5d5caf3a48cccbcc794e4e85590bb9729d37bc",
+      "program_reasons": [],
+      "reasons": [
+        "source_version_missing"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S31": {
+      "overview_sha256": "f2e83914cd7aa5042d6f7ed1a49face3fffa513b221829a6b5e6e61a69e8e868",
+      "program_reasons": [],
+      "reasons": [],
+      "reportability": "reportable"
+    },
+    "S32": {
+      "overview_sha256": "8e9eb27b1b497f21b7cd5164b15dc842a8432cd06d9443f106b136e71fab39e9",
+      "program_reasons": [],
+      "reasons": [
+        "source_refused"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S33": {
+      "overview_sha256": "5a9dcf29cde0d4d419c69b52a297ac5611ef475f7380f6e1ac0403dd48e702ed",
+      "program_reasons": [],
+      "reasons": [
+        "partial_export",
+        "period_mismatch"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S34": {
+      "overview_sha256": "179587a1b282d60c95af2a0b16f1d53aa6e6453356b621f304f2566d8f8d7e06",
+      "program_reasons": [],
+      "reasons": [
+        "source_version_ambiguous"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S35": {
+      "overview_sha256": "179587a1b282d60c95af2a0b16f1d53aa6e6453356b621f304f2566d8f8d7e06",
+      "program_reasons": [],
+      "reasons": [
+        "source_version_ambiguous"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S36": {
+      "overview_sha256": "d15a4a32df8067268c285360322fa41ffa93bbb40dcabd7089573b17d01a93d1",
+      "program_reasons": [
+        "membership_truncated"
+      ],
+      "reasons": [
+        "membership_truncated"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S37": {
+      "overview_sha256": "3e7b44db5a8405a9195930148314ec5a1fdd86c5ec14fbd6b7ecdf1a27e38b0a",
+      "program_reasons": [],
+      "reasons": [
+        "source_version_missing"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S38": {
+      "overview_sha256": "825752b027defe59c5064849dad535f4d5d6346da36fd9df534e457c612808cc",
+      "program_reasons": [],
+      "reasons": [],
+      "reportability": "reportable"
+    },
+    "S39": {
+      "overview_sha256": "825752b027defe59c5064849dad535f4d5d6346da36fd9df534e457c612808cc",
+      "program_reasons": [],
+      "reasons": [],
+      "reportability": "reportable"
+    },
+    "S40": {
+      "overview_sha256": "91e61a67197a1490467f7ddb498898117f3ff5db01e49131331e96ca5764bcfa",
+      "program_reasons": [],
+      "reasons": [
+        "source_version_conflict"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S41": {
+      "overview_sha256": "fe12084912f4e8972540a85765a2f9fe5a4b7d3404ac9ba3c1858d26da86e04c",
+      "program_reasons": [
+        "double_count_detected"
+      ],
+      "reasons": [
+        "double_count_detected"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S42": {
+      "overview_sha256": "f05a85ba139617d75b82ec9c58563154883047a7dd33686b361576011a967557",
+      "program_reasons": [],
+      "reasons": [
+        "source_refused"
+      ],
+      "reportability": "not_reportable"
+    },
+    "S43": {
+      "overview_sha256": "8e3eefd641a9368e37a35be68ac8ef9722363db51c5281ca8003c448260c4450",
+      "program_reasons": [],
+      "reasons": [],
+      "reportability": "reportable"
+    }
+  },
+  "synthetic": "every identifier is syn-/SYN-; no real finance source (OD-06)"
+}

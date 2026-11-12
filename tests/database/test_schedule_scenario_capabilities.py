@@ -675,6 +675,83 @@ def test_governing_designation_and_compare(
     assert plane.refused(revoke, surface=OperatorSurface.CLI) == ("conflict", ["governing"])
 
 
+def _series_pair(
+    rt: ScheduleRuntime,
+    w: World,
+    monkeypatch: pytest.MonkeyPatch,
+    **options: Any,  # noqa: ANN401
+) -> tuple[str, str]:
+    """A publication (imported with `options`) and a later complete one in its Series."""
+    first = _publish(rt, w, monkeypatch, data_date=date(2026, 5, 4), **options)
+    series = rt.scalar(
+        "SELECT series_id FROM knowledge.schedule_publications WHERE publication_id = :p", p=first
+    )
+    later = _publish(rt, w, monkeypatch, data_date=date(2026, 6, 1), series_id=series)
+    return first, later
+
+
+@pytest.mark.parametrize("status", ["proposed", "rejected", "withdrawn", "revoked"])
+def test_compare_refuses_a_non_effective_baseline(
+    rt: ScheduleRuntime,
+    w: World,
+    plane: Plane,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+) -> None:
+    """Section 15.7.2 (R10-F13, FR10-F01): compare names an effective Baseline only."""
+    first, later = _series_pair(rt, w, monkeypatch)
+    baseline = plane.ok(_propose(first), remote_client=CLIENT_A)["baseline_id"]
+    if status == "rejected":
+        plane.operator(_operator_command(Capability.SCHEDULE_BASELINES_REJECT, baseline, ""))
+    elif status == "withdrawn":
+        plane.operator(
+            WithdrawScheduleBaseline(
+                baseline_id=baseline, reason="Synthetic", idempotency_key=_key("withdraw")
+            )
+        )
+    elif status == "revoked":
+        plane.operator(_approve(baseline_id=baseline))
+        plane.operator(_operator_command(Capability.SCHEDULE_BASELINES_REVOKE, baseline, ""))
+    assert plane.ok(ReadScheduleBaseline(baseline_id=baseline))["status"] == status
+    compare = CompareScheduleBaseline(baseline_id=baseline, to_publication_id=later)
+    assert plane.refused(compare) == ("conflict", ["baseline_id"])
+    assert plane.refused(compare, remote_client=CLIENT_A) == ("conflict", ["baseline_id"])
+
+
+@pytest.mark.parametrize("capability", ["schedule_scenarios.create", "schedule_baselines.compare"])
+def test_an_ineligible_baseline_answers_conflict_status(
+    rt: ScheduleRuntime,
+    w: World,
+    plane: Plane,
+    monkeypatch: pytest.MonkeyPatch,
+    capability: str,
+) -> None:
+    """Section 15.7.2 (FR10-F02): approved, but its publication is not effective.
+
+    An import-time approval whose publication ends `review_required` is
+    `ineligible`: `from_baseline_id` and compare answer `conflict(status)`, not
+    the non-effective `conflict(baseline_id)`.
+    """
+    first, later = _series_pair(
+        rt,
+        w,
+        monkeypatch,
+        role="baseline",
+        outcome=SchedulePublicationStatus.REVIEW_REQUIRED,
+    )
+    baseline = rt.scalar(
+        "SELECT baseline_id FROM knowledge.schedule_baselines WHERE publication_id = :p", p=first
+    )
+    assert plane.ok(ReadScheduleBaseline(baseline_id=baseline))["status"] == "ineligible"
+    command: Any = (
+        _create(None, from_publication_id=None, from_baseline_id=baseline)
+        if capability == "schedule_scenarios.create"
+        else CompareScheduleBaseline(baseline_id=baseline, to_publication_id=later)
+    )
+    assert plane.refused(command) == ("conflict", ["status"])
+    assert plane.count("schedule_scenarios") == 0
+
+
 # ---- the switch ---------------------------------------------------------------------------
 
 
@@ -955,7 +1032,7 @@ def _with_builders(builders: Any) -> Callable[..., None]:  # noqa: ANN401
 def test_refusal_counting_scope(
     rt: ScheduleRuntime, w: World, plane: Plane, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """S6-3-D13 (R10-F11, P3-45): steps 1-4 refusals are never counted."""
+    """S6-3-D13 (R10-F11, P3-45, FR10-F03): steps 1-4 refusals never, steps 5-6 always."""
     publication = _publish(rt, w, monkeypatch)
     off = Plane(rt, scenarios=False)
     assert off.refused(_create(publication), remote_client=CLIENT_A) == ("unsupported", [])
@@ -974,6 +1051,24 @@ def test_refusal_counting_scope(
         "invalid_request"
     )
     assert plane.refusals() == 1
+    # So are a step-6 conflict (a moved head, FR10-F03) and a quota refusal.
+    created = plane.ok(_create(publication), remote_client=CLIENT_A)
+    assert plane.refused(_append(created["scenario_id"], head=2), remote_client=CLIENT_A) == (
+        "conflict",
+        ["expected_version"],
+    )
+    assert plane.refusals() == 2
+    monkeypatch.setattr(plane_module, "PRINCIPAL_BYTES_TOTAL", 1)
+    assert plane.refused(_create(publication), remote_client=CLIENT_A) == (
+        "rate_limited",
+        ["storage_quota"],
+    )
+    assert plane.refusals() == 3
+    rows = rt.scalar(
+        "SELECT string_agg(error_code, ',' ORDER BY error_code) "
+        "FROM knowledge.schedule_scenario_write_refusals"
+    )
+    assert rows == "conflict,invalid_request,rate_limited"
 
 
 def test_cpm_units_bound_is_enforced_client(

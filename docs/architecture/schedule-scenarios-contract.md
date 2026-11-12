@@ -3434,7 +3434,7 @@ equals an existing `SafeDetail` name or value.
 | `OutputRefusal(<any reason>)` | `invalid_request(OUTPUT)` |
 | output binding names another version, or a run not of that version | `invalid_request(OUTPUT)` (`binding`) |
 | `get_*` / `load_*` / `version_by_number` → `None` on a read | `not_found(<the request's id field>)` |
-| `ScheduleCursorError` | `invalid_request(CURSOR)` |
+| `ScheduleCursorError` | `invalid_request(CURSOR)` (the plane reads); **amended (FR10-F04, I10-A D-4):** `schedule_baselines.compare` delegates its delta page to the S5 `schedule_changes.list` order and command (section 15.6.2), so a bad compare cursor inherits S5's `conflict(CURSOR)`; its binding still differs by purpose (`schedule_analysis_read`), so S5 and compare cursors are not interchangeable |
 | `compare_refusal(...)` | the `BaselineRefusal` rows above |
 | `schedule_baselines.governing` with no governing event | not an error: `baseline_id: null` |
 | `from_baseline_id` or `compare` naming a Baseline that is not effective (R10-F13): a proposal, or a rejected, withdrawn or revoked Baseline | `conflict(BASELINE_ID)` (section 7 "refused"); the handler pre-check answers exactly as the S6-2 write-side `_require_effective_baseline` does |
@@ -3991,6 +3991,8 @@ head admits the lineage families; I10-C's head is the whole slice.
 | auto form gate (11.2) | capabilities `test_series_auto_refused_while_plane_off`, `test_intake_series_name_is_refused` |
 | refusal mapping (15.7.2) | capabilities `test_every_repository_outcome_maps_to_its_public_answer` (parametrized over the 15.7.2 rows reachable through a handler) |
 | budgets and refusal bound (8.3) | capabilities `test_client_write_budget_is_enforced_per_bucket_and_principal`, `test_refusal_bound_answers_before_decoding`, `test_refusal_counting_scope` (step 1–4 refusals uncounted, R10-F11), `test_storage_quota_is_enforced`, `test_cpm_units_bound_is_enforced` (cases `client`, `operator_exempt`: a client fills the Principal's hourly units and the operator still computes, R10-F04), `test_attested_operator_is_never_budgeted` (cases `writes`, `bytes`, `cpm_units`) |
+| compare names an effective Baseline only (15.7.2, R10-F13; FR10-F01) | capabilities `test_compare_refuses_a_non_effective_baseline` (`proposed`, `rejected`, `withdrawn`, `revoked`: `conflict(baseline_id)`) |
+| approved but ineligible (15.7.2; FR10-F02) | capabilities `test_an_ineligible_baseline_answers_conflict_status` (`schedule_scenarios.create` from the Baseline and `compare`: `conflict(status)`) |
 | lineage endpoints need only SELECT (R10-F12) | lineage `test_share_endpoint_needs_only_select_on_the_schedule_tables` |
 | ChatLLM (6.6) | policy `test_v13_targets`, `test_planner_desires_the_22_only_with_both_switches`, `test_planner_never_desires_the_4`, `test_old_client_stays_healthy_while_the_plane_is_off` |
 | revision B (15.13) | the 9 migration tests named there |
@@ -4057,6 +4059,9 @@ head admits the lineage families; I10-C's head is the whole slice.
 | P3-43 | the import plane gate placed before E-10/E-12 (R10-F01) | `test_baseline_import_refused_while_plane_off` (the remote case answers `invalid_request`) |
 | P3-44 | `share_endpoint` takes `FOR SHARE` on the `schedule_activity` family (a table without `UPDATE` under the test role; R10-F12, R10-N04) | `test_share_endpoint_needs_only_select_on_the_schedule_tables[schedule_activity]` (`insufficient_privilege`, SQLSTATE `42501`, under the role holding exactly P-check ∪ Q8); a mutation on the publication family would stay green (the role holds `UPDATE` there) and is not a valid prove-red |
 | P3-45 | a step-2 grant `denied` recorded as a refusal (R10-F11) | `test_refusal_counting_scope` |
+| P3-59 | FR10 M13: `compare` reads the Baseline without the effectiveness check (FR10-F01) | `test_compare_refuses_a_non_effective_baseline[proposed\|rejected\|withdrawn\|revoked]` |
+| P3-60 | FR10 M3: the `INELIGIBLE → conflict(STATUS)` branch of `_eligible_baseline` deleted (FR10-F02) | `test_an_ineligible_baseline_answers_conflict_status[schedule_scenarios.create\|schedule_baselines.compare]` (`conflict(baseline_id)` instead) |
+| P3-61 | FR10 M4: `_counted` stops recording `ConflictError` (FR10-F03) | `test_refusal_counting_scope` (the `conflict(expected_version)` is not counted) |
 
 A prove-red that stays green is reported as redundancy, a masked test or an unreachable hazard,
 never "covered". Declared layered in advance: P3-11's S6-2 write-side CAS (S6-2 P2-06) still
@@ -4157,21 +4162,50 @@ commissioning simply uses v13 after this build (R10-F03). The 22:
 | S6-3-U06 | a CPM compute refused only by the step-5 re-check (a race with a concurrent write of the same bucket after the step-1 pre-check) is computed but never stored, so it is not counted in `cpm_units_since` (R10-F02) | accepted: bounded by the lease and the race window |
 | S6-3-U08 | schedule virtual edges are emitted between reached nodes only and never traversed (15.11.3a item 3); a client reaches a Scenario's versions or a Baseline's publication by the plane reads, not by lineage expansion — **accepted by R10 re-review 3** on condition that the 15.12.5 guidance states the difference from the note edge (done) | later slice |
 | S6-3-U09 | a schedule publication node's `status` is read at read time, not as of the native cut; it equals the status at N for every reachable publication, because a publication becomes a node only through a typed link admitted while it was terminal, and terminal statuses never change (no other path exists: U08 forbids traversal) — reason corrected by R10 re-review 3 | accepted (R10 re-review 3) |
-| S6-3-U10 | `related_sha256` now covers schedule summaries and edges; a claim stored before I10-C over such a result reads `changed_since_read` (none exists: nothing of S6-3 is deployed) | accepted (R10 re-review 3) |
+| S6-3-U10 | `related_sha256` now covers schedule summaries and edges, and a default-filter related read's digest changes because the default relation set grew (B-06); a claim is verified only at report commit, so only a claim read on a pre-S6-3 build and committed on the S6-3 build reads `changed_since_read` — transient at deploy and failing closed (none exists: nothing of S6-3 is deployed) | accepted (R10 re-review 3; B-06 folded in by FR10) |
 | S6-3-U07 | heavy attested-operator CPM use counts toward the Principal's hourly units and can exhaust client headroom (R10-F04) | operator's own choice |
+| S6-3-U11 | CI headroom of validate-fast shard 1 (FR10-F05): the memory-row guard (`tests/architecture/test_every_capability_reaching_a_memory_row_is_declared.py`), alone in shard 1, ran 734–792 s locally at this head (about 563 s at an earlier base; 281 against 255 capabilities). Scaled by about 1.3 the worst complete shard-1 leg projects to about 2,400–2,600 s against `timeout-minutes: 55` (3,300 s), about 75–80 %: an erosion, not a breach. The weights are left unchanged (the table is CI-derived; the 5 new light FAST files are hash-placed) | make the guard cheaper, or re-weigh the fast lane from the first CI run of this head |
 
-#### 15.18.2a I10-B divergences (as reported by I10-B at `bb6bbe8d`; not ruled here)
+#### 15.18.2a I10-B divergences (as reported by I10-B at `bb6bbe8d`; ruled by the final review FR10, all accepted)
 
 | ID | Divergence (I10-B's words, condensed) |
 |---|---|
 | S6-3-B01 | stopped: section 15.11.3 designed no public shape for schedule node summaries and virtual edges — resolved by the 15.11.3a addendum (owner I10-C) |
-| B-02 | the hard-coded `AssertRecordAssociation` relation enum in `commands.py` (an I10-A file) was widened, as 15.11.1 asks; treated as a trivial ownership point |
-| B-03 | the web decoder and 3 UI label maps were widened (outside the listed paths); without the decoder the S2/S3/S3.1 decoder guards fail, without the labels `tsc` fails |
-| B-04 | the report recompute withholds the 6 families unconditionally (OD-08), and the manifest functions raise `ValueError` outside the 7 families — I10-B's concrete reading of "admit only it" |
-| B-05 | the P1 companion-table test excludes the Schedule families' reads (the Schedule plane's own grants, not P1 companions) |
-| B-06 | `related_sha256` of a default-filter related read changes (the default filter is all relations, which grew); a client claim stored before would show `changed_since_read` |
-| B-07 | the local cursor scope does not include withheld families (the local grant digest is `None`); a local cursor spanning a plane switch flip (which needs a restart) would not be told to restart — left as a residual |
-| B-08 | `concerns` has no evidence rule, but every assertion still needs at least 1 anchor (the S1 parse minimum), so the tests cite a `corroborates` anchor |
+| B-02 | the hard-coded `AssertRecordAssociation` relation enum in `commands.py` (an I10-A file) was widened, as 15.11.1 asks; treated as a trivial ownership point. **FR10: accepted** (trivial ownership) |
+| B-03 | the web decoder and 3 UI label maps were widened (outside the listed paths); without the decoder the S2/S3/S3.1 decoder guards fail, without the labels `tsc` fails. **FR10: accepted** |
+| B-04 | the report recompute withholds the 6 families unconditionally (OD-08), and the manifest functions raise `ValueError` outside the 7 families — I10-B's concrete reading of "admit only it". **FR10: accepted** (OD-08 stricter than required; `ValueError` only on an internal defect) |
+| B-05 | the P1 companion-table test excludes the Schedule families' reads (the Schedule plane's own grants, not P1 companions). **FR10: accepted** |
+| B-06 | `related_sha256` of a default-filter related read changes (the default filter is all relations, which grew); a client claim stored before would show `changed_since_read`. **FR10: accepted as a residual, folded into S6-3-U10** |
+| B-07 | the local cursor scope does not include withheld families (the local grant digest is `None`); a local cursor spanning a plane switch flip (which needs a restart) would not be told to restart — left as a residual. **FR10: accepted as a residual** (a switch flip needs a restart; the exposure is a local in-flight cursor across it) |
+| B-08 | `concerns` has no evidence rule, but every assertion still needs at least 1 anchor (the S1 parse minimum), so the tests cite a `corroborates` anchor. **FR10: accepted** (the S1 parse minimum) |
+
+#### 15.18.2b I10-A and I10-C divergences (as reported by the packages; ruled by the final review FR10)
+
+| ID | Divergence | FR10 ruling |
+|---|---|---|
+| I10-A D-1 | `admit_write` is `Callable[[ScenarioRepository, str, int \| None], None]` (15.14 named `Callable[[ScenarioRepository, str], None]`): `None` refuses at or over the byte quota (the CPM pre-check), `0` skips bytes, `n > 0` refuses `used + n > quota` — one `0` cannot express both the pre-check and the natural-key admission over quota (section 15.10) | accepted |
+| I10-A D-2 | a third plane port, `ScenarioRecordBuilders` (`new_version`, `new_output`), composed in `src/my_pa/bootstrap/gateway.py` beside `ScenarioUnitOfWork` and `ScenarioCpmRunner` (15.8 and 15.14 named 2): the builders live in the plane persistence, which the application may not import | accepted |
+| I10-A D-3 | `available_capabilities` restates the plane conjunction on the attributes instead of calling `_scenario_plane_is_composed()` (the S5 precedent; P3-04 guards it) | accepted (minor maintenance risk) |
+| I10-A D-4 | plane reads refuse a bad cursor `invalid_request(CURSOR)`; compare delegates to S5 and inherits `conflict(CURSOR)` | accepted; 15.7.2 amended |
+| I10-A D-5 | `StoredBaseline` carries its events; `SeriesMatchRecord` gains `created_at` (additive, for `.read` history and keyset paging) | accepted |
+| I10-A D-6 | repository reads beyond the 9 of 15.14 (read-only, Principal-partitioned, no schema change) | accepted |
+| I10-A D-7 | one shared `_operator_writer` (grant, `attested_lineage_authority`, provenance) for the 4 operator writes | accepted |
+| I10-A D-8 | a CPM replay answers the ledger's original `created` (15.6.1 byte-identical replays) | accepted |
+| I10-A D-9 | proposer and approver `client_id` withheld from remote readers (15.4, 15.6.4) | accepted |
+| I10-A D-10 | the S6-2 scope test relaxed: `service.py` and `bootstrap` may name `ScenarioUnitOfWork` (15.8 requires the parameter and the factory); the dropped "nothing public" pins replaced in lockstep by `test_only_the_composition_root_imports_the_plane`, `test_worker_passes_the_effective_plane` and the lineage vocabulary tests (R3-28) | accepted, not a weakening |
+| I10-A D-11 | the remote-key tests live in the database module (they need the real ledger) | accepted |
+| I10-A D-12 | 6 names added to the transport's mutating-name exemption (the 3 `.create` names append the Principal's own immutable plane rows; the 3 `schedule_scenario_outputs.*` names trip only on "put" in "outputs"); explicit and enumerated | accepted |
+| I10-A D-13 | the Reports suite upgrades to its own revision; only `HEAD` moves (15.2) | accepted |
+| I10-A D-14 | test naming | accepted (trivial) |
+| I10-A P3-18 | green: unreachable at the handler (Project ids are Principal-partitioned and `owns_project` refuses first); the persistence `_mine` in `list_scenarios` is defence in depth | accepted as unreachable, not "covered" |
+| I10-A P3-20 | green: layered on the S6-2 write-side `_require_effective_baseline` (S6-2's own prove-red isolates it); the ineligible half is guarded by FR10-F02's test | accepted as layered |
+| I10-C C-1 | the port record `LineageScheduleFacts` and a non-abstract `RecordLineageRepository.schedule_node_facts` (default `{}`, so in-memory fakes keep working) in `src/my_pa/contracts/ports.py`; the SQL repository overrides it with Principal-partitioned plain `SELECT`s | accepted (the default fails closed: nodes are dropped, never mislabelled) |
+| I10-C C-2 | a Schedule node with no facts (for example a Baseline with no event recorded by `N`) is dropped as `partial_native_history`; a summary the byte budget refuses drops its node with `truncated_budget` | accepted (hidden = absent) |
+| I10-C C-3 | an extra validator on `ScheduleBaselineNodeSummary` (`operator_approved` iff an effective type; `authoritative` iff `approved`), so P3-57 is layered | accepted (defence in depth for 15.11.3a item 1) |
+| I10-C C-4 | the publication summary's `data_date` is nullable (key always present); `status` is the stored status, equal to the effective status for every terminal (linkable) publication | not separately ruled (S6-3-U09) |
+| I10-C C-5 | the page-size-1 walk lowers `MIN_LINEAGE_PAGE_SIZE` (public minimum 10) in the test and still runs the service and the real cursor; no web component renders virtual edges or summaries, so the edge and label enumerations live in the decoder | not separately ruled (trivial) |
+| I10-C C-6 | `ops/runbooks/remote-mcp-cloudflare.md` inventory restated 37 (21 + 7 + 1 + 4 Reports custody + 4 baseline decisions = v13 `CONTROL_PLANE_EXCLUDED` 33 + 2 + 2); the base text (29) was stale after Reports | accepted |
+| I10-C C-7 | `tests/ci_shard_weights.json` unchanged | accepted with residual S6-3-U11 |
 
 #### 15.18.3 Open questions
 
@@ -4255,6 +4289,18 @@ P3-30 to P3-34 and P3-48 to P3-58 each reddened its named test; P3-56 with the k
 reddens through the position validator (P3-58's guard, layered), and P3-51 and P3-57 are also
 held by the strict summary models; commands and outcomes are in the I10-C handoff report.
 
+**Corrective FC-C1 (final review FR10, PASS_WITH_REQUIRED_CHANGES at `d6a035c5`; same branch,
+2026-11-11).** Tests only, no behaviour change: `test_compare_refuses_a_non_effective_baseline`
+(4), `test_an_ineligible_baseline_answers_conflict_status` (2; an import-time approval whose
+publication ends `review_required`) and a counted `conflict(expected_version)` and
+`rate_limited(storage_quota)` in `test_refusal_counting_scope`. Prove-red P3-59 (FR10 M13) reddens
+the 4 compare cases; its 2 ineligible cases stay green under M13 because the S5 delta then
+refuses the `review_required` publication with `conflict(status)` (layered; P3-60 isolates the
+branch). P3-60 (M3) reddens both ineligible cases (`conflict(baseline_id)`); P3-61 (M4) reddens
+`test_refusal_counting_scope` (1 counted refusal instead of 2). The database selection
+`database or recovery or e2e` collects 6,785 (+6). Divergences D-1…D-14 and C-1…C-7 are in
+section 15.18.2b; the CI headroom residual is S6-3-U11.
+
 ### 15.20 R10 findings → fixes (revision R10-1)
 
 Design review R10 (PASS_WITH_REQUIRED_CHANGES at `de81d3d8`); Orchestrator dispositions applied.
@@ -4312,3 +4358,13 @@ Design review R10 (PASS_WITH_REQUIRED_CHANGES at `de81d3d8`); Orchestrator dispo
 | Finding | Fix (section) |
 |---|---|
 | R10-T01 | `_lineage_position` accepts the schedule edge key form (schedule edge type, families from `NATIVE_VIRTUAL_EDGE_ENDPOINTS`, ids validated per family) besides `v:<note_version_id>`, amending S3 section 5; owned by I10-C; the page-size-1 test decodes it; P3-58 (15.11.3a items 5, 10; 15.16.3) |
+
+**Final review FR10 (PASS_WITH_REQUIRED_CHANGES at `d6a035c5`) → corrective FC-C1.**
+
+| Finding | Fix (section) |
+|---|---|
+| FR10-F01 | `test_compare_refuses_a_non_effective_baseline`; P3-59 (15.16.2, 15.16.3, 15.19) |
+| FR10-F02 | `test_an_ineligible_baseline_answers_conflict_status`; P3-60 (15.16.2, 15.16.3, 15.19) |
+| FR10-F03 | `test_refusal_counting_scope` counts a conflict and a quota refusal; P3-61 (15.16.3, 15.19) |
+| FR10-F04 | 15.18.2b (I10-A D-1…D-14, I10-C C-1…C-7 with FR10's rulings); the compare-cursor note in 15.7.2; B-02…B-08 marked ruled, B-06 folded into S6-3-U10 (15.7.2, 15.18) |
+| FR10-F05 | residual S6-3-U11 (15.18.2) |

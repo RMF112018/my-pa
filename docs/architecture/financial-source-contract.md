@@ -20,6 +20,7 @@ review and, for any real data, the operator source designation of OD-06.
 | Real financial source | **none designated** (OD-06 open; UB-009 `FINANCE_SOURCE_NOT_DESIGNATED`) |
 | Certified Program financial totals | **unreachable** (OD-08: any material gap is `NOT_REPORTABLE`; a looser threshold is an operator risk acceptance) |
 | F-1 content | pure domain under `src/my_pa/domain/project_controls/financial/`, the synthetic interchange parser under `src/my_pa/infrastructure/financial/`, synthetic fixtures under `tests/fixtures/financial_source/`, tests |
+| F-1 implementation state | **I11-A (pure domain and its 6 test modules): implemented in F-1 (not deployed)**, branch `feat/financial-source-domain`; implementation divergences F1-D26 to F1-D33 (section 13.1). I11-B (parser, fixtures, manifest, scope guard): not yet implemented |
 | Migration, table, persistence, capability, purpose, handler, grant, façade, ChatLLM or remote policy, web route, Settings field, worker | **none in F-1** (section 12.3 pins it) |
 | Switch `MY_PA_FINANCIAL_SOURCE_ENABLED` | documented future switch for F-2; **not defined and not read** anywhere in F-1 |
 | Deployment, production data, legacy `financial` schema and `procore.procore_financial_*` rows | none touched, none read |
@@ -1421,6 +1422,15 @@ hazard, never as "covered".
 | CR-011 exact hash parity (evaluator) | 3.7 step 7 | `tests/unit/test_financial_reportability.py::test_admitted_run_failing_hash_parity_is_hash_mismatch`; `tests/unit/test_financial_canonical.py::test_canonical_encoder_bytes_are_pinned` |
 | Legacy names never match the planned-table guard | 12.3 | `tests/architecture/test_financial_source_scope.py::test_the_table_guard_does_not_match_legacy_names` |
 
+**Implementation state of the crosswalk (I11-A).** Every row naming
+`tests/unit/test_financial_money.py`, `tests/unit/test_financial_domain.py`,
+`tests/unit/test_financial_equations.py`, `tests/unit/test_financial_reportability.py`,
+`tests/unit/test_financial_canonical.py` or `tests/unit/test_financial_properties.py` is
+implemented in F-1 (not deployed). Rows naming `tests/unit/test_financial_source_parser.py`,
+`tests/unit/test_financial_source_fixtures.py` or
+`tests/architecture/test_financial_source_scope.py` are pending I11-B. Rows owned by F-2 or
+F-3 are unchanged.
+
 ---
 
 ## 13. Divergences, open operator decisions, residuals
@@ -1454,6 +1464,19 @@ hazard, never as "covered".
 | F1-D23 | no truncation reason (the contract's first revision had 28 reasons) | 29: `membership_truncated` added | a truncated Program would otherwise be `reportable` (R11-F06) |
 | F1-D24 | parser code name | `source_version_not_first` (was `source_version_missing`) | the reason `source_version_missing` has a different meaning (R11-F22) |
 | F1-D25 | CR-011 recovery "quarantine wrong mappings" only | also an operator-only run quarantine (`financial_run_quarantines`, 10th table, prefix `fqr`) and an evaluator input `quarantined_run_refs` | a system-wide version conflict is otherwise unrecoverable (R11-N02) |
+
+Implementation divergences recorded by I11-A (contract vs code; none changes a decision above):
+
+| ID | Contract | Implementation | Reason |
+| --- | --- | --- | --- |
+| F1-D26 | `FinanceParseOutcome` is described with the parser (section 7.9) | defined in the domain `model.py`; I11-B's `synthetic_csv.py` imports and returns it | `admit_source_run` (domain, section 3.10) takes the parser outcome, and the domain may not import infrastructure |
+| F1-D27 | `eac_basis` ∈ {`computed`, `source`, `null`} | closed `StrEnum` `EacBasis` (`computed`, `source`) or `None` | a closed vocabulary instead of a free string |
+| F1-D28 | aware UTC instants | every instant (record fields and `request.source_cutoff`) also has whole seconds, the canonical `YYYY-MM-DDTHH:MM:SSZ` precision; F-3 truncates a fractional RFC3339 `source_cutoff` to the second when it normalises it to UTC | round trip of every canonical timestamp is exact |
+| F1-D29 | 9 test modules with the exact names of section 12.1 | as written, plus a non-module builder `tests/fixtures/financial_domain.py` (versions of section 8.3 built in Python, the section 8.5 scenarios) and 2 extra tests in `tests/unit/test_financial_reportability.py`: `test_every_domain_golden_matches_section_8_5` (all 43 goldens from domain inputs) and `test_s04_and_s29_golden_values` | I11-A exercises every golden without fixture files; I11-B's `test_every_scenario_matches_its_golden` re-runs them through the parser |
+| F1-D30 | `AT020` digests are frozen by I11-B (F1-U06) | `tests/unit/test_financial_canonical.py::test_canonical_encoder_bytes_are_pinned` already pins the section 8.2 base version's `content_sha256` (`ae7b8de3bc2551718b6bf40d3e99457cec6e28e4b8661d4af68529a545a73e07`), computed from the domain-built version | the parsed `syn_at020_owner_budget.csv` must reproduce it (hash parity across the 2 packages) |
+| F1-D31 | `test_seeded_body_mutations_are_refused`: a random byte change in a valid **file** body is refused | in I11-A it mutates 1 random byte of the canonical bytes of a valid version: the strict decoder refuses it, or the decoded version has a different `content_sha256` and the evaluator reports `hash_mismatch` (33 of 200 seeds reach the decoded branch) | the file half needs the I11-B parser; I11-B adds the file-body mutation property to `tests/unit/test_financial_source_parser.py` or extends this test |
+| F1-D32 | section 12.3: no `json` import outside `canonical.py`'s use of the shared encoder | `canonical.py` imports `json` for `loads_canonical` (the only JSON decode path, with refusing `parse_float` / `parse_constant` hooks, section 6.2) | I11-B's `test_financial_modules_use_no_float_io_or_logging` allows `json` in `canonical.py` only |
+| F1-D33 | input-contract violations of section 5.3 step 1 | also raise `ValueError` for 2 supplied runs with the same `run_ref`, an admitted run whose version names another system than its designation, and `admit_source_run` given an outcome of another file digest; `quarantined_run_refs` of any other type than `frozenset` is a `TypeError`; `MAX_FINANCIAL_PROJECTS = 100` is a finance constant pinned equal to S4 `MAX_PROGRAM_PROJECTS` by `test_project_cap_is_the_s4_cap` (the domain imports only `MetricValueState` from S4) | fail-closed inputs; the allowed-roots rule of section 12.3 |
 
 ### 13.2 Open operator decisions
 

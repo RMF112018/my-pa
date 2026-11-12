@@ -130,13 +130,14 @@ def test_revised_contract_is_original_plus_approved_changes() -> None:
 
 
 def test_pending_changes_never_enter_approved_figures() -> None:
-    s01 = figures(scenario(1).evaluate(), P1)
-    assert s01["approved_changes"] == "25000.0000"  # SYN-CO-2 (pending 40000) is not in it
-    assert s01["pending_changes"] == "40000.0000"
+    # The contract perspective first: no reconciliation identity can null its figures.
     s02 = figures(scenario(2).evaluate(), P1)
     assert s02["approved_changes"] == "42500.5000"  # SYN-CO-K3 (pending 7000) is not in it
     assert s02["revised_contract"] == "2042500.5000"
     assert s02["pending_changes"] == "7000.0000"
+    s01 = figures(scenario(1).evaluate(), P1)
+    assert s01["approved_changes"] == "25000.0000"  # SYN-CO-2 (pending 40000) is not in it
+    assert s01["pending_changes"] == "40000.0000"
 
 
 def test_eac_is_actual_plus_ctc_or_source_eac_never_both() -> None:

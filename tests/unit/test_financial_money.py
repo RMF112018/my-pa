@@ -110,7 +110,8 @@ def test_no_float_is_accepted_anywhere() -> None:
 
 
 def test_money_sum_is_exact_at_full_precision() -> None:
-    total = money_sum([parse_amount(MAX)] * 3)
+    # Built without `parse_amount`, so only `money_sum` runs under FINANCE_CONTEXT.
+    total = money_sum([Decimal(MAX)] * 3)
     assert total == Decimal("29999999999999999.9997")
     assert format(total, "f") == "29999999999999999.9997"
     assert not is_storable_amount(total)  # the caller turns it into aggregate_out_of_range

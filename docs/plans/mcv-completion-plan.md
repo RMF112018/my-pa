@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Four hundred and ninety-four Python modules under `src/my_pa` and nine hundred and fifty-three test modules —
+Five hundred Python modules under `src/my_pa` and nine hundred and fifty-nine test modules —
 
-**Current-tree remeasurement (Schedule Scenarios S6-3 package I10-C, branch `feat/schedule-scenarios-capabilities`, 2026-11-11):** the two commands below count 494 source modules and 953 test modules: the I10-B 494/952 below plus the one test module `tests/integration/test_scenario_compact_facade.py`; I10-C adds no source module under `src/my_pa`. Previously four hundred and ninety-four and nine hundred and fifty-two.
+**Current-tree remeasurement (Financial controlled source F-1 package I11-A, branch `feat/financial-source-domain`, 2026-11-12):** the two commands below count 500 source modules and 959 test modules: the I10-C 494/953 below plus the six source modules `src/my_pa/domain/project_controls/financial/__init__.py`, `money.py`, `model.py`, `equations.py`, `reportability.py` and `canonical.py` (same directory) and the six test modules `tests/unit/test_financial_money.py`, `tests/unit/test_financial_domain.py`, `tests/unit/test_financial_equations.py`, `tests/unit/test_financial_reportability.py`, `tests/unit/test_financial_canonical.py` and `tests/unit/test_financial_properties.py`. Previously four hundred and ninety-four and nine hundred and fifty-three.
+
+**Historical remeasurement (Schedule Scenarios S6-3 package I10-C, branch `feat/schedule-scenarios-capabilities`, 2026-11-11):** the two commands below counted 494 source modules and 953 test modules: the I10-B 494/952 below plus the one test module `tests/integration/test_scenario_compact_facade.py`; I10-C adds no source module under `src/my_pa`. Previously four hundred and ninety-four and nine hundred and fifty-two.
 
 **Historical remeasurement (Schedule Scenarios S6-3 package I10-B, branch `feat/schedule-scenarios-capabilities`, 2026-11-11):** the two commands below counted 494 source modules and 952 test modules: the I10-A 494/950 below plus the two test modules `tests/unit/test_schedule_lineage_vocabulary.py` and `tests/database/test_schedule_scenario_lineage.py`; I10-B adds no source module under `src/my_pa`. Previously four hundred and ninety-four and nine hundred and fifty.
 

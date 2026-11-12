@@ -17,8 +17,8 @@
 - **Authority:** as in Status. The OD-08 default (selected by the operator directive of
   2026-10-17, recorded in [ADR-015](ADR-015-record-lineage-and-issue-situations.md)) governs
   reportability. This ADR does not ratify any source, approval hierarchy, threshold or
-  exposure; design review R11 (PASS_WITH_REQUIRED_CHANGES) is resolved in contract revision
-  R11-1.
+  exposure; design review R11 and its re-review 1 are resolved in contract revisions R11-1
+  and R11-2.
 - **Scope and contract:** WP-05A, CR-011, AT-020 of review package
   `MYPA-LINEAGE-ADVERSARIAL-REVIEW-20261017-001`; the concrete contract is
   [`financial-source-contract.md`](../architecture/financial-source-contract.md).
@@ -73,9 +73,10 @@ designation; UB-009 stands.
    refuse, closed refusal codes) and synthetic fixtures. A real source needs its own adapter,
    mapping review and independent review.
 8. **Staging.** F-1 adds no public or persistent surface (pinned by an architecture scope
-   guard). F-2 plans 9 append-only, Principal-partitioned tables, always schema-qualified
-   `knowledge.financial_*` (never in schema `financial`; classified `excluded` and protected in
-   the MCP object-grant mechanism), an operator-only, attested-local import behind the default-off switch
+   guard). F-2 plans 10 append-only, Principal-partitioned tables (including an operator-only
+   run-quarantine record), always schema-qualified
+   `knowledge.financial_*` (never in schema `financial`; protected in the MCP object-grant
+   mechanism, never granted beyond the owner), an operator-only, attested-local import behind the default-off switch
    `MY_PA_FINANCIAL_SOURCE_ENABLED`, and recovery by switch-off with rows retained. F-3 plans
    `programs.financial.overview` withheld from ChatLLM and remote clients until OD-06 and
    OD-08 are decided.

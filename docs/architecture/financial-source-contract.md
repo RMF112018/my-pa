@@ -6,7 +6,7 @@
 accepted**; design and synthetic proof undertaken under the operator's program directive of
 2026-10-17 and the operator's 2026-11-12 discretion grant, with F-1 selected by the Manager,
 inside OD-06's "theoretical schema/fixtures can be prepared" carve-out; the model decisions
-are not operator-ratified). Revision R11-1 resolves design review R11 (section 15). It is the
+are not operator-ratified). Revisions R11-1 and R11-2 resolve design review R11 and its re-review 1 (section 15). It is the
 single document the
 F-1 (pure domain, synthetic interchange parser, synthetic fixtures), F-2 (schema,
 persistence, operator-only import, mapping review) and F-3 (Program financial read and its
@@ -101,8 +101,8 @@ proves nothing public or persistent exists.
 | R-06 | Property tests | not specified | `hypothesis` is **not** a dependency (`pyproject.toml`; `import hypothesis` fails in the repo venv). S6-1 precedent: `tests/unit/test_scenario_cpm_oracle.py` uses `random.Random(seed)` with `# noqa: S311` | Seeded deterministic generators (section 12.2) |
 | R-07 | ADR number | — | `docs/decisions/` holds ADR-001 to ADR-017 | **ADR-018** allocated |
 | R-08 | Capability naming | `programs.financial.overview` (07) | `programs.members.resolve`, `programs.overview` exist (S4), Purpose `program_reporting_read`, behind `MY_PA_PROGRAM_REPORTING_ENABLED` | F-3 adds `programs.financial.overview` in the same `programs.*` family with its own purpose (section 10). No capability in F-1 |
-| R-09 | IdKind | finance identifiers implied | 174 members; none of `fdes`, `fsrun`, `fsver`, `fmap`, `fpsn`, `fline`, `fchg`, `fxfr`, `fleg` is used | F-1 adds **no** IdKind; F-2 adds the 9 planned prefixes (section 9.2) |
-| R-10 | Tables | 8 `financial_*` tables | None of the 9 planned table names (section 9.1) exists in `src/my_pa/infrastructure/persistence/tables.py` (`METADATA` schema `knowledge`). A **migrated legacy** PostgreSQL schema named `financial` exists: created by revision `5d75f23847c9` (`SCHEMAS` tuple), its tables by the generated target DDL `migrations/sql/target_tables.up.sql` (e.g. `"financial"."aging_exposure_report_items"`, `"financial"."forecast_accuracy_results"`) under revision `1e6c0a94f3b7`. `migrations/data/disposition_registry.json` lists 67 objects with `target_schema = "financial"`: dispositions `MIGRATE_DATA` 28, `REBUILD_AND_VALIDATE` 20, `ARCHIVE_LEGACY_SOURCE_ONLY` 11, `REINITIALIZE_OPERATIONAL_STATE` 8; sensitivity `FINANCIAL_OPERATIONAL` 65, `PERSONAL_COMMUNICATION_OR_IDENTITY` 2; object families `forecast_*` (including `forecast_external_forecasts`, `forecast_cost_entries`, `forecast_monthly_actuals_by_budget_code`, `forecast_source_ingestions`, `forecast_budget_details`), `second_brain_financial_*` and `staffing_*`. `financial` is in `_SCHEMAS` of `src/my_pa/infrastructure/database/mcp_object_grants.py` and in `src/my_pa/infrastructure/migration/reconciliation.py`. Production row content is **unverified** (28 objects are data-migration targets, so real financial rows may exist) | F-2 tables are always schema-qualified `knowledge.financial_*`; never created in, granted through or read from schema `financial`. The legacy schema is unanalysed and **not** a designated source; it does not change UB-009. It is recorded as a possible OD-06 candidate needing its own analysis and designation (F1-O12, F1-D08, F1-U09) |
+| R-09 | IdKind | finance identifiers implied | 174 members; none of `fdes`, `fsrun`, `fsver`, `fmap`, `fpsn`, `fline`, `fchg`, `fxfr`, `fleg`, `fqr` is used | F-1 adds **no** IdKind; F-2 adds the 10 planned prefixes (section 9.2) |
+| R-10 | Tables | 8 `financial_*` tables | None of the 10 planned table names (section 9.1) exists in `src/my_pa/infrastructure/persistence/tables.py` (`METADATA` schema `knowledge`). A **migrated legacy** PostgreSQL schema named `financial` exists: created by revision `5d75f23847c9` (`SCHEMAS` tuple), its tables by the generated target DDL `migrations/sql/target_tables.up.sql` (e.g. `"financial"."aging_exposure_report_items"`, `"financial"."forecast_accuracy_results"`) under revision `1e6c0a94f3b7`. `migrations/data/disposition_registry.json` lists 67 objects with `target_schema = "financial"`: dispositions `MIGRATE_DATA` 28, `REBUILD_AND_VALIDATE` 20, `ARCHIVE_LEGACY_SOURCE_ONLY` 11, `REINITIALIZE_OPERATIONAL_STATE` 8; sensitivity `FINANCIAL_OPERATIONAL` 65, `PERSONAL_COMMUNICATION_OR_IDENTITY` 2; object families `forecast_*` (including `forecast_external_forecasts`, `forecast_cost_entries`, `forecast_monthly_actuals_by_budget_code`, `forecast_source_ingestions`, `forecast_budget_details`), `second_brain_financial_*` and `staffing_*`. `financial` is in `_SCHEMAS` of `src/my_pa/infrastructure/database/mcp_object_grants.py` and in `src/my_pa/infrastructure/migration/reconciliation.py`. Production row content is **unverified** (28 objects are data-migration targets, so real financial rows may exist) | F-2 tables are always schema-qualified `knowledge.financial_*`; never created in, granted through or read from schema `financial`. The legacy schema is unanalysed and **not** a designated source; it does not change UB-009. It is recorded as a possible OD-06 candidate needing its own analysis and designation (F1-O12, F1-D08, F1-U09) |
 | R-10a | Procore financial tables | not mentioned | schema `procore` holds legacy `procore_financial_change_orders`, `procore_financial_change_order_line_items`, `procore_financial_change_events` (target DDL); the target DDL also names `second_brain_financial_source_coverage_snapshots` and the column `raw_financial_source_payload_persisted` | Not read, not mapped, not designated by any slice here; no F-2/F-3 code reads `procore.*` or `financial.*` (an F-2/F-3 obligation, section 9.1). Possible OD-06 candidate (F1-O12). The F-1 scope guard must not match these legacy names (section 12.3 positive control) |
 | R-11 | Finance mentions in source | — | `financial_mention` (Capture classification), `financial_fact` (Knowledge consequential class), the legacy schema name; none is a finance ledger | Untouched; the scope guard matches only this slice's tokens (section 12.3) |
 | R-12 | Operator-only source import | operator designation | S5b-2 precedent: `schedule_publications.import` is an operator-only, attested-local capability (ADR-016) | F-2 follows that precedent (section 9.4); OD for CLI vs capability recorded as F1-O09 |
@@ -231,8 +231,13 @@ identified by `(source_system, source_version_ref, ref | transfer_ref)`.
 
 ### 3.7 Version resolution (immutability, supersession, spoofing)
 
-Inputs: the admitted and refused runs of 1 designated system S, after the request's
-`source_cutoff` filter (section 5.3 step 1). Definitions:
+Inputs: the admitted and refused runs of 1 designated system S, **minus quarantined runs**
+(section 5.3 step 1; quarantined runs are excluded from every step below and disclosed, never
+silently dropped — R11-N02). Step 1 runs over **all** remaining admitted runs of S; the
+request's `source_cutoff` filter is applied **after** step 1 and before step 2 (R11-N01).
+`run_sequence` is unique and monotonic per system (2 runs of S with the same `run_sequence` are
+an input-contract violation and raise `ValueError`; F-2 allocates it per `(principal,
+source_system)` across designations — R11-N05). Definitions:
 
 - A **version** is identified by its `content_sha256`; 2 or more admitted runs with equal
   `content_sha256` carry the **same** version (idempotent re-import, including a re-export
@@ -241,12 +246,23 @@ Inputs: the admitted and refused runs of 1 designated system S, after the reques
   `run_sequence`** among the admitted runs carrying that `content_sha256` (R11-F05).
 - The **scope key** is `(S, period, perspective, currency, cost_basis)`.
 
-1. **Conflict (system-wide, terminal).** If 2 admitted versions of S have the same
+1. **Conflict (system-wide, terminal, before the as-of filter).** If 2 admitted,
+   non-quarantined versions of S have the same
    `source_version_ref` and different `content_sha256` — in **any** period, perspective,
    currency or basis — every Project mapped from S gets `source_version_conflict` for every
    request, and resolution for S stops (no effective version, no further version reason). A
    ref may never carry 2 contents. This detects an edited or spoofed re-export **only when
-   the other content was imported too** (section 11, F1-U10).
+   the other content was imported too** (section 11, F1-U10). It is evaluated **before** the
+   `source_cutoff` filter, so 2 contents with different self-asserted `cutoff_at` values cannot
+   hide each other from an as-of request (R11-N01). **Recovery** is operator-only: quarantine
+   the mistaken run (F-2 `financial_run_quarantines`, section 9.4); the quarantined run is then
+   excluded here and disclosed in `quarantined_runs` (section 5.4). Supersession, withdrawal and
+   re-import cannot clear a conflict.
+1a. **As-of filter.** When `request.source_cutoff` is set, admitted runs whose version has
+   `cutoff_at > source_cutoff` are removed for steps 2–7. `cutoff_at` is the export's
+   self-asserted data cutoff, so this is "as of data cutoff", not "as known at": importing an
+   older-cutoff export later can change an earlier as-of answer (R11-N09). Refused runs are
+   kept (their cutoff is unknown; step 6 stays fail-closed).
 2. **Supersession graph** over the versions of the scope key: an edge V → X when V is
    `approved` or `withdrawn` and `X.source_version_ref == V.supersedes_ref` with X in the same
    scope key. A `proposed` version **never** supersedes (F1-D18). A `supersedes_ref` naming no
@@ -281,10 +297,14 @@ Inputs: the admitted and refused runs of 1 designated system S, after the reques
    parser `partial_export` ⇒ `partial_export`, parser `hash_mismatch` ⇒ `hash_mismatch`, every
    other parser or admission code ⇒ `source_refused`. A refused run cannot say which period,
    perspective, currency or basis it covered, so the effect is **cross-scope by design**: a
-   refused file meant for `2026-11` blocks `2026-10` answers of S until recovery. **Recovery:**
-   the operator imports a good export again; every import appends a new run (F-2 keeps no
-   file-hash uniqueness, section 9.1), so re-importing the identical good file, or a
-   re-export with the same content, makes a newer admitting run and clears the poison. Older
+   refused file meant for `2026-11` blocks `2026-10` answers of S until recovery. **Recovery
+   is per scope key (R11-N04):** the operator imports a good export again; every import appends
+   a new run (F-2 keeps no file-hash uniqueness, section 9.1), so re-importing the identical
+   good file, or a re-export with the same content, makes a newer admitting run **for that
+   scope key only**. Every other period, perspective, currency and basis of S — every historical
+   period included — stays poisoned until its own good export is re-imported (F1-U13).
+   Alternatively the operator quarantines the refused run, which clears it for every scope key
+   and is disclosed (section 9.4). Older
    refused runs are only counted (`denominator.refused_runs`). When the scope key has no
    version at all, both this step's reasons and the 5.3 step 6 classification reason apply.
 7. **Hash parity.** For every admitted run carrying the effective version,
@@ -443,9 +463,12 @@ transfer with 1 leg outside the scope is external and is not eliminated. Program
      the request perspective (section 3.8);
   2. program reason: a change-order `ref` or a `transfer_ref` appearing in more than 1
      effective version entering the answer, or a `ref` used as both a change-order ref and a
-     transfer ref across those versions. The versions **entering the answer** are the
-     effective versions (section 3.7) of every designated system for the request scope key
-     that supplied a figure to at least 1 member Project. Independent systems that
+     transfer ref across those versions. The versions **entering the answer** are, for every
+     designated system S, S's effective version for the request scope key **when S is the
+     accepted-mapping source of at least 1 member Project** — evaluated after section 3.7 and
+     section 3.8 and **before** the 5.3 step 9 nulling (so a version still enters when the
+     Project it maps is nulled for double coverage; R11-N03). The rule's result is reported in
+     `program_reasons` as well as in the union `reasons`. Independent systems that
      legitimately reuse a ref give a fail-closed false positive, and the same change order
      under 2 different refs in 2 systems is not detected (F1-U12).
 - Program identity, asserted in tests (not a reason): for `owner_budget`, when every term is
@@ -480,13 +503,13 @@ transfer with 1 leg outside the scope is external and is not eliminated. Program
 | `approval_stale` | project | `approved_at < cutoff_at` |
 | `approval_actor_unrecognized` | project | approver not in the designation |
 | `withdrawn_source` | project | head is a withdrawal |
-| `source_version_ambiguous` | project | more than 1 approved head |
+| `source_version_ambiguous` | project | more than 1 approved head, an approved and a withdrawn head, or a supersession cycle (section 3.7 step 3) |
 | `source_version_conflict` | project | same ref, 2 contents |
 | `hash_mismatch` | project | refused run (`hash_mismatch`) or parity failure |
 | `partial_export` | project | refused run (`partial_export`) |
-| `source_refused` | project | any other refused run newer than the effective version |
+| `source_refused` | project | any other refused, non-quarantined run newer than the effective version's admitting run, or any such run when the scope key has no effective version |
 | `source_reconciliation_failed` | project | section 4.5 identity fails |
-| `double_count_detected` | project, program | section 4.7 |
+| `double_count_detected` | project, program | section 4.7 (program occurrences also in `program_reasons`) |
 | `measure_not_reported` | metric | balance measure absent |
 | `eac_basis_conflict` | metric | `eac`, `variance` |
 | `eac_incomplete` | metric | `eac`, `variance` |
@@ -509,7 +532,9 @@ precedence that matches its reasons: `not_integrated` (`source_not_integrated`) 
 Signature (exact; **no threshold, tolerance or materiality parameter exists**):
 `evaluate_financial_overview(request: FinancialScopeRequest, designations:
 Sequence[SourceDesignation], runs: Sequence[SourceRun], mappings:
-Sequence[ProjectMappingRevision]) -> FinancialOverview`.
+Sequence[ProjectMappingRevision], quarantined_run_refs: frozenset[str]) -> FinancialOverview`.
+`quarantined_run_refs` is the set of `run_ref`s the operator has quarantined (F-2
+`financial_run_quarantines`); a ref naming no supplied run raises `ValueError`.
 
 `FinancialScopeRequest(project_ids: tuple[str, ...]` (sorted, unique, 1..100 — the S4
 `MAX_PROGRAM_PROJECTS` cap; more raises `ValueError`), `unresolved_members: int ≥ 0,
@@ -519,9 +544,10 @@ input to UTC) or `None` (R11-F07).
 
 1. Input order never matters: designations, runs and mappings are sorted canonically first.
    Designations must be active and unique per system (section 3.4); mapping revisions must be
-   gap-free (section 3.8); a violation raises `ValueError`. When `source_cutoff` is set, every
-   admitted run whose version has `cutoff_at > source_cutoff` is removed **before** section
-   3.7 ("the answer as of that source cutoff"); refused runs are kept (their cutoff is
+   gap-free (section 3.8); `run_sequence` unique per system (section 3.7); a violation raises
+   `ValueError`. Quarantined runs are set aside (excluded from section 3.7 entirely) and listed in
+   `quarantined_runs`. The `source_cutoff` filter is section 3.7 step 1a: it runs **after** the
+   system-wide conflict check and before supersession; refused runs are kept (their cutoff is
    unknown, so the fail-closed poisoning of section 3.7 step 6 still applies).
 2. If no designation lists `request.perspective`: reportability `source_not_integrated`;
    every Project state `not_integrated` with reason `source_not_integrated`; every value
@@ -566,13 +592,15 @@ signature).
 | `request` | the request (period, perspective, currency, cost_basis, project_ids, unresolved_members, membership_truncated, source_cutoff) | |
 | `reportability` | `FinancialReportability` | |
 | `reasons` | sorted tuple of every program- and project-level reason present | |
+| `program_reasons` | sorted tuple of the **program-level** reasons only (`source_not_integrated`, `membership_unresolved`, `membership_truncated`, `double_count_detected` from the section 4.7 program rule) | makes the program rule observable apart from any Project reason (R11-N03) |
+| `quarantined_runs` | sorted `run_ref`s of quarantined runs supplied for the system(s) in scope | disclosure: a quarantine is never a silent drop (R11-N02) |
 | `program_metrics` | tuple of `FinancialMetricValue(metric, value: Decimal \| None, value_state: MetricValueState, reasons)` in catalogue order | `restricted` is never produced in F-1 (F-3 visibility) |
 | `projects` | tuple of `ProjectFinancialFigures(project_id, source_state, reasons, source_content_sha256 \| None, external_project_id \| None, eac_basis, metrics)` sorted by `project_id` | per-Project partial figures stay visible when the Program total is not reportable |
 | `transfer_eliminations` | tuple, sorted by `transfer_ref` | section 4.6 |
 | `source_versions` | sorted `content_sha256` of effective versions used | |
 | `pending_source_versions` | sorted `content_sha256` of proposed versions in scope | |
 | `source_cutoff_at` | the **earliest** `cutoff_at` among effective versions used, or `null` | every figure is at least as current as this instant |
-| `denominator` | `FinancialDenominator(member_projects, unresolved_members, projects_reportable, missing_source_count, refused_runs, projects_by_source_state: {6 states → int})` | integers; `missing_source_count` = members whose state ≠ `effective`; never hidden |
+| `denominator` | `FinancialDenominator(member_projects, unresolved_members, projects_reportable, missing_source_count, refused_runs, quarantined_runs, projects_by_source_state: {6 states → int})` | integers (`refused_runs` counts non-quarantined refused runs, `quarantined_runs` every quarantined run); `missing_source_count` = members whose state ≠ `effective`; never hidden |
 
 S4 alignment: same `MetricValueState`, same rule that a total is `null` with sorted `reasons`
 rather than a substituted number, same denominator discipline. Divergences: a finance-own
@@ -656,9 +684,10 @@ closed values, amounts through `parse_amount`, every record rebuilt through its 
 any deviation (unknown/missing key, JSON number where a string is required, `float`) raises
 `FinanceDecodeError` whose message carries nothing of the object. Counts and integers are
 checked with `type(x) is int` (a `bool` is refused). Any JSON decoding of these objects (F-2
-readback, manifest goldens) uses `json.loads` with `parse_float`, `parse_int` for non-count
-positions and `parse_constant` hooks that refuse, because `json.loads` accepts `NaN` and
-`Infinity` by default (R11-F14). **Hash parity rule:**
+readback, manifest goldens) uses `json.loads` with refusing `parse_float` and `parse_constant`
+hooks, because `json.loads` accepts `NaN`, `Infinity` and floats by default; `parse_int` stays
+the default, and positions are enforced by the post-decode `type(x) is int` / `type(x) is str`
+checks above (R11-F14, R11-N06). **Hash parity rule:**
 `source_content_sha256(source_version_from_object(source_version_object(v))) ==
 source_content_sha256(v)` for every admitted `v`, and F-2's readback of persisted rows must
 reproduce the stored `content_sha256` byte for byte.
@@ -935,6 +964,9 @@ Designations used by scenarios: `syn-fin-a` (perspectives `owner_budget`,
 | `syn_cycle_a.csv` | supersession cycle | base rows; ref `SYN-V-2026-10-C1`, `supersedes_ref SYN-V-2026-10-C2` | admitted |
 | `syn_cycle_b.csv` | supersession cycle | base rows; ref `SYN-V-2026-10-C2`, `supersedes_ref SYN-V-2026-10-C1` | admitted |
 | `syn_withdrawal_dangling.csv` | withdrawal naming no version | as `syn_withdrawal.csv` with ref `SYN-V-2026-10-W2`, `supersedes_ref SYN-V-2026-10-NONE` | admitted |
+| `syn_version_conflict_late.csv` | conflict hidden from an as-of request without the N01 rule | as `syn_version_conflict.csv` (ref `SYN-V-2026-10-A`, `SYN-L-003` = `400001.0000`) with `cutoff_at 2026-11-30T23:59:59Z`, `approved_at 2026-12-05T15:00:00Z` | admitted |
+| `syn_p300_second_system.csv` | program-only double count | `source_system syn-fin-c`, ref `SYN-V-2026-10-D`; SYN-P-300: `original_budget 100000.0000`, `current_budget 110000.0000`, change order `SYN-CO-1` approved `10000.0000`; `row_count 3` | admitted |
+| `syn_period_2026_11.csv` | cross-period poisoning recovery | base rows; ref `SYN-V-2026-11-A`, `period 2026-11`, `cutoff_at 2026-11-30T23:59:59Z`, `approved_at 2026-12-05T15:00:00Z` | admitted |
 | `syn_partial_export.csv` | truncated export | base with the `end` line removed (file still ends with LF) | refused `partial_export`, line 18 |
 | `syn_tampered_body.csv` | body changed after its declared hash was written (accidental corruption; a deliberate forger recomputes the hash — section 11) | base, then `SYN-L-003` = `400000.0001` after `body_sha256` was computed | refused `hash_mismatch`, line 3 |
 | `syn_duplicate_identity.csv` | duplicate identity | base plus `SYN-L-099` with the identity of `SYN-L-001` (amount `1.0000`), counts and hash updated | refused `duplicate_identity`, line of `SYN-L-099` |
@@ -944,7 +976,7 @@ Designations used by scenarios: `syn-fin-a` (perspectives `owner_budget`,
 Each is the base file with exactly 1 mutation, `body_sha256` and `row_count` recomputed after
 the mutation unless the mutation targets them. Expected: refused with the code in the name
 at the manifest's recorded line. The set is exactly these 52 files (so the fixture tree holds
-20 named files, 52 malformed files and the manifest: 73 files):
+23 named files, 52 malformed files and the manifest: 76 files):
 
 | File | Mutation |
 | --- | --- |
@@ -1010,7 +1042,9 @@ section 12.2.
 The bracketed list after the reportability is the **complete sorted** overview `reasons`
 (every program- and project-level reason present); a Project named before a list scopes it to
 that Project, and the other members are `effective`. Metric-level reasons are listed per
-metric. Run sequence numbers are the listed order (1, 2, …).
+metric. Run sequence numbers are the listed order (1, 2, …) and run refs are `syn-run-<n>`
+for sequence n. `program_reasons` is `[]` unless stated. `quarantined_runs` is `[]` unless
+stated, and `quarantine {…}` lists the `quarantined_run_refs` input.
 
 | # | Runs (sequence order) | Members | Expected reportability; reasons |
 | --- | --- | --- | --- |
@@ -1028,7 +1062,7 @@ metric. Run sequence numbers are the listed order (1, 2, …).
 | S12 | unknown_actor | P1, P2 | `not_reportable`; [`approval_actor_unrecognized`] |
 | S13 | eac_conflict | P1, P2 | `reportable`; P1 `eac`/`variance` [`eac_basis_conflict`]; P2 `eac`/`variance` [`eac_incomplete`]; Program `eac`/`variance` both reasons |
 | S14 | reconciliation_failure | P1, P2 | `not_reportable`; P1 [`source_reconciliation_failed`] all `null`; P2 reported with S01 P2 figures |
-| S15 | at020 (`syn-fin-a`), second_system (`syn-fin-c`, mapping `syn-fin-c`/`SYN-P-100` → P1) | P1, P2 | `not_reportable`; P1 [`double_count_detected`]; program [`double_count_detected`] |
+| S15 | at020 (`syn-fin-a`), second_system (`syn-fin-c`, mapping `syn-fin-c`/`SYN-P-100` → P1) | P1, P2 | `not_reportable`; [`double_count_detected`]; P1 [`double_count_detected`] (project rule) and `program_reasons` [`double_count_detected`] (program rule: `syn-fin-c` is the accepted-mapping source of P1 and has an effective version, so it enters the answer before nulling and `SYN-CO-1` repeats) |
 | S16 | partial_export | P1, P2 | `not_reportable`; [`partial_export`, `source_version_missing`] |
 | S17 | tampered_body | P1, P2 | `not_reportable`; [`hash_mismatch`, `source_version_missing`] |
 | S18 | duplicate_identity | P1, P2 | `not_reportable`; [`source_refused`, `source_version_missing`] |
@@ -1046,11 +1080,17 @@ metric. Run sequence numbers are the listed order (1, 2, …).
 | S30 | (none) | P1 | `not_reportable`; [`source_version_missing`] |
 | S31 | spoofed, at020, spoofed_b, at020 (identical re-import) | P1, P2 | `reportable` (S01 figures): the admitting run of the at020 version is sequence 4 > 3; `refused_runs = 2` (recovery) |
 | S32 | spoofed, at020, spoofed_b | P1, P2 | `not_reportable`; [`source_refused`]; `refused_runs = 2` |
-| S33 | at020 | P1, P2 (period `2026-09`), plus a later refused partial_export | `not_reportable`; [`partial_export`, `period_mismatch`] — the refused run poisons across periods |
+| S33 | at020, partial_export | P1, P2 (period `2026-09`) | `not_reportable`; [`partial_export`, `period_mismatch`] — a refused run poisons a scope key that has **no effective version** (any refused run counts; section 3.7 step 6) |
 | S34 | cycle_a, cycle_b | P1, P2 | `not_reportable`; [`source_version_ambiguous`] |
 | S35 | at020, withdrawal_dangling | P1, P2 | `not_reportable`; [`source_version_ambiguous`] (1 approved and 1 withdrawn head) |
 | S36 | at020 | P1, P2, `membership_truncated` true | `not_reportable`; [`membership_truncated`]; per-Project figures reported |
 | S37 | at020 | P1, P2, `source_cutoff 2026-10-30T00:00:00Z` | `not_reportable`; [`source_version_missing`] (the only version is cut off after the requested source cutoff) |
+| S38 | at020, version_conflict; quarantine {`syn-run-2`} | P1, P2 | `reportable` (S01 figures); `quarantined_runs` [`syn-run-2`]; `denominator.quarantined_runs = 1` — a conflict cleared only by quarantine |
+| S39 | at020, spoofed; quarantine {`syn-run-2`} | P1, P2 | `reportable` (S01 figures); `quarantined_runs` [`syn-run-2`]; `refused_runs = 0`; `quarantined_runs = 1` (disclosed, not silently dropped) |
+| S40 | at020, version_conflict_late | P1, P2, `source_cutoff 2026-11-15T00:00:00Z` | `not_reportable`; [`source_version_conflict`] — the conflict is found before the as-of filter would have removed the later content (R11-N01) |
+| S41 | at020 (`syn-fin-a`), p300_second_system (`syn-fin-c`); mappings `syn-fin-a`/`SYN-P-100` → P1 and `syn-fin-c`/`SYN-P-300` → P3 only | P1, P3 | `not_reportable`; [`double_count_detected`]; P1 and P3 `effective` with their own figures; `program_reasons` [`double_count_detected`]; every Program metric `null` — **only** the program rule fires (`SYN-CO-1` in both effective versions) |
+| S42 | at020, spoofed, period_2026_11 | P1, P2 (period `2026-10`) | `not_reportable`; [`source_refused`] — the `2026-10` admitting run (sequence 1) is older than the refused run (2); re-importing a **different** period (3) does not clear `2026-10` |
+| S43 | at020, spoofed, period_2026_11 | P1, P2 (period `2026-11`) | `reportable` (S01 figures; `source_cutoff_at 2026-11-30T23:59:59Z`) — the `2026-11` admitting run (3) is newer than the refused run |
 
 ### 8.6 Golden values (exact decimal strings)
 
@@ -1129,7 +1169,7 @@ closed-value `CHECK`s for every section 3.2 vocabulary; timestamps `timestamptz`
 | Table | Key columns | Uniqueness / checks |
 | --- | --- | --- |
 | `financial_source_designations` (`fdes_`) | `designation_id`, `source_system`, `perspectives text[]`, `approvers text[]`, `decision_reference`, `designated_by`, `designated_at`, `revokes_designation_id` | operator-only writes; revocation is a new row |
-| `financial_source_runs` (`fsrun_`) | `run_id`, `designation_id`, `run_sequence`, `file_sha256`, `file_size`, `format_version`, `outcome`, `refusal_code`, `refusal_line`, `version_id` (nullable; composite FK to the version), `imported_by`, `imported_at` | unique `(principal_id, designation_id, run_sequence)`; **no** uniqueness on `file_sha256` (every import appends a run, so re-importing an identical good file clears poisoning — section 3.7 step 6); `outcome = 'admitted'` ⇔ `version_id IS NOT NULL` ⇔ `refusal_code IS NULL` CHECK; many runs → 1 version |
+| `financial_source_runs` (`fsrun_`) | `run_id`, `designation_id`, `run_sequence`, `file_sha256`, `file_size`, `format_version`, `outcome`, `refusal_code`, `refusal_line`, `version_id` (nullable; composite FK to the version), `imported_by`, `imported_at` | `source_system` column (the designated system); `run_sequence` is **monotonic per `(principal_id, source_system)`** across designations — unique `(principal_id, source_system, run_sequence)` and allocated as 1 + the current maximum for that system (R11-N05); **no** uniqueness on `file_sha256` (every import appends a run, so re-importing an identical good file clears poisoning — section 3.7 step 6); `outcome = 'admitted'` ⇔ `version_id IS NOT NULL` ⇔ `refusal_code IS NULL` CHECK; many runs → 1 version |
 | `financial_source_versions` (`fsver_`) | `version_id`, section 3.5 header fields, `body_sha256` of the first admitting run, `content_sha256` | unique `(principal_id, source_system, source_version_ref, content_sha256)`: an identical content from a later run reuses the row (idempotency lives at the version, not the file); a second content under the same ref is a new row and surfaces as `source_version_conflict`; approval-field CHECKs of section 3.5 |
 | `financial_project_mappings` (`fmap_`) | `mapping_id`, `source_system`, `external_project_id`, `revision`, `state`, `project_id`, `match_basis`, `reviewed_by`, `reviewed_at`, `reason` | unique `(principal_id, source_system, external_project_id, revision)`; `match_basis = 'operator_review'` CHECK; composite FK `(project_id, principal_id)` → `knowledge.projects (project_id, principal_id)`; revision gap-free trigger |
 | `financial_period_snapshots` (`fpsn_`) | `snapshot_id`, `version_id`, `external_project_id`, 3 counts, `slice_sha256` | unique `(principal_id, version_id, external_project_id)` |
@@ -1137,19 +1177,23 @@ closed-value `CHECK`s for every section 3.2 vocabulary; timestamps `timestamptz`
 | `financial_change_orders` (`fchg_`) | `change_order_id`, `version_id`, `ref`, external ids, scope, `change_status`, `amount` | unique `(version_id, ref)`; `amount <> 0` |
 | `financial_scope_transfers` (`fxfr_`) | `transfer_id`, `version_id`, `transfer_ref`, `cost_code`, `wbs_package`, `change_status` | unique `(version_id, transfer_ref)` |
 | `financial_transfer_legs` (`fleg_`) | `leg_id`, `transfer_id`, `ref`, `external_project_id`, `leg_side`, `amount` | unique `(transfer_id, leg_side)`; sign CHECK by side; `DEFERRABLE INITIALLY DEFERRED` constraint trigger: each transfer has exactly 2 legs, different projects, Σ = 0 at commit |
+| `financial_run_quarantines` (`fqr_`) | `quarantine_id`, `run_id` (composite FK), `reason`, `quarantined_by`, `quarantined_at` | operator-only, append-only; unique `(principal_id, run_id)`; never deletes or edits the run; the evaluator receives the quarantined run refs (section 5.3) |
 
 **Schema and access obligations (F-2/F-3; R11-F02).** Every F-2 DDL and query names the
 tables schema-qualified as `knowledge.financial_*`; nothing is created in, granted through or
 read from schema `financial` or `procore`, and no F-2/F-3 module reads `financial.*` or
 `procore.*`. F-2 extends the scope guard with these checks.
 
-**Database privileges (R11-F16).** No `GRANT`/`REVOKE` and no MCP object grant in the F-2
-revision (the S5b-1/S6-2 precedent: tables owned by the migrating role). In the creator-bound
-grant mechanism of `src/my_pa/infrastructure/database/mcp_object_grants.py` all 9 tables are
-classified `excluded` (never `application_read`/`application_write`), and F-2 adds all 9
-`("knowledge", "financial_*")` pairs to `_PROTECTED`, so no later MCP database profile can
-expose them. Rows are written only by the import transaction of the application; they are read
-only through the F-3 read path.
+**Database privileges (R11-F16, R11-N07).** No `GRANT`/`REVOKE` in the F-2 revision, and the
+F-2 revision does **not** call the creator-bound grant mechanism of
+`src/my_pa/infrastructure/database/mcp_object_grants.py` (the S6-2 precedent and its
+no-reference test in `tests/schema/test_schedule_scenarios_migration.py`); the tables are owned
+by the migrating role. F-2 adds the 10 `("knowledge", name)` pairs to `_PROTECTED`, so any
+future declaration of them can only be `excluded` (the mechanism refuses any other
+classification for a protected pair). F-2's database test asserts no privilege beyond the owner
+(the `test_no_grant_beyond_the_owner` precedent of the same S6-2 module). Rows are written only
+by the import and quarantine transactions of the application; they are read only through the
+F-3 read path.
 
 Only the import transaction writes rows; a version's lines, orders, transfers, legs and
 snapshots are inserted in the same transaction as the first run that admits it, and the readback
@@ -1162,7 +1206,8 @@ snapshots are inserted in the same transaction as the first run that admits it, 
 `FINANCIAL_SOURCE_VERSION = "fsver"`, `FINANCIAL_PROJECT_MAPPING = "fmap"`,
 `FINANCIAL_PERIOD_SNAPSHOT = "fpsn"`, `FINANCIAL_ACCOUNT_LINE = "fline"`,
 `FINANCIAL_CHANGE_ORDER = "fchg"`, `FINANCIAL_SCOPE_TRANSFER = "fxfr"`,
-`FINANCIAL_TRANSFER_LEG = "fleg"` (all unused at the basis; F-2 re-verifies collisions).
+`FINANCIAL_TRANSFER_LEG = "fleg"`, `FINANCIAL_RUN_QUARANTINE = "fqr"` (10 prefixes, all
+unused at the basis; F-2 re-verifies collisions).
 
 ### 9.3 Switch
 
@@ -1185,10 +1230,18 @@ operator gate and does not designate a source.
   names in F-2.
 - **Quarantine** of a wrong mapping: append a `quarantined` revision; every overview using it
   turns `mapping_quarantined`; nothing is deleted or rewritten.
-- **Recovery:** switch off (halts import and reads); immutable rows are retained; a wrong
-  version is superseded or withdrawn by a new source version, never edited; a poisoning
-  refused run is cleared by re-importing a good export (section 3.7 step 6); **no write to
-  any source system ever**.
+- **Run quarantine (R11-N02, CR-011 "quarantine")**: an operator-only, append-only
+  `financial_run_quarantines` row naming 1 run, with a reason. It never deletes or edits the
+  run or its version. The evaluator receives the quarantined run refs and excludes those runs
+  from conflict detection, poisoning and version resolution, and every overview of that system
+  **discloses** them (`quarantined_runs`, `denominator.quarantined_runs`). There is no
+  un-quarantine in F-2 (a later contract may add an append-only release record).
+- **Recovery:** switch off (halts import and reads); immutable rows are retained. A wrong
+  version is superseded or withdrawn by a new source version, never edited. A **version
+  conflict** (section 3.7 step 1) is recoverable **only** by quarantining the mistaken run;
+  supersession, withdrawal and re-import cannot clear it. A poisoning refused run is cleared
+  per scope key by re-importing that scope key's good export, or for every scope key at once
+  by quarantining it (section 3.7 step 6). **No write to any source system ever**.
 - **AT-020 DB half:** `tests/integration/test_financial_scope_transfer.py` (database +
   integration) — owned by F-2; it imports the section 8.2 fixture into an isolated synthetic
   database and asserts the S01 values, the deferred leg-balance trigger, append-only and
@@ -1200,7 +1253,7 @@ operator gate and does not designate a source.
 
 | Item | Decision |
 | --- | --- |
-| Capability | `programs.financial.overview` (read, `programs.*` family next to `programs.overview`); payload `program_entity_id`, `period`, `perspective`, `currency`, **`cost_basis`** (F1-D11), optional `source_cutoff` (RFC3339, normalized to UTC, passed as `request.source_cutoff`, section 5.3 step 1); resolves members with the S4 resolver (passing its unresolved count and truncation flag), then `evaluate_financial_overview` over persisted rows; response = section 5.4 with `program_entity_id` and money as decimal strings (`amount_decimal`, F1-D03) |
+| Capability | `programs.financial.overview` (read, `programs.*` family next to `programs.overview`); payload `program_entity_id`, `period`, `perspective`, `currency`, **`cost_basis`** (F1-D11), optional `source_cutoff` (RFC3339, normalized to UTC, passed as `request.source_cutoff`, section 5.3 step 1); resolves members with the S4 resolver (passing its unresolved count and truncation flag), then `evaluate_financial_overview` over persisted rows and the quarantined run refs; response = section 5.4 with `program_entity_id` and money as decimal strings (`amount_decimal`, F1-D03) |
 | Per-Project read | none separate: per-Project figures are in the overview; a dedicated read is a later decision |
 | Operator status read | an operator-only read of designations, runs, refusals and the mapping queue (name fixed by F-3) |
 | Purpose | a new `program_financial_read` purpose (distinct from `program_reporting_read`) — fixed here at contract level only (R11 ruling Q9); nothing is added to code in F-1 |
@@ -1234,13 +1287,13 @@ operator gate and does not designate a source.
 | Module | Tests (exact names) |
 | --- | --- |
 | `tests/unit/test_financial_money.py` | `test_amount_grammar_accepts_the_frozen_forms`; `test_amount_grammar_refuses_exponent_separators_and_locale`; `test_amount_refuses_negative_zero_leading_plus_and_leading_zeros`; `test_amount_scale_above_4_is_refused_never_rounded`; `test_amount_range_is_numeric_20_4`; `test_no_float_is_accepted_anywhere`; `test_money_sum_is_exact_at_full_precision`; `test_money_sum_is_exact_and_traps_inexact`; `test_empty_sum_and_negated_zero_are_storable`; `test_presentation_rounding_is_half_even_per_currency`; `test_unknown_currency_has_no_minor_units`; `test_format_amount_always_writes_4_places` |
-| `tests/unit/test_financial_domain.py` | `test_records_refuse_float_and_unquantized_amounts`; `test_mapping_match_basis_is_operator_review_only`; `test_current_mapping_is_the_highest_revision`; `test_effective_version_ignores_proposed_supersession`; `test_withdrawal_withdraws_the_superseded_version`; `test_two_approved_heads_are_ambiguous`; `test_same_ref_different_content_is_a_version_conflict`; `test_run_from_an_undesignated_system_is_refused`; `test_period_snapshot_slices_by_external_project`; `test_supersession_cycle_is_ambiguous`; `test_approved_and_withdrawn_heads_are_ambiguous`; `test_several_withdrawn_heads_are_withdrawn_source`; `test_dangling_withdrawal_stays_a_withdrawn_head`; `test_conflict_is_system_wide_and_terminal`; `test_admitting_run_is_the_latest_carrying_the_content`; `test_mapping_revision_gap_is_an_input_error`; `test_duplicate_designation_is_an_input_error` |
+| `tests/unit/test_financial_domain.py` | `test_records_refuse_float_and_unquantized_amounts`; `test_mapping_match_basis_is_operator_review_only`; `test_current_mapping_is_the_highest_revision`; `test_effective_version_ignores_proposed_supersession`; `test_withdrawal_withdraws_the_superseded_version`; `test_two_approved_heads_are_ambiguous`; `test_same_ref_different_content_is_a_version_conflict`; `test_run_from_an_undesignated_system_is_refused`; `test_period_snapshot_slices_by_external_project`; `test_supersession_cycle_is_ambiguous`; `test_approved_and_withdrawn_heads_are_ambiguous`; `test_several_withdrawn_heads_are_withdrawn_source`; `test_dangling_withdrawal_stays_a_withdrawn_head`; `test_conflict_is_system_wide_and_terminal`; `test_admitting_run_is_the_latest_carrying_the_content`; `test_mapping_revision_gap_is_an_input_error`; `test_duplicate_designation_is_an_input_error`; `test_run_sequence_must_be_unique_per_system` |
 | `tests/unit/test_financial_equations.py` | `test_revised_contract_is_original_plus_approved_changes`; `test_pending_changes_never_enter_approved_figures`; `test_eac_is_actual_plus_ctc_or_source_eac_never_both`; `test_variance_requires_one_version_scope`; `test_owner_budget_reconciliation_identity`; `test_at020_owning_project_figures_balance`; `test_at020_consolidation_is_net_neutral`; `test_at020_transfer_is_eliminated_once`; `test_at020_pending_change_is_reported_separately`; `test_at020_unapproved_transfer_is_excluded`; `test_at020_currency_mismatch_is_not_consolidated`; `test_double_count_is_detected` |
-| `tests/unit/test_financial_reportability.py` | `test_no_designation_is_source_not_integrated`; `test_project_level_reason_nulls_every_metric_of_that_project`; `test_program_total_is_not_reportable_when_any_member_is`; `test_per_project_figures_survive_a_program_gap`; `test_no_zero_is_substituted`; `test_denominator_counts_every_member`; `test_evaluator_has_no_threshold_parameter`; `test_currency_mismatch_reports_fx_missing`; `test_refused_run_newer_than_effective_poisons_the_designation`; `test_membership_unresolved_blocks_program_totals_only`; `test_stale_approval_is_not_reportable`; `test_unrecognized_approver_is_not_reportable`; `test_admitted_run_failing_hash_parity_is_hash_mismatch`; `test_identical_reimport_clears_poisoning`; `test_poisoning_crosses_periods`; `test_membership_truncated_blocks_program_totals_only`; `test_source_cutoff_excludes_later_versions`; `test_project_cap_is_the_s4_cap` |
+| `tests/unit/test_financial_reportability.py` | `test_no_designation_is_source_not_integrated`; `test_project_level_reason_nulls_every_metric_of_that_project`; `test_program_total_is_not_reportable_when_any_member_is`; `test_per_project_figures_survive_a_program_gap`; `test_no_zero_is_substituted`; `test_denominator_counts_every_member`; `test_evaluator_has_no_threshold_parameter`; `test_currency_mismatch_reports_fx_missing`; `test_refused_run_newer_than_effective_poisons_the_designation`; `test_membership_unresolved_blocks_program_totals_only`; `test_stale_approval_is_not_reportable`; `test_unrecognized_approver_is_not_reportable`; `test_admitted_run_failing_hash_parity_is_hash_mismatch`; `test_identical_reimport_clears_poisoning`; `test_poisoning_crosses_periods`; `test_membership_truncated_blocks_program_totals_only`; `test_source_cutoff_excludes_later_versions`; `test_project_cap_is_the_s4_cap`; `test_conflict_is_found_before_the_source_cutoff_filter`; `test_quarantine_clears_a_conflict_and_is_disclosed`; `test_quarantined_refused_run_no_longer_poisons`; `test_unknown_quarantine_ref_is_an_input_error`; `test_program_double_count_is_reported_apart_from_project_reasons` |
 | `tests/unit/test_financial_canonical.py` | `test_content_hash_ignores_row_order`; `test_content_object_round_trips`; `test_decode_refuses_unknown_keys_and_numbers`; `test_hash_parity_detects_a_changed_amount`; `test_overview_digest_is_deterministic`; `test_slice_hash_covers_only_its_project`; `test_canonical_encoder_bytes_are_pinned`; `test_decode_refuses_bool_counts_and_nan` |
 | `tests/unit/test_financial_properties.py` | `test_seeded_balanced_transfers_consolidate_to_zero`; `test_seeded_pending_rows_never_move_approved_metrics`; `test_seeded_amount_strings_round_trip`; `test_seeded_body_mutations_are_refused`; `test_seeded_input_order_never_changes_the_overview`; `test_seeded_presentation_rounding_matches_integer_reference` |
 | `tests/unit/test_financial_source_parser.py` | `test_valid_fixture_parses_to_its_golden_version`; `test_each_malformed_fixture_refuses_with_its_code`; `test_refusal_carries_code_and_line_only`; `test_oversized_input_is_refused_before_decoding`; `test_too_many_rows_under_an_injected_limit`; `test_formula_injection_is_refused_in_text_cells_only`; `test_a_negative_amount_is_not_a_formula`; `test_partial_export_is_rejected_whole`; `test_tampered_body_is_a_hash_mismatch`; `test_parser_raises_only_type_error_for_non_bytes`; `test_period_is_data_never_ingest_time`; `test_end_line_cells_are_validated`; `test_transfer_leg_sign_is_not_masked_by_amount_sign` |
-| `tests/unit/test_financial_source_fixtures.py` | `test_fixture_files_match_their_pinned_sha256`; `test_fixture_directory_equals_the_manifest`; `test_every_scenario_matches_its_golden`; `test_fixture_identifiers_are_synthetic`; `test_no_test_calls_the_fixture_writer`; `test_fixtures_are_not_text_normalised` (asserts `.gitattributes` carries the section 8.1 rule and that the CRLF, TAB, BOM and no-final-LF fixtures still hold those bytes) |
+| `tests/unit/test_financial_source_fixtures.py` | `test_fixture_files_match_their_pinned_sha256`; `test_fixture_directory_equals_the_manifest`; `test_every_scenario_matches_its_golden`; `test_fixture_identifiers_are_synthetic`; `test_no_test_calls_the_fixture_writer`; `test_fixtures_are_not_text_normalised` (asserts `.gitattributes` carries the section 8.1 rule **or** its documented `binary` fallback, and that the CRLF, TAB, BOM and no-final-LF fixtures still hold those bytes) |
 | `tests/architecture/test_financial_source_scope.py` | `test_financial_crosswalk_names_real_tests`; `test_no_financial_capability_purpose_or_id_kind`; `test_no_financial_table_or_migration`; `test_financial_switch_has_no_consumer`; `test_financial_modules_are_imported_only_by_their_own_slice`; `test_financial_modules_import_only_their_allowed_roots`; `test_financial_modules_use_no_float_io_or_logging`; `test_programs_financial_overview_is_not_served`; `test_the_table_guard_does_not_match_legacy_names` |
 
 ### 12.2 Seeded property tests
@@ -1261,9 +1314,9 @@ integer-arithmetic half-even reference. Not exhaustive (F1-U07).
 | Test | Pins |
 | --- | --- |
 | `test_financial_crosswalk_names_real_tests` | every `test_*` named in section 12.1 and 12.5 is a function defined in the module of its row (S4 guard precedent) |
-| `test_no_financial_capability_purpose_or_id_kind` | no `Capability` or `Purpose` value contains `financ`; no `IdKind` value is one of the 9 planned prefixes and no member name contains `FINANCIAL` |
-| `test_no_financial_table_or_migration` | the exact 9 planned names with identifier boundaries — `(?<![A-Za-z0-9_])financial_(source_designations\|source_runs\|source_versions\|project_mappings\|period_snapshots\|account_lines\|change_orders\|scope_transfers\|transfer_legs)(?![A-Za-z0-9_])` — match no table name in `METADATA` and no text of `migrations/versions/*.py` or `migrations/sql/*.sql` (R11-F01) |
-| `test_the_table_guard_does_not_match_legacy_names` | positive control: the same pattern does **not** match the legacy names present at the basis (`procore_financial_change_orders`, `procore_financial_change_order_line_items`, `procore_financial_change_events`, `second_brain_financial_source_coverage_snapshots`, `raw_financial_source_payload_persisted`), and **does** match each of the 9 planned names written alone and schema-qualified (`knowledge.financial_source_runs`) — so the guard is shown to discriminate |
+| `test_no_financial_capability_purpose_or_id_kind` | no `Capability` or `Purpose` value contains `financ`; no `IdKind` value is one of the 10 planned prefixes and no member name contains `FINANCIAL` |
+| `test_no_financial_table_or_migration` | the exact 10 planned names with identifier boundaries — `(?<![A-Za-z0-9_])financial_(source_designations\|source_runs\|source_versions\|project_mappings\|period_snapshots\|account_lines\|change_orders\|scope_transfers\|transfer_legs\|run_quarantines)(?![A-Za-z0-9_])` — match no table name in `METADATA` and no text of `migrations/versions/*.py` or `migrations/sql/*.sql` (R11-F01) |
+| `test_the_table_guard_does_not_match_legacy_names` | positive control: the same pattern does **not** match the legacy names present at the basis (`procore_financial_change_orders`, `procore_financial_change_order_line_items`, `procore_financial_change_events`, `second_brain_financial_source_coverage_snapshots`, `raw_financial_source_payload_persisted`), and **does** match each of the 10 planned names written alone and schema-qualified (`knowledge.financial_source_runs`) — so the guard is shown to discriminate |
 | `test_financial_switch_has_no_consumer` | `MY_PA_FINANCIAL_SOURCE_ENABLED` and `financial_source_enabled` occur in no file under `src/`, `apps/`, `ops/`, `migrations/`, `web/src/`, nor in any `.env*` example file |
 | `test_financial_modules_are_imported_only_by_their_own_slice` | by `ast`, `my_pa.domain.project_controls.financial` is imported only by its own modules and `my_pa.infrastructure.financial`; `my_pa.infrastructure.financial` by nothing under `src/`, `apps/`, `ops/`, `migrations/` (tests only) |
 | `test_financial_modules_import_only_their_allowed_roots` | the 6 domain modules import only the standard library, `my_pa.domain.schedule.canonical` (name `canonical_json_bytes` only), `my_pa.domain.program.vocabulary` (name `MetricValueState` only) and each other; the 2 infrastructure modules additionally only the finance domain |
@@ -1277,13 +1330,13 @@ integer-arithmetic half-even reference. Not exhaustive (F1-U07).
 | PR-01 | scale refused, not rounded | `parse_amount` quantizes a 5-place input | `test_amount_scale_above_4_is_refused_never_rounded` |
 | PR-02 | float refused | drop the `type(value) is Decimal` check in `is_storable_amount` | `test_no_float_is_accepted_anywhere`, which asserts `is_storable_amount(1.5) is False` with no exception (expected failure: `AttributeError` from a Decimal-only method called on the float) |
 | PR-03a | precision | set `FINANCE_CONTEXT.prec = 10` only | `test_money_sum_is_exact_at_full_precision` (input: `money_sum` of `9999999999999999.9999` 3 times; expected `29999999999999999.9997` exactly; expected failure: `Rounded` raised) |
-| PR-03b | inexact trap | remove `Inexact` **and** `Rounded` from the traps (1 named alternative; then run again removing only `Rounded`) | `test_money_sum_is_exact_and_traps_inexact` (input: `Decimal("1") / Decimal("3")` under `FINANCE_CONTEXT`; expected failure: no exception raised). Each alternative is run separately and reported |
+| PR-03b | inexact trap | remove `Inexact` **and** `Rounded` from the traps (1 named alternative; then run again removing only `Rounded`) | `test_money_sum_is_exact_and_traps_inexact` (input: `Decimal("1") / Decimal("3")` under `FINANCE_CONTEXT`; expected failure: no exception raised). Each alternative is run separately and reported | The remove-only-`Rounded` alternative is **expected to stay green** (`Inexact` fires on the same operation): it is planned redundancy and is reported as such, never as coverage.
 | PR-04 | presentation mode | `ROUND_HALF_UP` in `presentation_amount` | `test_presentation_rounding_is_half_even_per_currency` |
 | PR-05 | pending excluded | `approved_changes` includes `pending` | `test_pending_changes_never_enter_approved_figures` |
 | PR-06 | EAC exclusivity | EAC adds `source_eac` to the computed value when both exist | `test_eac_is_actual_plus_ctc_or_source_eac_never_both` |
 | PR-07 | elimination | Program `transfers_in` sums all member legs | `test_at020_transfer_is_eliminated_once` |
 | PR-08 | reconciliation | skip section 4.5 | `test_owner_budget_reconciliation_identity` |
-| PR-09 | double count | skip the cross-version ref check | `test_double_count_is_detected` |
+| PR-09 | double count (program rule) | skip the cross-version ref check | `test_double_count_is_detected`, which evaluates **S41** (no Project mapped from 2 systems; expected failure: `program_reasons` `[]` and the overview `reportable`) (R11-N03) |
 | PR-10 | no zero substitution | a missing balance measure returns `0.0000` | `test_no_zero_is_substituted` |
 | PR-11 | Program gate | Program total reported when 1 member is `not_reportable` | `test_program_total_is_not_reportable_when_any_member_is` |
 | PR-12 | proposed never supersedes | count `proposed` in supersession | `test_effective_version_ignores_proposed_supersession` |
@@ -1315,6 +1368,11 @@ integer-arithmetic half-even reference. Not exhaustive (F1-U07).
 | PR-38 | source cutoff | ignore `request.source_cutoff` | `test_source_cutoff_excludes_later_versions` (S37) |
 | PR-39 | encoder pin | change the separators of the imported encoder in a scratch copy | `test_canonical_encoder_bytes_are_pinned` |
 | PR-40 | leg sign masking | apply `amount_sign` to transfer legs | `test_transfer_leg_sign_is_not_masked_by_amount_sign` |
+| PR-41 | conflict before as-of filter | apply the `source_cutoff` filter before section 3.7 step 1 | `test_conflict_is_found_before_the_source_cutoff_filter` (S40; expected failure: `reportable`) |
+| PR-42 | quarantine honoured | ignore `quarantined_run_refs` | `test_quarantine_clears_a_conflict_and_is_disclosed` (S38; expected failure: [`source_version_conflict`]) |
+| PR-43 | quarantine disclosed | leave `quarantined_runs` empty while still excluding the runs | `test_quarantine_clears_a_conflict_and_is_disclosed` (S38; expected failure: `quarantined_runs` `[]`) |
+| PR-44 | per-scope recovery | compare refused runs with the greatest admitting run of **any** scope key of S | `test_poisoning_crosses_periods` (S42; expected failure: `reportable`) |
+| PR-45 | program reasons separated | fill `program_reasons` with the full union | `test_program_double_count_is_reported_apart_from_project_reasons` (input: S28 with the P2 mapping removed, so P2 has project reason `mapping_missing` and the program has `membership_unresolved`; expected `program_reasons` [`membership_unresolved`]; expected failure: `mapping_missing` in `program_reasons`) |
 
 A prove-red that stays green is reported as redundancy, a masked test or an unreachable
 hazard, never as "covered".
@@ -1350,7 +1408,9 @@ hazard, never as "covered".
 | UB-009 no real source; synthetic only | 7, 8.1 | `tests/unit/test_financial_source_fixtures.py::test_fixture_identifiers_are_synthetic`; `tests/architecture/test_financial_source_scope.py::test_financial_switch_has_no_consumer` |
 | OD-08 truncated membership never reportable | 5.1, 5.3 | `tests/unit/test_financial_reportability.py::test_membership_truncated_blocks_program_totals_only` |
 | CR-011 version resolution total (cycles, mixed heads, dangling, system-wide conflict) | 3.7 | `tests/unit/test_financial_domain.py::test_supersession_cycle_is_ambiguous`; `tests/unit/test_financial_domain.py::test_approved_and_withdrawn_heads_are_ambiguous`; `tests/unit/test_financial_domain.py::test_conflict_is_system_wide_and_terminal` |
-| CR-011 recovery from a refused run | 3.7 step 6 | `tests/unit/test_financial_reportability.py::test_identical_reimport_clears_poisoning` |
+| CR-011 recovery from a refused run | 3.7 step 6 | `tests/unit/test_financial_reportability.py::test_identical_reimport_clears_poisoning`; `tests/unit/test_financial_reportability.py::test_poisoning_crosses_periods` |
+| CR-011 recovery: quarantine wrong data | 3.7 step 1, 9.4 | `tests/unit/test_financial_reportability.py::test_quarantine_clears_a_conflict_and_is_disclosed`; `tests/unit/test_financial_reportability.py::test_quarantined_refused_run_no_longer_poisons` |
+| Integrity not hidden by the as-of filter | 3.7 step 1 | `tests/unit/test_financial_reportability.py::test_conflict_is_found_before_the_source_cutoff_filter` |
 | 07 `source_cutoff` | 5.3 step 1 | `tests/unit/test_financial_reportability.py::test_source_cutoff_excludes_later_versions` |
 | CR-011 exact hash parity (evaluator) | 3.7 step 7 | `tests/unit/test_financial_reportability.py::test_admitted_run_failing_hash_parity_is_hash_mismatch`; `tests/unit/test_financial_canonical.py::test_canonical_encoder_bytes_are_pinned` |
 | Legacy names never match the planned-table guard | 12.3 | `tests/architecture/test_financial_source_scope.py::test_the_table_guard_does_not_match_legacy_names` |
@@ -1369,7 +1429,7 @@ hazard, never as "covered".
 | F1-D04 | 07 `coverage_state` (8 values) | S4 `MetricValueState` + finance reasons | the repository's Program precedent (S4 D-11) |
 | F1-D05 | — | `FinancialNotReportableReason` separate from S4 `NotReportableReason` | the S4 set is closed and pinned by its scope guard |
 | F1-D06 | identity `(source_system, external_account/project/contract/cost_code/scope, source_version, period, perspective, currency)` | identity adds `cost_basis` and `measure`; `cost_code`, `wbs_package` explicit; CR's `scope` is `wbs_package`; CR's `external_account` is **omitted** (the synthetic format has no account identifier separate from `cost_code`; a designated source with one needs a format revision) | 2 measures of 1 cost code are distinct facts; basis changes meaning (R11-F17) |
-| F1-D07 | 8 tables | 9 (adds `financial_source_designations`) | the operator designation must be durable and attributable |
+| F1-D07 | 8 tables | 10 (adds `financial_source_designations` and `financial_run_quarantines`) | the operator designation must be durable and attributable; CR-011's "quarantine" recovery needs a durable, disclosed record (R11-N02) |
 | F1-D08 | — | F-2 tables schema-qualified `knowledge.financial_*`, never created in, granted through or read from schema `financial` or `procore` | the `financial` schema is a migrated legacy schema (67 objects: 28 `MIGRATE_DATA`, 20 `REBUILD_AND_VALIDATE`, 11 `ARCHIVE_LEGACY_SOURCE_ONLY`, 8 `REINITIALIZE_OPERATIONAL_STATE`; 65 `FINANCIAL_OPERATIONAL`, 2 personal), unanalysed, whose production row content is unverified, and which is not a designated source |
 | F1-D09 | buyout, billing, cash flow "only if source-backed" | not in v1 measures | no source backs them; adding a measure is a contract amendment |
 | F1-D10 | variance against "approved current budget" | contract perspective uses `revised_contract` | the contract perspective has no budget measure |
@@ -1387,6 +1447,7 @@ hazard, never as "covered".
 | F1-D22 | 07 output fields `grain`, `unit`, `coverage_state`, `dedupe_basis`, `source_run_ids`, `as_of`, `excluded_project_count`, `nonadditive_across_projects`; input `source_cutoff` | mapped or dropped per the section 5.4 table; `source_cutoff` is `request.source_cutoff` | the F-1 evaluator defines every field it returns (R11-F07) |
 | F1-D23 | no truncation reason (the contract's first revision had 28 reasons) | 29: `membership_truncated` added | a truncated Program would otherwise be `reportable` (R11-F06) |
 | F1-D24 | parser code name | `source_version_not_first` (was `source_version_missing`) | the reason `source_version_missing` has a different meaning (R11-F22) |
+| F1-D25 | CR-011 recovery "quarantine wrong mappings" only | also an operator-only run quarantine (`financial_run_quarantines`, 10th table, prefix `fqr`) and an evaluator input `quarantined_run_refs` | a system-wide version conflict is otherwise unrecoverable (R11-N02) |
 
 ### 13.2 Open operator decisions
 
@@ -1422,13 +1483,14 @@ hazard, never as "covered".
 | F1-U10 | **No authenticity.** `body_sha256`, `source_system`, `status`, `approved_by` and `approved_at` are self-asserted inside the file; a deliberate forger recomputes the hash and names the designated system and approver. Authenticity rests entirely on operator-only import of an operator-obtained file (provenance); there is no signature. Same-ref conflict detects an edit only when the original content was imported first |
 | F1-U11 | `reportable` certifies source integrity and coverage only, never a certified total (OD-08); F-3 wording must say so |
 | F1-U12 | Cross-system double-count detection by ref is fail-closed against legitimate ref reuse by independent systems, and misses the same change order under different refs in 2 systems |
+| F1-U13 | Poisoning recovery is per scope key: after a refused run newer than every admitted run, each period, perspective, currency and basis of the system (historical periods included) needs its own good re-import, or the operator quarantines the refused run (R11-N04) |
 
 ---
 
 ## 14. F-1 work split (proposal)
 
 2 sequential packages; B depends on A's public symbols. A single package was considered and
-rejected: 8 source modules, 9 test modules and 73 fixture files exceed a reviewable diff, and
+rejected: 8 source modules, 9 test modules and 76 fixture files exceed a reviewable diff, and
 the parser/fixture half can be reviewed against frozen domain symbols.
 
 | Package | Owned paths | Deliverables |
@@ -1471,3 +1533,20 @@ R11 (PASS_WITH_REQUIRED_CHANGES at `6c00e671`) findings and where each is resolv
 | R11-F21 | minor | `test_canonical_encoder_bytes_are_pinned` (12.1, 12.5, PR-39, F1-D21) |
 | R11-F22 | nit | malformed count 52, fixture tree 73; parser code `source_version_not_first` (F1-D24); `source_cutoff_at` described as the earliest cutoff |
 | Rulings Q1–Q11 | — | Q1: 9.4 operator-only attested-local capability, never ChatLLM/remote/façade/web; Q6: `reportable` is never a certified total (header, 5.3 step 11, section 10, F1-U11, ADR-018); Q9: purpose and dual switch fixed at contract level only (section 10); Q2–Q5, Q7, Q8, Q10, Q11 accepted with their conditions met by the fixes above |
+
+### 15.1 Re-review 1 — finding → fix map (revision R11-2)
+
+R11 re-review 1 (PASS_WITH_REQUIRED_CHANGES at `ea937ac1`):
+
+| Finding | Severity | Fix |
+| --- | --- | --- |
+| R11-N01 | major | 3.7 step 1 runs over all non-quarantined admitted runs **before** the new step 1a as-of filter; 5.3 step 1 reworded; fixture `syn_version_conflict_late.csv`; golden S40; `test_conflict_is_found_before_the_source_cutoff_filter`; PR-41 |
+| R11-N02 | major | option (a): F-2 `financial_run_quarantines` (10th table, prefix `fqr`, `_PROTECTED`), evaluator input `quarantined_run_refs`, exclusion from 3.7 and disclosure (`quarantined_runs`, `denominator.quarantined_runs`); 9.4 recovery corrected (a conflict clears only by quarantine); goldens S38, S39; tests; PR-42, PR-43; F1-D07, F1-D25; ADR-018 decision 8 |
+| R11-N03 | major | 4.7 defines the versions entering the answer (accepted-mapping source of a member, effective version, before step 9 nulling); new `program_reasons` field; S15 reworded; fixture `syn_p300_second_system.csv`; golden S41 (only the program rule fires); `test_double_count_is_detected` and PR-09 target S41; PR-45 |
+| R11-N04 | minor | 3.7 step 6 states per-scope-key recovery; F1-U13; S33 relabelled; fixture `syn_period_2026_11.csv`; goldens S42, S43 for `test_poisoning_crosses_periods`; PR-44 |
+| R11-N05 | minor | 3.7 inputs and 9.1: `run_sequence` monotonic and unique per `(principal, source_system)` across designations; duplicate raises `ValueError`; `test_run_sequence_must_be_unique_per_system` |
+| R11-N06 | minor | 6.2: refusing `parse_float` / `parse_constant`, default `parse_int`, positions by post-decode type checks |
+| R11-N07 | minor | 9.1 privileges: F-2 does not call the grant mechanism; the 10 pairs join `_PROTECTED`; DB test asserts no privilege beyond the owner |
+| R11-N08 | nit | 5.1 meanings of `source_version_ambiguous` and `source_refused` updated; `test_fixtures_are_not_text_normalised` accepts the `binary` fallback |
+| R11-N09 | nit | 3.7 step 1a: "as of data cutoff", not "as known at" |
+| F11 residue | — | PR-03b remove-only-`Rounded` alternative recorded as expected redundancy, not coverage |

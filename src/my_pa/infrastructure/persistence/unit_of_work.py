@@ -198,6 +198,7 @@ from my_pa.infrastructure.persistence.entity_reenrichment import (
     SqlReenrichmentWorkRepository,
 )
 from my_pa.infrastructure.persistence.extraction import coverage_for
+from my_pa.infrastructure.persistence.file_workspace import SqlFileWorkspaceRepository
 from my_pa.infrastructure.persistence.goodnotes import (
     decide_goodnotes_review,
     goodnotes_review_cases,
@@ -1464,6 +1465,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def report_transfers(self) -> SqlReportTransferRepository:
         """The transfer sessions and chunk ledger, on this transaction's connection (WP06)."""
         return SqlReportTransferRepository(self._open)
+
+    @property
+    def file_workspace(self) -> SqlFileWorkspaceRepository:
+        """The files workspace rows, on this transaction's connection (files WP5)."""
+        return SqlFileWorkspaceRepository(self._open)
 
     @property
     def tasks(self) -> TaskManagementRepository:

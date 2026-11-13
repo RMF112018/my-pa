@@ -143,6 +143,7 @@ __all__ = [
     "BUFFER_CEILING_BYTES",
     "DROP_REPORT_SECONDS",
     "INTERACTION_COLUMNS",
+    "OMITTED",
     "QUEUED_BYTES_BUDGET",
     "QUEUE_MAXSIZE",
     "REDACTED",
@@ -726,8 +727,36 @@ class _Body:
     hash_scope: str = "redacted_full"
 
 
-def _process_body(raw: bytes, *, overflowed: bool) -> _Body:
-    """`overflowed` means `raw` is not the whole body: past the buffer, or never read."""
+#: Files workspace (files-workspace contract section 11): the capabilities whose
+#: request (`files.write_text`'s `text` argument) or response (`files.preview`'s
+#: `text` result) carries file content. For them every value under a key named
+#: `text`, at any depth -- the MCP `TextContent.text` wrapping the envelope
+#: included -- is stored as `OMITTED`, before redaction and hashing, so neither
+#: the stored body nor its digest reflects the content; a body that is not JSON
+#: is not stored at all.
+_TEXT_OMITTED_REQUESTS: Final = frozenset({"files.write_text"})
+_TEXT_OMITTED_RESPONSES: Final = frozenset({"files.preview"})
+#: What an omitted file text becomes.
+OMITTED: Final = "[OMITTED]"
+
+
+def _without_text(value: object) -> object:
+    """`value` with every value under a `text` key replaced by `OMITTED`."""
+    if isinstance(value, dict):
+        return {
+            key: OMITTED if key == "text" else _without_text(item) for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_without_text(item) for item in value]
+    return value
+
+
+def _process_body(raw: bytes, *, overflowed: bool, omit_text: bool = False) -> _Body:
+    """`overflowed` means `raw` is not the whole body: past the buffer, or never read.
+
+    `omit_text` stores the body with every `text` value omitted (`_without_text`);
+    `parsed` stays the original, for the response facts only.
+    """
     body = _Body()
     if overflowed:
         body.hash_scope = "redacted_prefix"
@@ -743,7 +772,8 @@ def _process_body(raw: bytes, *, overflowed: bool) -> _Body:
             body.is_json = False
     if body.is_json:
         try:
-            redacted, body.redactions, body.nul_replaced = redact_json(body.parsed)
+            stored = _without_text(body.parsed) if omit_text else body.parsed
+            redacted, body.redactions, body.nul_replaced = redact_json(stored)
             serialized = _dumps(redacted)
         except (ValueError, RecursionError):
             body.is_json = False
@@ -759,6 +789,11 @@ def _process_body(raw: bytes, *, overflowed: bool) -> _Body:
                 body.stored_text = _utf8_prefix(serialized, BODY_CAP_BYTES)
             return body
     body.parse = "not_captured" if overflowed else "invalid_json"
+    if omit_text:
+        body.truncated = True
+        body.sha256 = hashlib.sha256(OMITTED.encode("utf-8")).hexdigest()
+        body.stored_text = OMITTED
+        return body
     text, body.redactions, body.nul_replaced = redact_text(raw.decode("utf-8", errors="replace"))
     encoded = text.encode("utf-8")
     body.sha256 = hashlib.sha256(encoded).hexdigest()
@@ -1010,9 +1045,18 @@ def build_interaction_row(
     """
     walk = _Walk()
     request = _process_body(exchange.request_body, overflowed=exchange.request_overflowed)
-    response = _process_body(exchange.response_body, overflowed=exchange.response_overflowed)
     request_meta = _request_metadata(
         request.parsed if request.is_json else None, walk, facade_invoke_tools
+    )
+    capability = request_meta["capability"]
+    if capability in _TEXT_OMITTED_REQUESTS:
+        request = _process_body(
+            exchange.request_body, overflowed=exchange.request_overflowed, omit_text=True
+        )
+    response = _process_body(
+        exchange.response_body,
+        overflowed=exchange.response_overflowed,
+        omit_text=capability in _TEXT_OMITTED_RESPONSES,
     )
     facts = _response_facts(
         response.parsed if response.is_json else None, exchange.http_status, walk

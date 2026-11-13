@@ -159,6 +159,9 @@ def _planes_from_settings(settings: Settings) -> ChatLLMCompositionPlanes:
         schedule=settings.schedule_enabled,
         # Schedule Scenarios S6-3 (chatllm-data-v13): the 22 plane names likewise.
         schedule_scenarios=settings.schedule_scenarios_enabled,
+        # Files workspace (chatllm-data-v14): the 17 `files.*` names, composed
+        # exactly when `MY_PA_FILES_WORKSPACE_ROOT` composes the store.
+        files_workspace=settings.files_workspace_is_composed(),
     )
 
 

@@ -341,6 +341,35 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
             )
         ),
         ("context.feedback", "target_id"),
+        # Files workspace WP5 (ADR-019, files-workspace contract sections 2-3): the
+        # one plane whose subject *is* a location. A `path`, `to_path` or `new_name`
+        # is workspace-relative, validated per section 3 (no `..`, empty or `.`
+        # component, no control character or backslash, no reserved name) before
+        # any I/O, and resolved by the contained store one component at a time
+        # from the configured root's descriptor with `O_NOFOLLOW`; it can never
+        # name a host path, a source root or the managed store, which still takes
+        # no path at all.
+        *(
+            (name, field)
+            for name, field in (
+                ("files.list", "path"),
+                ("files.stat", "path"),
+                ("files.search", "path"),
+                ("files.preview", "path"),
+                ("files.history", "path"),
+                ("files.download.begin", "path"),
+                ("files.mkdir", "path"),
+                ("files.copy", "path"),
+                ("files.copy", "to_path"),
+                ("files.upload.begin", "path"),
+                ("files.rename", "path"),
+                ("files.move", "path"),
+                ("files.move", "to_path"),
+                ("files.trash", "path"),
+                ("files.restore", "to_path"),
+                ("files.write_text", "path"),
+            )
+        ),
         # Reports Modernization WP02 (contract D): an association names what a
         # standalone report is about, not where a file lives. `target_kind` is a
         # closed enum; a resolvable `target_ref` must name a record the caller's
@@ -768,8 +797,9 @@ def test_the_location_scan_would_catch_one() -> None:
     # Plus WP05's declared `uncompressed_byte_count` / `uncompressed_sha256` on
     # `reports.publish` content and `reports.update` patch content ("unc").
     # Plus Schedule Scenarios S6-3's 6 client-usable plane writes' boolean
-    # `user_directed` claim.
-    assert len(EXEMPT_PROPERTIES) == 74
+    # `user_directed` claim. Plus the files workspace WP5's 16 workspace-relative
+    # `path`/`to_path` fields on the `files.*` names (contract sections 2-3).
+    assert len(EXEMPT_PROPERTIES) == 90
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

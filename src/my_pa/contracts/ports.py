@@ -6369,6 +6369,15 @@ class UnitOfWork(ABC):
         raise NotImplementedError
 
     @property
+    def file_workspace(self) -> FileWorkspaceRepository:
+        """The files workspace rows, inside this transaction (files-workspace WP5).
+
+        Not abstract, for the reason `report_transfers` is not: the SQL unit of
+        work serves it, and every other implementation refuses.
+        """
+        raise NotImplementedError
+
+    @property
     @abstractmethod
     def tasks(self) -> TaskManagementRepository:
         """The task-management rows, inside this transaction (WP-TM-02/03).
@@ -13528,6 +13537,17 @@ class FileWorkspaceRepository(ABC):
     path. Application rules (CAS, idempotent replay, refusal mapping) are the
     caller's; this port only reads and writes rows.
     """
+
+    # ---- serialization -----------------------------------------------------
+
+    @abstractmethod
+    def lock_workspace(self, workspace_id: str) -> None:
+        """Take the workspace's transaction-scoped advisory lock (contract section 5).
+
+        Serializes the product's own mutations of one workspace alias until the
+        transaction ends; keyed deterministically from the alias alone (the
+        filesystem is shared by every Principal), never from a path.
+        """
 
     # ---- tickets ------------------------------------------------------------
 

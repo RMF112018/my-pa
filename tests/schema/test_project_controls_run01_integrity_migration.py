@@ -133,9 +133,10 @@ def test_revision_identity_and_frozen_vocabulary_are_exact() -> None:
     # Modernization WP02 `reports.publish`, and WP03 its 5 names and
     # `report_lifecycle`, and WP05b its 4 custody names, `report_hold` and
     # `report_retention`, and WP06 its 5 transfer names, and Schedule Scenarios
-    # S6-3 its 26 plane names and 3 purposes.
-    assert len(Capability) == 281
-    assert len(Purpose) == 68
+    # S6-3 its 26 plane names and 3 purposes, and the files workspace WP5 its 17
+    # `files.*` names and 2 purposes.
+    assert len(Capability) == 298
+    assert len(Purpose) == 70
     assert "from my_pa.domain" not in MIGRATION.read_text(encoding="utf-8")
 
 

@@ -144,6 +144,8 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
         }
         # Nor WP06's five transfer names.
         and not c.value.startswith("reports.transfer.")
+        # Nor the files workspace WP5's 17 `files.*` names.
+        and not c.value.startswith("files.")
     }
     assert len(deployed) == 190
     assert deployed <= names

@@ -199,7 +199,7 @@ def profile_grants(service: ApplicationService) -> tuple[GrantRow, ...]:
         resource=RESOURCE,
         scope=SCOPE,
     )
-    assert diff.profile_version == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    assert diff.profile_version == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
     actions = plan_chatllm_grant_actions(diff, (), now=WHEN, resource=RESOURCE, scope=SCOPE)
     rows = tuple(
         (action.capability, action.purpose, action.is_write, None)

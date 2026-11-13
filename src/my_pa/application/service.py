@@ -522,6 +522,10 @@ from my_pa.application.errors import (
     UnsupportedError,
     problem_detail,
 )
+from my_pa.application.file_workspace import (
+    FILE_WORKSPACE_CAPABILITIES,
+    FileWorkspaceApplication,
+)
 from my_pa.application.goodnotes_content import content_payload, lookup_content
 from my_pa.application.goodnotes_gsqs_b0_workflow import (
     WorkflowPorts,
@@ -4953,8 +4957,14 @@ class ApplicationService:
         report_content_inline_max_bytes: int = INLINE_CONTENT_MAX_BYTES,
         report_preservation_store: ReportContentStore | None = None,
         report_transfer_staging: ReportTransferStaging | None = None,
+        file_workspace: FileWorkspaceApplication | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
+        #: Files workspace (files-workspace contract section 9): the handlers over
+        #: the composed store, or `None` -- what an unset
+        #: `MY_PA_FILES_WORKSPACE_ROOT` composes -- which withholds the 17
+        #: `files.*` names here and answers each `unsupported` (`_files`).
+        self._file_workspace = file_workspace
         #: WP05 C3: the report content store and the inline threshold. `None`
         #: -- what an unset `MY_PA_REPORT_CONTENT_ROOT` composes -- keeps every
         #: report content inline and refuses decoded content above the
@@ -5233,6 +5243,9 @@ class ApplicationService:
         # the transfer staging it stages chunks in.
         if self._report_content_store is None or self._report_transfer_staging is None:
             served -= _REPORT_TRANSFER_UPLOAD_CAPABILITIES
+        # Files workspace (contract section 9): no composed store, no `files.*` name.
+        if self._file_workspace is None:
+            served -= FILE_WORKSPACE_CAPABILITIES
         if not self._relationship_intelligence_enabled:
             served -= _ENTITY_CAPABILITIES
         # The write half, narrowed separately. Subtracted after the line above
@@ -17862,6 +17875,21 @@ class ApplicationService:
                 "a terminal transfer session's staging was not discarded; left to the transfer GC"
             )
 
+    def _files(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: Command
+    ) -> _Result:
+        """Every `files.*` capability (files-workspace contract): bound here, served there.
+
+        `unsupported` when no store is composed, before anything is read: the
+        names are withheld from `available_capabilities` then, and a transport
+        dispatching straight through `_HANDLERS` meets the same refusal.
+        """
+        files = self._file_workspace
+        if files is None:
+            raise UnsupportedError()
+        payload = files.handle(unit_of_work, authorization, command)
+        return _Result(payload=payload, disclosure=unenrolled_disclosure(authorization.at))
+
     def _reports_transfer_begin(
         self,
         unit_of_work: UnitOfWork,
@@ -19759,6 +19787,24 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.SCHEDULE_BASELINES_READ: ApplicationService._schedule_baselines_read,
         Capability.SCHEDULE_BASELINES_GOVERNING: ApplicationService._schedule_baselines_governing,
         Capability.SCHEDULE_BASELINES_COMPARE: ApplicationService._schedule_baselines_compare,
+        # Files workspace (files-workspace contract): one binding for all 17.
+        Capability.FILES_WORKSPACES_LIST: ApplicationService._files,
+        Capability.FILES_LIST: ApplicationService._files,
+        Capability.FILES_STAT: ApplicationService._files,
+        Capability.FILES_SEARCH: ApplicationService._files,
+        Capability.FILES_PREVIEW: ApplicationService._files,
+        Capability.FILES_HISTORY: ApplicationService._files,
+        Capability.FILES_DOWNLOAD_BEGIN: ApplicationService._files,
+        Capability.FILES_MKDIR: ApplicationService._files,
+        Capability.FILES_COPY: ApplicationService._files,
+        Capability.FILES_UPLOAD_BEGIN: ApplicationService._files,
+        Capability.FILES_UPLOAD_ABORT: ApplicationService._files,
+        Capability.FILES_RENAME: ApplicationService._files,
+        Capability.FILES_MOVE: ApplicationService._files,
+        Capability.FILES_TRASH: ApplicationService._files,
+        Capability.FILES_RESTORE: ApplicationService._files,
+        Capability.FILES_UPLOAD_FINALIZE: ApplicationService._files,
+        Capability.FILES_WRITE_TEXT: ApplicationService._files,
         Capability.MEETINGS_NOTES_VERSIONS: ApplicationService._meetings_notes_versions,
         Capability.MEETINGS_NOTES_READ_VERSION: ApplicationService._meetings_notes_read_version,
         Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,

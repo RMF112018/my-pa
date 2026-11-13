@@ -586,6 +586,17 @@ class IdKind(StrEnum):
     REPORT_HOLD_EVENT = "grhld"
     REPORT_RETENTION_EVENT = "grrtn"
     REPORT_PRESERVATION_OBJECT = "grprv"
+    #: Files workspace (files-workspace contract section 1.3): an upload ticket
+    #: and its staging object, a download ticket, a preserved preimage, a trashed
+    #: entry and an idempotency receipt. Checked unique against the 174 prior
+    #: members by the contract (WP1) and the uniqueness assertion in
+    #: `tests/unit/test_identifiers.py`: none collides, no member is a prefix of
+    #: any, and none is a prefix of a member (no prior member starts `fw`).
+    FILE_UPLOAD = "fwupl"
+    FILE_DOWNLOAD = "fwdnl"
+    FILE_VERSION = "fwver"
+    FILE_TRASH_ITEM = "fwtrs"
+    FILE_RECEIPT = "fwrcp"
 
 
 class InvalidIdentifierError(ValueError):

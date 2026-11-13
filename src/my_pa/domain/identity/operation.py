@@ -1159,6 +1159,27 @@ class Capability(StrEnum):
     SCHEDULE_BASELINES_READ = "schedule_baselines.read"
     SCHEDULE_BASELINES_GOVERNING = "schedule_baselines.governing"
     SCHEDULE_BASELINES_COMPARE = "schedule_baselines.compare"
+    # Files workspace (ADR-019, files-workspace contract section 1.1): the 17
+    # `files.*` names, appended in contract order so every positional slice of
+    # the earlier members holds. Reads under `file_workspace_read`, writes under
+    # `file_workspace_authoring`; none is operator-only, each is scopeless.
+    FILES_WORKSPACES_LIST = "files.workspaces.list"
+    FILES_LIST = "files.list"
+    FILES_STAT = "files.stat"
+    FILES_SEARCH = "files.search"
+    FILES_PREVIEW = "files.preview"
+    FILES_HISTORY = "files.history"
+    FILES_DOWNLOAD_BEGIN = "files.download.begin"
+    FILES_MKDIR = "files.mkdir"
+    FILES_COPY = "files.copy"
+    FILES_UPLOAD_BEGIN = "files.upload.begin"
+    FILES_UPLOAD_ABORT = "files.upload.abort"
+    FILES_RENAME = "files.rename"
+    FILES_MOVE = "files.move"
+    FILES_TRASH = "files.trash"
+    FILES_RESTORE = "files.restore"
+    FILES_UPLOAD_FINALIZE = "files.upload.finalize"
+    FILES_WRITE_TEXT = "files.write_text"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1871,6 +1892,24 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.SCHEDULE_BASELINES_READ: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
         Capability.SCHEDULE_BASELINES_GOVERNING: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
         Capability.SCHEDULE_BASELINES_COMPARE: frozenset({Purpose.SCHEDULE_ANALYSIS_READ}),
+        # Files workspace (contract section 1.1): each permits exactly its one purpose.
+        Capability.FILES_WORKSPACES_LIST: frozenset({Purpose.FILE_WORKSPACE_READ}),
+        Capability.FILES_LIST: frozenset({Purpose.FILE_WORKSPACE_READ}),
+        Capability.FILES_STAT: frozenset({Purpose.FILE_WORKSPACE_READ}),
+        Capability.FILES_SEARCH: frozenset({Purpose.FILE_WORKSPACE_READ}),
+        Capability.FILES_PREVIEW: frozenset({Purpose.FILE_WORKSPACE_READ}),
+        Capability.FILES_HISTORY: frozenset({Purpose.FILE_WORKSPACE_READ}),
+        Capability.FILES_DOWNLOAD_BEGIN: frozenset({Purpose.FILE_WORKSPACE_READ}),
+        Capability.FILES_MKDIR: frozenset({Purpose.FILE_WORKSPACE_AUTHORING}),
+        Capability.FILES_COPY: frozenset({Purpose.FILE_WORKSPACE_AUTHORING}),
+        Capability.FILES_UPLOAD_BEGIN: frozenset({Purpose.FILE_WORKSPACE_AUTHORING}),
+        Capability.FILES_UPLOAD_ABORT: frozenset({Purpose.FILE_WORKSPACE_AUTHORING}),
+        Capability.FILES_RENAME: frozenset({Purpose.FILE_WORKSPACE_AUTHORING}),
+        Capability.FILES_MOVE: frozenset({Purpose.FILE_WORKSPACE_AUTHORING}),
+        Capability.FILES_TRASH: frozenset({Purpose.FILE_WORKSPACE_AUTHORING}),
+        Capability.FILES_RESTORE: frozenset({Purpose.FILE_WORKSPACE_AUTHORING}),
+        Capability.FILES_UPLOAD_FINALIZE: frozenset({Purpose.FILE_WORKSPACE_AUTHORING}),
+        Capability.FILES_WRITE_TEXT: frozenset({Purpose.FILE_WORKSPACE_AUTHORING}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -2095,6 +2134,18 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.SCHEDULE_BASELINES_REJECT,
         Capability.SCHEDULE_BASELINES_REVOKE,
         Capability.SCHEDULE_BASELINES_SET_GOVERNING,
+        # Files workspace (contract section 1.1): the 10 `file_workspace_authoring`
+        # names; the 7 reads (`files.download.begin` included) stay out.
+        Capability.FILES_MKDIR,
+        Capability.FILES_COPY,
+        Capability.FILES_UPLOAD_BEGIN,
+        Capability.FILES_UPLOAD_ABORT,
+        Capability.FILES_RENAME,
+        Capability.FILES_MOVE,
+        Capability.FILES_TRASH,
+        Capability.FILES_RESTORE,
+        Capability.FILES_UPLOAD_FINALIZE,
+        Capability.FILES_WRITE_TEXT,
     }
 )
 
@@ -2236,6 +2287,14 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.SCHEDULE_CPM_RUNS_CREATE,
         Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD,
         Capability.SCHEDULE_BASELINES_PROPOSE,
+        # Files workspace (contract section 1.1): mkdir and copy never overwrite,
+        # upload.begin and upload.abort only open or close a ticket. The other 6
+        # writes rename, trash, restore or replace content and carry the
+        # destructive hint; `files.write_text` too, even when it creates.
+        Capability.FILES_MKDIR,
+        Capability.FILES_COPY,
+        Capability.FILES_UPLOAD_BEGIN,
+        Capability.FILES_UPLOAD_ABORT,
     }
 )
 

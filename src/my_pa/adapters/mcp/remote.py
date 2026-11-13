@@ -115,6 +115,11 @@ _WRITE_PURPOSES: Final = frozenset(
         # publication rule ever reached them. `schedule_analysis_read` stays out.
         Purpose.SCHEDULE_ANALYSIS_AUTHORING,
         Purpose.SCHEDULE_BASELINE_APPROVAL,
+        # Files workspace (contract section 1.1): the 10 `files.*` writes' purpose.
+        # Without it they would be classified remote reads -- published while
+        # writes are disabled and routed to `my_pa.read`. `file_workspace_read`
+        # (and so `files.download.begin`) stays out.
+        Purpose.FILE_WORKSPACE_AUTHORING,
         Purpose.RELATIONSHIP_MEMORY_AUTHORING,
         Purpose.ENTITY_OBSERVATION_INGEST,
         Purpose.ENTITY_AUTHORING,

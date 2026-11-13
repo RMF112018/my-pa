@@ -462,6 +462,26 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.SCHEDULE_BASELINES_READ,
         Capability.SCHEDULE_BASELINES_GOVERNING,
         Capability.SCHEDULE_BASELINES_COMPARE,
+        # Files workspace (contract section 1.1): every `files.*` name addresses
+        # the one configured workspace alias and a relative path, never a
+        # `source_id`; its rows carry no `enrollment_id` a scope could match.
+        Capability.FILES_WORKSPACES_LIST,
+        Capability.FILES_LIST,
+        Capability.FILES_STAT,
+        Capability.FILES_SEARCH,
+        Capability.FILES_PREVIEW,
+        Capability.FILES_HISTORY,
+        Capability.FILES_DOWNLOAD_BEGIN,
+        Capability.FILES_MKDIR,
+        Capability.FILES_COPY,
+        Capability.FILES_UPLOAD_BEGIN,
+        Capability.FILES_UPLOAD_ABORT,
+        Capability.FILES_RENAME,
+        Capability.FILES_MOVE,
+        Capability.FILES_TRASH,
+        Capability.FILES_RESTORE,
+        Capability.FILES_UPLOAD_FINALIZE,
+        Capability.FILES_WRITE_TEXT,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

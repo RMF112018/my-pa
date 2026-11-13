@@ -73,6 +73,7 @@ from my_pa.application.commands import (
     SubmitGoodNotesProposal,
 )
 from my_pa.application.disclosure import Limitation
+from my_pa.application.file_workspace import FILE_WORKSPACE_CAPABILITIES
 from my_pa.application.service import (
     _HANDLERS,
     _LINEAGE_CAPABILITIES,
@@ -673,6 +674,8 @@ def test_capabilities_get_reports_phase_a_pull_contracts_as_not_implemented(
         # Reports Modernization WP06 T14: served only with a report content
         # store and the transfer staging, which this world composes neither of.
         | _REPORT_TRANSFER_UPLOAD_CAPABILITIES
+        # Files workspace WP5: served only with a workspace root, none here.
+        | FILE_WORKSPACE_CAPABILITIES
     )
     assert {
         Capability(name)
@@ -716,12 +719,15 @@ def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derive
         - _SCHEDULE_SCENARIO_CAPABILITIES
         # Reports Modernization WP06 T14: no content store and no staging here.
         - _REPORT_TRANSFER_UPLOAD_CAPABILITIES
+        # Files workspace WP5: no workspace root here.
+        - FILE_WORKSPACE_CAPABILITIES
     )
     # Reports Modernization WP02 adds `reports.publish`, ungated like `reports.read`;
     # WP03 adds `reports.update`, `.history`, `.archive`, `.delete`, `.restore`, ungated too;
     # WP05b its 4 operator custody names, ungated as the lifecycle writes.
     # WP06: `reports.transfer.read_chunk` is ungated (T14); its 4 uploads are not.
     # Schedule Scenarios S6-3: its 26 names are all gated, so the count holds.
+    # Files workspace WP5: its 17 names are all gated on the root, likewise.
     assert len(expected_available) == 191
     assert readiness["implemented_capabilities"] == len(expected_available)
     assert readiness["limitations"]

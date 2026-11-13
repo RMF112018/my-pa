@@ -55,7 +55,7 @@ def manifest(implemented: frozenset[Capability] = EVERYTHING) -> CapabilityManif
 
 def test_manifest_lists_every_capability_exactly_once() -> None:
     names = [status.name for status in manifest().capabilities]
-    assert len(names) == len(Capability) == 281
+    assert len(names) == len(Capability) == 298
     assert set(names) == set(Capability)
     assert len(set(names)) == len(names)
 
@@ -348,6 +348,23 @@ def test_capability_names_match_the_published_contract() -> None:
         "schedule_baselines.read",
         "schedule_baselines.governing",
         "schedule_baselines.compare",
+        "files.workspaces.list",
+        "files.list",
+        "files.stat",
+        "files.search",
+        "files.preview",
+        "files.history",
+        "files.download.begin",
+        "files.mkdir",
+        "files.copy",
+        "files.upload.begin",
+        "files.upload.abort",
+        "files.rename",
+        "files.move",
+        "files.trash",
+        "files.restore",
+        "files.upload.finalize",
+        "files.write_text",
     }
 
 

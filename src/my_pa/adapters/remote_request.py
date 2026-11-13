@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from types import MappingProxyType
@@ -489,6 +490,33 @@ _CLIENT_BOUND_SCENARIO_WRITES: Final[frozenset[Capability]] = frozenset(
         Capability.SCHEDULE_BASELINES_WITHDRAW,
     }
 )
+#: Files workspace (files-workspace contract section 5): the 10 `files.*`
+#: writes. Each command requires `idempotency_key` and a remote caller may not
+#: send one (`REMOTE_OWNED_PAYLOAD_FIELDS`), so the server stamps it -- but a
+#: **fresh** key per call, never a digest of the payload. A file workspace is a
+#: tree that changes outside any receipt: `mkdir a`, `trash a`, `mkdir a` is
+#: the same payload twice, and a payload-derived key would replay the first
+#: receipt (`replayed: true`, nothing created); an `upload.begin` retried after
+#: its ticket was aborted would replay a ticket whose token is gone. Without
+#: the replay a lost-response retry stays safe: no write overwrites by default
+#: and a replace needs `expected_version`, so a retry answers `exists`,
+#: `not_found` or `version_conflict` rather than writing twice. A caller that
+#: supplies its own key (CLI, HTTP gateway) keeps the receipt replay. Not
+#: client-bound and not `idempotentHint`: no remote retry replays.
+_FRESH_KEY_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.FILES_MKDIR,
+        Capability.FILES_COPY,
+        Capability.FILES_UPLOAD_BEGIN,
+        Capability.FILES_UPLOAD_ABORT,
+        Capability.FILES_RENAME,
+        Capability.FILES_MOVE,
+        Capability.FILES_TRASH,
+        Capability.FILES_RESTORE,
+        Capability.FILES_UPLOAD_FINALIZE,
+        Capability.FILES_WRITE_TEXT,
+    }
+)
 _CLIENT_BOUND_KEY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability
     for capability in _IDEMPOTENT_REMOTE_CAPABILITIES
@@ -595,6 +623,9 @@ def compose_remote_arguments(
             keyed["client"] = authenticated_client_id
         digest = hashlib.sha256(json.dumps(keyed, sort_keys=True, default=str).encode()).hexdigest()
         composed["payload"] = {**domain, "idempotency_key": f"idk_{digest[:32]}"}
+    elif capability in _FRESH_KEY_REMOTE_CAPABILITIES:
+        domain = dict(payload) if isinstance(payload, Mapping) else {}
+        composed["payload"] = {**domain, "idempotency_key": f"idk_{secrets.token_hex(16)}"}
     if is_server_replay_capability(capability):
         request_digest = hashlib.sha256(
             json.dumps(

@@ -36,6 +36,7 @@ from my_pa.adapters.mcp_interaction_capture import (
     BODY_CAP_BYTES,
     BUFFER_CEILING_BYTES,
     INTERACTION_COLUMNS,
+    OMITTED,
     REDACTED,
     CapturedExchange,
     InteractionRecorder,
@@ -2108,3 +2109,73 @@ def test_the_worker_reports_whether_its_memory_cap_is_in_force() -> None:
         assert uncapped.memory_limited is False
     finally:
         uncapped.close()
+
+
+# ---- files workspace (files-workspace contract section 11, WP5) -------------------
+
+_FILE_TEXT = "Synthetic file body that must never be logged 7f3a"
+
+
+def _files_call(name: str, arguments: dict[str, object]) -> dict[str, object]:
+    return {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {"name": name, "arguments": arguments},
+    }
+
+
+def _files_result(envelope: dict[str, object]) -> dict[str, object]:
+    return {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+            "content": [{"type": "text", "text": json.dumps(envelope)}],
+            "structuredContent": envelope,
+            "isError": False,
+        },
+    }
+
+
+@pytest.mark.parametrize("facade", [False, True])
+def test_the_write_text_argument_is_omitted_from_the_stored_request(facade: bool) -> None:
+    payload = {"workspace_id": "mcp", "path": "n.md", "text": _FILE_TEXT}
+    request = (
+        _files_call(
+            WRITE_TOOL, {"capability": "files.write_text", "arguments": {"payload": payload}}
+        )
+        if facade
+        else _files_call("files.write_text", {"payload": payload})
+    )
+    row = _row(_exchange(request, _files_result({"result": {"replayed": False}})))
+    assert row["capability"] == "files.write_text"
+    stored = _serialized(row)
+    assert _FILE_TEXT not in stored
+    assert OMITTED in stored
+    assert row["request_sha256"] != hashlib.sha256(json.dumps(request).encode()).hexdigest()
+
+
+def test_the_preview_text_result_is_omitted_from_the_stored_response() -> None:
+    request = _files_call("files.preview", {"payload": {"workspace_id": "mcp", "path": "n.md"}})
+    envelope = {"result": {"text": _FILE_TEXT, "binary": False, "next_offset": None}}
+    row = _row(_exchange(request, _files_result(envelope)))
+    assert row["capability"] == "files.preview"
+    assert row["outcome"] == "ok"
+    assert _FILE_TEXT not in _serialized(row)
+
+
+def test_a_preview_response_that_is_not_json_is_not_stored() -> None:
+    request = _files_call("files.preview", {"payload": {"workspace_id": "mcp", "path": "n.md"}})
+    row = _row(_exchange(request, raw_response=_FILE_TEXT.encode()))
+    assert _FILE_TEXT not in _serialized(row)
+    assert row["response_body_text"] == OMITTED
+
+
+def test_other_capabilities_keep_their_text_and_the_token_redaction_still_applies() -> None:
+    request = _files_call("capture.create", {"payload": {"text": "an ordinary capture"}})
+    upload = _files_call("files.upload.begin", {"payload": {"workspace_id": "mcp", "path": "u"}})
+    begun = {"result": {"upload_id": "fwupl_synthetic01", "upload_token": "gfwtk_" + "a" * 64}}
+    assert "an ordinary capture" in _serialized(_row(_exchange(request, None)))
+    row = _serialized(_row(_exchange(upload, _files_result(begun))))
+    assert "gfwtk_" + "a" * 64 not in row
+    assert REDACTED in row

@@ -86,6 +86,7 @@ from tests.conftest import (
     staged_search,
     staged_task,
 )
+from tests.files_workspace_samples import FILES_WORKSPACE_CAPABILITIES, files_payloads
 from tests.schedule_scenario_samples import SCHEDULE_SCENARIO_CAPABILITIES, scenario_payloads
 from tests.transports import CLI_OPTIONS, CLI_SCOPE_OPTIONS, TRANSPORTS, Answer
 
@@ -2310,6 +2311,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         },
         # Schedule Scenarios S6-3: synthetic plane samples.
         **scenario_payloads("parity"),
+        # Files workspace WP5: synthetic plane samples.
+        **files_payloads("parity"),
     }
 
 
@@ -2445,8 +2448,9 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    # Schedule Scenarios S6-3: 26 plane commands, 256 -> 282.
-    assert len(REQUEST_VALUES) == 282, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # Schedule Scenarios S6-3: 26 plane commands, 256 -> 282. Files workspace
+    # WP5: 17 `files.*` commands, 282 -> 299.
+    assert len(REQUEST_VALUES) == 299, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2852,6 +2856,8 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.SCHEDULE_CHANGES_LIST,
         # Schedule Scenarios S6-3: the 26 plane names (scopeless, plane switch off).
         *SCHEDULE_SCENARIO_CAPABILITIES,
+        # Files workspace WP5: the 17 `files.*` names (no workspace root here).
+        *FILES_WORKSPACE_CAPABILITIES,
     }
 )
 
@@ -3488,7 +3494,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 281
+    assert len(IMPLEMENTED_CAPABILITIES) == 298
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

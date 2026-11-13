@@ -285,6 +285,13 @@ def test_contract_prefixes_are_stable() -> None:
         "grhld",
         "grrtn",
         "grprv",
+        # Files workspace (files-workspace contract section 1.3): upload and
+        # download tickets, preserved preimages, trash items and receipts.
+        "fwupl",
+        "fwdnl",
+        "fwver",
+        "fwtrs",
+        "fwrcp",
     }
 
 

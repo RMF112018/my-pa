@@ -224,6 +224,10 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
     excluded |= {
         capability.value for capability in Capability if capability.value.startswith(_S63_FAMILIES)
     } | {"schedule_series.current", "schedule_series.match_decisions"}
+    # Files workspace WP5: its 17 `files.*` names are new.
+    excluded |= {
+        capability.value for capability in Capability if capability.value.startswith("files.")
+    }
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
@@ -240,13 +244,15 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
     # CPM Workbench S5b-2 appends its 2 purposes after the S4 one (contract 3.12),
     # and Reports Modernization WP03 appends `report_lifecycle` after those, and
     # WP05b `report_hold` and `report_retention` after that, and Schedule
-    # Scenarios S6-3 its 3 plane purposes after those.
-    assert len(published) == 68
-    basis = published[:-9]
+    # Scenarios S6-3 its 3 plane purposes after those, and the files workspace
+    # WP5 its 2 after S6-3's.
+    assert len(published) == 70
+    basis = published[:-11]
     assert hashlib.sha256(json.dumps(basis, separators=(",", ":")).encode("utf-8")).hexdigest() == (
         BASIS_PURPOSE_ENUM_SHA256
     )
-    assert published[-9:] == [
+    assert published[-2:] == ["file_workspace_read", "file_workspace_authoring"]
+    assert published[-11:-2] == [
         "program_reporting_read",
         "schedule_import",
         "schedule_read",

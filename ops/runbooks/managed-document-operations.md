@@ -537,11 +537,11 @@ agent, a migration or the code.
    It was already applied to the deployment's environment on 2026-11-06 and
    takes effect at the next container recreate.
 4. **ChatLLM profile.** For each ChatLLM client run `profile-plan`, then
-   `profile-apply --apply`, for `chatllm-data-v13`
+   `profile-apply --apply`, for `chatllm-data-v14` (files workspace WP5: the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set)
    ([`managed-knowledge-context.md`](managed-knowledge-context.md)). Reports
    Modernization added its 11 names in `chatllm-data-v12`; v13 with
    `MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires exactly the v12 set, so a
-   pending Reports commissioning uses v13 after this build. A client converged
+   pending Reports commissioning uses v14 after this build. A client converged
    on `chatllm-data-v11` adds exactly the 11 Reports names
    while the Schedule switches are off. Reconnect the client afterwards.
 5. **Retention.** After the deploy, set the operator-approved period once with

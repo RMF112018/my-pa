@@ -224,7 +224,9 @@ def test_at_sets_equal_the_live_enums() -> None:
     assert head["_PURPOSES_BEFORE_THIS_REVISION"] == mine["_PURPOSES_AT_THIS_REVISION"]
     head_purposes = _literals(head["_PURPOSES_AT_THIS_REVISION"])
     assert head_purposes == sorted(head_purposes)
-    assert set(head_purposes) == {member.value for member in Purpose} - S63_PURPOSES
+    assert (
+        set(head_purposes) == {member.value for member in Purpose} - S63_PURPOSES - FILES_PURPOSES
+    )
     assert set(head_purposes) - set(purposes) == {
         "report_lifecycle",
         "report_hold",

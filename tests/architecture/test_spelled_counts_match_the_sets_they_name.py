@@ -624,6 +624,25 @@ _ORDINAL_UNITS = (
     "two-hundred-eightieth",
     "two-hundred-eighty-first",
     "two-hundred-eighty-second",
+    # The files workspace WP5 takes it to two hundred and ninety-eight; dense
+    # through the two-hundred-ninety-ninth.
+    "two-hundred-eighty-third",
+    "two-hundred-eighty-fourth",
+    "two-hundred-eighty-fifth",
+    "two-hundred-eighty-sixth",
+    "two-hundred-eighty-seventh",
+    "two-hundred-eighty-eighth",
+    "two-hundred-eighty-ninth",
+    "two-hundred-ninetieth",
+    "two-hundred-ninety-first",
+    "two-hundred-ninety-second",
+    "two-hundred-ninety-third",
+    "two-hundred-ninety-fourth",
+    "two-hundred-ninety-fifth",
+    "two-hundred-ninety-sixth",
+    "two-hundred-ninety-seventh",
+    "two-hundred-ninety-eighth",
+    "two-hundred-ninety-ninth",
 )
 
 

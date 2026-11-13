@@ -95,8 +95,9 @@ def test_the_eight_prefixes_are_s61s_patterns() -> None:
         )
         assert pattern.fullmatch(identifier)
     # 164 at S6-2; Reports Modernization WP01 appended seven `gr*` kinds after,
-    # and WP05b three more (hold, retention, preservation).
-    assert len(IdKind) == 174
+    # and WP05b three more (hold, retention, preservation); the files workspace
+    # WP5 five more (`fwupl`, `fwdnl`, `fwver`, `fwtrs`, `fwrcp`).
+    assert len(IdKind) == 179
     new = [
         IdKind.SCHEDULE_SCENARIO,
         IdKind.SCHEDULE_SCENARIO_VERSION,

@@ -794,6 +794,39 @@ class SafeDetail(StrEnum):
     SCENARIO_WRITE_BUDGET = "scenario_write_budget"
     SCENARIO_REFUSAL_BUDGET = "scenario_refusal_budget"
     CRITICAL_ONLY = "critical_only"
+    #: Files workspace (files-workspace contract section 7): the closed reason
+    #: tokens, each naming a condition and never a path or content. Mapped to
+    #: their public code by `application.file_workspace` (`invalid_path` and
+    #: `too_large` `invalid_request`, `not_found` `not_found`, `exists`,
+    #: `version_conflict`, `external_change_detected`, `digest_mismatch` and
+    #: `offset_mismatch` `conflict`, `unsupported_entry` `unsupported`, `quota`
+    #: `unavailable`, `ticket_invalid` `denied`).
+    INVALID_PATH = "invalid_path"
+    NOT_FOUND = "not_found"
+    EXISTS = "exists"
+    VERSION_CONFLICT = "version_conflict"
+    EXTERNAL_CHANGE_DETECTED = "external_change_detected"
+    UNSUPPORTED_ENTRY = "unsupported_entry"
+    TOO_LARGE = "too_large"
+    QUOTA = "quota"
+    DIGEST_MISMATCH = "digest_mismatch"
+    OFFSET_MISMATCH = "offset_mismatch"
+    TICKET_INVALID = "ticket_invalid"
+    #: Files workspace (contract section 6): the plane's own request fields.
+    #: `PATH`, `TO_PATH` and `NEW_NAME` accompany `INVALID_PATH`; the paging,
+    #: `EXPECTED_VERSION`, `VERSION_ID`, `QUERY`, `OFFSET`, `MAX_BYTES`,
+    #: `LENGTH`, `SHA256`, `TTL_SECONDS`, `TEXT` and `IDEMPOTENCY_KEY` details
+    #: are reused.
+    WORKSPACE_ID = "workspace_id"
+    PATH = "path"
+    TO_PATH = "to_path"
+    NEW_NAME = "new_name"
+    UPLOAD_ID = "upload_id"
+    TRASH_ITEM_ID = "trash_item_id"
+    PARENTS = "parents"
+    INCLUDE_SHA256 = "include_sha256"
+    SIZE = "size"
+    AFTER = "after"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

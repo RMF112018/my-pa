@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v13"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v14"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -46,6 +46,9 @@ class ChatLLMCompositionPrerequisite(StrEnum):
     #: Schedule Scenarios S6-3 (chatllm-data-v13): `MY_PA_SCHEDULE_SCENARIOS_ENABLED`,
     #: which stacks on the Schedule switch.
     SCHEDULE_SCENARIOS = "SCHEDULE_SCENARIOS"
+    #: Files workspace (chatllm-data-v14; files-workspace contract section 12):
+    #: `MY_PA_FILES_WORKSPACE_ROOT` composes the store; needs no other plane.
+    FILES_WORKSPACE = "FILES_WORKSPACE"
     NONE = "NONE"
 
 
@@ -359,6 +362,26 @@ _DATA_CONDITIONAL: Final[frozenset[Capability]] = frozenset(
         Capability.SCHEDULE_BASELINES_READ,
         Capability.SCHEDULE_BASELINES_GOVERNING,
         Capability.SCHEDULE_BASELINES_COMPARE,
+        # Files workspace (chatllm-data-v14; files-workspace contract section 12):
+        # the 17 `files.*` names, conditional on `MY_PA_FILES_WORKSPACE_ROOT` by
+        # explicit name (`FILES_WORKSPACE_DATA_NAMES`).
+        Capability.FILES_WORKSPACES_LIST,
+        Capability.FILES_LIST,
+        Capability.FILES_STAT,
+        Capability.FILES_SEARCH,
+        Capability.FILES_PREVIEW,
+        Capability.FILES_HISTORY,
+        Capability.FILES_DOWNLOAD_BEGIN,
+        Capability.FILES_MKDIR,
+        Capability.FILES_COPY,
+        Capability.FILES_UPLOAD_BEGIN,
+        Capability.FILES_UPLOAD_ABORT,
+        Capability.FILES_RENAME,
+        Capability.FILES_MOVE,
+        Capability.FILES_TRASH,
+        Capability.FILES_RESTORE,
+        Capability.FILES_UPLOAD_FINALIZE,
+        Capability.FILES_WRITE_TEXT,
     }
 )
 
@@ -564,6 +587,31 @@ SCHEDULE_SCENARIO_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
+#: Files workspace (chatllm-data-v14; files-workspace contract section 12): the
+#: 17 `files.*` names (7 reads, 10 writes), composed only when
+#: `MY_PA_FILES_WORKSPACE_ROOT` composes the store. None is operator-only.
+FILES_WORKSPACE_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.FILES_WORKSPACES_LIST,
+        Capability.FILES_LIST,
+        Capability.FILES_STAT,
+        Capability.FILES_SEARCH,
+        Capability.FILES_PREVIEW,
+        Capability.FILES_HISTORY,
+        Capability.FILES_DOWNLOAD_BEGIN,
+        Capability.FILES_MKDIR,
+        Capability.FILES_COPY,
+        Capability.FILES_UPLOAD_BEGIN,
+        Capability.FILES_UPLOAD_ABORT,
+        Capability.FILES_RENAME,
+        Capability.FILES_MOVE,
+        Capability.FILES_TRASH,
+        Capability.FILES_RESTORE,
+        Capability.FILES_UPLOAD_FINALIZE,
+        Capability.FILES_WRITE_TEXT,
+    }
+)
+
 _COMPATIBILITY_REPLACEMENTS: Final[Mapping[Capability, Capability]] = MappingProxyType(
     {
         Capability.CONTINUITY_TASKS_CREATE: Capability.TASKS_CREATE,
@@ -674,6 +722,8 @@ def _prerequisite_of(
         return ChatLLMCompositionPrerequisite.SCHEDULE
     if capability in SCHEDULE_SCENARIO_DATA_NAMES:
         return ChatLLMCompositionPrerequisite.SCHEDULE_SCENARIOS
+    if capability in FILES_WORKSPACE_DATA_NAMES:
+        return ChatLLMCompositionPrerequisite.FILES_WORKSPACE
     value = capability.value
     if value.startswith("documents."):
         return ChatLLMCompositionPrerequisite.MANAGED_DOCUMENTS

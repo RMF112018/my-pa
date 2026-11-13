@@ -294,9 +294,10 @@ def test_s31_capabilities_are_operator_decision_required() -> None:
     # `DATA_REQUIRED` since chatllm-data-v12).
     assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
     # Schedule Scenarios S6-3: its 26 plane names (no operator decision among them).
-    assert len(Capability) == 281
+    # Files workspace WP5: its 17 `files.*` names (none an operator decision).
+    assert len(Capability) == 298
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
 
 
 def test_switch_off_withholds_every_s31_capability(scene: Scene) -> None:
@@ -519,7 +520,7 @@ def test_no_s31_capability_is_in_the_chatllm_data_profile() -> None:
             desired_effective_capabilities(composed_off, knowledge_manager=knowledge_manager)
             & lineage_plane
         )
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
 
 
 # ---- client guidance (section 7.12) ----------------------------------------------
@@ -738,6 +739,10 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
         for capability in Capability
         if capability.value.startswith("reports.transfer.")
     }
+    # Files workspace WP5: its 17 `files.*` names are new.
+    lineage |= {
+        capability.value for capability in Capability if capability.value.startswith("files.")
+    }
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
@@ -761,9 +766,11 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
     # CPM Workbench S5b-2 appends its 2 purposes after them (contract 3.12),
     # and Reports Modernization WP03 its `report_lifecycle` after those, and
     # WP05b `report_hold` and `report_retention` after that.
-    # Schedule Scenarios S6-3 appends its 3 plane purposes after those.
-    assert len(published) == len(Purpose) == 68
-    assert published[-10:] == [
+    # Schedule Scenarios S6-3 appends its 3 plane purposes after those, and the
+    # files workspace WP5 its 2 after S6-3's.
+    assert len(published) == len(Purpose) == 70
+    assert published[-2:] == ["file_workspace_read", "file_workspace_authoring"]
+    assert published[-12:-2] == [
         "lineage_backfill",
         "program_reporting_read",
         "schedule_import",

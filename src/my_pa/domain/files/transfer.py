@@ -6,7 +6,7 @@ What is decided without a clock, a row or a file, stdlib and domain only:
   `ticket_token_digest` and `ticket_token_from_authorization`, over
   `domain.identity.secret_digests`; only the digest is ever stored;
 - the opaque ids of the plane (`fwupl`, `fwdnl`, `fwver`, `fwtrs`, `fwrcp`),
-  held here as local patterns until WP5 adds the `IdKind` members;
+  the `IdKind` members;
 - `UploadDeclaration` (optional size and sha256, TTL) and `validate_ttl`;
 - the upload offset arithmetic and the strict `Upload-Offset` and
   `Upload-Complete: sha256=<hex>, length=<n>` header grammars;
@@ -28,6 +28,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
+from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.files.errors import (
     FilesArgumentError,
     FilesRefusal,
@@ -80,13 +81,13 @@ TICKET_TOKEN_PATTERN: Final = r"^gfwtk_[0-9a-f]{64}$"  # noqa: S105 - a pattern
 _TICKET_TOKEN: Final = re.compile(r"\Agfwtk_([0-9a-f]{64})\Z")
 _BEARER_PREFIX: Final = "Bearer "
 
-#: Section 1.3 prefixes. Local until WP5 appends the `IdKind` members; the
-#: shape is `domain.common.identifiers`' (`<prefix>_` + 8-64 alphanumerics).
-UPLOAD_ID_PREFIX: Final = "fwupl"
-DOWNLOAD_ID_PREFIX: Final = "fwdnl"
-VERSION_ID_PREFIX: Final = "fwver"
-TRASH_ITEM_ID_PREFIX: Final = "fwtrs"
-RECEIPT_ID_PREFIX: Final = "fwrcp"
+#: Section 1.3 prefixes: the `IdKind` members (WP5); the shape is
+#: `domain.common.identifiers`' (`<prefix>_` + 8-64 alphanumerics).
+UPLOAD_ID_PREFIX: Final = IdKind.FILE_UPLOAD.value
+DOWNLOAD_ID_PREFIX: Final = IdKind.FILE_DOWNLOAD.value
+VERSION_ID_PREFIX: Final = IdKind.FILE_VERSION.value
+TRASH_ITEM_ID_PREFIX: Final = IdKind.FILE_TRASH_ITEM.value
+RECEIPT_ID_PREFIX: Final = IdKind.FILE_RECEIPT.value
 _ID_PREFIXES: Final = frozenset(
     {
         UPLOAD_ID_PREFIX,

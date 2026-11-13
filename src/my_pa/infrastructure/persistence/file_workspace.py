@@ -30,6 +30,7 @@ Application rules (CAS, idempotent replay, refusal mapping) are the caller's.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
@@ -42,6 +43,7 @@ from sqlalchemy import (
     RowMapping,
     Table,
     Text,
+    func,
     literal,
     select,
     tuple_,
@@ -88,7 +90,12 @@ from my_pa.infrastructure.persistence.tables import (
     file_workspace_versions,
 )
 
-__all__ = ["MAX_EXPIRE_BATCH", "SqlFileWorkspaceRepository"]
+__all__ = [
+    "MAX_EXPIRE_BATCH",
+    "WORKSPACE_LOCK_NAMESPACE",
+    "SqlFileWorkspaceRepository",
+    "workspace_lock_key",
+]
 
 #: The most tickets one `expire_due` call moves.
 MAX_EXPIRE_BATCH: Final = 1000
@@ -103,6 +110,21 @@ _TRANSFER_PREFIX: Final = {
     FileTransferKind.UPLOAD: UPLOAD_ID_PREFIX,
     FileTransferKind.DOWNLOAD: DOWNLOAD_ID_PREFIX,
 }
+
+
+#: Domain separator of the per-workspace mutation lock (contract section 5).
+WORKSPACE_LOCK_NAMESPACE: Final = "file-workspace-mutation"
+
+
+def workspace_lock_key(workspace_id: str) -> int:
+    """A stable signed 64-bit `pg_advisory_xact_lock` key for one workspace alias.
+
+    SHA-256 of the namespace and the alias (the `intelligence` registry lock's
+    construction), so the key never depends on a server hash function and is
+    domain-separated from every other single-key advisory lock in `src/`.
+    """
+    encoded = f"{WORKSPACE_LOCK_NAMESPACE}\x1f{workspace_id}".encode()
+    return int.from_bytes(hashlib.sha256(encoded).digest()[:8], byteorder="big", signed=True)
 
 
 # ---- argument checks (a fault here is a caller's programming error) ------------------
@@ -287,6 +309,13 @@ class SqlFileWorkspaceRepository(FileWorkspaceRepository):
 
     def __init__(self, connection: Connection) -> None:
         self._connection: Final = connection
+
+    # ---- serialization -----------------------------------------------------------
+
+    def lock_workspace(self, workspace_id: str) -> None:
+        self._connection.execute(
+            select(func.pg_advisory_xact_lock(workspace_lock_key(_workspace(workspace_id))))
+        ).scalar_one()
 
     # ---- tickets ---------------------------------------------------------------
 

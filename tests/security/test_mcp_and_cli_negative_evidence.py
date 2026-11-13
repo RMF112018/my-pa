@@ -87,6 +87,7 @@ from tests.contract.test_transport_parity import (
 from tests.contract.test_transport_parity import (
     payloads_for as transport_payloads_for,
 )
+from tests.files_workspace_samples import FILES_WORKSPACE_CAPABILITIES
 from tests.schedule_scenario_samples import SCHEDULE_SCENARIO_CAPABILITIES
 from tests.transports import (
     Answer,
@@ -635,6 +636,8 @@ SCOPED_CAPABILITIES = [
         Capability.SCHEDULE_CHANGES_LIST,
         # Schedule Scenarios S6-3: the 26 plane names (scopeless, plane switch off).
         *SCHEDULE_SCENARIO_CAPABILITIES,
+        # Files workspace WP5: the 17 `files.*` names (scopeless, no workspace root).
+        *FILES_WORKSPACE_CAPABILITIES,
     }
 ]
 
@@ -1039,6 +1042,19 @@ SCHEDULE_SCENARIO_AUTHORING_EXEMPTION = frozenset(
     }
 )
 
+#: Files workspace WP5 (ADR-019): `files.rename`, `files.move` and
+#: `files.write_text` trip the substring proxy. They mutate the one configured
+#: file workspace -- the ADR-019 writable authority class, a tree under its own
+#: root that is never a source root -- and reach no source provider and no
+#: enrollment; every other `files.*` write carries no listed verb.
+FILE_WORKSPACE_AUTHORING_EXEMPTION = frozenset(
+    {
+        Capability.FILES_RENAME,
+        Capability.FILES_MOVE,
+        Capability.FILES_WRITE_TEXT,
+    }
+)
+
 
 def test_neither_transport_routes_a_mutating_capability() -> None:
     """The tool list and the CLI's positional, and no name that mutates a *source*.
@@ -1074,6 +1090,7 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
         | GENERAL_REPORT_MANAGEMENT_EXEMPTION
         | ISSUE_AUTHORING_EXEMPTION
         | SCHEDULE_SCENARIO_AUTHORING_EXEMPTION
+        | FILE_WORKSPACE_AUTHORING_EXEMPTION
     )
     checked = [c for c in IMPLEMENTED_CAPABILITIES if c not in exempt]
     assert len(checked) == len(IMPLEMENTED_CAPABILITIES) - len(exempt)

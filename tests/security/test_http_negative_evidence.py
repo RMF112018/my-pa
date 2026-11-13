@@ -79,6 +79,7 @@ from tests.contract.test_transport_parity import (
     staged_mention,
     staged_project_entity,
 )
+from tests.files_workspace_samples import FILES_WORKSPACE_CAPABILITIES, files_payloads
 from tests.schedule_scenario_samples import SCHEDULE_SCENARIO_CAPABILITIES, scenario_payloads
 from tests.wire import Reply, Wire, serve
 
@@ -348,6 +349,8 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.SCHEDULE_CHANGES_LIST,
         # Schedule Scenarios S6-3: the 26 plane names (scopeless, plane switch off).
         *SCHEDULE_SCENARIO_CAPABILITIES,
+        # Files workspace WP5: the 17 `files.*` names (scopeless, no workspace root).
+        *FILES_WORKSPACE_CAPABILITIES,
     }
 )
 
@@ -1745,6 +1748,8 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         },
         # Schedule Scenarios S6-3: synthetic plane samples.
         **scenario_payloads("wire"),
+        # Files workspace WP5: synthetic plane samples.
+        **files_payloads("wire"),
     }
 
 
@@ -2497,6 +2502,8 @@ SCOPED_CAPABILITIES = [
         Capability.SCHEDULE_CHANGES_LIST,
         # Schedule Scenarios S6-3: the 26 plane names (scopeless, plane switch off).
         *SCHEDULE_SCENARIO_CAPABILITIES,
+        # Files workspace WP5: the 17 `files.*` names (scopeless, no workspace root).
+        *FILES_WORKSPACE_CAPABILITIES,
     }
 ]
 
@@ -2836,6 +2843,19 @@ SCHEDULE_SCENARIO_AUTHORING_EXEMPTION = frozenset(
     }
 )
 
+#: Files workspace WP5 (ADR-019): `files.rename`, `files.move` and
+#: `files.write_text` trip the substring proxy. They mutate the one configured
+#: file workspace -- the ADR-019 writable authority class, a tree under its own
+#: root that is never a source root -- and reach no source provider and no
+#: enrollment; every other `files.*` write carries no listed verb.
+FILE_WORKSPACE_AUTHORING_EXEMPTION = frozenset(
+    {
+        Capability.FILES_RENAME,
+        Capability.FILES_MOVE,
+        Capability.FILES_WRITE_TEXT,
+    }
+)
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
@@ -2889,6 +2909,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | GENERAL_REPORT_MANAGEMENT_EXEMPTION
         | ISSUE_AUTHORING_EXEMPTION
         | SCHEDULE_SCENARIO_AUTHORING_EXEMPTION
+        | FILE_WORKSPACE_AUTHORING_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(IMPLEMENTED_CAPABILITIES) - len(exempt)

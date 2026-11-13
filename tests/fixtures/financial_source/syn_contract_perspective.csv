@@ -1,0 +1,10 @@
+my-pa-synthetic-finance-v1
+record_type,ref,source_system,source_version_ref,period,cutoff_at,status,approved_by,approved_at,supersedes_ref,perspective,currency,cost_basis,external_project_id,external_contract_id,cost_code,wbs_package,measure,amount,change_status,transfer_ref,leg_side,row_count,body_sha256
+source_version,,syn-fin-a,SYN-V-2026-10-K,2026-10,2026-10-31T23:59:59Z,approved,syn-approver-1,2026-11-05T15:00:00Z,,construction_contract,USD,gross,,,,,,,,,,6,4a8e8f76c7fc61210f8619ad7b1fa7d344339df7339d1c45b67cc6645174e42e
+account_line,SYN-L-K01,,,,,,,,,,USD,,SYN-P-100,SYN-K-1,SYN-CC-03300,SYN-WBS-CONC,original_contract,2000000.0000,,,,,
+account_line,SYN-L-K02,,,,,,,,,,USD,,SYN-P-100,SYN-K-1,SYN-CC-03300,SYN-WBS-CONC,actual_cost,800000.0000,,,,,
+account_line,SYN-L-K03,,,,,,,,,,USD,,SYN-P-100,SYN-K-1,SYN-CC-03300,SYN-WBS-CONC,source_eac,1900000.0000,,,,,
+change_order,SYN-CO-K1,,,,,,,,,,USD,,SYN-P-100,SYN-K-1,SYN-CC-03300,SYN-WBS-CONC,,30000.0000,approved,,,,
+change_order,SYN-CO-K2,,,,,,,,,,USD,,SYN-P-100,SYN-K-1,SYN-CC-03300,SYN-WBS-CONC,,12500.5000,approved,,,,
+change_order,SYN-CO-K3,,,,,,,,,,USD,,SYN-P-100,SYN-K-1,SYN-CC-03300,SYN-WBS-CONC,,7000.0000,pending,,,,
+end,,,,,,,,,,,,,,,,,,,,,,6,

@@ -1,0 +1,4 @@
+my-pa-synthetic-finance-v1
+record_type,ref,source_system,source_version_ref,period,cutoff_at,status,approved_by,approved_at,supersedes_ref,perspective,currency,cost_basis,external_project_id,external_contract_id,cost_code,wbs_package,measure,amount,change_status,transfer_ref,leg_side,row_count,body_sha256
+source_version,,syn-fin-a,SYN-V-2026-10-W2,2026-10,2026-10-31T23:59:59Z,withdrawn,syn-approver-1,2026-11-07T09:00:00Z,SYN-V-2026-10-NONE,owner_budget,USD,gross,,,,,,,,,,0,cbf089a3249e9aa46dd98394b9defa5f2b288787fe1f625bc0852ecc9952cc46
+end,,,,,,,,,,,,,,,,,,,,,,0,

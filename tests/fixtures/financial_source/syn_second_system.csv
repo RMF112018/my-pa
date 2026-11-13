@@ -1,0 +1,7 @@
+my-pa-synthetic-finance-v1
+record_type,ref,source_system,source_version_ref,period,cutoff_at,status,approved_by,approved_at,supersedes_ref,perspective,currency,cost_basis,external_project_id,external_contract_id,cost_code,wbs_package,measure,amount,change_status,transfer_ref,leg_side,row_count,body_sha256
+source_version,,syn-fin-c,SYN-V-2026-10-C,2026-10,2026-10-31T23:59:59Z,approved,syn-approver-1,2026-11-05T15:00:00Z,,owner_budget,USD,gross,,,,,,,,,,3,000c0b7b1b3577758461f01b0514cea71ef21ccbb455efd0998c063812fc4010
+account_line,SYN-L-C01,,,,,,,,,,USD,,SYN-P-100,,SYN-CC-03300,SYN-WBS-CONC,original_budget,1000000.0000,,,,,
+account_line,SYN-L-C02,,,,,,,,,,USD,,SYN-P-100,,SYN-CC-03300,SYN-WBS-CONC,current_budget,1025000.0000,,,,,
+change_order,SYN-CO-1,,,,,,,,,,USD,,SYN-P-100,,SYN-CC-03300,SYN-WBS-CONC,,25000.0000,approved,,,,
+end,,,,,,,,,,,,,,,,,,,,,,3,

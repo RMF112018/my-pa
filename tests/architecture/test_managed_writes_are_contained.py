@@ -1030,10 +1030,46 @@ def test_the_files_workspace_root_setting_is_its_own_and_reaches_only_the_store(
         f"{readers} read the files workspace root setting; each reader must build "
         "the store, which is where containment and the overlap refusals live"
     )
-    composition = (ROOT / "src/my_pa/bootstrap/gateway.py").read_text(encoding="utf-8")
-    assert "FilesystemFileWorkspaceStore(" in composition
-    for keyword in ("source_roots=", "managed_roots=", "report_roots="):
-        assert keyword in composition, (
-            f"the composition root builds the files workspace store without `{keyword}`, "
+    # Scoped to the one function, not the module: `source_roots=` is passed to
+    # every other store the composition root builds, so a textual search
+    # would pass with the keyword missing from the files workspace store.
+    composition = ast.parse((ROOT / "src/my_pa/bootstrap/gateway.py").read_text(encoding="utf-8"))
+    functions = [
+        node
+        for node in ast.walk(composition)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    ]
+    setting_readers = sorted(
+        function.name
+        for function in functions
+        if any(
+            isinstance(node, ast.Attribute) and node.attr == "files_workspace_root"
+            for node in ast.walk(function)
+        )
+    )
+    assert setting_readers == ["files_workspace_store"], (
+        f"{setting_readers} read the files workspace root in the composition root; "
+        "only `files_workspace_store` may, as it builds the store from it"
+    )
+    constructions = {
+        function.name: [
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "FilesystemFileWorkspaceStore"
+        ]
+        for function in functions
+    }
+    builders = sorted(name for name, calls in constructions.items() if calls)
+    assert builders == ["files_workspace_store"], (
+        f"{builders} construct `FilesystemFileWorkspaceStore` in the composition root; "
+        "only `files_workspace_store` may, with every overlap root"
+    )
+    (call,) = constructions["files_workspace_store"]
+    keywords = {keyword.arg for keyword in call.keywords}
+    for keyword in ("source_roots", "managed_roots", "report_roots"):
+        assert keyword in keywords, (
+            f"the composition root builds the files workspace store without `{keyword}=`, "
             "so that overlap refusal compares against nothing"
         )

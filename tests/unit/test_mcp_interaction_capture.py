@@ -2179,3 +2179,72 @@ def test_other_capabilities_keep_their_text_and_the_token_redaction_still_applie
     row = _serialized(_row(_exchange(upload, _files_result(begun))))
     assert "gfwtk_" + "a" * 64 not in row
     assert REDACTED in row
+
+
+def _unresolved_request(form: str, call: dict[str, object]) -> tuple[bytes, bool]:
+    """`call` as a request body whose capability the row builder cannot resolve."""
+    encoded = json.dumps(call).encode()
+    if form == "batch":
+        return json.dumps([call, _call("capture.create", {})]).encode(), False
+    if form == "invalid":
+        return encoded + b",", False
+    return encoded[: len(encoded) - 3], True  # "overflow": a prefix past the buffer
+
+
+_UNRESOLVED_FORMS = ["batch", "invalid", "overflow"]
+
+
+@pytest.mark.parametrize("facade", [False, True])
+@pytest.mark.parametrize("form", _UNRESOLVED_FORMS)
+def test_an_unresolved_request_naming_write_text_is_omitted(form: str, facade: bool) -> None:
+    payload = {"workspace_id": "mcp", "path": "n.md", "text": _FILE_TEXT}
+    call = (
+        _files_call(
+            WRITE_TOOL, {"capability": "files.write_text", "arguments": {"payload": payload}}
+        )
+        if facade
+        else _files_call("files.write_text", {"payload": payload})
+    )
+    raw, overflowed = _unresolved_request(form, call)
+    row = _row(_exchange(raw_request=raw, request_overflowed=overflowed))
+    assert row["capability"] is None
+    stored = _serialized(row)
+    assert _FILE_TEXT not in stored
+    assert OMITTED in stored
+
+
+@pytest.mark.parametrize("facade", [False, True])
+@pytest.mark.parametrize("form", _UNRESOLVED_FORMS)
+def test_an_unresolved_request_naming_preview_omits_the_response_text(
+    form: str, facade: bool
+) -> None:
+    payload = {"workspace_id": "mcp", "path": "n.md"}
+    call = (
+        _files_call(READ_TOOL, {"capability": "files.preview", "arguments": {"payload": payload}})
+        if facade
+        else _files_call("files.preview", {"payload": payload})
+    )
+    raw, overflowed = _unresolved_request(form, call)
+    envelope = {"result": {"text": _FILE_TEXT, "binary": False, "next_offset": None}}
+    response = [_files_result(envelope)] if form == "batch" else _files_result(envelope)
+    row = _row(_exchange(response=response, raw_request=raw, request_overflowed=overflowed))
+    assert row["capability"] is None
+    assert _FILE_TEXT not in _serialized(row)
+
+
+@pytest.mark.parametrize("form", _UNRESOLVED_FORMS)
+def test_an_unresolved_request_naming_neither_keeps_its_text(form: str) -> None:
+    raw, overflowed = _unresolved_request(
+        form, _files_call("capture.create", {"payload": {"text": "an ordinary capture"}})
+    )
+    row = _row(
+        _exchange(
+            response=_tool_result("an ordinary reply", is_error=False),
+            raw_request=raw,
+            request_overflowed=overflowed,
+        )
+    )
+    stored = _serialized(row)
+    assert "an ordinary capture" in stored
+    assert "an ordinary reply" in stored
+    assert OMITTED not in stored

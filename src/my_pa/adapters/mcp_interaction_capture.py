@@ -740,6 +740,23 @@ _TEXT_OMITTED_RESPONSES: Final = frozenset({"files.preview"})
 OMITTED: Final = "[OMITTED]"
 
 
+def _unresolved_names(raw: bytes, parsed: object, capabilities: frozenset[str]) -> bool:
+    """Whether a request whose capability was not resolved may name one of `capabilities`.
+
+    Fail-closed for the text omission above: a request that is not a single
+    JSON object -- a batch, invalid JSON, or a body past the capture buffer --
+    resolves no capability, yet may still carry a `files.write_text` call
+    (direct, or as a facade's `arguments.capability`) or ask for a
+    `files.preview`. Any mention in the captured bytes, or in a parsed batch
+    re-serialised (so a `\\u`-escaped name is seen), omits the text.
+    """
+    haystacks = [raw]
+    if isinstance(parsed, list):
+        with contextlib.suppress(ValueError, RecursionError, TypeError):
+            haystacks.append(json.dumps(parsed, ensure_ascii=False).encode("utf-8", "replace"))
+    return any(name.encode("utf-8") in hay for name in capabilities for hay in haystacks)
+
+
 def _without_text(value: object) -> object:
     """`value` with every value under a `text` key replaced by `OMITTED`."""
     if isinstance(value, dict):
@@ -1049,14 +1066,23 @@ def build_interaction_row(
         request.parsed if request.is_json else None, walk, facade_invoke_tools
     )
     capability = request_meta["capability"]
-    if capability in _TEXT_OMITTED_REQUESTS:
+    omit_request = capability in _TEXT_OMITTED_REQUESTS
+    omit_response = capability in _TEXT_OMITTED_RESPONSES
+    if capability is None and not (request.is_json and isinstance(request.parsed, dict)):
+        omit_request = _unresolved_names(
+            exchange.request_body, request.parsed, _TEXT_OMITTED_REQUESTS
+        )
+        omit_response = _unresolved_names(
+            exchange.request_body, request.parsed, _TEXT_OMITTED_RESPONSES
+        )
+    if omit_request:
         request = _process_body(
             exchange.request_body, overflowed=exchange.request_overflowed, omit_text=True
         )
     response = _process_body(
         exchange.response_body,
         overflowed=exchange.response_overflowed,
-        omit_text=capability in _TEXT_OMITTED_RESPONSES,
+        omit_text=omit_response,
     )
     facts = _response_facts(
         response.parsed if response.is_json else None, exchange.http_status, walk

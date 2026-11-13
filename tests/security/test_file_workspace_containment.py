@@ -366,6 +366,56 @@ def test_a_directory_swapped_in_after_the_recheck_is_never_moved(
 
 
 @pytest.mark.parametrize("replacement", ["symlink", "directory"])
+@pytest.mark.parametrize("operation", ["write_text", "publish_upload"])
+def test_a_leaf_swapped_after_the_publish_recheck_keeps_no_preimage(
+    store: FilesystemFileWorkspaceStore,
+    layout: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    replacement: str,
+) -> None:
+    """A replacement swapped in between the re-check and the preimage link is refused.
+
+    The link holds the swapped-in object, not the observed file, so it is
+    taken back: nothing stays under `versions`, nothing is published over the
+    replacement, and the secret it points at is neither read nor linked.
+    """
+    root, outside = layout
+    (root / "a.txt").write_bytes(b"mine")
+    observed = store.stat("a.txt").version
+    reached: list[str] = []
+
+    def swap(stage: str) -> None:
+        reached.append(stage)
+        _replace_leaf(root, outside, replacement)
+
+    monkeypatch.setattr(store, "_after_recheck", swap)
+    if operation == "write_text":
+        reason = _refusal(
+            lambda: store.write_text(
+                "a.txt", "new", expected_version=observed, preimage_version_id=VERSION_ID
+            )
+        )
+    else:
+        store.begin_upload(UPLOAD_ID)
+        store.append_upload(UPLOAD_ID, 0, [b"new"], limit=3)
+        reason = _refusal(
+            lambda: store.publish_upload(
+                UPLOAD_ID,
+                "a.txt",
+                length=3,
+                sha256=hashlib.sha256(b"new").hexdigest(),
+                expected_version=observed,
+                preimage_version_id=VERSION_ID,
+            )
+        )
+    assert reached == ["publish"]
+    assert reason is FilesReason.EXTERNAL_CHANGE_DETECTED
+    assert list((root / ".my-pa" / "versions").iterdir()) == []
+    _replacement_untouched(root, outside, replacement)
+
+
+@pytest.mark.parametrize("replacement", ["symlink", "directory"])
 @pytest.mark.parametrize("operation", ["move", "trash"])
 def test_a_leaf_swapped_inside_the_fallback_rename_is_put_back(
     store: FilesystemFileWorkspaceStore,

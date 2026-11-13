@@ -823,8 +823,9 @@ def test_download_reads_ranges_of_the_bound_version(
         assert b"".join(reader.read_range(10, 20)) == data[10:30]
         assert b"".join(reader.read_range(2550, 100)) == data[2550:]
         assert reader.sha256() == _sha(data)
-        # A rename-replace of the path unlinks the held inode, which moves its
-        # ctime: the next read refuses rather than serving a superseded file.
+        # A rename-replace of the path unlinks the held inode (link count 0,
+        # whatever its ctime did): the next read refuses rather than serving a
+        # superseded file.
         (root / "replacement").write_bytes(b"new")
         (root / "replacement").replace(root / "f")
         with pytest.raises(FilesRefusal) as caught:
@@ -834,6 +835,40 @@ def test_download_reads_ranges_of_the_bound_version(
     with pytest.raises(FilesRefusal) as caught:
         store.open_download("f", expected_version=version)
     assert _reason(caught) is FilesReason.EXTERNAL_CHANGE_DETECTED
+
+
+def test_download_refuses_a_replaced_held_file_even_when_ctime_does_not_move(
+    store: FilesystemFileWorkspaceStore, root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Linux before 6.13 stamps ctime from a coarse (1-4 ms) clock, so a
+    # rename-replace in the same tick as the write leaves the held inode's
+    # token unchanged. Pin ctime out of the token to make that deterministic:
+    # only the held inode's link count (0 once it is renamed over) can refuse.
+    def coarse_token(status: os.stat_result) -> str:
+        return store_module.version_token(
+            dev=status.st_dev,
+            ino=status.st_ino,
+            kind=store_module._kind(status.st_mode),
+            size=status.st_size,
+            mtime_ns=status.st_mtime_ns,
+            ctime_ns=0,
+        )
+
+    monkeypatch.setattr(store_module, "_token", coarse_token)
+    (root / "f").write_bytes(b"abc")
+    version = store.stat("f").version
+    with store.open_download("f", expected_version=version) as reader:
+        assert b"".join(reader.read_range(0, 3)) == b"abc"
+        held = (root / "f").stat()
+        (root / "replacement").write_bytes(b"xyz")
+        os.utime(root / "replacement", ns=(held.st_atime_ns, held.st_mtime_ns))
+        (root / "replacement").replace(root / "f")
+        with pytest.raises(FilesRefusal) as caught:
+            list(reader.read_range(0, 3))
+        assert _reason(caught) is FilesReason.EXTERNAL_CHANGE_DETECTED
+        with pytest.raises(FilesRefusal) as caught:
+            reader.sha256()
+        assert _reason(caught) is FilesReason.EXTERNAL_CHANGE_DETECTED
 
 
 def test_download_refuses_an_in_place_change_after_open(

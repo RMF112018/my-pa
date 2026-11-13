@@ -57,10 +57,14 @@ Concretely:
 * when hard links are unsupported (`EPERM`, `ENOTSUP`, `EMLINK`), a file move
   falls back to check-absent-then-`rename`, with the same interval; the source
   is re-proved the observed regular file before the rename and the moved entry
-  after it, and anything else that was moved is renamed back and refused.
+  after it, and anything else that was moved is renamed back and refused;
+* a directory's identity across a move is its inode plus its type only, so on
+  ext4 a directory swapped in after the re-check that reuses the observed
+  inode number could be moved instead (it stays inside the root).
 
-Identity is never the inode number alone: ext4 reuses a freed number at once,
-so a name unlinked and replaced can come back with the observed `st_ino`.
+A file's identity across an unlink is never the inode number alone: ext4
+reuses a freed number at once, so a name unlinked and replaced can come back
+with the observed `st_ino`.
 A file's identity is its inode plus its type, size and `st_mtime_ns`, which a
 link or rename leaves unchanged.
 
@@ -464,7 +468,13 @@ class _HeldFile(FileWorkspaceReader):
         if self._descriptor is None:
             raise _unavailable()
         with _translated():
-            if _token(os.fstat(self._descriptor)) != self.version:
+            status = os.fstat(self._descriptor)
+            # `st_nlink == 0`: the held inode was unlinked or renamed over. Its
+            # token can survive that when the ctime clock is coarse (Linux
+            # before 6.13), so the link count is checked as well. A live file
+            # has at least one link; the store's own transient links only
+            # raise the count.
+            if status.st_nlink == 0 or _token(status) != self.version:
                 raise _refuse("version", FilesReason.EXTERNAL_CHANGE_DETECTED)
         return self._descriptor
 
@@ -1349,6 +1359,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         if self._lstat(versions, preimage) is not None:
             raise _refuse("preimage_version_id", FilesReason.EXISTS)
         self._recheck(parent, path.name, current, "path")
+        self._after_recheck("publish")
         linked = True
         try:
             os.link(

@@ -450,6 +450,8 @@ UNRELATED_CALLS: Final = frozenset(
         ("src/my_pa/infrastructure/report_content_stores/filesystem.py", "link", "os"),
         # Reports Modernization WP06: the transfer staging's link-publish.
         ("src/my_pa/infrastructure/report_content_stores/staging.py", "link", "os"),
+        # Files workspace WP3: the file workspace store's no-overwrite link-publish.
+        ("src/my_pa/infrastructure/file_workspace/store.py", "link", "os"),
         ("ops/nas/write-postgres-backup-runtime-attestation.py", "link", "os"),
         ("ops/nas/generate-runtime-admission.py", "link", "os"),
     }

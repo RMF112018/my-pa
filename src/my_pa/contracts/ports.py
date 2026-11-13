@@ -13375,8 +13375,12 @@ class FileWorkspaceStore(ABC):
         """
 
     @abstractmethod
-    def upload_digest(self, upload_id: str) -> tuple[int, str]:
-        """`(length, sha256 hex)` of the staged bytes."""
+    def upload_digest(self, upload_id: str) -> tuple[int, str, str]:
+        """`(length, sha256 hex, staged version token)` of the staged bytes.
+
+        The token is the staged file's fingerprint the bytes were hashed under;
+        `external_change_detected` if it moved while they were read.
+        """
 
     @abstractmethod
     def discard_upload(self, upload_id: str) -> bool:
@@ -13396,10 +13400,17 @@ class FileWorkspaceStore(ABC):
         sha256: str,
         expected_version: str | None = None,
         preimage_version_id: str | None = None,
+        staged_version: str | None = None,
     ) -> FileWorkspacePublication:
         """Publish verified staged bytes: create, or replace with a preserved preimage.
 
         As with `write_text`, a `preimage_version_id` given with a create is not used.
+        Without `staged_version` the staged bytes are hashed and must match
+        `(length, sha256)` (`digest_mismatch`). With it -- the token of an
+        `upload_digest` whose `(length, sha256)` the caller has verified equal
+        to these -- they are not read again: the staged file must still have
+        that fingerprint (`external_change_detected`), so the bytes published
+        are the bytes that were hashed.
         """
 
     @abstractmethod

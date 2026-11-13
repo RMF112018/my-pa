@@ -757,6 +757,27 @@ def _unresolved_names(raw: bytes, parsed: object, capabilities: frozenset[str]) 
     return any(name.encode("utf-8") in hay for name in capabilities for hay in haystacks)
 
 
+#: Bytes whose presence leaves open that a body carries a `text` key: the key
+#: itself, or a JSON `\u` escape (the only escape that spells a letter, as in
+#: `t\u0065xt`).
+_TEXT_KEY_MARKERS: Final = (b"text", b"\\u")
+
+
+def _may_carry_text(raw: bytes) -> bool:
+    """Whether an incomplete or unparseable request body may hold a `text` value.
+
+    Fail-closed for the `files.write_text` omission: a prefix past the buffer,
+    or a body that is not JSON, cannot be resolved to its capability -- its
+    `name` (or a facade's `arguments.capability`) may come after the text, past
+    the cut, or be repeated (the last duplicate wins) -- so it is stored only
+    when it positively holds no `text` key at all: none of the bytes that could
+    spell one. A body with a NUL is searched with its NULs removed, so a
+    UTF-16 or UTF-32 spelling is seen. Linear byte searches only, whatever the body.
+    """
+    compact = raw.replace(b"\x00", b"") if b"\x00" in raw else raw
+    return any(marker in compact for marker in _TEXT_KEY_MARKERS)
+
+
 def _without_text(value: object) -> object:
     """`value` with every value under a `text` key replaced by `OMITTED`."""
     if isinstance(value, dict):
@@ -1071,7 +1092,7 @@ def build_interaction_row(
     if capability is None and not (request.is_json and isinstance(request.parsed, dict)):
         omit_request = _unresolved_names(
             exchange.request_body, request.parsed, _TEXT_OMITTED_REQUESTS
-        )
+        ) or (not request.is_json and _may_carry_text(exchange.request_body))
         omit_response = _unresolved_names(
             exchange.request_body, request.parsed, _TEXT_OMITTED_RESPONSES
         )

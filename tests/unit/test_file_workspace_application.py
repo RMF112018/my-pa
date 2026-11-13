@@ -10,6 +10,7 @@ PostgreSQL in `tests/database/test_files_workspace_application.py`.
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -61,6 +62,7 @@ from my_pa.domain.files.transfer import ticket_token_digest
 from my_pa.domain.files.versions import EntryKind
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.infrastructure.file_workspace import store as store_module
 from my_pa.infrastructure.file_workspace.store import FilesystemFileWorkspaceStore
 
 WORKSPACE = "mcp"
@@ -615,6 +617,66 @@ def test_an_upload_publishes_verified_bytes_and_its_token_is_answered_once(world
         DeniedError,
     )
     assert used.safe_details == (SafeDetail.TICKET_INVALID,)
+
+
+def _staged_upload(world: _World, path: str, key: str, data: bytes) -> str:
+    begun = _begin(world, path, key, size=len(data), sha256=hashlib.sha256(data).hexdigest())
+    world.store.append_upload(begun["upload_id"], 0, [data], limit=1024)
+    return str(begun["upload_id"])
+
+
+def _finalize(upload: str, data: bytes, key: str) -> FinalizeFileUpload:
+    return FinalizeFileUpload(
+        workspace_id=WORKSPACE,
+        upload_id=upload,
+        length=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        idempotency_key=key,
+    )
+
+
+def test_finalize_reads_the_staged_bytes_once(
+    world: _World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = b"synthetic bytes hashed once"
+    upload = _staged_upload(world, "once.bin", "k-o1", data)
+    reads: list[int] = []
+    pread = store_module.os.pread
+
+    def counted(descriptor: int, length: int, offset: int) -> bytes:
+        chunk = pread(descriptor, length, offset)
+        reads.append(len(chunk))
+        return chunk
+
+    monkeypatch.setattr(store_module.os, "pread", counted)
+    world.run(_finalize(upload, data, "k-o2"))
+    monkeypatch.undo()
+    assert sum(reads) == len(data), "finalize read the staged bytes more than once"
+    assert (world.root / "once.bin").read_bytes() == data
+
+
+def test_a_staged_file_changed_between_digest_and_publication_is_refused(
+    world: _World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = b"synthetic bytes, then swapped"
+    upload = _staged_upload(world, "swap.bin", "k-s1", data)
+    digest = world.store.upload_digest
+
+    def digest_then_swap(upload_id: str) -> tuple[int, str, str]:
+        answered = digest(upload_id)
+        staged = world.root / ".my-pa" / "staging" / upload_id
+        with staged.open("r+b") as handle:
+            handle.write(b"X")  # same length, other bytes
+        # A coarse filesystem clock may leave the mtime where it was: move it.
+        status = staged.stat()
+        os.utime(staged, ns=(status.st_atime_ns, status.st_mtime_ns + 1_000_000_000))
+        return answered
+
+    monkeypatch.setattr(world.store, "upload_digest", digest_then_swap)
+    error = _refused(world, _finalize(upload, data, "k-s2"), ConflictError)
+    assert error.safe_details == (SafeDetail.EXTERNAL_CHANGE_DETECTED,)
+    assert not (world.root / "swap.bin").exists()
+    assert world.rows.transfers[upload].state is not FileTransferState.FINALIZED
 
 
 def test_an_upload_replace_needs_the_current_version_and_keeps_the_preimage(

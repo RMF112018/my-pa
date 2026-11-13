@@ -1530,11 +1530,17 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             os.fsync(descriptor)
             return position
 
-    def upload_digest(self, upload_id: str) -> tuple[int, str]:
+    def upload_digest(self, upload_id: str) -> tuple[int, str, str]:
         with ExitStack() as stack, _translated():
             staging, name, status = self._staged(stack, upload_id)
             descriptor = self._open_file(stack, staging, name, status, "upload_id")
-            return _hash_descriptor(descriptor)
+            length, sha256 = _hash_descriptor(descriptor)
+            # The digest is bound to the fingerprint it was read under: a change
+            # while hashing moves it, so the bytes are not vouched for.
+            staged_version = _token(status)
+            if _token(os.fstat(descriptor)) != staged_version:
+                raise _refuse("upload_id", FilesReason.EXTERNAL_CHANGE_DETECTED)
+            return length, sha256, staged_version
 
     def discard_upload(self, upload_id: str) -> bool:
         name = _file_id(upload_id, UPLOAD_ID_PREFIX, "upload_id")
@@ -1566,18 +1572,30 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         sha256: str,
         expected_version: str | None = None,
         preimage_version_id: str | None = None,
+        staged_version: str | None = None,
     ) -> FileWorkspacePublication:
         file_path = parse_path(path)
         claimed_length = _bounded_int(length, "length", 0)
         claimed_sha256 = validate_sha256(sha256)
         if expected_version is not None:
             validate_version_token(expected_version)
+        if staged_version is not None:
+            validate_version_token(staged_version, "staged_version")
         with ExitStack() as stack, _translated():
             staging, name, status = self._staged(stack, upload_id)
             descriptor = self._open_file(stack, staging, name, status, "upload_id")
-            staged_length, staged_sha256 = _hash_descriptor(descriptor)
-            if (staged_length, staged_sha256) != (claimed_length, claimed_sha256):
-                raise _refuse("sha256", FilesReason.DIGEST_MISMATCH)
+            if staged_version is None:
+                staged_length, staged_sha256 = _hash_descriptor(descriptor)
+                if (staged_length, staged_sha256) != (claimed_length, claimed_sha256):
+                    raise _refuse("sha256", FilesReason.DIGEST_MISMATCH)
+            else:
+                # Already hashed by `upload_digest` under `staged_version`: the
+                # held descriptor is that inode, unchanged since (`_open_file`
+                # proved it matches `status`), so it is not read again.
+                if _token(status) != staged_version:
+                    raise _refuse("upload_id", FilesReason.EXTERNAL_CHANGE_DETECTED)
+                if status.st_size != claimed_length:
+                    raise _refuse("sha256", FilesReason.DIGEST_MISMATCH)
             if _token(os.fstat(descriptor)) != _token(status):
                 raise _refuse("upload_id", FilesReason.EXTERNAL_CHANGE_DETECTED)
             parent, current, preimage = self._target(

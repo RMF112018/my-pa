@@ -658,7 +658,9 @@ def test_upload_staging_resumes_and_publishes(
     assert _reason(caught) is FilesReason.TOO_LARGE
     assert store.upload_offset(UPLOAD_ID) == 4000
     assert store.append_upload(UPLOAD_ID, 4000, iter([payload[4000:]]), limit=10_000) == 10_000
-    assert store.upload_digest(UPLOAD_ID) == (10_000, _sha(payload))
+    length, sha256, staged_version = store.upload_digest(UPLOAD_ID)
+    assert (length, sha256) == (10_000, _sha(payload))
+    assert staged_version.startswith("fv1_")
 
     with pytest.raises(FilesRefusal) as caught:
         store.publish_upload(UPLOAD_ID, "up.bin", length=10_000, sha256=_sha(b"other"))
@@ -670,6 +672,86 @@ def test_upload_staging_resumes_and_publishes(
     with pytest.raises(FilesRefusal) as caught:
         store.upload_offset(UPLOAD_ID)
     assert _reason(caught) is FilesReason.NOT_FOUND
+
+
+def _moved_mtime(path: Path) -> None:
+    """Move `path`'s mtime a second on: a coarse filesystem clock may not have."""
+    status = path.stat()
+    os.utime(path, ns=(status.st_atime_ns, status.st_mtime_ns + 1_000_000_000))
+
+
+def _counting_reads(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Every byte count `os.pread` returns from now on."""
+    reads: list[int] = []
+    pread = os.pread
+
+    def counted(descriptor: int, length: int, offset: int) -> bytes:
+        chunk = pread(descriptor, length, offset)
+        reads.append(len(chunk))
+        return chunk
+
+    monkeypatch.setattr(store_module.os, "pread", counted)
+    return reads
+
+
+def test_a_publication_bound_to_its_digest_does_not_read_the_staged_bytes_again(
+    store: FilesystemFileWorkspaceStore, root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b"synthetic staged bytes" * 100
+    store.begin_upload(UPLOAD_ID)
+    store.append_upload(UPLOAD_ID, 0, [payload], limit=10_000)
+    reads = _counting_reads(monkeypatch)
+    length, sha256, staged_version = store.upload_digest(UPLOAD_ID)
+    assert sum(reads) == len(payload)
+    published = store.publish_upload(
+        UPLOAD_ID, "up.bin", length=length, sha256=sha256, staged_version=staged_version
+    )
+    assert sum(reads) == len(payload), "the staged bytes were read twice"
+    assert published.entry.size == len(payload)
+    assert (root / "up.bin").read_bytes() == payload
+
+
+@pytest.mark.parametrize("change", ["in_place", "appended"])
+def test_a_staged_file_changed_after_its_digest_is_not_published(
+    store: FilesystemFileWorkspaceStore, root: Path, change: str
+) -> None:
+    payload = b"synthetic staged bytes"
+    store.begin_upload(UPLOAD_ID)
+    store.append_upload(UPLOAD_ID, 0, [payload], limit=10_000)
+    length, sha256, staged_version = store.upload_digest(UPLOAD_ID)
+    staged = root / ".my-pa" / "staging" / UPLOAD_ID
+    with staged.open("r+b") as handle:
+        if change == "in_place":
+            handle.write(b"S")
+        else:
+            handle.seek(0, os.SEEK_END)
+            handle.write(b"!")
+    _moved_mtime(staged)
+    with pytest.raises(FilesRefusal) as caught:
+        store.publish_upload(
+            UPLOAD_ID, "up.bin", length=length, sha256=sha256, staged_version=staged_version
+        )
+    assert _reason(caught) is FilesReason.EXTERNAL_CHANGE_DETECTED
+    assert not (root / "up.bin").exists()
+    assert staged.stat().st_mode & 0o777 == 0o600
+
+
+def test_a_digest_bound_publication_still_refuses_another_length(
+    store: FilesystemFileWorkspaceStore, root: Path
+) -> None:
+    store.begin_upload(UPLOAD_ID)
+    store.append_upload(UPLOAD_ID, 0, [b"bytes"], limit=100)
+    _length, sha256, staged_version = store.upload_digest(UPLOAD_ID)
+    with pytest.raises(FilesRefusal) as caught:
+        store.publish_upload(
+            UPLOAD_ID, "up.bin", length=4, sha256=sha256, staged_version=staged_version
+        )
+    assert _reason(caught) is FilesReason.DIGEST_MISMATCH
+    with pytest.raises(FilesArgumentError):
+        store.publish_upload(
+            UPLOAD_ID, "up.bin", length=5, sha256=sha256, staged_version="not-a-token"
+        )
+    assert not (root / "up.bin").exists()
 
 
 def test_staged_uploads_are_private_and_published_files_keep_the_umask_mode(root: Path) -> None:

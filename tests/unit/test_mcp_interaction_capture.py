@@ -2235,7 +2235,7 @@ def test_an_unresolved_request_naming_preview_omits_the_response_text(
 @pytest.mark.parametrize("form", _UNRESOLVED_FORMS)
 def test_an_unresolved_request_naming_neither_keeps_its_text(form: str) -> None:
     raw, overflowed = _unresolved_request(
-        form, _files_call("capture.create", {"payload": {"text": "an ordinary capture"}})
+        form, _files_call("capture.create", {"payload": {"title": "an ordinary capture"}})
     )
     row = _row(
         _exchange(
@@ -2248,3 +2248,84 @@ def test_an_unresolved_request_naming_neither_keeps_its_text(form: str) -> None:
     assert "an ordinary capture" in stored
     assert "an ordinary reply" in stored
     assert OMITTED not in stored
+
+
+def test_an_unresolved_batch_naming_neither_keeps_a_text_value() -> None:
+    raw, overflowed = _unresolved_request(
+        "batch", _files_call("capture.create", {"payload": {"text": "an ordinary capture"}})
+    )
+    stored = _serialized(_row(_exchange(raw_request=raw, request_overflowed=overflowed)))
+    assert "an ordinary capture" in stored
+    assert OMITTED not in stored
+
+
+#: Past the request limit (762,288 bytes): a client that keeps sending is cut
+#: off there, and only that prefix reaches the row builder.
+_REQUEST_LIMIT = 762_288
+
+
+def _name_after_text(facade: bool, *, name: str = "files.write_text") -> bytes:
+    """A `files.write_text` call whose name is serialised after a large `text`."""
+    payload = {"workspace_id": "mcp", "path": "n.md", "text": _FILE_TEXT + "x" * 900_000}
+    params: dict[str, object] = (
+        {
+            "arguments": {"arguments": {"payload": payload}, "capability": name},
+            "name": WRITE_TOOL,
+        }
+        if facade
+        else {"arguments": {"payload": payload}, "name": name}
+    )
+    call = {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params}
+    return json.dumps(call).encode()
+
+
+@pytest.mark.parametrize("facade", [False, True])
+def test_an_overflowed_prefix_cut_before_the_name_omits_the_text(facade: bool) -> None:
+    raw = _name_after_text(facade)[:_REQUEST_LIMIT]
+    assert b"files.write_text" not in raw
+    row = _row(_exchange(raw_request=raw, request_overflowed=True))
+    assert row["capability"] is None
+    assert _FILE_TEXT not in _serialized(row)
+    assert row["request_body_text"] == OMITTED
+
+
+@pytest.mark.parametrize("facade", [False, True])
+def test_an_invalid_body_with_an_escaped_name_after_the_text_omits_the_text(
+    facade: bool,
+) -> None:
+    raw = _name_after_text(facade).replace(b"files.write_text", b"files.write\\u005ftext") + b","
+    assert b"files.write_text" not in raw
+    row = _row(_exchange(raw_request=raw))
+    assert row["capability"] is None
+    assert _FILE_TEXT not in _serialized(row)
+    assert row["request_body_text"] == OMITTED
+
+
+@pytest.mark.parametrize("form", ["invalid", "overflow"])
+def test_an_unparsed_request_that_may_hold_a_text_key_is_omitted(form: str) -> None:
+    """Fail-closed: an unparsed body is kept only if it can hold no `text` key."""
+    for arguments in (
+        {"payload": {"text": _FILE_TEXT}},
+        {"payload": {"t\\u0065xt": _FILE_TEXT}},
+    ):
+        raw, overflowed = _unresolved_request(form, _files_call("capture.create", arguments))
+        raw = raw.replace(b"\\\\u0065", b"\\u0065")
+        row = _row(_exchange(raw_request=raw, request_overflowed=overflowed))
+        assert _FILE_TEXT not in _serialized(row)
+        assert row["request_body_text"] == OMITTED
+    utf16 = json.dumps(_files_call("capture.create", {"payload": {"text": _FILE_TEXT}}))
+    row = _row(_exchange(raw_request=utf16.encode("utf-16-le")[:-2], request_overflowed=True))
+    assert row["request_body_text"] == OMITTED
+
+
+def test_the_unparsed_body_check_is_cheap_and_total_on_odd_input() -> None:
+    bodies = [
+        b"[" * 200_000 + b"]" * 200_000 + b",",
+        b"\xff\xfe" * 1024 + b"text",
+        b"x" * (16 * 1024 * 1024),
+    ]
+    for raw in bodies:
+        started = time.perf_counter()
+        row = _row(_exchange(raw_request=raw, request_overflowed=True))
+        assert time.perf_counter() - started < 10
+        assert row["capability"] is None

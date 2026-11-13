@@ -795,7 +795,11 @@ class FileWorkspaceApplication:
             ticket = self._owned_upload(call, command.upload_id)
             if not ticket.usable_at(call.at):
                 raise _refusal(FilesReason.TICKET_INVALID)
-            staged_length, staged_sha256 = self._store.upload_digest(command.upload_id)
+            # Hashed once: the publication re-checks this fingerprint rather
+            # than reading the staged bytes again under the workspace lock.
+            staged_length, staged_sha256, staged_version = self._store.upload_digest(
+                command.upload_id
+            )
             verify_staged(
                 UploadCompletion(sha256=command.sha256, length=command.length),
                 UploadDeclaration(
@@ -823,7 +827,11 @@ class FileWorkspaceApplication:
                 raise _refusal(FilesReason.OFFSET_MISMATCH)
             if ticket.expected_version is None:
                 published = self._store.publish_upload(
-                    command.upload_id, ticket.path, length=command.length, sha256=command.sha256
+                    command.upload_id,
+                    ticket.path,
+                    length=command.length,
+                    sha256=command.sha256,
+                    staged_version=staged_version,
                 )
             else:
                 replaced = self._replaced(
@@ -838,6 +846,7 @@ class FileWorkspaceApplication:
                     sha256=command.sha256,
                     expected_version=ticket.expected_version,
                     preimage_version_id=issue_identifier(IdKind.FILE_VERSION),
+                    staged_version=staged_version,
                 )
                 self._record_preimage(
                     call, published.preimage_version_id, replaced, "upload.finalize"

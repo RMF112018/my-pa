@@ -398,6 +398,11 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "report_transfer_chunks",
         "report_hold_events",
         "report_retention_policy_events",
+        # Files workspace WP4 stacks the four files plane tables.
+        "file_workspace_transfers",
+        "file_workspace_versions",
+        "file_workspace_trash",
+        "file_workspace_receipts",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

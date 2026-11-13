@@ -403,6 +403,11 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "report_transfer_chunks",
         "report_hold_events",
         "report_retention_policy_events",
+        # Files workspace WP4 stacks the four files plane tables.
+        "file_workspace_transfers",
+        "file_workspace_versions",
+        "file_workspace_trash",
+        "file_workspace_receipts",
     }
 )
 

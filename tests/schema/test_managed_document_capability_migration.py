@@ -54,6 +54,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
+from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.knowledge_schema_ahead_contract import admitted_ahead
 from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
 
@@ -268,7 +269,7 @@ def test_the_chain_has_one_head_and_this_revision_revises_the_managed_plane() ->
     # (RULING-M11); 91 since `6a2f9d1c4b80` added the GoodNotes pull schema on
     # top of that -- counted on the merged tree, not derived (RULING-M2).
     # R8 adds one receipt migration on the previous 91-revision chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 128
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 129
 
 
 def test_the_widening_is_exactly_the_managed_plane() -> None:
@@ -394,10 +395,10 @@ def test_downgrading_this_revision_restores_exactly_the_previous_vocabularies(
             member.value for member in NativeSourceCapability
         }
         assert _admitted(engine, "capability_is_known") == declared | (
-            admitted_ahead("capability") | lineage_admitted_ahead("capability")
+            admitted_ahead("capability") | lineage_admitted_ahead("capability") | FILES_CAPABILITIES
         )
         assert _admitted(engine, "purpose_is_known") == {member.value for member in Purpose} | (
-            admitted_ahead("purpose") | lineage_admitted_ahead("purpose")
+            admitted_ahead("purpose") | lineage_admitted_ahead("purpose") | FILES_PURPOSES
         )
 
         command.downgrade(_config(), PREVIOUS_REVISION)
@@ -409,10 +410,10 @@ def test_downgrading_this_revision_restores_exactly_the_previous_vocabularies(
 
         command.upgrade(_config(), "head")
         assert _admitted(engine, "capability_is_known") == declared | (
-            admitted_ahead("capability") | lineage_admitted_ahead("capability")
+            admitted_ahead("capability") | lineage_admitted_ahead("capability") | FILES_CAPABILITIES
         )
         assert _admitted(engine, "purpose_is_known") == {member.value for member in Purpose} | (
-            admitted_ahead("purpose") | lineage_admitted_ahead("purpose")
+            admitted_ahead("purpose") | lineage_admitted_ahead("purpose") | FILES_PURPOSES
         )
     finally:
         engine.dispose()

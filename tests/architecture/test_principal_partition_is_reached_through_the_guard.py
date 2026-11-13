@@ -185,6 +185,12 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # `_bound` over `principal_bound_values`. The three operator GC queries
         # are unpartitioned on purpose (see `PER_MODULE_ONLY`).
         "infrastructure/persistence/report_transfers.py",
+        # Files workspace WP4's tickets, preimages, trash and receipts. Every
+        # SELECT and UPDATE composes `_mine` over `partition_criterion`, every
+        # INSERT (the receipt's `ON CONFLICT` included) `_bound` over
+        # `principal_bound_values`. The byte routes' bearer-ticket read is
+        # unpartitioned on purpose (see `PER_MODULE_ONLY`).
+        "infrastructure/persistence/file_workspace.py",
         # Record lineage S2's handoff ledger. Every SELECT composes `_mine`
         # over `partition_criterion`, the one INSERT `_bound` over
         # `principal_bound_values`, and the anchor join
@@ -505,6 +511,15 @@ PER_MODULE_ONLY: Final = {
         "sessions), `terminal_session_ids` and `known_session_ids`: opaque `grxfr_` "
         "identifiers only, for the transfer GC's expiry, staging reclamation and "
         "orphan detection (the shape of `known_managed_content_ids`). It has not "
+        "joined a dedicated statement-level scanner."
+    ),
+    "infrastructure/persistence/file_workspace.py": (
+        "Files workspace WP4: every SELECT and UPDATE composes `_mine` over "
+        "`partition_criterion`, every INSERT `_bound` over `principal_bound_values`. "
+        "One deliberately unpartitioned read, `authenticate_ticket`: a byte route "
+        "carries a bearer ticket, not a session, so the ticket row names its owner; "
+        "it returns the row only when the presented token digest matches (constant "
+        "time) and the ticket is open, unexpired and of the route's kind. It has not "
         "joined a dedicated statement-level scanner."
     ),
     "infrastructure/persistence/record_lineage.py": (

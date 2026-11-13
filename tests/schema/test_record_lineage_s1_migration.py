@@ -82,7 +82,7 @@ REVISION: Final = "264310e0416a"
 PREVIOUS: Final = "b9025e7fb738"
 #: Record lineage S2 (`d020b532ad7d`), S3 (`6f1476b8da52`) and S4 (`c5260943d933`,
 #: ADR-015) are additive on this revision; the S4 revision is the head.
-HEAD: Final = "b77334135653"
+HEAD: Final = "640aaacc78e8"
 #: The S2 revision, the S1 suite's head before the S3 revision.
 S2_REVISION: Final = "d020b532ad7d"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`.
@@ -242,7 +242,7 @@ def test_the_revision_is_the_single_head_on_b9025e7fb738() -> None:
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "5c1e7a9b3d42"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 128
+    assert len(list(MIGRATIONS.glob("*.py"))) == 129
 
 
 # ---- the freeze -------------------------------------------------------------

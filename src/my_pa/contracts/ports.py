@@ -13404,3 +13404,312 @@ class FileWorkspaceStore(ABC):
     @abstractmethod
     def ensure_free_space(self, required_bytes: int) -> None:
         """Refuse `quota` unless `required_bytes` would leave the disk reserve free."""
+
+
+# --- file workspace persistence (`files.*` WP4, revision 640aaacc78e8) ----------------
+
+
+class FileTransferKind(StrEnum):
+    """What a ticket moves: bytes in (`upload`) or out (`download`)."""
+
+    UPLOAD = "upload"
+    DOWNLOAD = "download"
+
+
+class FileTransferState(StrEnum):
+    """A ticket's state. Only `open` moves; a download is only `open` or `expired`."""
+
+    OPEN = "open"
+    FINALIZED = "finalized"
+    ABORTED = "aborted"
+    EXPIRED = "expired"
+
+
+@dataclass(frozen=True, slots=True)
+class FileTransferRecord:
+    """One upload or download ticket row (contract sections 1.4, 5, 10).
+
+    `expected_version` is the upload's bound target version (`None`: create
+    only) or the version a download serves; `received_bytes` is an upload's
+    staged offset. Only the token's SHA-256 digest is held, never in `repr`;
+    the raw token is never stored.
+    """
+
+    transfer_id: str
+    owner_principal_id: str
+    client_ref: str
+    kind: FileTransferKind
+    workspace_id: str
+    path: str
+    expected_version: str | None
+    preserved_version_id: str | None
+    declared_size: int | None
+    declared_sha256: str | None
+    received_bytes: int
+    state: FileTransferState
+    created_at: datetime
+    expires_at: datetime
+    finalized_at: datetime | None
+    token_digest: str = field(repr=False)
+
+    def usable_at(self, now: datetime) -> bool:
+        """`open` and not yet expired at `now` (whatever the state column says otherwise)."""
+        return self.state is FileTransferState.OPEN and self.expires_at > now
+
+
+@dataclass(frozen=True, slots=True)
+class FileVersionRecord:
+    """One preserved preimage (contract section 5): what a replace moved aside."""
+
+    version_id: str
+    owner_principal_id: str
+    workspace_id: str
+    path: str
+    version: str
+    size: int
+    sha256: str | None
+    cause: str
+    captured_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class FileTrashRecord:
+    """One trashed entry (contract section 5); `restored_*` set once, by restore."""
+
+    trash_item_id: str
+    owner_principal_id: str
+    workspace_id: str
+    original_path: str
+    kind: FileEntryKind
+    original_version: str
+    trashed_version: str
+    size: int | None
+    trashed_at: datetime
+    restored_at: datetime | None = None
+    restored_path: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FileReceiptRecord:
+    """One idempotency receipt (contract section 5): a write's key, intent and result.
+
+    `result` is the JSON object the write answered, minus any body, text or
+    token (the repository refuses a key that names one).
+    """
+
+    receipt_id: str
+    owner_principal_id: str
+    client_ref: str
+    capability: str
+    idempotency_key: str
+    intent_digest: str
+    result: Mapping[str, Any]
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class FileHistoryPage:
+    """A newest-first page of versions or trash items; `next_after` is the last id, or `None`."""
+
+    versions: tuple[FileVersionRecord, ...] = ()
+    trash: tuple[FileTrashRecord, ...] = ()
+    next_after: str | None = None
+
+
+class FileWorkspaceRepository(ABC):
+    """The files workspace rows, inside the caller's transaction (WP4).
+
+    **Every method is scoped by the authenticated `principal_id`**, except
+    `authenticate_ticket`: a row of another Principal answers exactly what an
+    absent one answers (`None`, or nothing in a page). `now` is always the
+    caller's, never the database clock. Opaque ids are minted by the caller and
+    only shape-checked here; argument faults are `FilesArgumentError`. No
+    method deletes a row, and no row holds a body, a text, a raw token or a host
+    path. Application rules (CAS, idempotent replay, refusal mapping) are the
+    caller's; this port only reads and writes rows.
+    """
+
+    # ---- tickets ------------------------------------------------------------
+
+    @abstractmethod
+    def create_transfer(
+        self,
+        *,
+        transfer_id: str,
+        principal_id: str,
+        client_ref: str,
+        kind: FileTransferKind,
+        workspace_id: str,
+        path: str,
+        expected_version: str | None,
+        preserved_version_id: str | None,
+        declared_size: int | None,
+        declared_sha256: str | None,
+        token_digest: str,
+        created_at: datetime,
+        expires_at: datetime,
+    ) -> FileTransferRecord:
+        """Insert an `open` ticket with no received bytes."""
+
+    @abstractmethod
+    def get_transfer(
+        self, transfer_id: str, *, principal_id: str, for_update: bool = False
+    ) -> FileTransferRecord | None:
+        """The caller's ticket (locked `FOR UPDATE` when asked), or `None`."""
+
+    @abstractmethod
+    def authenticate_ticket(
+        self, transfer_id: str, token_digest: str, *, kind: FileTransferKind, now: datetime
+    ) -> FileTransferRecord | None:
+        """The byte routes' one unscoped read: the ticket a presented token opens, or `None`.
+
+        **Not Principal-scoped, on purpose**: a byte route carries a bearer
+        ticket, not a session, so the ticket names its owner. The row is
+        returned only when its kind is `kind`, it is usable at `now` and its
+        stored digest equals `token_digest` (constant time); every other case
+        is the one `None`.
+        """
+
+    @abstractmethod
+    def advance_offset(
+        self,
+        transfer_id: str,
+        *,
+        principal_id: str,
+        expected_offset: int,
+        new_offset: int,
+        now: datetime,
+    ) -> FileTransferRecord | None:
+        """Move an open, unexpired upload's offset from `expected_offset` to `new_offset`.
+
+        `None` (nothing written) when no such row has exactly `expected_offset`.
+        """
+
+    @abstractmethod
+    def settle_transfer(
+        self,
+        transfer_id: str,
+        *,
+        principal_id: str,
+        state: FileTransferState,
+        now: datetime,
+    ) -> FileTransferRecord | None:
+        """Move an open ticket to `finalized`, `aborted` or `expired`; `None` if not open.
+
+        `finalized` stamps `finalized_at = now`. Expiry by time is the caller's
+        decision; this only refuses a ticket that is no longer `open`.
+        """
+
+    @abstractmethod
+    def expire_due(
+        self, *, principal_id: str, now: datetime, limit: int
+    ) -> tuple[FileTransferRecord, ...]:
+        """Move up to `limit` of the caller's open tickets due at `now` to `expired`.
+
+        Oldest first, skipping a row another transaction holds. The caller
+        discards the staging of each expired upload after its commit.
+        """
+
+    # ---- preimages ---------------------------------------------------------------
+
+    @abstractmethod
+    def record_version(
+        self,
+        *,
+        version_id: str,
+        principal_id: str,
+        workspace_id: str,
+        path: str,
+        version: str,
+        size: int,
+        sha256: str | None,
+        cause: str,
+        captured_at: datetime,
+    ) -> FileVersionRecord:
+        """Insert one preserved preimage row."""
+
+    @abstractmethod
+    def get_version(self, version_id: str, *, principal_id: str) -> FileVersionRecord | None:
+        """The caller's preimage row, or `None`."""
+
+    @abstractmethod
+    def list_versions(
+        self,
+        *,
+        principal_id: str,
+        workspace_id: str,
+        path: str | None = None,
+        after: str | None = None,
+        limit: int = 200,
+    ) -> FileHistoryPage:
+        """The caller's preimages of `path` (or the workspace), newest first, after `after`."""
+
+    # ---- trash -------------------------------------------------------------------
+
+    @abstractmethod
+    def record_trash(
+        self,
+        *,
+        trash_item_id: str,
+        principal_id: str,
+        workspace_id: str,
+        original_path: str,
+        kind: FileEntryKind,
+        original_version: str,
+        trashed_version: str,
+        size: int | None,
+        trashed_at: datetime,
+    ) -> FileTrashRecord:
+        """Insert one trash item row (not restored)."""
+
+    @abstractmethod
+    def get_trash_item(
+        self, trash_item_id: str, *, principal_id: str, for_update: bool = False
+    ) -> FileTrashRecord | None:
+        """The caller's trash item (locked `FOR UPDATE` when asked), or `None`."""
+
+    @abstractmethod
+    def mark_restored(
+        self, trash_item_id: str, *, principal_id: str, restored_path: str, now: datetime
+    ) -> FileTrashRecord | None:
+        """Record the one restore of an unrestored item; `None` if absent or already restored."""
+
+    @abstractmethod
+    def list_trash(
+        self,
+        *,
+        principal_id: str,
+        workspace_id: str,
+        original_path: str | None = None,
+        after: str | None = None,
+        limit: int = 200,
+    ) -> FileHistoryPage:
+        """The caller's trash items of `original_path` (or the workspace), newest first."""
+
+    # ---- receipts ----------------------------------------------------------------
+
+    @abstractmethod
+    def get_receipt(
+        self, *, principal_id: str, client_ref: str, capability: str, idempotency_key: str
+    ) -> FileReceiptRecord | None:
+        """The receipt of this key in its scope (Principal, client, capability), or `None`."""
+
+    @abstractmethod
+    def insert_receipt(
+        self,
+        *,
+        receipt_id: str,
+        principal_id: str,
+        client_ref: str,
+        capability: str,
+        idempotency_key: str,
+        intent_digest: str,
+        result: Mapping[str, Any],
+        created_at: datetime,
+    ) -> tuple[FileReceiptRecord, bool]:
+        """Insert once: `(receipt, True)`, or `(the existing receipt, False)` for a taken key.
+
+        The caller compares the existing receipt's `intent_digest` (replay or
+        `conflict`). A `result` holding a key named `text` or ending in
+        `_token`, at any depth, is refused.
+        """

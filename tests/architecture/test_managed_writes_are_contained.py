@@ -85,7 +85,24 @@ REPORT_CONTENT_STORE: Final = "src/my_pa/infrastructure/report_content_stores/fi
 REPORT_TRANSFER_STAGING: Final = "src/my_pa/infrastructure/report_content_stores/staging.py"
 
 #: Every module allowed to write user-owned bytes, each behind its own containment.
-CONTAINED_STORES: Final = frozenset({MANAGED_STORE, REPORT_CONTENT_STORE, REPORT_TRANSFER_STAGING})
+#: Files workspace WP3 (ADR-019): the file workspace store, the fourth contained
+#: store. Unlike its peers it takes caller paths: each is re-validated against
+#: files-workspace contract section 3 before any I/O, then reached by an
+#: O_DIRECTORY|O_NOFOLLOW dirfd walk from a pinned root clear of the
+#: source/managed/report roots it is given, with fstat-checked
+#: O_NOFOLLOW|O_NONBLOCK leaf opens, an in-root 0700 `.my-pa` control dir, and
+#: refusal of multiply-linked regular files on read. Creates publish by
+#: no-overwrite link; directory move/restore/copy, the link-unsupported fallback
+#: and replace (rename over the target after a preimage link) are documented
+#: check-then-rename windows (contract section 5, trim T10). Proved in
+#: tests/unit/test_file_workspace_store.py and
+#: tests/security/test_file_workspace_containment.py. WP5 must add
+#: `test_the_files_workspace_root_setting_is_its_own_and_reaches_only_the_store`
+#: asserting source_roots=/managed_roots=/report_roots= at the composition root.
+FILE_WORKSPACE_STORE: Final = "src/my_pa/infrastructure/file_workspace/store.py"
+CONTAINED_STORES: Final = frozenset(
+    {MANAGED_STORE, REPORT_CONTENT_STORE, REPORT_TRANSFER_STAGING, FILE_WORKSPACE_STORE}
+)
 
 #: Modules other than the managed byte store that call a filesystem-write API,
 #: with what each writes and why it is not the managed plane.

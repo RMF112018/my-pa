@@ -13273,7 +13273,9 @@ class FileWorkspaceStore(ABC):
     shape-checked here. The per-workspace advisory lock is the caller's; this
     port re-checks fingerprints immediately before each rename and reports a
     drift as `external_change_detected`, but cannot close the remaining
-    check-to-rename window against writers outside the product.
+    check-to-rename window against writers outside the product. A regular file
+    with more than one hard link is listed as a `file` but its bytes are never
+    read out (`unsupported_entry`).
     """
 
     @abstractmethod
@@ -13338,7 +13340,11 @@ class FileWorkspaceStore(ABC):
         expected_version: str | None = None,
         preimage_version_id: str | None = None,
     ) -> FileWorkspacePublication:
-        """Create (no `expected_version`) or replace (with it and a preimage id) a text file."""
+        """Create (no `expected_version`) or replace (with it and a preimage id) a text file.
+
+        A `preimage_version_id` given with a create is not used: nothing is
+        preserved and the result's `preimage_version_id` is `None`.
+        """
 
     @abstractmethod
     def begin_upload(self, upload_id: str) -> None:
@@ -13382,7 +13388,10 @@ class FileWorkspaceStore(ABC):
         expected_version: str | None = None,
         preimage_version_id: str | None = None,
     ) -> FileWorkspacePublication:
-        """Publish verified staged bytes: create, or replace with a preserved preimage."""
+        """Publish verified staged bytes: create, or replace with a preserved preimage.
+
+        As with `write_text`, a `preimage_version_id` given with a create is not used.
+        """
 
     @abstractmethod
     def open_download(self, path: str, *, expected_version: str) -> FileWorkspaceReader:

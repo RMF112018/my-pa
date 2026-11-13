@@ -241,6 +241,73 @@ def test_a_leaf_swapped_for_a_symlink_before_the_rename_is_refused(
     assert (outside / "secret.txt").read_bytes() == SECRET
 
 
+@pytest.mark.parametrize("operation", ["move", "trash"])
+def test_a_leaf_swapped_after_the_recheck_leaves_no_new_entry(
+    store: FilesystemFileWorkspaceStore,
+    layout: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    """A swap between the re-check and the link is refused, and the link it made is undone.
+
+    Whatever sits at the new name after a successful `linkat` was created by
+    that call, so a refused move or trash must not leave it behind.
+    """
+    root, outside = layout
+    (root / "a.txt").write_bytes(b"mine")
+    observed = store.stat("a.txt").version
+
+    def swap(_stage: str) -> None:
+        (root / "a.txt").unlink()
+        (root / "a.txt").symlink_to(outside / "secret.txt")
+
+    monkeypatch.setattr(store, "_after_recheck", swap)
+    if operation == "move":
+        reason = _refusal(lambda: store.move("a.txt", "b.txt", expected_version=observed))
+        target = root / "b.txt"
+    else:
+        reason = _refusal(lambda: store.trash("a.txt", TRASH_ID, expected_version=observed))
+        target = root / ".my-pa" / "trash" / TRASH_ID
+    assert reason is FilesReason.EXTERNAL_CHANGE_DETECTED
+    assert not os.path.lexists(target)
+    assert (root / "a.txt").is_symlink()  # the external replacement is left alone
+    assert (outside / "secret.txt").read_bytes() == SECRET
+    assert (outside / "secret.txt").stat().st_nlink == 1
+
+
+def test_a_hard_linked_file_is_listed_but_its_bytes_are_never_read(
+    store: FilesystemFileWorkspaceStore, layout: tuple[Path, Path]
+) -> None:
+    """A host hard link to a file outside the root is a regular file the store will not read.
+
+    It stays kind `file` in `list` and `stat` (section 4 kinds are by file
+    type), but every operation that reads its bytes out is `unsupported_entry`.
+    """
+    root, outside = layout
+    (root / "d").mkdir()
+    os.link(outside / "secret.txt", root / "h.txt")
+    os.link(outside / "secret.txt", root / "d" / "h.txt")
+    assert (root / "h.txt").read_bytes() == SECRET  # a real escape by name
+    entry = store.stat("h.txt")
+    assert entry.kind.value == "file" and entry.size == len(SECRET)
+    assert [e.name for e in store.list_directory("").entries] == ["d", "h.txt"]
+    version = entry.version
+
+    calls: list[Callable[[], object]] = [
+        lambda: store.stat("h.txt", include_sha256=True),
+        lambda: store.preview("h.txt"),
+        lambda: store.open_download("h.txt", expected_version=version),
+        lambda: store.copy("h.txt", "copied.txt"),
+        lambda: store.copy("d", "d-copy"),
+    ]
+    for call in calls:
+        assert _refusal(call) is FilesReason.UNSUPPORTED_ENTRY
+    assert not (root / "copied.txt").exists() and not (root / "d-copy").exists()
+    staging = root / ".my-pa" / "staging"
+    assert not staging.exists() or list(staging.iterdir()) == []
+    assert (outside / "secret.txt").stat().st_nlink == 3
+
+
 # --- special files -------------------------------------------------------------------------
 
 
@@ -436,6 +503,25 @@ def test_an_os_error_naming_the_root_is_not_chained(
             if isinstance(chained, OSError):
                 assert chained.filename is None and chained.filename2 is None
             chained = chained.__context__
+
+
+def test_a_constructor_refusal_chains_no_host_path(tmp_path: Path) -> None:
+    """The root's `FileNotFoundError` is the implicit `__context__`: it must be scrubbed."""
+    missing = tmp_path / "missing-root"
+    with pytest.raises(FileWorkspaceRootError) as caught:
+        FilesystemFileWorkspaceStore(missing)
+    error = caught.value
+    assert str(tmp_path) not in "".join(traceback.format_exception(error))
+    chained: BaseException | None = error
+    seen = 0
+    while chained is not None:
+        seen += 1
+        for rendered in (str(chained), repr(chained), str(chained.args)):
+            assert str(tmp_path) not in rendered
+        if isinstance(chained, OSError):
+            assert chained.filename is None and chained.filename2 is None
+        chained = chained.__cause__ or chained.__context__
+    assert seen >= 1
 
 
 def test_no_exception_carries_a_host_path(

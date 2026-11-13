@@ -57,11 +57,32 @@ Concretely:
 * when hard links are unsupported (`EPERM`, `ENOTSUP`, `EMLINK`), a file move
   falls back to check-absent-then-`rename`, with the same interval.
 
-A drift detected *after* a link is rolled back where the identity proves it is
-safe (the link this call created is removed) and reported as
-`external_change_detected`. If a replacement's final rename fails after the
-preimage link was made, the preimage stays under `versions/<id>` unrecorded --
-an orphan named by the id the caller minted.
+A drift detected *after* a successful link is reported as
+`external_change_detected` and the link is rolled back: the new name was absent
+(or `linkat` would have failed `EEXIST`), so what it holds was made by this
+call, and it is unlinked when its inode is the one the source name holds now
+(the source was swapped before the link) or the observed one (the source was
+swapped after it). Only when the source name has also vanished, so neither
+identity can be proved, is the new name left in place. If a replacement's final
+rename fails after the preimage link was made, the preimage stays under
+`versions/<id>` unrecorded -- an orphan named by the id the caller minted.
+
+**Hard links.** A regular file with `st_nlink > 1` may be a host hard link to a
+file outside the root, so its bytes are never read out: preview, download,
+`include_sha256`, copy and a directory copy containing one are refused
+`unsupported_entry`, as in the repository's other contained stores. It is still
+listed and `stat`ed as kind `file` (section 4 kinds are by file type). The
+store's own links are transient within one call (a move's link-then-unlink, a
+publish's link-then-unlink, a replacement's preimage link before the rename
+over the name), so a read racing a product mutation may see `unsupported_entry`
+for that instant; the advisory lock does not cover reads.
+
+**Modes.** Files waiting under `.my-pa/staging` are created 0600 and given the
+published mode (`0666 & ~umask`, the umask read once at construction) by
+`fchmod` just before publication; a refused `fchmod` (a NAS ACL) leaves them
+0600. A preimage under `versions` keeps the mode the user file had. The
+control directories are created 0700 but are not re-checked for group or
+other write bits: on the NAS their effective access is the share ACL.
 
 **Not here.** The advisory lock, idempotency receipts, version and trash rows,
 tickets and audit are WP4/WP5. Nothing here reads a clock, a row or the
@@ -96,7 +117,12 @@ from my_pa.contracts.ports import (
     FileWorkspaceUnavailableError,
 )
 from my_pa.domain.files.errors import FilesArgumentError, FilesRefusal
-from my_pa.domain.files.paths import WorkspacePath, parse_path, validate_name
+from my_pa.domain.files.paths import (
+    WorkspacePath,
+    is_reserved_name,
+    parse_path,
+    validate_name,
+)
 from my_pa.domain.files.transfer import (
     TRASH_ITEM_ID_PREFIX,
     UPLOAD_ID_PREFIX,
@@ -133,9 +159,12 @@ _READ_FLAGS: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
 _CREATE_FLAGS: Final = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
 #: The staging file of an upload, re-opened for a positional append.
 _APPEND_FLAGS: Final = os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-#: New user content honours the process umask (and NAS ACL inheritance); the
-#: staging directory above it is 0700 until publication.
+#: Published user content gets `0666 & ~umask` (the umask read at
+#: construction), as a plain `open` would give it. Bytes waiting under
+#: `.my-pa/staging` are created 0600 and given that mode by `fchmod` just
+#: before publication, so a long-lived upload is private while staged.
 _FILE_MODE: Final = 0o666
+_STAGED_MODE: Final = 0o600
 _DIRECTORY_MODE: Final = 0o777
 
 _CHUNK_BYTES: Final = 1 << 20
@@ -182,6 +211,21 @@ def _platform_supported() -> bool:
         and hasattr(os, "pread")
         and hasattr(os, "pwrite")
     )
+
+
+def _process_umask() -> int:
+    """The process umask. `umask` can only be read by setting it, so it is set
+    to the stricter 0o077 for that instant and put straight back (construction
+    happens once, at composition)."""
+    current = os.umask(0o077)
+    os.umask(current)
+    return current
+
+
+def _publishable(descriptor: int, mode: int) -> None:
+    """Give a staged file its published mode; best effort (a NAS ACL may refuse `chmod`)."""
+    with suppress(OSError):
+        os.fchmod(descriptor, mode)
 
 
 def _unavailable() -> FileWorkspaceUnavailableError:
@@ -231,6 +275,16 @@ def _token(status: os.stat_result) -> str:
     )
 
 
+def _hard_linked(status: os.stat_result) -> bool:
+    """A regular file with another name: perhaps a host hard link to a file outside the root.
+
+    Its bytes are never read out (`unsupported_entry`), as in every other
+    contained store of the repository. It is still listed as kind `file`
+    (section 4 kinds are by file type, and the version token is unchanged).
+    """
+    return S_ISREG(status.st_mode) and status.st_nlink > 1
+
+
 def _same_inode(one: os.stat_result, other: os.stat_result) -> bool:
     return (one.st_dev, one.st_ino) == (other.st_dev, other.st_ino)
 
@@ -272,6 +326,24 @@ def _names(directory: int) -> list[str]:
     """A directory's addressable entry names, sorted by their UTF-8 bytes."""
     listed = os.listdir(directory)
     return sorted((name for name in listed if _addressable(name)), key=_name_bytes)
+
+
+def _copyable_names(directory: int) -> list[str]:
+    """`_names`, but a name no request could spell refuses the copy (`unsupported_entry`).
+
+    A directory copy must not silently drop part of the tree. Reserved names
+    (section 3 rule 5: the control directory and the NAS's own `@eaDir`,
+    `#recycle`, `#snapshot` metadata) stay omitted, as listing and search omit
+    them; a non-UTF-8 name, a control character or a backslash refuses.
+    """
+    names: list[str] = []
+    for name in os.listdir(directory):
+        if is_reserved_name(name):
+            continue
+        if not _addressable(name):
+            raise _refuse("path", FilesReason.UNSUPPORTED_ENTRY)
+        names.append(name)
+    return sorted(names, key=_name_bytes)
 
 
 def _bounded_int(value: object, field: str, low: int, high: int | None = None) -> int:
@@ -410,7 +482,14 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             status = os.stat(resolved, follow_symlinks=False)  # noqa: PTH116 - an lstat
         except FileWorkspaceRootError:
             raise
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError) as error:
+            # `from None` hides the chain from a formatted traceback, but the
+            # error stays the implicit `__context__`: scrub its host path.
+            if isinstance(error, OSError):
+                error.filename = None
+                error.filename2 = None
+            else:
+                error.args = ()
             raise FileWorkspaceRootError(
                 "the configured file workspace root could not be resolved"
             ) from None
@@ -427,11 +506,15 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         self._root: Final = resolved
         self._identity: Final = (status.st_dev, status.st_ino)
         self._reserve: Final = _bounded_int(disk_reserve_bytes, "disk_reserve_bytes", 0)
+        self._published_mode: Final = _FILE_MODE & ~_process_umask()
 
     # ---- a seam for tests: called immediately before each fingerprint re-check
 
     def _checkpoint(self, stage: str) -> None:
         """No-op. Tests replace it to act between an observation and its re-check."""
+
+    def _after_recheck(self, stage: str) -> None:
+        """No-op. Tests replace it to act between a re-check and the link or rename after it."""
 
     # ---- descriptors -------------------------------------------------------
 
@@ -518,7 +601,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             raise
         stack.callback(_close, descriptor)
         held = os.fstat(descriptor)
-        if not S_ISREG(held.st_mode):
+        if not S_ISREG(held.st_mode) or _hard_linked(observed) or _hard_linked(held):
             raise _refuse(field, FilesReason.UNSUPPORTED_ENTRY)
         if _token(held) != _token(observed):
             raise _refuse(field, FilesReason.EXTERNAL_CHANGE_DETECTED)
@@ -584,6 +667,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         """
         self._checkpoint("relocate")
         self._recheck(source, name, observed, field)
+        self._after_recheck("relocate")
         if S_ISDIR(observed.st_mode):
             self._rename_absent(source, name, target, target_name, target_field)
             moved = self._lstat(target, target_name)
@@ -609,11 +693,17 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
                 linked = self._lstat(target, target_name)
                 remaining = self._lstat(source, name)
                 if linked is None or not _same_inode(linked, observed):
-                    self._unlink_if(target, target_name, linked, observed)
+                    # The source name was replaced between the re-check and
+                    # the link, so the link this call made names the
+                    # replacement. The target name was absent (or the link
+                    # would have failed `EEXIST`): when it still holds the
+                    # source's current inode it is this call's link -- undo it
+                    # and leave the replacement at the source alone.
+                    self._unlink_if(target, target_name, linked, remaining)
                     raise _refuse(field, FilesReason.EXTERNAL_CHANGE_DETECTED)
                 if remaining is None or not _same_inode(remaining, observed):
-                    # The source name was replaced since the re-check: undo the
-                    # link this call made and leave the replacement alone.
+                    # The source name was replaced after the link: undo the
+                    # link of the observed inode and leave the replacement alone.
                     self._unlink_if(target, target_name, linked, observed)
                     raise _refuse(field, FilesReason.EXTERNAL_CHANGE_DETECTED)
                 os.unlink(name, dir_fd=source)
@@ -622,9 +712,13 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
 
     @staticmethod
     def _unlink_if(
-        directory: int, name: str, status: os.stat_result | None, observed: os.stat_result
+        directory: int,
+        name: str,
+        status: os.stat_result | None,
+        expected: os.stat_result | None,
     ) -> None:
-        if status is not None and _same_inode(status, observed):
+        """Unlink `name` only when its `lstat` proves it is `expected`'s inode."""
+        if status is not None and expected is not None and _same_inode(status, expected):
             os.unlink(name, dir_fd=directory)
 
     # ---- reads ---------------------------------------------------------------
@@ -756,15 +850,49 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
                 return FileWorkspacePreview(
                     text="", binary=False, next_offset=None, version=version
                 )
-            text, consumed = self._decode_window(descriptor, start, limit, total)
+            tail = self._character_tail(descriptor, start)
+            text: str | None = ""
+            consumed = 0
+            if start + tail < total:
+                text, consumed = self._decode_window(descriptor, start + tail, limit, total)
             if _token(os.fstat(descriptor)) != version:
                 raise _refuse("path", FilesReason.EXTERNAL_CHANGE_DETECTED)
         if text is None:
             return FileWorkspacePreview(text=None, binary=True, next_offset=None, version=version)
-        after = start + consumed
+        after = start + tail + consumed
         return FileWorkspacePreview(
             text=text, binary=False, next_offset=after if after < total else None, version=version
         )
+
+    @staticmethod
+    def _character_tail(descriptor: int, start: int) -> int:
+        """Bytes from `start` to the end of a character that began before it; 0 on a boundary.
+
+        An `offset` inside a valid character (only a hand-made one: every
+        `next_offset` is a boundary) is moved forward to the next character
+        rather than misread as binary. The skip is taken only when the bytes
+        before `start` really open a well-formed character that `start` falls
+        inside; anything else is decoded as it stands (and is binary if invalid).
+        """
+        if start == 0:
+            return 0
+        back = min(start, 3)
+        window = os.pread(descriptor, back + 3, start - back)
+        if len(window) <= back or window[back] & 0xC0 != 0x80:
+            return 0
+        for index in range(back - 1, -1, -1):
+            lead = window[index]
+            if lead & 0xC0 == 0x80:
+                continue
+            width = 2 if lead >> 5 == 0b110 else 3 if lead >> 4 == 0b1110 else 4
+            if lead >> 3 > 0b11110 or lead < 0xC0 or index + width <= back:
+                return 0
+            try:
+                window[index : index + width].decode("utf-8")
+            except UnicodeDecodeError:
+                return 0
+            return index + width - back
+        return 0
 
     @staticmethod
     def _decode_window(
@@ -773,21 +901,30 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         """UTF-8 text of at most `limit` bytes from `start`, cut on a character boundary.
 
         A trailing incomplete sequence is left for the next window. If `limit`
-        is smaller than the first character, the window grows to that one
-        character (at most 4 bytes). Invalid UTF-8 is `(None, 0)`: binary.
+        is smaller than the first character, exactly that one character is
+        returned (at most 4 bytes): the only case a window exceeds `limit`.
+        Invalid UTF-8 is `(None, 0)`: binary.
         """
-        for size in (limit, max(limit, 4)):
-            data = os.pread(descriptor, size, start)
-            at_end = start + len(data) >= total
-            decoder = codecs.getincrementaldecoder("utf-8")()
-            try:
-                text = decoder.decode(data, final=at_end)
-            except UnicodeDecodeError:
-                return None, 0
-            consumed = len(data) - len(decoder.getstate()[0])
-            if consumed > 0 or at_end:
-                return text, consumed
-        return None, 0
+        data = os.pread(descriptor, limit, start)
+        at_end = start + len(data) >= total
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        try:
+            text = decoder.decode(data, final=at_end)
+        except UnicodeDecodeError:
+            return None, 0
+        consumed = len(data) - len(decoder.getstate()[0])
+        if consumed > 0 or at_end:
+            return text, consumed
+        data = os.pread(descriptor, 4, start)
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        try:
+            text = decoder.decode(data, final=start + len(data) >= total)
+        except UnicodeDecodeError:
+            return None, 0
+        if not text:
+            return None, 0
+        first = text[0]
+        return first, len(first.encode("utf-8"))
 
     # ---- directory and name mutations -------------------------------------------
 
@@ -973,7 +1110,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
     ) -> None:
         reader = self._open_file(stack, directory, name, observed, "path")
         try:
-            self._copy_descriptor(reader, staging, temporary)
+            self._copy_descriptor(reader, staging, temporary, self._published_mode)
         except BaseException:
             self._discard_quietly(staging, temporary)
             raise
@@ -982,8 +1119,9 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             raise _refuse("path", FilesReason.EXTERNAL_CHANGE_DETECTED)
 
     @staticmethod
-    def _copy_descriptor(reader: int, directory: int, name: str) -> None:
-        writer = os.open(name, _CREATE_FLAGS, _FILE_MODE, dir_fd=directory)
+    def _copy_descriptor(reader: int, directory: int, name: str, mode: int) -> None:
+        """Copy into a new staged file created 0600, given `mode` once complete."""
+        writer = os.open(name, _CREATE_FLAGS, _STAGED_MODE, dir_fd=directory)
         try:
             position = 0
             while True:
@@ -991,6 +1129,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
                 if not chunk:
                     break
                 position = _write_all(writer, chunk, position)
+            _publishable(writer, mode)
             os.fsync(writer)
         finally:
             _close(writer)
@@ -1001,7 +1140,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
 
         def measure(descriptor: int, depth: int) -> int:
             total = 0
-            for name in _names(descriptor):
+            for name in _copyable_names(descriptor):
                 counter[0] += 1
                 if counter[0] > SEARCH_WALK_MAX_ENTRIES:
                     raise _refuse("path", FilesReason.TOO_LARGE)
@@ -1009,7 +1148,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
                 if status is None:
                     continue
                 kind = _kind(status.st_mode)
-                if kind is EntryKind.OTHER:
+                if kind is EntryKind.OTHER or _hard_linked(status):
                     raise _refuse("path", FilesReason.UNSUPPORTED_ENTRY)
                 if kind is EntryKind.FILE:
                     total += status.st_size
@@ -1024,7 +1163,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
 
     def _copy_tree(self, source: int, target: int, *, depth: int, counter: list[int]) -> None:
         """Recreate `source`'s addressable entries under `target`, caps re-enforced."""
-        for name in _names(source):
+        for name in _copyable_names(source):
             counter[0] += 1
             if counter[0] > SEARCH_WALK_MAX_ENTRIES:
                 raise _refuse("path", FilesReason.TOO_LARGE)
@@ -1037,7 +1176,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             if kind is EntryKind.FILE:
                 with ExitStack() as inner:
                     reader = self._open_file(inner, source, name, status, "path")
-                    self._copy_descriptor(reader, target, name)
+                    self._copy_descriptor(reader, target, name, self._published_mode)
                     if _token(os.fstat(reader)) != _token(status):
                         raise _refuse("path", FilesReason.EXTERNAL_CHANGE_DETECTED)
                 continue
@@ -1077,7 +1216,11 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         expected_version: str | None,
         preimage_version_id: str | None,
     ) -> tuple[int, os.stat_result | None, str | None]:
-        """Where a content write lands: create (no version) or replace (version + preimage id)."""
+        """Where a content write lands: create (no version) or replace (version + preimage id).
+
+        A preimage id given with a create is not used (nothing is preserved);
+        it is neither validated nor refused, so a caller may mint one eagerly.
+        """
         parent = self._directory(stack, path.parent, "path")
         status = self._lstat(parent, path.name)
         if expected_version is None:
@@ -1176,10 +1319,11 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             if staging is None:  # pragma: no cover - created above
                 raise _unavailable()
             temporary = f".text-{secrets.token_hex(12)}"
-            writer = os.open(temporary, _CREATE_FLAGS, _FILE_MODE, dir_fd=staging)
+            writer = os.open(temporary, _CREATE_FLAGS, _STAGED_MODE, dir_fd=staging)
             try:
                 try:
                     _write_all(writer, data, 0)
+                    _publishable(writer, self._published_mode)
                     os.fsync(writer)
                     staged = os.fstat(writer)
                 finally:
@@ -1199,7 +1343,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             if staging is None:  # pragma: no cover - created above
                 raise _unavailable()
             try:
-                descriptor = os.open(name, _CREATE_FLAGS, _FILE_MODE, dir_fd=staging)
+                descriptor = os.open(name, _CREATE_FLAGS, _STAGED_MODE, dir_fd=staging)
             except FileExistsError:
                 raise _refuse("upload_id", FilesReason.EXISTS) from None
             try:
@@ -1253,8 +1397,13 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
                         raise _refuse("body", FilesReason.TOO_LARGE)
                     self.ensure_free_space(len(chunk))
                     position = _write_all(descriptor, bytes(chunk), position)
-            finally:
-                os.fsync(descriptor)
+            except BaseException:
+                # Keep what was appended, but never let a failing `fsync`
+                # replace the error that interrupted the append.
+                with suppress(OSError):
+                    os.fsync(descriptor)
+                raise
+            os.fsync(descriptor)
             return position
 
     def upload_digest(self, upload_id: str) -> tuple[int, str]:
@@ -1305,13 +1454,16 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             staged_length, staged_sha256 = _hash_descriptor(descriptor)
             if (staged_length, staged_sha256) != (claimed_length, claimed_sha256):
                 raise _refuse("sha256", FilesReason.DIGEST_MISMATCH)
-            staged = os.fstat(descriptor)
-            if _token(staged) != _token(status):
+            if _token(os.fstat(descriptor)) != _token(status):
                 raise _refuse("upload_id", FilesReason.EXTERNAL_CHANGE_DETECTED)
             parent, current, preimage = self._target(
                 stack, file_path, expected_version, preimage_version_id
             )
             self.ensure_free_space(0)
+            # Private while staged; the published mode is given just before
+            # publication (it moves `ctime`, so the staged fingerprint is re-read).
+            _publishable(descriptor, self._published_mode)
+            staged = os.fstat(descriptor)
             return self._publish(stack, staging, name, staged, file_path, parent, current, preimage)
 
     # ---- downloads -------------------------------------------------------------------

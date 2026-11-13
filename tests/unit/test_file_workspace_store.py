@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -233,6 +234,39 @@ def test_preview_cuts_on_character_boundaries_and_continues(
     assert store.preview("t.txt", offset=100).text == ""
 
 
+def test_preview_exceeds_max_bytes_only_for_one_character(
+    store: FilesystemFileWorkspaceStore, root: Path
+) -> None:
+    """A window smaller than its first character grows to that character, never further."""
+    (root / "e.txt").write_bytes("éé".encode())
+    window = store.preview("e.txt", max_bytes=1)
+    assert (window.text, window.binary, window.next_offset) == ("é", False, 2)
+    (root / "emoji.txt").write_bytes("\U0001f600\U0001f600".encode())
+    for limit in (1, 2, 3):
+        window = store.preview("emoji.txt", max_bytes=limit)
+        assert (window.text, window.next_offset) == ("\U0001f600", 4)
+    (root / "mixed.txt").write_bytes("€a".encode())
+    assert store.preview("mixed.txt", max_bytes=2).text == "€"
+
+
+def test_preview_at_a_mid_character_offset_skips_to_the_next_boundary(
+    store: FilesystemFileWorkspaceStore, root: Path
+) -> None:
+    """Valid UTF-8 read from inside a character is text, starting at the next character."""
+    (root / "t.txt").write_bytes("aé€z".encode())  # é at 1-2, € at 3-5, z at 6
+    window = store.preview("t.txt", offset=2)
+    assert (window.text, window.binary, window.next_offset) == ("€z", False, None)
+    window = store.preview("t.txt", offset=4, max_bytes=1)
+    assert (window.text, window.binary, window.next_offset) == ("z", False, None)
+    window = store.preview("t.txt", offset=4, max_bytes=2)
+    assert (window.text, window.next_offset) == ("z", None)
+    (root / "tail.txt").write_bytes("a€".encode())
+    window = store.preview("tail.txt", offset=2)  # only continuation bytes remain
+    assert (window.text, window.binary, window.next_offset) == ("", False, None)
+    (root / "bad.txt").write_bytes(b"a\x80\x80\x80\x80b")  # more than a character's tail
+    assert store.preview("bad.txt", offset=1).binary is True
+
+
 def test_preview_flags_binary_and_checks_the_version(
     store: FilesystemFileWorkspaceStore, root: Path
 ) -> None:
@@ -394,6 +428,26 @@ def test_copy_refuses_a_tree_holding_another_kind(
         store.copy("tree", "copy")
     assert _reason(caught) is FilesReason.UNSUPPORTED_ENTRY
     assert not (root / "copy").exists()
+
+
+@pytest.mark.parametrize("name", ["back\\slash", "control\x01char"])
+def test_copy_refuses_a_tree_holding_an_unaddressable_name(
+    store: FilesystemFileWorkspaceStore, root: Path, name: str
+) -> None:
+    """A name no request could spell would be silently dropped: the copy is refused instead.
+
+    Reserved names stay omitted (as listing and search omit them); see the
+    `@eaDir` case in the tree copy test above.
+    """
+    (root / "tree" / "sub").mkdir(parents=True)
+    (root / "tree" / "ok").write_bytes(b"ok")
+    (root / "tree" / "sub" / name).write_bytes(b"unaddressable")
+    with pytest.raises(FilesRefusal) as caught:
+        store.copy("tree", "copy")
+    assert _reason(caught) is FilesReason.UNSUPPORTED_ENTRY
+    assert not (root / "copy").exists()
+    staging = root / ".my-pa" / "staging"
+    assert not staging.exists() or list(staging.iterdir()) == []
 
 
 def test_copy_respects_the_disk_reserve(root: Path) -> None:
@@ -588,6 +642,49 @@ def test_upload_staging_resumes_and_publishes(
     with pytest.raises(FilesRefusal) as caught:
         store.upload_offset(UPLOAD_ID)
     assert _reason(caught) is FilesReason.NOT_FOUND
+
+
+def test_staged_uploads_are_private_and_published_files_keep_the_umask_mode(root: Path) -> None:
+    """Bytes waiting in `.my-pa/staging` are 0600; what is published gets `0666 & ~umask`."""
+    previous = os.umask(0o022)
+    try:
+        store = FilesystemFileWorkspaceStore(root, disk_reserve_bytes=0)
+        store.begin_upload(UPLOAD_ID)
+        staged = root / ".my-pa" / "staging" / UPLOAD_ID
+        assert staged.stat().st_mode & 0o777 == 0o600
+        store.append_upload(UPLOAD_ID, 0, [b"payload"], limit=100)
+        assert staged.stat().st_mode & 0o777 == 0o600
+        store.publish_upload(UPLOAD_ID, "up.bin", length=7, sha256=_sha(b"payload"))
+        assert (root / "up.bin").stat().st_mode & 0o777 == 0o644
+        store.write_text("t.txt", "text")
+        assert (root / "t.txt").stat().st_mode & 0o777 == 0o644
+        store.copy("t.txt", "t-copy.txt")
+        assert (root / "t-copy.txt").stat().st_mode & 0o777 == 0o644
+        (root / "tree").mkdir()
+        (root / "tree" / "leaf").write_bytes(b"L")
+        store.copy("tree", "tree-copy")
+        assert (root / "tree-copy" / "leaf").stat().st_mode & 0o777 == 0o644
+    finally:
+        os.umask(previous)
+
+
+def test_a_failing_fsync_does_not_mask_the_append_failure(
+    store: FilesystemFileWorkspaceStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.begin_upload(UPLOAD_ID)
+
+    def chunks() -> Iterator[bytes]:
+        yield b"kept"
+        raise RuntimeError("the client went away")
+
+    def failing_fsync(_descriptor: int) -> None:
+        raise OSError(5, "simulated")
+
+    monkeypatch.setattr(store_module.os, "fsync", failing_fsync)
+    with pytest.raises(RuntimeError, match="the client went away"):
+        store.append_upload(UPLOAD_ID, 0, chunks(), limit=100)
+    monkeypatch.undo()
+    assert store.upload_offset(UPLOAD_ID) == 4
 
 
 def test_upload_replace_preserves_the_preimage_and_zero_bytes_are_valid(

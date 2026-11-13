@@ -9,6 +9,7 @@ reserved control directory staying out of every listing.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 from collections.abc import Iterator
@@ -16,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from my_pa.contracts.ports import FileWorkspaceRootError
+from my_pa.contracts.ports import FileWorkspaceRootError, FileWorkspaceUnavailableError
 from my_pa.domain.files.errors import FilesArgumentError, FilesRefusal
 from my_pa.domain.files.versions import EntryKind
 from my_pa.domain.files.vocabulary import FilesReason
@@ -602,6 +603,33 @@ def test_replace_detects_an_external_change_before_the_rename(
         )
     assert _reason(caught) is FilesReason.EXTERNAL_CHANGE_DETECTED
     assert (root / "f").read_bytes() == b"theirs!"
+    assert not (root / ".my-pa" / "versions" / VERSION_ID).exists()
+
+
+def test_a_failed_final_rename_without_hard_links_gives_the_path_back(
+    store: FilesystemFileWorkspaceStore, root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With `linkat` refused the preimage is renamed into `versions`; a failed publish undoes it."""
+    created = store.write_text("f", "mine")
+
+    def refuse_link(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    real_rename = os.rename
+
+    def failing_publish(source: str, target: str, **kwargs: int) -> None:
+        if target == "f" and source != VERSION_ID:
+            raise OSError(errno.EIO, "Input/output error")
+        real_rename(source, target, **kwargs)
+
+    monkeypatch.setattr(store_module.os, "link", refuse_link)
+    monkeypatch.setattr(store_module.os, "rename", failing_publish)
+    with pytest.raises(FileWorkspaceUnavailableError):
+        store.write_text(
+            "f", "new", expected_version=created.entry.version, preimage_version_id=VERSION_ID
+        )
+    monkeypatch.undo()
+    assert (root / "f").read_bytes() == b"mine"
     assert not (root / ".my-pa" / "versions" / VERSION_ID).exists()
 
 

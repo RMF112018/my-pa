@@ -55,7 +55,14 @@ Concretely:
 * a directory's token moves only when its direct children change, so a change
   deeper in a trashed tree does not refuse its restore;
 * when hard links are unsupported (`EPERM`, `ENOTSUP`, `EMLINK`), a file move
-  falls back to check-absent-then-`rename`, with the same interval.
+  falls back to check-absent-then-`rename`, with the same interval; the source
+  is re-proved the observed regular file before the rename and the moved entry
+  after it, and anything else that was moved is renamed back and refused.
+
+Identity is never the inode number alone: ext4 reuses a freed number at once,
+so a name unlinked and replaced can come back with the observed `st_ino`.
+A file's identity is its inode plus its type, size and `st_mtime_ns`, which a
+link or rename leaves unchanged.
 
 A drift detected *after* a successful link is reported as
 `external_change_detected` and the link is rolled back: the new name was absent
@@ -67,7 +74,9 @@ when the link named a replacement that the source name no longer holds (it
 vanished, or was swapped again), so the link's identity cannot be proved, is
 the new name left in place. If a replacement's final
 rename fails after the preimage link was made, the preimage stays under
-`versions/<id>` unrecorded -- an orphan named by the id the caller minted.
+`versions/<id>` unrecorded -- an orphan named by the id the caller minted; when
+the preimage was renamed there instead (no hard links), it is renamed back to
+the path, best effort, so the path is not left absent.
 
 **Hard links.** A regular file with `st_nlink > 1` may be a host hard link to a
 file outside the root, so its bytes are never read out: preview, download,
@@ -306,6 +315,26 @@ def _hard_linked(status: os.stat_result) -> bool:
 
 def _same_inode(one: os.stat_result, other: os.stat_result) -> bool:
     return (one.st_dev, one.st_ino) == (other.st_dev, other.st_ino)
+
+
+def _same_file(status: os.stat_result, observed: os.stat_result) -> bool:
+    """`status` is the observed regular file, not merely an inode with its number.
+
+    `(st_dev, st_ino)` alone is not an identity across an unlink: ext4 (the
+    Linux CI runner's `/tmp`, and a typical NAS volume) hands a freed inode
+    number straight to the next allocation in the same directory, so a file
+    unlinked and replaced by a symlink or directory can come back with the
+    observed number. APFS allocates inode numbers monotonically and never shows
+    this. The file type, size and `st_mtime_ns` are compared too: `linkat` and
+    `renameat` change `st_nlink` and `st_ctime` but never these, while a
+    different object reusing the number would have to match all of them.
+    """
+    return (
+        S_ISREG(status.st_mode)
+        and _same_inode(status, observed)
+        and status.st_size == observed.st_size
+        and status.st_mtime_ns == observed.st_mtime_ns
+    )
 
 
 def _entry(
@@ -688,16 +717,23 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         self._recheck(source, name, observed, field)
         self._after_recheck("relocate")
         if S_ISDIR(observed.st_mode):
-            self._rename_absent(source, name, target, target_name, target_field)
-            moved = self._lstat(target, target_name)
-            if moved is None or not _same_inode(moved, observed):
-                # Something else took the source name after the re-check and
-                # was moved instead: put it back where it was, best effort.
-                if moved is not None:
-                    with suppress(OSError, FilesRefusal):
-                        self._rename_absent(target, target_name, source, name, field)
-                raise _refuse(field, FilesReason.EXTERNAL_CHANGE_DETECTED)
+            self._rename_moved(source, name, observed, target, target_name, field, target_field)
         else:
+            # Platform semantics this branch relies on (Python passes
+            # `linkat(..., flags=0)` for `follow_symlinks=False` on both):
+            # * Linux and macOS both hard-link a *symlink itself* rather than
+            #   its target (verified on macOS; Linux `linkat` without
+            #   `AT_SYMLINK_FOLLOW`). Linux `fs.protected_hardlinks=1` allows it
+            #   when the caller owns the symlink, so a swapped-in symlink of
+            #   the service's own user is linked, not refused.
+            # * Linking a directory fails `EPERM` on both, as does a
+            #   filesystem without hard links; that falls back to rename.
+            # * `rename` moves anything onto an absent name -- symlink,
+            #   directory or file -- so the fallback must prove what it moved.
+            # * ext4 reuses a freed inode number at once, so the identity
+            #   checks use `_same_file`, never the inode number alone; that
+            #   reuse is why a symlink swapped in after the re-check passed an
+            #   inode-only check on the Linux CI runner and not on APFS.
             try:
                 os.link(
                     name, target_name, src_dir_fd=source, dst_dir_fd=target, follow_symlinks=False
@@ -707,11 +743,16 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             except OSError as error:
                 if error.errno not in _LINK_UNSUPPORTED:
                     raise
-                self._rename_absent(source, name, target, target_name, target_field)
+                # Never rename an unverified entry: the link may have failed
+                # because the source is now a directory, not the file.
+                current = self._lstat(source, name)
+                if current is None or not _same_file(current, observed):
+                    raise _refuse(field, FilesReason.EXTERNAL_CHANGE_DETECTED) from None
+                self._rename_moved(source, name, observed, target, target_name, field, target_field)
             else:
                 linked = self._lstat(target, target_name)
                 remaining = self._lstat(source, name)
-                if linked is None or not _same_inode(linked, observed):
+                if linked is None or not _same_file(linked, observed):
                     # The source name was replaced between the re-check and
                     # the link, so the link this call made names the
                     # replacement. The target name was absent (or the link
@@ -720,7 +761,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
                     # and leave the replacement at the source alone.
                     self._unlink_if(target, target_name, linked, remaining)
                     raise _refuse(field, FilesReason.EXTERNAL_CHANGE_DETECTED)
-                if remaining is None or not _same_inode(remaining, observed):
+                if remaining is None or not _same_file(remaining, observed):
                     # The source name was replaced after the link: undo the
                     # link of the observed inode and leave the replacement alone.
                     self._unlink_if(target, target_name, linked, observed)
@@ -728,6 +769,34 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
                 os.unlink(name, dir_fd=source)
         os.fsync(target)
         os.fsync(source)
+
+    def _rename_moved(
+        self,
+        source: int,
+        name: str,
+        observed: os.stat_result,
+        target: int,
+        target_name: str,
+        field: str,
+        target_field: str,
+    ) -> None:
+        """Check-absent-then-rename, then prove the observed entry is what moved.
+
+        Something else may take the source name between the last check and the
+        rename; it is then put back where it was (best effort) and the move is
+        refused `external_change_detected`.
+        """
+        self._rename_absent(source, name, target, target_name, target_field)
+        moved = self._lstat(target, target_name)
+        if S_ISDIR(observed.st_mode):
+            proved = moved is not None and S_ISDIR(moved.st_mode) and _same_inode(moved, observed)
+        else:
+            proved = moved is not None and _same_file(moved, observed)
+        if not proved:
+            if moved is not None:
+                with suppress(OSError, FilesRefusal):
+                    self._rename_absent(target, target_name, source, name, field)
+            raise _refuse(field, FilesReason.EXTERNAL_CHANGE_DETECTED)
 
     @staticmethod
     def _unlink_if(
@@ -1293,7 +1362,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             linked = False
             os.rename(path.name, preimage, src_dir_fd=parent, dst_dir_fd=versions)
         kept = self._lstat(versions, preimage)
-        if kept is None or not _same_inode(kept, current):
+        if kept is None or not _same_file(kept, current):
             # What reached `versions` is not the observed file: take back only
             # what this call put there, and leave the replacement in place.
             if kept is not None:
@@ -1303,7 +1372,15 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
                     self._rename_absent(versions, preimage, parent, path.name, "path")
             raise _refuse("path", FilesReason.EXTERNAL_CHANGE_DETECTED)
         os.fsync(versions)
-        os.rename(temporary, path.name, src_dir_fd=staging, dst_dir_fd=parent)
+        try:
+            os.rename(temporary, path.name, src_dir_fd=staging, dst_dir_fd=parent)
+        except OSError:
+            if not linked:
+                # The preimage was renamed away, so the path is absent: give
+                # the observed file its name back (best effort) before failing.
+                with suppress(OSError, FilesRefusal):
+                    self._rename_absent(versions, preimage, parent, path.name, "path")
+            raise
         os.fsync(parent)
         os.fsync(staging)
         return FileWorkspacePublication(

@@ -12,6 +12,7 @@ exception; and the control directory being unreachable through the API.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import signal
@@ -19,6 +20,7 @@ import socket
 import traceback
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from stat import S_ISLNK
 
 import pytest
 
@@ -29,6 +31,7 @@ from my_pa.contracts.ports import (
 )
 from my_pa.domain.files.errors import FilesDomainError, FilesRefusal
 from my_pa.domain.files.vocabulary import FilesReason
+from my_pa.infrastructure.file_workspace import store as store_module
 from my_pa.infrastructure.file_workspace.store import FilesystemFileWorkspaceStore
 
 TRASH_ID = "fwtrs_abcdef0123456789"
@@ -273,6 +276,169 @@ def test_a_leaf_swapped_after_the_recheck_leaves_no_new_entry(
     assert (root / "a.txt").is_symlink()  # the external replacement is left alone
     assert (outside / "secret.txt").read_bytes() == SECRET
     assert (outside / "secret.txt").stat().st_nlink == 1
+
+
+# The swapped-leaf cases below are forced deterministically on any platform, so
+# a macOS run covers the Linux behaviours too: `linkat` refused `EPERM` (no hard
+# links on the volume, or a directory at the name), and ext4 handing the freed
+# inode number of the observed file straight to its replacement.
+
+
+def _replace_leaf(root: Path, outside: Path, replacement: str) -> None:
+    """Unlink `root/a.txt` and put a symlink to the secret, or a directory, at its name."""
+    (root / "a.txt").unlink()
+    if replacement == "symlink":
+        (root / "a.txt").symlink_to(outside / "secret.txt")
+    else:
+        (root / "a.txt").mkdir()
+        (root / "a.txt" / "inner.txt").write_bytes(b"theirs")
+
+
+def _relocation(
+    store: FilesystemFileWorkspaceStore, root: Path, operation: str, observed: str
+) -> tuple[FilesReason, Path]:
+    if operation == "move":
+        reason = _refusal(lambda: store.move("a.txt", "b.txt", expected_version=observed))
+        return reason, root / "b.txt"
+    reason = _refusal(lambda: store.trash("a.txt", TRASH_ID, expected_version=observed))
+    return reason, root / ".my-pa" / "trash" / TRASH_ID
+
+
+def _replacement_untouched(root: Path, outside: Path, replacement: str) -> None:
+    if replacement == "symlink":
+        assert (root / "a.txt").is_symlink()
+        assert (root / "a.txt").readlink() == outside / "secret.txt"
+    else:
+        assert (root / "a.txt").is_dir() and not (root / "a.txt").is_symlink()
+        assert (root / "a.txt" / "inner.txt").read_bytes() == b"theirs"
+    assert (outside / "secret.txt").read_bytes() == SECRET
+    assert (outside / "secret.txt").stat().st_nlink == 1
+
+
+def _links_unsupported(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(store_module.os, "link", refuse)
+
+
+@pytest.mark.parametrize("replacement", ["symlink", "directory"])
+@pytest.mark.parametrize("operation", ["move", "trash"])
+def test_a_leaf_swapped_before_an_unsupported_link_is_never_renamed(
+    store: FilesystemFileWorkspaceStore,
+    layout: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    replacement: str,
+) -> None:
+    """With `linkat` refused, the fallback re-proves the source before it renames anything."""
+    root, outside = layout
+    (root / "a.txt").write_bytes(b"mine")
+    observed = store.stat("a.txt").version
+    _links_unsupported(monkeypatch)
+    monkeypatch.setattr(
+        store, "_after_recheck", lambda _s: _replace_leaf(root, outside, replacement)
+    )
+    reason, target = _relocation(store, root, operation, observed)
+    assert reason is FilesReason.EXTERNAL_CHANGE_DETECTED
+    assert not os.path.lexists(target)
+    _replacement_untouched(root, outside, replacement)
+
+
+@pytest.mark.parametrize("operation", ["move", "trash"])
+def test_a_directory_swapped_in_after_the_recheck_is_never_moved(
+    store: FilesystemFileWorkspaceStore,
+    layout: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    """Through the real `linkat`: a directory refuses the link `EPERM` and is not then renamed."""
+    root, outside = layout
+    (root / "a.txt").write_bytes(b"mine")
+    observed = store.stat("a.txt").version
+    monkeypatch.setattr(
+        store, "_after_recheck", lambda _s: _replace_leaf(root, outside, "directory")
+    )
+    reason, target = _relocation(store, root, operation, observed)
+    assert reason is FilesReason.EXTERNAL_CHANGE_DETECTED
+    assert not os.path.lexists(target)
+    _replacement_untouched(root, outside, "directory")
+
+
+@pytest.mark.parametrize("replacement", ["symlink", "directory"])
+@pytest.mark.parametrize("operation", ["move", "trash"])
+def test_a_leaf_swapped_inside_the_fallback_rename_is_put_back(
+    store: FilesystemFileWorkspaceStore,
+    layout: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    replacement: str,
+) -> None:
+    """A swap after the fallback's source check: what was renamed is proved, then renamed back."""
+    root, outside = layout
+    (root / "a.txt").write_bytes(b"mine")
+    observed = store.stat("a.txt").version
+    _links_unsupported(monkeypatch)
+    real = store._rename_absent
+    swapped: list[bool] = []
+
+    def swap_then_rename(source: int, name: str, target: int, target_name: str, field: str) -> None:
+        if not swapped:
+            swapped.append(True)
+            _replace_leaf(root, outside, replacement)
+        real(source, name, target, target_name, field)
+
+    monkeypatch.setattr(store, "_rename_absent", swap_then_rename)
+    reason, target = _relocation(store, root, operation, observed)
+    assert swapped
+    assert reason is FilesReason.EXTERNAL_CHANGE_DETECTED
+    assert not os.path.lexists(target)
+    _replacement_untouched(root, outside, replacement)
+
+
+class _ReusedInode:
+    """An `lstat` result reporting another inode number: ext4's immediate inode reuse."""
+
+    def __init__(self, real: os.stat_result, reused: os.stat_result) -> None:
+        self._real = real
+        self.st_dev = reused.st_dev
+        self.st_ino = reused.st_ino
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._real, name)
+
+
+@pytest.mark.parametrize("operation", ["move", "trash"])
+def test_a_swapped_leaf_reusing_the_observed_inode_number_is_refused(
+    store: FilesystemFileWorkspaceStore,
+    layout: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    """The Linux CI failure: a symlink swapped in gets the freed inode number of the file.
+
+    ext4 reuses the number at once, so `(st_dev, st_ino)` matched and the real
+    `linkat` of the symlink passed an inode-only identity check; APFS never
+    reuses one. The reuse is simulated here so every platform runs that case.
+    """
+    root, outside = layout
+    (root / "a.txt").write_bytes(b"mine")
+    original = os.lstat(root / "a.txt")
+    observed = store.stat("a.txt").version
+    real_lstat = store._lstat
+
+    def reusing(directory: int, name: str) -> object:
+        status = real_lstat(directory, name)
+        if status is not None and S_ISLNK(status.st_mode):
+            return _ReusedInode(status, original)
+        return status
+
+    monkeypatch.setattr(store, "_lstat", reusing)
+    monkeypatch.setattr(store, "_after_recheck", lambda _s: _replace_leaf(root, outside, "symlink"))
+    reason, target = _relocation(store, root, operation, observed)
+    assert reason is FilesReason.EXTERNAL_CHANGE_DETECTED
+    assert not os.path.lexists(target)
+    _replacement_untouched(root, outside, "symlink")
 
 
 def test_a_hard_linked_file_is_listed_but_its_bytes_are_never_read(

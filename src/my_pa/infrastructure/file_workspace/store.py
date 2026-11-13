@@ -1327,7 +1327,9 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             return parent, None, None
         if status is None:
             raise _refuse("path", FilesReason.NOT_FOUND)
-        if not S_ISREG(status.st_mode):
+        if not S_ISREG(status.st_mode) or _hard_linked(status):
+            # A multiply-linked file is never written (contract section 4):
+            # its preimage link would keep a perhaps-outside inode under `versions`.
             raise _refuse("path", FilesReason.UNSUPPORTED_ENTRY)
         if _token(status) != expected_version:
             raise _refuse("path", FilesReason.VERSION_CONFLICT)
@@ -1371,16 +1373,27 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             if error.errno not in _LINK_UNSUPPORTED:
                 raise
             linked = False
-            os.rename(path.name, preimage, src_dir_fd=parent, dst_dir_fd=versions)
+            # Never rename an unverified entry (as `_relocate`): the link may
+            # have failed because the name is now a directory, not the file.
+            probe = self._lstat(parent, path.name)
+            if probe is None or not _same_file(probe, current):
+                raise _refuse("path", FilesReason.EXTERNAL_CHANGE_DETECTED) from None
+            self._rename_absent(parent, path.name, versions, preimage, "preimage_version_id")
         kept = self._lstat(versions, preimage)
-        if kept is None or not _same_file(kept, current):
-            # What reached `versions` is not the observed file: take back only
-            # what this call put there, and leave the replacement in place.
+        # `current` was single-linked (`_target`); this call's link adds one
+        # name, so any other count is a host hard link made after the re-check.
+        if kept is None or not _same_file(kept, current) or kept.st_nlink != (2 if linked else 1):
+            # What reached `versions` is not the observed, single-linked file:
+            # take back only what this call put there, and leave the rest alone.
+            # A fallback rename back blocked by yet another racing entry at the
+            # name leaves the moved object at `versions/<id>` (never read or
+            # followed) and the refusal is still `external_change_detected`.
             if kept is not None:
                 if linked:
                     os.unlink(preimage, dir_fd=versions)
                 else:
-                    self._rename_absent(versions, preimage, parent, path.name, "path")
+                    with suppress(OSError, FilesRefusal):
+                        self._rename_absent(versions, preimage, parent, path.name, "path")
             raise _refuse("path", FilesReason.EXTERNAL_CHANGE_DETECTED)
         os.fsync(versions)
         try:

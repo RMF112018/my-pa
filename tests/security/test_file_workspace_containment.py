@@ -446,6 +446,173 @@ def test_a_leaf_swapped_inside_the_fallback_rename_is_put_back(
     _replacement_untouched(root, outside, replacement)
 
 
+def _replace(store: FilesystemFileWorkspaceStore, operation: str, observed: str) -> FilesReason:
+    """Replace `a.txt` (CAS `observed`) by `write_text` or `publish_upload`; the refusal reason."""
+    if operation == "write_text":
+        return _refusal(
+            lambda: store.write_text(
+                "a.txt", "new", expected_version=observed, preimage_version_id=VERSION_ID
+            )
+        )
+    store.begin_upload(UPLOAD_ID)
+    store.append_upload(UPLOAD_ID, 0, [b"new"], limit=3)
+    return _refusal(
+        lambda: store.publish_upload(
+            UPLOAD_ID,
+            "a.txt",
+            length=3,
+            sha256=hashlib.sha256(b"new").hexdigest(),
+            expected_version=observed,
+            preimage_version_id=VERSION_ID,
+        )
+    )
+
+
+def _preimage_renames(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    before: Callable[[], None] | None = None,
+    after: Callable[[], None] | None = None,
+) -> list[str]:
+    """Record every rename onto the preimage id, running `before`/`after` around the first one."""
+    real = os.rename
+    seen: list[str] = []
+
+    def recording(src: str, dst: str, **kwargs: object) -> None:
+        if dst == VERSION_ID:
+            seen.append(src)
+            if len(seen) == 1 and before is not None:
+                before()
+        real(src, dst, **kwargs)  # type: ignore[arg-type]
+        if dst == VERSION_ID and len(seen) == 1 and after is not None:
+            after()
+
+    monkeypatch.setattr(store_module.os, "rename", recording)
+    return seen
+
+
+@pytest.mark.parametrize("replacement", ["symlink", "directory"])
+@pytest.mark.parametrize("operation", ["write_text", "publish_upload"])
+def test_a_leaf_swapped_before_an_unsupported_preimage_link_is_never_renamed(
+    store: FilesystemFileWorkspaceStore,
+    layout: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    replacement: str,
+) -> None:
+    """With `linkat` refused, the preimage fallback re-proves the file before renaming anything."""
+    root, outside = layout
+    (root / "a.txt").write_bytes(b"mine")
+    observed = store.stat("a.txt").version
+    _links_unsupported(monkeypatch)
+    renamed = _preimage_renames(monkeypatch)
+    monkeypatch.setattr(
+        store, "_after_recheck", lambda _s: _replace_leaf(root, outside, replacement)
+    )
+    assert _replace(store, operation, observed) is FilesReason.EXTERNAL_CHANGE_DETECTED
+    assert renamed == []
+    assert list((root / ".my-pa" / "versions").iterdir()) == []
+    _replacement_untouched(root, outside, replacement)
+
+
+@pytest.mark.parametrize("replacement", ["symlink", "directory"])
+def test_a_preimage_fallback_double_race_strands_nothing(
+    store: FilesystemFileWorkspaceStore,
+    layout: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: str,
+) -> None:
+    """A swap after the publish re-check, then a file created at the name after a fallback rename.
+
+    Without the re-proof the swapped object was renamed into `versions`, the
+    racing file then blocked its rename back (`exists`) and the user's entry
+    stayed stranded under `.my-pa/versions/<id>`.
+    """
+    root, outside = layout
+    (root / "a.txt").write_bytes(b"mine")
+    observed = store.stat("a.txt").version
+    _links_unsupported(monkeypatch)
+    _preimage_renames(monkeypatch, after=lambda: (root / "a.txt").write_bytes(b"racer"))
+    monkeypatch.setattr(
+        store, "_after_recheck", lambda _s: _replace_leaf(root, outside, replacement)
+    )
+    assert _replace(store, "write_text", observed) is FilesReason.EXTERNAL_CHANGE_DETECTED
+    assert list((root / ".my-pa" / "versions").iterdir()) == []
+    _replacement_untouched(root, outside, replacement)
+
+
+@pytest.mark.parametrize("replacement", ["symlink", "directory"])
+def test_a_swap_inside_the_preimage_fallback_rename_is_refused_as_a_change(
+    store: FilesystemFileWorkspaceStore,
+    layout: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: str,
+) -> None:
+    """A swap after the fallback's re-proof, then a racing file blocks the rename back.
+
+    What moved is proved not to be the observed file; its rename back is
+    blocked by the racing file, so the refusal is `external_change_detected`
+    (not `exists`) and the moved object stays at `.my-pa/versions/<id>`,
+    unread and unfollowed: the documented best-effort limit.
+    """
+    root, outside = layout
+    (root / "a.txt").write_bytes(b"mine")
+    observed = store.stat("a.txt").version
+    _links_unsupported(monkeypatch)
+    renamed = _preimage_renames(
+        monkeypatch,
+        before=lambda: _replace_leaf(root, outside, replacement),
+        after=lambda: (root / "a.txt").write_bytes(b"racer"),
+    )
+    assert _replace(store, "write_text", observed) is FilesReason.EXTERNAL_CHANGE_DETECTED
+    assert renamed == ["a.txt"]
+    assert (root / "a.txt").read_bytes() == b"racer"
+    stranded = root / ".my-pa" / "versions" / VERSION_ID
+    if replacement == "symlink":
+        assert stranded.is_symlink()
+    else:
+        assert (stranded / "inner.txt").read_bytes() == b"theirs"
+    assert (outside / "secret.txt").read_bytes() == SECRET
+    assert (outside / "secret.txt").stat().st_nlink == 1
+
+
+@pytest.mark.parametrize("operation", ["write_text", "publish_upload"])
+def test_a_hard_linked_file_is_never_replaced(
+    store: FilesystemFileWorkspaceStore,
+    layout: tuple[Path, Path],
+    operation: str,
+) -> None:
+    """Replacing a host hard link would keep the outside inode alive under `versions`."""
+    root, outside = layout
+    os.link(outside / "secret.txt", root / "a.txt")
+    observed = store.stat("a.txt").version
+    assert _replace(store, operation, observed) is FilesReason.UNSUPPORTED_ENTRY
+    assert (outside / "secret.txt").read_bytes() == SECRET
+    assert (outside / "secret.txt").stat().st_nlink == 2
+    assert (root / "a.txt").read_bytes() == SECRET
+    versions = root / ".my-pa" / "versions"
+    assert not versions.exists() or list(versions.iterdir()) == []
+
+
+@pytest.mark.parametrize("operation", ["write_text", "publish_upload"])
+def test_a_hard_link_made_after_the_publish_recheck_keeps_no_preimage(
+    store: FilesystemFileWorkspaceStore,
+    layout: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    """A host hard link added between the re-check and the preimage link is refused."""
+    root, outside = layout
+    (root / "a.txt").write_bytes(b"mine")
+    observed = store.stat("a.txt").version
+    alias = outside / "alias.txt"
+    monkeypatch.setattr(store, "_after_recheck", lambda _s: os.link(root / "a.txt", alias))
+    assert _replace(store, operation, observed) is FilesReason.EXTERNAL_CHANGE_DETECTED
+    assert list((root / ".my-pa" / "versions").iterdir()) == []
+    assert (root / "a.txt").read_bytes() == b"mine"
+    assert alias.stat().st_nlink == 2
+
+
 class _ReusedInode:
     """An `lstat` result reporting another inode number: ext4's immediate inode reuse."""
 

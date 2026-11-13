@@ -709,6 +709,66 @@ def test_upload_replace_preserves_the_preimage_and_zero_bytes_are_valid(
     assert (root / ".my-pa" / "versions" / VERSION_ID).read_bytes() == b"old"
 
 
+def test_a_refused_upload_publication_leaves_the_staged_file_private(root: Path) -> None:
+    """A refusal inside publication (preimage id taken) puts the staged file back to 0600."""
+    previous = os.umask(0o022)
+    try:
+        store = FilesystemFileWorkspaceStore(root, disk_reserve_bytes=0)
+        (root / "f").write_bytes(b"old")
+        version = store.stat("f").version
+        (root / ".my-pa" / "versions").mkdir(parents=True)
+        (root / ".my-pa" / "versions" / VERSION_ID).write_bytes(b"taken")
+        store.begin_upload(UPLOAD_ID)
+        store.append_upload(UPLOAD_ID, 0, [b"new"], limit=100)
+        with pytest.raises(FilesRefusal) as caught:
+            store.publish_upload(
+                UPLOAD_ID,
+                "f",
+                length=3,
+                sha256=_sha(b"new"),
+                expected_version=version,
+                preimage_version_id=VERSION_ID,
+            )
+        assert _reason(caught) is FilesReason.EXISTS
+        staged = root / ".my-pa" / "staging" / UPLOAD_ID
+        assert staged.stat().st_mode & 0o777 == 0o600
+        assert (root / "f").read_bytes() == b"old"
+    finally:
+        os.umask(previous)
+
+
+def test_the_umask_is_read_without_being_changed_when_proc_reports_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Where `/proc/self/status` reports `Umask:` the umask is read, never set."""
+    status = tmp_path / "status"
+    status.write_text("Name:\tpython\nUmask:\t0027\nState:\tR\n")
+
+    def no_umask(_mask: int) -> int:
+        raise AssertionError("the umask was set")
+
+    monkeypatch.setattr(store_module, "_PROC_STATUS", status)
+    monkeypatch.setattr(store_module.os, "umask", no_umask)
+    assert store_module._process_umask() == 0o027
+
+
+@pytest.mark.parametrize("content", [None, "Name:\tpython\n", "Umask:\tnot-octal\n"])
+def test_the_umask_falls_back_to_set_and_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str | None
+) -> None:
+    """Without a readable `Umask:` line the umask is set to 0o077 and put straight back."""
+    status = tmp_path / "status"
+    if content is not None:
+        status.write_text(content)
+    monkeypatch.setattr(store_module, "_PROC_STATUS", status)
+    previous = os.umask(0o027)
+    try:
+        assert store_module._process_umask() == 0o027
+        assert os.umask(0o027) == 0o027
+    finally:
+        os.umask(previous)
+
+
 def test_upload_discard_and_reap(store: FilesystemFileWorkspaceStore, root: Path) -> None:
     assert store.discard_upload(UPLOAD_ID) is False
     store.begin_upload(UPLOAD_ID)

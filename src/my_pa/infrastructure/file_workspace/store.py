@@ -61,9 +61,11 @@ A drift detected *after* a successful link is reported as
 `external_change_detected` and the link is rolled back: the new name was absent
 (or `linkat` would have failed `EEXIST`), so what it holds was made by this
 call, and it is unlinked when its inode is the one the source name holds now
-(the source was swapped before the link) or the observed one (the source was
-swapped after it). Only when the source name has also vanished, so neither
-identity can be proved, is the new name left in place. If a replacement's final
+(the source was swapped before the link) or the observed one (the link holds
+the observed inode, whether the source was then swapped or vanished). Only
+when the link named a replacement that the source name no longer holds (it
+vanished, or was swapped again), so the link's identity cannot be proved, is
+the new name left in place. If a replacement's final
 rename fails after the preimage link was made, the preimage stays under
 `versions/<id>` unrecorded -- an orphan named by the id the caller minted.
 
@@ -80,9 +82,13 @@ for that instant; the advisory lock does not cover reads.
 **Modes.** Files waiting under `.my-pa/staging` are created 0600 and given the
 published mode (`0666 & ~umask`, the umask read once at construction) by
 `fchmod` just before publication; a refused `fchmod` (a NAS ACL) leaves them
-0600. A preimage under `versions` keeps the mode the user file had. The
-control directories are created 0700 but are not re-checked for group or
-other write bits: on the NAS their effective access is the share ACL.
+0600, and a refused publication puts a still-staged upload back to 0600 (best
+effort). A staged name with `st_nlink > 1`, or one whose opened inode is not
+the one `lstat` observed, is never sized or written (`unsupported_entry`);
+discarding it only unlinks the staging name. A preimage under `versions` keeps
+the mode the user file had. The control directories are created 0700 but are
+not re-checked for group or other write bits: on the NAS their effective access
+is the share ACL.
 
 **Not here.** The advisory lock, idempotency receipts, version and trash rows,
 tickets and audit are WP4/WP5. Nothing here reads a clock, a row or the
@@ -213,10 +219,23 @@ def _platform_supported() -> bool:
     )
 
 
+#: Linux reports the umask here (`Umask:`, since 4.7) without changing it.
+_PROC_STATUS: Final = Path("/proc/self/status")
+
+
 def _process_umask() -> int:
-    """The process umask. `umask` can only be read by setting it, so it is set
-    to the stricter 0o077 for that instant and put straight back (construction
-    happens once, at composition)."""
+    """The process umask, read once at construction.
+
+    On Linux it is read from `/proc/self/status`. Elsewhere (or when that line
+    is missing or malformed) `umask` can only be read by setting it, so it is
+    set to the stricter 0o077 for that instant and put straight back: a file
+    another thread creates in that instant is more private, never less. The
+    store is therefore constructed at composition, before worker threads start.
+    """
+    with suppress(OSError, UnicodeDecodeError, ValueError):
+        for line in _PROC_STATUS.read_text(encoding="ascii").splitlines():
+            if line.startswith("Umask:"):
+                return int(line.removeprefix("Umask:").strip(), 8) & 0o777
     current = os.umask(0o077)
     os.umask(current)
     return current
@@ -1365,6 +1384,8 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
     def upload_offset(self, upload_id: str) -> int:
         with ExitStack() as stack, _translated():
             _staging, _name, status = self._staged(stack, upload_id)
+            if _hard_linked(status):
+                raise _refuse("upload_id", FilesReason.UNSUPPORTED_ENTRY)
             return status.st_size
 
     def append_upload(
@@ -1373,7 +1394,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         start = _bounded_int(offset, "Upload-Offset", 0)
         ceiling = _bounded_int(limit, "limit", 0)
         with ExitStack() as stack, _translated():
-            staging, name, _status = self._staged(stack, upload_id)
+            staging, name, status = self._staged(stack, upload_id)
             try:
                 descriptor = os.open(name, _APPEND_FLAGS, dir_fd=staging)
             except OSError as error:
@@ -1382,7 +1403,9 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
                 raise
             stack.callback(_close, descriptor)
             held = os.fstat(descriptor)
-            if not S_ISREG(held.st_mode):
+            # The descriptor writes: it must be the single-linked inode `lstat`
+            # observed, or it could write through a host hard link outside the root.
+            if not S_ISREG(held.st_mode) or _hard_linked(held) or not _same_inode(held, status):
                 raise _refuse("upload_id", FilesReason.UNSUPPORTED_ENTRY)
             if held.st_size != start:
                 raise _refuse("Upload-Offset", FilesReason.OFFSET_MISMATCH)
@@ -1461,10 +1484,30 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             )
             self.ensure_free_space(0)
             # Private while staged; the published mode is given just before
-            # publication (it moves `ctime`, so the staged fingerprint is re-read).
+            # publication (it moves `ctime`, so the staged fingerprint is re-read
+            # and that post-`fchmod` fingerprint is what `_publish` compares).
             _publishable(descriptor, self._published_mode)
             staged = os.fstat(descriptor)
-            return self._publish(stack, staging, name, staged, file_path, parent, current, preimage)
+            try:
+                return self._publish(
+                    stack, staging, name, staged, file_path, parent, current, preimage
+                )
+            except BaseException:
+                self._keep_private(descriptor, staging, name)
+                raise
+
+    @staticmethod
+    def _keep_private(descriptor: int, staging: int, name: str) -> None:
+        """Put a still-staged upload back to 0600 after a refused publication; best effort.
+
+        Only while the staging name still holds this single-linked inode: once a
+        published name shares it, its mode is the published one.
+        """
+        with suppress(OSError):
+            held = os.fstat(descriptor)
+            current = os.stat(name, dir_fd=staging, follow_symlinks=False)
+            if _same_inode(held, current) and not _hard_linked(held):
+                os.fchmod(descriptor, _STAGED_MODE)
 
     # ---- downloads -------------------------------------------------------------------
 

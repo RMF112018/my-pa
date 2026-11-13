@@ -357,6 +357,60 @@ def test_a_staging_file_replaced_by_a_fifo_is_refused(
         assert _refusal(call) is FilesReason.UNSUPPORTED_ENTRY
 
 
+def test_a_staging_file_replaced_by_a_hard_link_is_never_written_through(
+    store: FilesystemFileWorkspaceStore, layout: tuple[Path, Path]
+) -> None:
+    """A staged name hard-linked to a file outside the root is neither appended to nor sized.
+
+    Discarding it only drops the staging name; the outside file is untouched.
+    """
+    root, outside = layout
+    store.begin_upload(UPLOAD_ID)
+    staged = root / ".my-pa" / "staging" / UPLOAD_ID
+    staged.unlink()
+    os.link(outside / "secret.txt", staged)
+    for call in (
+        lambda: store.upload_offset(UPLOAD_ID),
+        lambda: store.append_upload(UPLOAD_ID, len(SECRET), [b"PWNED"], limit=1000),
+        lambda: store.upload_digest(UPLOAD_ID),
+        lambda: store.publish_upload(
+            UPLOAD_ID, "f", length=len(SECRET), sha256=hashlib.sha256(SECRET).hexdigest()
+        ),
+    ):
+        assert _refusal(call) is FilesReason.UNSUPPORTED_ENTRY
+    assert (outside / "secret.txt").read_bytes() == SECRET
+    assert not (root / "f").exists()
+    assert store.discard_upload(UPLOAD_ID) is True
+    assert not staged.exists()
+    assert (outside / "secret.txt").read_bytes() == SECRET
+    assert (outside / "secret.txt").stat().st_nlink == 1
+
+
+def test_a_staging_file_swapped_after_its_lstat_is_not_appended_to(
+    store: FilesystemFileWorkspaceStore, layout: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The appending descriptor must hold the inode `lstat` observed, single-linked."""
+    root, outside = layout
+    store.begin_upload(UPLOAD_ID)
+    staged = root / ".my-pa" / "staging" / UPLOAD_ID
+    real_open = os.open
+
+    def swapping_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        if path == UPLOAD_ID and flags & os.O_WRONLY:
+            staged.unlink()
+            os.link(outside / "secret.txt", staged)
+            (outside / "secret.txt").unlink()  # single-linked again: only identity can tell
+        return real_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", swapping_open)
+    assert (
+        _refusal(lambda: store.append_upload(UPLOAD_ID, len(SECRET), [b"PWNED"], limit=1000))
+        is FilesReason.UNSUPPORTED_ENTRY
+    )
+    monkeypatch.undo()
+    assert staged.read_bytes() == SECRET
+
+
 # --- links the store makes ---------------------------------------------------------------------
 
 

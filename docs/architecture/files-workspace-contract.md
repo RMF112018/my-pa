@@ -79,7 +79,7 @@ Resolution walks one component at a time from a root directory fd. It uses `open
 
 ## 4. Entries and version tokens
 
-- **Kinds:** an entry's `kind` is one of `file`, `directory` or `other`. `other` covers symlinks, FIFOs, sockets and devices. Such entries are **listed but never followed, opened, read, copied, moved, renamed, trashed or replaced**; any operation naming one is refused `unsupported_entry`. A symlink's target is never disclosed.
+- **Kinds:** an entry's `kind` is one of `file`, `directory` or `other`. `other` covers symlinks, FIFOs, sockets and devices. Such entries are **listed but never followed, opened, read, copied, moved, renamed, trashed or replaced**; any operation naming one is refused `unsupported_entry`. A symlink's target is never disclosed. A regular file with more than one hard link is listed and `stat`ed as kind `file`, but its bytes are never read or written (preview, download, `include_sha256`, copy and upload staging refuse it `unsupported_entry`).
 - **Entry shape:** `{workspace_id, path, name, kind, size, modified_at, version}`. `size` is the byte count for files and `null` otherwise. `modified_at` is RFC 3339 UTC from `st_mtime_ns`.
 - **Version token:** `fv1_` followed by 64 lowercase hex characters, the SHA-256 of a canonical encoding of `(st_dev, st_ino, kind, st_size, st_mtime_ns, st_ctime_ns)` taken from `lstat`. It does not include a content hash. SHA-256 of the content is computed only on request (`include_sha256`) and returned as a separate field. The token is opaque, and clients compare it only for equality. Any external edit that changes size, mtime, ctime or inode changes the token. This is fingerprint detection, not proof of unchanged bytes (FW-D04).
 
@@ -104,7 +104,7 @@ Every call takes `workspace_id`. Writes also take `idempotency_key`. Optional ar
 | `files.list` | `path`, `after?`, `page_size?` (≤ 200, default 200) | `entries[]` sorted by name bytes, `next_after` (last name, or null) |
 | `files.stat` | `path`, `include_sha256?` | entry, `sha256?` |
 | `files.search` | `path` (subtree), `query` (1–255 chars, case-insensitive name substring), `page_size?` (≤ 200) | `entries[]`, `truncated` (walk cap or page reached); no continuation |
-| `files.preview` | `path`, `offset?`, `max_bytes?` (≤ 262144), `expected_version?` | `text`, `next_offset` (null at EOF), `version`; non-UTF-8 content gives `binary: true` and no text; the cut never splits a character |
+| `files.preview` | `path`, `offset?`, `max_bytes?` (≤ 262144), `expected_version?` | `text`, `next_offset` (null at EOF), `version`; non-UTF-8 content gives `binary: true` and no text; the cut never splits a character, so a window may exceed `max_bytes` only to return a single character wider than the limit (≤ 4 bytes) |
 | `files.history` | `path?`, `after?`, `page_size?` (≤ 200) | product-recorded preimage versions and trash items for the path (or the workspace), newest first; external edits have no history |
 | `files.download.begin` | `path` + `expected_version?`, or `version_id`; `include_sha256?`; `ttl_seconds?` | `download_id`, `download_token`, `route`, `size`, `version`, `sha256?`, `expires_at` |
 | `files.mkdir` | `path`, `parents?` (default false) | entry |

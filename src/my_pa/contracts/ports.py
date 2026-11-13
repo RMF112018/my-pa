@@ -13275,7 +13275,7 @@ class FileWorkspaceStore(ABC):
     drift as `external_change_detected`, but cannot close the remaining
     check-to-rename window against writers outside the product. A regular file
     with more than one hard link is listed as a `file` but its bytes are never
-    read out (`unsupported_entry`).
+    read out or written, staged uploads included (`unsupported_entry`).
     """
 
     @abstractmethod

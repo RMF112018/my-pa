@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Five hundred and eight Python modules under `src/my_pa` and nine hundred and sixty-five test modules —
+Five hundred and ten Python modules under `src/my_pa` and nine hundred and sixty-seven test modules —
 
-**Current-tree remeasurement (Files workspace WP2, branch `feat/files-workspace`, 2026-11-13):** the two commands below count 508 source modules and 965 test modules: the I11-B 502/962 below plus the six source modules `src/my_pa/domain/files/__init__.py`, `vocabulary.py`, `errors.py`, `paths.py`, `versions.py` and `transfer.py` (same directory) and the three test modules `tests/unit/test_files_paths.py`, `tests/unit/test_files_versions.py` and `tests/unit/test_files_transfer.py`. Previously five hundred and two and nine hundred and sixty-two.
+**Current-tree remeasurement (Files workspace WP3, branch `feat/files-workspace`, 2026-11-13):** the two commands below count 510 source modules and 967 test modules: the WP2 508/965 below plus the two source modules `src/my_pa/infrastructure/file_workspace/__init__.py` and `src/my_pa/infrastructure/file_workspace/store.py` and the two test modules `tests/unit/test_file_workspace_store.py` and `tests/security/test_file_workspace_containment.py`. Previously five hundred and eight and nine hundred and sixty-five.
+
+**Historical remeasurement (Files workspace WP2, branch `feat/files-workspace`, 2026-11-13):** the two commands below counted 508 source modules and 965 test modules: the I11-B 502/962 below plus the six source modules `src/my_pa/domain/files/__init__.py`, `vocabulary.py`, `errors.py`, `paths.py`, `versions.py` and `transfer.py` (same directory) and the three test modules `tests/unit/test_files_paths.py`, `tests/unit/test_files_versions.py` and `tests/unit/test_files_transfer.py`. Previously five hundred and two and nine hundred and sixty-two.
 
 **Historical remeasurement (Financial controlled source F-1 package I11-B, branch `feat/financial-source-domain`, 2026-11-12):** the two commands below counted 502 source modules and 962 test modules: the I11-A 500/959 below plus the two source modules `src/my_pa/infrastructure/financial/__init__.py` and `src/my_pa/infrastructure/financial/synthetic_csv.py` and the three test modules `tests/unit/test_financial_source_parser.py`, `tests/unit/test_financial_source_fixtures.py` and `tests/architecture/test_financial_source_scope.py` (the fixture writer `tests/fixtures/financial_source_writer.py` is not a `test_*.py` module). Previously five hundred and nine hundred and fifty-nine.
 

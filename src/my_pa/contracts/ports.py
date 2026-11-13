@@ -107,6 +107,7 @@ from my_pa.domain.documents.managed import (
 from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
+from my_pa.domain.files.versions import EntryKind as FileEntryKind
 from my_pa.domain.goodnotes.models import (
     GoodNotesPageRaster,
     GoodNotesPageWork,
@@ -13157,3 +13158,240 @@ class ProgramReadUnitOfWork(ABC):
     @abstractmethod
     def program_metrics(self) -> ProgramMetricsRepository:
         """The Program metric reads (S4 sections 3.2, 3.3), on this same snapshot connection."""
+
+
+# --- file workspace (`files.*`, ADR-019, files-workspace contract) ------------------
+
+
+class FileWorkspaceRootError(PortError):
+    """The configured file workspace root is unusable, or overlaps a root it must avoid.
+
+    A configuration defect raised at construction (contract section 9:
+    composition refuses to start), never a request-time answer. Names no path.
+    """
+
+
+class FileWorkspaceUnavailableError(PortError):
+    """The workspace filesystem failed for a reason no section 7 token names.
+
+    An I/O error, a permission the service UID lacks, an unusable control
+    directory. Mapped to `unavailable`; carries no path, name or content.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class FileWorkspaceEntry:
+    """One `lstat` observation of a workspace entry (contract section 4).
+
+    `path` is workspace-relative (never a host path); `size` is the byte count
+    of a file and `None` otherwise; `mtime_ns` is `st_mtime_ns`, formatted as
+    RFC 3339 UTC by the caller; `version` is the `fv1_` token of the same
+    observation. `sha256` is present only when it was asked for.
+    """
+
+    path: str
+    name: str
+    kind: FileEntryKind
+    size: int | None
+    mtime_ns: int
+    version: str
+    sha256: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FileWorkspacePage:
+    """A `files.list` or `files.search` page: `next_after` for list, `truncated` for search."""
+
+    entries: tuple[FileWorkspaceEntry, ...]
+    next_after: str | None = None
+    truncated: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class FileWorkspacePreview:
+    """A `files.preview` window: `text` is `None` exactly when `binary` is true."""
+
+    text: str | None
+    binary: bool
+    next_offset: int | None
+    version: str
+
+
+@dataclass(frozen=True, slots=True)
+class FileWorkspacePublication:
+    """The entry a write produced, and the preimage it preserved when it replaced one."""
+
+    entry: FileWorkspaceEntry
+    preimage_version_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FileWorkspaceTrashing:
+    """What `trash` moved: the entry as it was observed, and its fingerprint in the trash.
+
+    `trashed_version` is the token of the object *at its trash location*, read
+    after the rename (a rename moves `ctime`); `restore` compares against it.
+    """
+
+    entry: FileWorkspaceEntry
+    trashed_version: str
+
+
+class FileWorkspaceReader(ABC):
+    """A file opened for download, bound to the version observed at open.
+
+    The descriptor holds the inode, and each `read_range` and `sha256` first
+    re-reads its fingerprint: an in-place edit, or the inode's unlinking by a
+    rename-replace of the path (which moves its `ctime`), is refused
+    `external_change_detected` rather than served.
+    """
+
+    size: int
+    version: str
+
+    @abstractmethod
+    def read_range(self, start: int, length: int) -> Iterator[bytes]:
+        """Stream `length` bytes from `start` (bounded chunks), after re-checking the version."""
+
+    @abstractmethod
+    def sha256(self) -> str:
+        """SHA-256 hex of the whole held file, after re-checking the version."""
+
+    @abstractmethod
+    def close(self) -> None:
+        """Release the descriptor; idempotent."""
+
+
+class FileWorkspaceStore(ABC):
+    """The contained filesystem of one file workspace root (contract sections 2-6, 8).
+
+    Paths are workspace-relative strings, re-validated here against section 3
+    before any I/O; results never carry a host path. Section 7 conditions are
+    raised as `domain.files.errors.FilesRefusal` (and argument faults as
+    `FilesArgumentError`); anything else is `FileWorkspaceUnavailableError`.
+    Opaque ids (`fwupl_`, `fwver_`, `fwtrs_`) are minted by the caller and only
+    shape-checked here. The per-workspace advisory lock is the caller's; this
+    port re-checks fingerprints immediately before each rename and reports a
+    drift as `external_change_detected`, but cannot close the remaining
+    check-to-rename window against writers outside the product.
+    """
+
+    @abstractmethod
+    def list_directory(
+        self, path: str, *, after: str | None = None, page_size: int = 200
+    ) -> FileWorkspacePage:
+        """Entries of a directory sorted by name bytes, after `after`; reserved names omitted."""
+
+    @abstractmethod
+    def stat(self, path: str, *, include_sha256: bool = False) -> FileWorkspaceEntry:
+        """One entry; `sha256` of a file's content only when asked for."""
+
+    @abstractmethod
+    def search(self, path: str, query: str, *, page_size: int = 200) -> FileWorkspacePage:
+        """A bounded name walk under `path` (ASCII-case-insensitive substring), no link followed."""
+
+    @abstractmethod
+    def preview(
+        self,
+        path: str,
+        *,
+        offset: int = 0,
+        max_bytes: int = 262144,
+        expected_version: str | None = None,
+    ) -> FileWorkspacePreview:
+        """A bounded UTF-8 window of a file whose cut never splits a character."""
+
+    @abstractmethod
+    def mkdir(self, path: str, *, parents: bool = False) -> FileWorkspaceEntry:
+        """Create a directory; an existing final entry is `exists`."""
+
+    @abstractmethod
+    def move(
+        self, path: str, to_path: str, *, expected_version: str | None = None
+    ) -> FileWorkspaceEntry:
+        """Rename or move an entry without overwriting (`files.rename`, `files.move`)."""
+
+    @abstractmethod
+    def copy(
+        self, path: str, to_path: str, *, expected_version: str | None = None
+    ) -> FileWorkspaceEntry:
+        """Copy a file or a bounded directory tree through staging, without overwriting."""
+
+    @abstractmethod
+    def trash(
+        self, path: str, trash_item_id: str, *, expected_version: str | None = None
+    ) -> FileWorkspaceTrashing:
+        """Move an entry (a directory as one item) into the control directory's trash."""
+
+    @abstractmethod
+    def restore(
+        self, trash_item_id: str, to_path: str, *, trashed_version: str
+    ) -> FileWorkspaceEntry:
+        """Move a trashed entry back to `to_path` without overwriting, if its fingerprint held."""
+
+    @abstractmethod
+    def write_text(
+        self,
+        path: str,
+        text: str,
+        *,
+        expected_version: str | None = None,
+        preimage_version_id: str | None = None,
+    ) -> FileWorkspacePublication:
+        """Create (no `expected_version`) or replace (with it and a preimage id) a text file."""
+
+    @abstractmethod
+    def begin_upload(self, upload_id: str) -> None:
+        """Create the empty staging file of an upload."""
+
+    @abstractmethod
+    def upload_offset(self, upload_id: str) -> int:
+        """The staged byte count of an upload (its current `Upload-Offset`)."""
+
+    @abstractmethod
+    def append_upload(
+        self, upload_id: str, offset: int, chunks: Iterable[bytes], *, limit: int
+    ) -> int:
+        """Stream `chunks` onto the staging file at `offset`, fsync, return the new offset.
+
+        `offset` must equal the staged length (`offset_mismatch`). Passing
+        `limit` total bytes is `too_large` and the staged length is put back to
+        `offset`. Bytes appended before an interrupting failure are kept.
+        """
+
+    @abstractmethod
+    def upload_digest(self, upload_id: str) -> tuple[int, str]:
+        """`(length, sha256 hex)` of the staged bytes."""
+
+    @abstractmethod
+    def discard_upload(self, upload_id: str) -> bool:
+        """Remove one staging file; whether there was one."""
+
+    @abstractmethod
+    def reap_uploads(self, upload_ids: Iterable[str]) -> int:
+        """Remove the staging files of these (expired) uploads; how many were removed."""
+
+    @abstractmethod
+    def publish_upload(
+        self,
+        upload_id: str,
+        path: str,
+        *,
+        length: int,
+        sha256: str,
+        expected_version: str | None = None,
+        preimage_version_id: str | None = None,
+    ) -> FileWorkspacePublication:
+        """Publish verified staged bytes: create, or replace with a preserved preimage."""
+
+    @abstractmethod
+    def open_download(self, path: str, *, expected_version: str) -> FileWorkspaceReader:
+        """Open a file for ranged reads; `external_change_detected` if its version moved."""
+
+    @abstractmethod
+    def open_preserved_version(self, version_id: str) -> FileWorkspaceReader:
+        """Open a preimage kept under the control directory's `versions`."""
+
+    @abstractmethod
+    def ensure_free_space(self, required_bytes: int) -> None:
+        """Refuse `quota` unless `required_bytes` would leave the disk reserve free."""

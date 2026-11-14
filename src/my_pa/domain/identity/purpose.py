@@ -504,3 +504,11 @@ class Purpose(StrEnum):
     SCHEDULE_ANALYSIS_AUTHORING = "schedule_analysis_authoring"
     SCHEDULE_ANALYSIS_READ = "schedule_analysis_read"
     SCHEDULE_BASELINE_APPROVAL = "schedule_baseline_approval"
+    # Files workspace (ADR-019, files-workspace contract section 1.2), on `D-91`:
+    # would reuse widen the grant? Every existing purpose would: none names the
+    # one configured workspace root, the third writable filesystem authority. 2
+    # purposes of their own, each implied by no other: `file_workspace_read` for
+    # exactly the 7 `files.*` reads and `file_workspace_authoring` for exactly the
+    # 10 `files.*` writes.
+    FILE_WORKSPACE_READ = "file_workspace_read"
+    FILE_WORKSPACE_AUTHORING = "file_workspace_authoring"

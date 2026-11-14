@@ -601,6 +601,15 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "report_retention_policy_events",
         }
     ),
+    # Files workspace WP4: the files plane (tickets, preimages, trash, receipts).
+    "640aaacc78e8": frozenset(
+        {
+            "file_workspace_transfers",
+            "file_workspace_versions",
+            "file_workspace_trash",
+            "file_workspace_receipts",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

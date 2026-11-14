@@ -47,6 +47,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from tests.schema import lineage_s31_schema_ahead_contract as gap
 from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES
+from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES
 from tests.schema.lineage_s31_schema_ahead_contract import S31_CAPABILITIES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES
 
@@ -68,7 +69,7 @@ SCHEMA: Final = "knowledge"
 REVISION: Final = "023f8f7eb499"
 PREVIOUS: Final = "c5260943d933"
 #: CPM Workbench S5b-1 (`6c2306330ceb`) is additive on this revision.
-HEAD: Final = "b77334135653"
+HEAD: Final = "640aaacc78e8"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261025_023f8f7eb499_record_lineage_s31.py"
 EARLIER: Final = (
@@ -261,7 +262,8 @@ def _left_function_body(name: str) -> str:
 def test_the_revision_is_the_single_head_on_c5260943d933() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "4c37731671fc"
+    assert script.get_revision(HEAD).down_revision == "b77334135653"
+    assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
     assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
     assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
     assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
@@ -270,7 +272,7 @@ def test_the_revision_is_the_single_head_on_c5260943d933() -> None:
     assert script.get_revision(PREVIOUS).down_revision == "6f1476b8da52"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert MIGRATION.name.endswith("_record_lineage_s31.py")
-    assert len(list(MIGRATIONS.glob("*.py"))) == 128
+    assert len(list(MIGRATIONS.glob("*.py"))) == 129
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -401,6 +403,8 @@ def test_at_vocabulary_adds_exactly_the_s31_names() -> None:
         - S5B2_CAPABILITIES
         # Schedule Scenarios S6-3: admitted by `b77334135653`.
         - S63_CAPABILITIES
+        # Files workspace WP4: admitted by its revision (the head).
+        - FILES_CAPABILITIES
         # And WP03's five, the head's too.
         - {
             "reports.publish",

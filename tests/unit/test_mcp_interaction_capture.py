@@ -36,6 +36,7 @@ from my_pa.adapters.mcp_interaction_capture import (
     BODY_CAP_BYTES,
     BUFFER_CEILING_BYTES,
     INTERACTION_COLUMNS,
+    OMITTED,
     REDACTED,
     CapturedExchange,
     InteractionRecorder,
@@ -2108,3 +2109,252 @@ def test_the_worker_reports_whether_its_memory_cap_is_in_force() -> None:
         assert uncapped.memory_limited is False
     finally:
         uncapped.close()
+
+
+# ---- files workspace (files-workspace contract section 11, WP5) -------------------
+
+_FILE_TEXT = "Synthetic file body that must never be logged 7f3a"
+
+
+def _files_call(name: str, arguments: dict[str, object]) -> dict[str, object]:
+    return {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {"name": name, "arguments": arguments},
+    }
+
+
+def _files_result(envelope: dict[str, object]) -> dict[str, object]:
+    return {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+            "content": [{"type": "text", "text": json.dumps(envelope)}],
+            "structuredContent": envelope,
+            "isError": False,
+        },
+    }
+
+
+@pytest.mark.parametrize("facade", [False, True])
+def test_the_write_text_argument_is_omitted_from_the_stored_request(facade: bool) -> None:
+    payload = {"workspace_id": "mcp", "path": "n.md", "text": _FILE_TEXT}
+    request = (
+        _files_call(
+            WRITE_TOOL, {"capability": "files.write_text", "arguments": {"payload": payload}}
+        )
+        if facade
+        else _files_call("files.write_text", {"payload": payload})
+    )
+    row = _row(_exchange(request, _files_result({"result": {"replayed": False}})))
+    assert row["capability"] == "files.write_text"
+    stored = _serialized(row)
+    assert _FILE_TEXT not in stored
+    assert OMITTED in stored
+    assert row["request_sha256"] != hashlib.sha256(json.dumps(request).encode()).hexdigest()
+
+
+def test_the_preview_text_result_is_omitted_from_the_stored_response() -> None:
+    request = _files_call("files.preview", {"payload": {"workspace_id": "mcp", "path": "n.md"}})
+    envelope = {"result": {"text": _FILE_TEXT, "binary": False, "next_offset": None}}
+    row = _row(_exchange(request, _files_result(envelope)))
+    assert row["capability"] == "files.preview"
+    assert row["outcome"] == "ok"
+    assert _FILE_TEXT not in _serialized(row)
+
+
+def test_a_preview_response_that_is_not_json_is_not_stored() -> None:
+    request = _files_call("files.preview", {"payload": {"workspace_id": "mcp", "path": "n.md"}})
+    row = _row(_exchange(request, raw_response=_FILE_TEXT.encode()))
+    assert _FILE_TEXT not in _serialized(row)
+    assert row["response_body_text"] == OMITTED
+
+
+def test_other_capabilities_keep_their_text_and_the_token_redaction_still_applies() -> None:
+    request = _files_call("capture.create", {"payload": {"text": "an ordinary capture"}})
+    upload = _files_call("files.upload.begin", {"payload": {"workspace_id": "mcp", "path": "u"}})
+    begun = {"result": {"upload_id": "fwupl_synthetic01", "upload_token": "gfwtk_" + "a" * 64}}
+    assert "an ordinary capture" in _serialized(_row(_exchange(request, None)))
+    row = _serialized(_row(_exchange(upload, _files_result(begun))))
+    assert "gfwtk_" + "a" * 64 not in row
+    assert REDACTED in row
+
+
+def _unresolved_request(form: str, call: dict[str, object]) -> tuple[bytes, bool]:
+    """`call` as a request body whose capability the row builder cannot resolve."""
+    encoded = json.dumps(call).encode()
+    if form == "batch":
+        return json.dumps([call, _call("capture.create", {})]).encode(), False
+    if form == "invalid":
+        return encoded + b",", False
+    return encoded[: len(encoded) - 3], True  # "overflow": a prefix past the buffer
+
+
+_UNRESOLVED_FORMS = ["batch", "invalid", "overflow"]
+
+
+@pytest.mark.parametrize("facade", [False, True])
+@pytest.mark.parametrize("form", _UNRESOLVED_FORMS)
+def test_an_unresolved_request_naming_write_text_is_omitted(form: str, facade: bool) -> None:
+    payload = {"workspace_id": "mcp", "path": "n.md", "text": _FILE_TEXT}
+    call = (
+        _files_call(
+            WRITE_TOOL, {"capability": "files.write_text", "arguments": {"payload": payload}}
+        )
+        if facade
+        else _files_call("files.write_text", {"payload": payload})
+    )
+    raw, overflowed = _unresolved_request(form, call)
+    row = _row(_exchange(raw_request=raw, request_overflowed=overflowed))
+    assert row["capability"] is None
+    stored = _serialized(row)
+    assert _FILE_TEXT not in stored
+    assert OMITTED in stored
+
+
+@pytest.mark.parametrize("facade", [False, True])
+@pytest.mark.parametrize("form", _UNRESOLVED_FORMS)
+def test_an_unresolved_request_naming_preview_omits_the_response_text(
+    form: str, facade: bool
+) -> None:
+    payload = {"workspace_id": "mcp", "path": "n.md"}
+    call = (
+        _files_call(READ_TOOL, {"capability": "files.preview", "arguments": {"payload": payload}})
+        if facade
+        else _files_call("files.preview", {"payload": payload})
+    )
+    raw, overflowed = _unresolved_request(form, call)
+    envelope = {"result": {"text": _FILE_TEXT, "binary": False, "next_offset": None}}
+    response = [_files_result(envelope)] if form == "batch" else _files_result(envelope)
+    row = _row(_exchange(response=response, raw_request=raw, request_overflowed=overflowed))
+    assert row["capability"] is None
+    assert _FILE_TEXT not in _serialized(row)
+
+
+@pytest.mark.parametrize("form", _UNRESOLVED_FORMS)
+def test_an_unresolved_request_naming_neither_keeps_its_text(form: str) -> None:
+    raw, overflowed = _unresolved_request(
+        form, _files_call("capture.create", {"payload": {"title": "an ordinary capture"}})
+    )
+    row = _row(
+        _exchange(
+            response=_tool_result("an ordinary reply", is_error=False),
+            raw_request=raw,
+            request_overflowed=overflowed,
+        )
+    )
+    stored = _serialized(row)
+    assert "an ordinary capture" in stored
+    if form == "batch":
+        assert "an ordinary reply" in stored
+        assert OMITTED not in stored
+    else:
+        # Fail-closed: an unparsed or overflowed request cannot rule out a
+        # `files.preview`, so the response `text` is omitted (the request has no
+        # `text` key and is kept).
+        assert "an ordinary reply" not in stored
+        assert row["request_body_text"] != OMITTED
+
+
+@pytest.mark.parametrize("form", ["invalid", "overflow"])
+def test_an_unparsed_request_omits_any_response_text(form: str) -> None:
+    """A `files.preview` whose name the capture cannot see still has its text omitted.
+
+    The name lies past the buffer cut (overflow) or is `\\u`-escaped in a body that
+    is not JSON (invalid), so nothing in the captured request names the
+    capability; the response's `text` is omitted all the same.
+    """
+    call = _files_call("files.preview", {"payload": {"workspace_id": "mcp", "path": "n.md"}})
+    encoded = json.dumps(call).encode().replace(b"files.preview", b"files.pr\\u0065view")
+    raw, overflowed = (encoded + b",", False) if form == "invalid" else (encoded[:20], True)
+    assert b"files.preview" not in raw
+    envelope = {"result": {"text": _FILE_TEXT, "binary": False, "next_offset": None}}
+    row = _row(
+        _exchange(response=_files_result(envelope), raw_request=raw, request_overflowed=overflowed)
+    )
+    assert row["capability"] is None
+    stored = _serialized(row)
+    assert _FILE_TEXT not in stored
+    assert OMITTED in stored
+
+
+def test_an_unresolved_batch_naming_neither_keeps_a_text_value() -> None:
+    raw, overflowed = _unresolved_request(
+        "batch", _files_call("capture.create", {"payload": {"text": "an ordinary capture"}})
+    )
+    stored = _serialized(_row(_exchange(raw_request=raw, request_overflowed=overflowed)))
+    assert "an ordinary capture" in stored
+    assert OMITTED not in stored
+
+
+#: Past the request limit (762,288 bytes): a client that keeps sending is cut
+#: off there, and only that prefix reaches the row builder.
+_REQUEST_LIMIT = 762_288
+
+
+def _name_after_text(facade: bool, *, name: str = "files.write_text") -> bytes:
+    """A `files.write_text` call whose name is serialised after a large `text`."""
+    payload = {"workspace_id": "mcp", "path": "n.md", "text": _FILE_TEXT + "x" * 900_000}
+    params: dict[str, object] = (
+        {
+            "arguments": {"arguments": {"payload": payload}, "capability": name},
+            "name": WRITE_TOOL,
+        }
+        if facade
+        else {"arguments": {"payload": payload}, "name": name}
+    )
+    call = {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params}
+    return json.dumps(call).encode()
+
+
+@pytest.mark.parametrize("facade", [False, True])
+def test_an_overflowed_prefix_cut_before_the_name_omits_the_text(facade: bool) -> None:
+    raw = _name_after_text(facade)[:_REQUEST_LIMIT]
+    assert b"files.write_text" not in raw
+    row = _row(_exchange(raw_request=raw, request_overflowed=True))
+    assert row["capability"] is None
+    assert _FILE_TEXT not in _serialized(row)
+    assert row["request_body_text"] == OMITTED
+
+
+@pytest.mark.parametrize("facade", [False, True])
+def test_an_invalid_body_with_an_escaped_name_after_the_text_omits_the_text(
+    facade: bool,
+) -> None:
+    raw = _name_after_text(facade).replace(b"files.write_text", b"files.write\\u005ftext") + b","
+    assert b"files.write_text" not in raw
+    row = _row(_exchange(raw_request=raw))
+    assert row["capability"] is None
+    assert _FILE_TEXT not in _serialized(row)
+    assert row["request_body_text"] == OMITTED
+
+
+@pytest.mark.parametrize("form", ["invalid", "overflow"])
+def test_an_unparsed_request_that_may_hold_a_text_key_is_omitted(form: str) -> None:
+    """Fail-closed: an unparsed body is kept only if it can hold no `text` key."""
+    for arguments in (
+        {"payload": {"text": _FILE_TEXT}},
+        {"payload": {"t\\u0065xt": _FILE_TEXT}},
+    ):
+        raw, overflowed = _unresolved_request(form, _files_call("capture.create", arguments))
+        raw = raw.replace(b"\\\\u0065", b"\\u0065")
+        row = _row(_exchange(raw_request=raw, request_overflowed=overflowed))
+        assert _FILE_TEXT not in _serialized(row)
+        assert row["request_body_text"] == OMITTED
+    utf16 = json.dumps(_files_call("capture.create", {"payload": {"text": _FILE_TEXT}}))
+    row = _row(_exchange(raw_request=utf16.encode("utf-16-le")[:-2], request_overflowed=True))
+    assert row["request_body_text"] == OMITTED
+
+
+def test_the_unparsed_body_check_is_cheap_and_total_on_odd_input() -> None:
+    bodies = [
+        b"[" * 200_000 + b"]" * 200_000 + b",",
+        b"\xff\xfe" * 1024 + b"text",
+        b"x" * (16 * 1024 * 1024),
+    ]
+    for raw in bodies:
+        started = time.perf_counter()
+        row = _row(_exchange(raw_request=raw, request_overflowed=True))
+        assert time.perf_counter() - started < 10
+        assert row["capability"] is None

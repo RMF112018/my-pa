@@ -87,7 +87,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the 281 capabilities.
+the 298 capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -191,6 +191,7 @@ from my_pa.application.entity_reenrichment import (
     ProductionReenrichmentCaller,
     ReenrichmentWork,
 )
+from my_pa.application.file_workspace import FileWorkspaceApplication
 from my_pa.application.goodnotes_orchestrator import rollout_stage_permits
 from my_pa.application.native_sources import NativeSourceController
 from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
@@ -205,6 +206,7 @@ from my_pa.bootstrap.apple_machine_control import SqlAppleMachineControl
 from my_pa.bootstrap.goodnotes_rollout import allowed_activation_steps
 from my_pa.bootstrap.settings import AuthMode, Settings
 from my_pa.contracts.ports import (
+    FileWorkspaceStore,
     ManagedByteStore,
     ProgramReadUnitOfWork,
     ReportContentNamespace,
@@ -231,6 +233,7 @@ from my_pa.domain.identity.webauthn_relying_party import (
 from my_pa.domain.policy.decision import POLICY_VERSION
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.file_workspace.store import FilesystemFileWorkspaceStore
 from my_pa.infrastructure.jobs.reenrichment import (
     claim_reenrichment_work,
     settle_reenrichment_work,
@@ -293,6 +296,7 @@ __all__ = [
     "RemoteClientAuthenticator",
     "build_gateway_runtime",
     "entra_authenticator",
+    "files_workspace_store",
     "local_principal",
     "remote_client_authenticator",
     "report_content_backup_store",
@@ -669,6 +673,49 @@ def report_transfer_staging(
         Path(configured),
         source_roots=[Path(root) for root in source_roots],
         managed_documents_root=Path(managed) if managed else None,
+    )
+
+
+def files_workspace_store(settings: Settings, work_engine: Engine) -> FileWorkspaceStore | None:
+    """The files workspace store, or `None` when no workspace root is configured.
+
+    `None` is the plane absent (files-workspace contract section 9): an unset
+    or blank `MY_PA_FILES_WORKSPACE_ROOT` composes no store, serves no
+    `files.*` name and leaves the ChatLLM `FILES_WORKSPACE` prerequisite false.
+    A configured root is handed to `FilesystemFileWorkspaceStore` with the
+    configured source roots, the managed document root and the report content
+    root, whose constructor refuses to start unless the root exists, is a
+    directory and not a link, and neither is, contains nor lies inside any of
+    them -- a misconfiguration the operator must fix, never a quietly absent
+    plane. The setting reaches this function and nothing else.
+    """
+    configured = settings.files_workspace_root.strip()
+    if not configured:
+        return None
+    with work_engine.begin() as connection:
+        source_roots = configured_source_roots(connection)
+    managed = settings.managed_document_root.strip()
+    report = settings.report_content_root.strip()
+    return FilesystemFileWorkspaceStore(
+        Path(configured),
+        source_roots=[Path(root) for root in source_roots],
+        managed_roots=[Path(managed)] if managed else [],
+        report_roots=[Path(report)] if report else [],
+        disk_reserve_bytes=settings.files_disk_reserve_bytes,
+    )
+
+
+def _file_workspace_application(
+    settings: Settings, work_engine: Engine
+) -> FileWorkspaceApplication | None:
+    """The `files.*` handlers over the composed store, or `None` with no store."""
+    store = files_workspace_store(settings, work_engine)
+    if store is None:
+        return None
+    return FileWorkspaceApplication(
+        store,
+        workspace_id=settings.files_workspace_id,
+        max_upload_bytes=settings.files_max_upload_bytes,
     )
 
 
@@ -1435,6 +1482,13 @@ def build_gateway_runtime(
             # WP06 T13/T14: the same root's `transfer` staging (`None` when no
             # root: the four transfer uploads are withheld).
             report_transfer_staging=report_transfer_staging(settings, work_engine),
+            # Files workspace (contract section 9): composed only when
+            # `MY_PA_FILES_WORKSPACE_ROOT` is set and never in a restricted
+            # composition -- an injected `data_engine` is a fixed MCP database
+            # role holding no privilege on the files plane tables.
+            file_workspace=(
+                _file_workspace_application(settings, work_engine) if data_engine is None else None
+            ),
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, control_engine) if entra else None,

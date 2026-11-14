@@ -82,6 +82,11 @@ from tests.contract.test_transport_parity import (
     staged_participation,
     staged_project_entity,
 )
+from tests.files_workspace_samples import (
+    FILES_WORKSPACE_CAPABILITIES,
+    files_commands,
+    files_payloads,
+)
 from tests.schedule_scenario_samples import (
     SCHEDULE_SCENARIO_CAPABILITIES,
     scenario_commands,
@@ -556,6 +561,8 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.SCHEDULE_CHANGES_LIST,
         # Schedule Scenarios S6-3: the 26 plane names (scopeless, plane switch off).
         *SCHEDULE_SCENARIO_CAPABILITIES,
+        # Files workspace WP5: the 17 `files.*` names (no workspace root here).
+        *FILES_WORKSPACE_CAPABILITIES,
         # Reports Modernization WP06 T14: the 4 transfer uploads need a report
         # content store and the transfer staging; this harness composes neither.
         Capability.REPORTS_TRANSFER_BEGIN,
@@ -2015,6 +2022,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         },
         # Schedule Scenarios S6-3: synthetic plane samples.
         **scenario_payloads("http"),
+        # Files workspace WP5: synthetic plane samples.
+        **files_payloads("http"),
     }
 
 
@@ -3380,6 +3389,8 @@ def commands_for(
         ),
         # Schedule Scenarios S6-3: synthetic plane samples.
         **scenario_commands("http"),
+        # Files workspace WP5: synthetic plane samples.
+        **files_commands("http"),
     }
 
 

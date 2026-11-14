@@ -53,7 +53,7 @@ def test_section_8_limits_and_section_7_tokens() -> None:
     assert DISK_RESERVE_BYTES == 21_474_836_480
     assert MAX_UPLOAD_CHUNK_BYTES == 33_554_432
     assert MAX_PREVIEW_BYTES == 262_144
-    assert MAX_WRITE_TEXT_BYTES == 1_048_576
+    assert MAX_WRITE_TEXT_BYTES == 122_880
     assert PAGE_SIZE == 200
     assert (SEARCH_WALK_MAX_ENTRIES, SEARCH_WALK_MAX_DEPTH) == (20_000, 32)
     assert (TICKET_TTL_DEFAULT_SECONDS, TICKET_TTL_MAX_SECONDS) == (3600, 86400)

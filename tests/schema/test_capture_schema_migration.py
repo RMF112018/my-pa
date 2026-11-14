@@ -28,8 +28,8 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with two hundred and eighty-one capabilities and
-sixty-eight purposes now declared in the domain. If this reddens, the freeze has been undone
+emits what it emitted on the day it merged, with two hundred and ninety-eight capabilities and
+seventy purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -67,6 +67,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
+from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.knowledge_schema_ahead_contract import (
     GAP_ROWS,
     KNOWLEDGE_WP_HEAD,
@@ -351,6 +352,21 @@ LINEAGE_TRIGGERS: Final[frozenset[str]] = frozenset(
         "a_report_retention_event_continues_its_predecessor",
         # WP06.
         "a_report_transfer_chunk_continues_its_session",
+        # Files workspace WP4: append-only on the preimages and receipts, a
+        # TRUNCATE refusal on all four tables, and the two guarded updates.
+        "file_workspace_versions_are_append_only",
+        "file_workspace_receipts_are_append_only",
+        *(
+            f"{table}_refuse_truncate"
+            for table in (
+                "file_workspace_transfers",
+                "file_workspace_versions",
+                "file_workspace_trash",
+                "file_workspace_receipts",
+            )
+        ),
+        "a_file_workspace_transfer_moves_forward",
+        "a_file_workspace_trash_item_is_restored_once",
     }
 )
 
@@ -718,6 +734,8 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         # Schedule Scenarios S6-3, admitted by revision B (`b77334135653`) with the
         # domain declaring every name in the same change.
         *S63_CAPABILITIES,
+        # Files workspace WP4, admitted by its revision ahead of the domain (WP5).
+        *FILES_CAPABILITIES,
     }
 )
 
@@ -971,14 +989,17 @@ CHECKED_VOCABULARY: Final[tuple[tuple[str, str, frozenset[str]], ...]] = (
         "capability_is_known",
         HEAD_CAPABILITIES_DECLARED_BY_DOMAIN
         | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
-        | lineage_admitted_ahead("capability"),
+        | lineage_admitted_ahead("capability")
+        # Files workspace WP4: admitted by its revision, declared by WP5.
+        | FILES_CAPABILITIES,
     ),
     (
         "audit_events",
         "purpose_is_known",
         frozenset(p.value for p in Purpose)
         | PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN
-        | lineage_admitted_ahead("purpose"),
+        | lineage_admitted_ahead("purpose")
+        | FILES_PURPOSES,
     ),
     ("audit_events", "audit_outcome_is_known", frozenset(o.value for o in AuditOutcome)),
     ("audit_events", "denial_reason_is_known", frozenset(d.value for d in DenialReason)),
@@ -1152,6 +1173,11 @@ def test_the_schema_ahead_gap_matches_the_knowledge_wp_head() -> None:
     # The record lineage S1 revision admits its names ahead of the domain on the
     # same terms (`tests/schema/lineage_schema_ahead_contract.py`).
     frozen_capabilities, frozen_purposes = _latest_frozen_audit_vocabulary()
+    # Files workspace WP4 admits the `files.*` names ahead of the domain on its
+    # own terms (`tests/schema/files_workspace_vocabulary_contract.py`), set aside
+    # here whether or not the domain declares them yet (WP5).
+    frozen_capabilities -= FILES_CAPABILITIES
+    frozen_purposes -= FILES_PURPOSES
     assert frozen_capabilities - HEAD_CAPABILITIES_DECLARED_BY_DOMAIN == row[
         "capability"
     ] | lineage_admitted_ahead("capability")
@@ -1368,6 +1394,7 @@ def test_downgrading_this_revision_restores_the_previous_vocabulary(
             HEAD_CAPABILITIES_DECLARED_BY_DOMAIN
             | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
             | lineage_admitted_ahead("capability")
+            | FILES_CAPABILITIES
         )
 
         command.downgrade(_config(), ENROLLMENT_OBJECTS_REVISION)
@@ -1416,6 +1443,7 @@ def test_stopping_at_the_capture_revision_emits_the_twelve_it_merged_with(
             HEAD_CAPABILITIES_DECLARED_BY_DOMAIN
             | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
             | lineage_admitted_ahead("capability")
+            | FILES_CAPABILITIES
         )
         assert _admitted(engine, "capability_is_known") == admitted_at_head
         assert _tables(engine) >= PROPOSAL_TABLES

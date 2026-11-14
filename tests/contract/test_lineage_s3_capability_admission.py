@@ -238,7 +238,7 @@ def test_s3_capabilities_are_operator_decision_required() -> None:
         assert policy.exclusion_rationale is None
         assert not is_operator_only(capability)
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
 
 
 def test_backfill_capabilities_are_operator_only_and_control_plane_excluded() -> None:
@@ -394,6 +394,10 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
         for capability in Capability
         if capability.value.startswith("reports.transfer.")
     }
+    # Files workspace WP5: its 17 `files.*` names are new.
+    lineage |= {
+        capability.value for capability in Capability if capability.value.startswith("files.")
+    }
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
@@ -421,7 +425,9 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     # CPM Workbench S5b-2 appends its 2 purposes after S4's (contract 3.12),
     # and Reports Modernization WP03 its `report_lifecycle` after those, and
     # WP05b `report_hold` and `report_retention` after that.
-    assert published[-13:] == [
+    # Files workspace WP5 appends its 2 purposes after S6-3's (contract 1.2).
+    assert published[-2:] == ["file_workspace_read", "file_workspace_authoring"]
+    assert published[-15:-2] == [
         *basis_tail,
         "lineage_backfill",
         "program_reporting_read",

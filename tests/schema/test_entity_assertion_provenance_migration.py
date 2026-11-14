@@ -330,6 +330,11 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "report_transfer_chunks",
         "report_hold_events",
         "report_retention_policy_events",
+        # Files workspace WP4 stacks the four files plane tables.
+        "file_workspace_transfers",
+        "file_workspace_versions",
+        "file_workspace_trash",
+        "file_workspace_receipts",
     }
     assert {
         "entities",

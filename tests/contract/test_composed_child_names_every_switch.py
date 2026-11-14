@@ -75,6 +75,10 @@ _COMPOSED_DEPENDENCY_ATTRIBUTES: Final[frozenset[str]] = frozenset(
         "_scenario_unit_of_work",
         "_scenario_cpm_runner",
         "_scenario_record_builders",
+        # Files workspace (files-workspace contract section 9): the handlers over
+        # the store `bootstrap/gateway.py` composes from `MY_PA_FILES_WORKSPACE_ROOT`
+        # (a root, not a switch).
+        "_file_workspace",
     }
 )
 

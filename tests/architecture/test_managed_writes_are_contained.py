@@ -112,6 +112,13 @@ CONTAINED_STORES: Final = frozenset(
 #: managed or source root. A module added here is a decision someone has to
 #: write down.
 REGISTERED_WRITERS: Final[dict[str, str]] = {
+    "src/my_pa/application/file_workspace.py": (
+        "Files workspace WP5: the detector matches the handlers' calls of the "
+        "`FileWorkspaceStore` port's own `mkdir`, `copy`, `move` and `write_text` "
+        "methods. This module opens, writes and renames nothing itself; every byte "
+        "and rename is the contained store's (FILE_WORKSPACE_STORE), behind its "
+        "root, overlap and dirfd containment, and never a managed or source root."
+    ),
     "src/my_pa/infrastructure/goodnotes/local.py": (
         "BoundedLocalOCRTranscriber._run_bounded calls os.write only on stdin.fileno() "
         "from its own Popen(stdin=PIPE), streaming bounded admitted input to the isolated "
@@ -997,3 +1004,72 @@ def test_the_report_content_root_setting_is_its_own_and_reaches_only_the_store()
     command = (ROOT / "apps/cli/report_content.py").read_text(encoding="utf-8")
     assert "report_content_backup_store" in command
     assert "report_content_store" in command
+
+
+def test_the_files_workspace_root_setting_is_its_own_and_reaches_only_the_store() -> None:
+    """Files workspace WP5 (contract section 9): the workspace root, read as the others are.
+
+    Empty by default (no store is composed and no `files.*` name is served),
+    read only by the settings and the composition root, which builds
+    `FilesystemFileWorkspaceStore` from it with the configured source roots, the
+    managed document root and the report content root -- so the resolution and
+    all three overlap refusals run wherever the setting is read.
+    """
+    from my_pa.bootstrap.settings import Settings
+
+    assert Settings.model_fields["files_workspace_root"].default == "", (
+        "the files workspace root now has a default location. An unconfigured "
+        "process would then acquire a writable workspace by forgetting something"
+    )
+    readers = sorted(
+        _relative(path)
+        for path in _python_files()
+        if "files_workspace_root" in path.read_text(encoding="utf-8")
+    )
+    assert readers == ["src/my_pa/bootstrap/gateway.py", "src/my_pa/bootstrap/settings.py"], (
+        f"{readers} read the files workspace root setting; each reader must build "
+        "the store, which is where containment and the overlap refusals live"
+    )
+    # Scoped to the one function, not the module: `source_roots=` is passed to
+    # every other store the composition root builds, so a textual search
+    # would pass with the keyword missing from the files workspace store.
+    composition = ast.parse((ROOT / "src/my_pa/bootstrap/gateway.py").read_text(encoding="utf-8"))
+    functions = [
+        node
+        for node in ast.walk(composition)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    ]
+    setting_readers = sorted(
+        function.name
+        for function in functions
+        if any(
+            isinstance(node, ast.Attribute) and node.attr == "files_workspace_root"
+            for node in ast.walk(function)
+        )
+    )
+    assert setting_readers == ["files_workspace_store"], (
+        f"{setting_readers} read the files workspace root in the composition root; "
+        "only `files_workspace_store` may, as it builds the store from it"
+    )
+    constructions = {
+        function.name: [
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "FilesystemFileWorkspaceStore"
+        ]
+        for function in functions
+    }
+    builders = sorted(name for name, calls in constructions.items() if calls)
+    assert builders == ["files_workspace_store"], (
+        f"{builders} construct `FilesystemFileWorkspaceStore` in the composition root; "
+        "only `files_workspace_store` may, with every overlap root"
+    )
+    (call,) = constructions["files_workspace_store"]
+    keywords = {keyword.arg for keyword in call.keywords}
+    for keyword in ("source_roots", "managed_roots", "report_roots"):
+        assert keyword in keywords, (
+            f"the composition root builds the files workspace store without `{keyword}=`, "
+            "so that overlap refusal compares against nothing"
+        )

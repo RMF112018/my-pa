@@ -173,6 +173,24 @@ from my_pa.domain.documents.managed import (
 from my_pa.domain.extraction.coverage import LimitationReason
 from my_pa.domain.extraction.quarantine import QuarantineReason, QuarantineReviewState
 from my_pa.domain.extraction.text import SUPPORTED_MEDIA_TYPES, ExtractionStatus
+from my_pa.domain.files.transfer import (
+    DOWNLOAD_ID_PREFIX as FILE_DOWNLOAD_ID_PREFIX,
+)
+from my_pa.domain.files.transfer import (
+    RECEIPT_ID_PREFIX as FILE_RECEIPT_ID_PREFIX,
+)
+from my_pa.domain.files.transfer import (
+    TRASH_ITEM_ID_PREFIX as FILE_TRASH_ITEM_ID_PREFIX,
+)
+from my_pa.domain.files.transfer import (
+    UPLOAD_ID_PREFIX as FILE_UPLOAD_ID_PREFIX,
+)
+from my_pa.domain.files.transfer import (
+    VERSION_ID_PREFIX as FILE_VERSION_ID_PREFIX,
+)
+from my_pa.domain.files.versions import VERSION_TOKEN_PATTERN as FILE_VERSION_TOKEN_PATTERN
+from my_pa.domain.files.vocabulary import MAX_PATH_BYTES as MAX_FILE_PATH_BYTES
+from my_pa.domain.files.vocabulary import TICKET_TTL_MAX_SECONDS as FILE_TICKET_TTL_MAX_SECONDS
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.intelligence.catalog import (
@@ -21299,5 +21317,310 @@ schedule_scenario_write_refusals = Table(
         "decision_channel",
         "asserting_client_id",
         "refused_at",
+    ),
+)
+
+
+# ---- files workspace (ADR-019; files-workspace contract; revision 640aaacc78e8) ----
+#
+# The four plane tables, each partitioned by `owner_principal_id` (the report
+# transfer precedent). No column holds a file body, a `write_text` text, a
+# preview text, a raw ticket token or a host path (contract section 11): a
+# ticket keeps only its token's SHA-256 digest, and every path is
+# workspace-relative. The opaque id kinds (`fwupl`, `fwdnl`, `fwver`, `fwtrs`,
+# `fwrcp`) are the domain's prefixes until WP5 appends the `IdKind` members.
+
+#: A workspace-relative path: 1 to 4096 bytes, no leading or trailing `/`
+#: (contract section 3 rules 1 and 4; the other rules are the domain's).
+_FILE_PATH_SHAPE: Final = (
+    "octet_length({column}) BETWEEN 1 AND " + str(MAX_FILE_PATH_BYTES) + " AND "
+    "left({column}, 1) <> '/' AND right({column}, 1) <> '/'"
+)
+#: Contract section 2: the workspace alias, a lower-case token.
+_FILE_WORKSPACE_ALIAS: Final = "^[a-z][a-z0-9_]{0,63}$"
+#: The 10 write capabilities a receipt can record (contract section 1.1, rows
+#: 8-17). Literal until WP5 appends them to `Capability`.
+FILE_RECEIPT_CAPABILITIES: Final = frozenset(
+    {
+        "files.mkdir",
+        "files.copy",
+        "files.upload.begin",
+        "files.upload.abort",
+        "files.rename",
+        "files.move",
+        "files.trash",
+        "files.restore",
+        "files.upload.finalize",
+        "files.write_text",
+    }
+)
+#: The capabilities that replace a file's content, and so preserve a preimage.
+FILE_VERSION_CAUSES: Final = frozenset({"files.upload.finalize", "files.write_text"})
+FILE_TRANSFER_KINDS: Final = frozenset({"download", "upload"})
+FILE_TRANSFER_STATES: Final = frozenset({"aborted", "expired", "finalized", "open"})
+#: Contract section 4: an `other` entry is never trashed.
+FILE_TRASH_KINDS: Final = frozenset({"directory", "file"})
+#: A receipt's result: a JSON object of at most 16 KiB (an entry and opaque ids).
+MAX_FILE_RECEIPT_RESULT_BYTES: Final = 16384
+
+
+def _file_id(column: str, prefix: str) -> CheckConstraint:
+    return CheckConstraint(
+        f"{column} ~ '^{prefix}_{_IDENTIFIER_SUFFIX}$'", name=f"{column}_is_an_opaque_identifier"
+    )
+
+
+def _file_path(column: str, *, name: str) -> CheckConstraint:
+    return CheckConstraint(_FILE_PATH_SHAPE.format(column=column), name=name)
+
+
+def _file_version(column: str, *, name: str, nullable: bool = False) -> CheckConstraint:
+    shape = FILE_VERSION_TOKEN_PATTERN.removeprefix("^").removesuffix("$")
+    predicate = f"{column} ~ '^{shape}$'"
+    return CheckConstraint(f"{column} IS NULL OR {predicate}" if nullable else predicate, name=name)
+
+
+def _file_alias(*, name: str) -> CheckConstraint:
+    return CheckConstraint(f"workspace_id ~ '{_FILE_WORKSPACE_ALIAS}'", name=name)
+
+
+#: One upload or download ticket (contract sections 1.4, 5, 8, 10). An upload
+#: binds its target path, its `expected_version` (absent: create only) and any
+#: declared size and SHA-256; `received_bytes` is its staged offset. A download
+#: binds the version it serves (and, for a preimage, `preserved_version_id`),
+#: never moves its offset and is only ever `open` or `expired`. Only an `open`
+#: ticket changes, its declaration never, its offset never backwards, and no
+#: ticket is deleted (`a_file_workspace_transfer_moves_forward`).
+file_workspace_transfers = Table(
+    "file_workspace_transfers",
+    METADATA,
+    Column("transfer_id", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("client_ref", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("workspace_id", Text, nullable=False),
+    Column("path", Text, nullable=False),
+    Column("expected_version", Text),
+    Column("preserved_version_id", Text),
+    Column("declared_size", BigInteger),
+    Column("declared_sha256", Text),
+    Column("received_bytes", BigInteger, nullable=False),
+    Column("token_digest", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("finalized_at", DateTime(timezone=True)),
+    PrimaryKeyConstraint("transfer_id", name="file_workspace_transfers_pkey"),
+    CheckConstraint(
+        f"transfer_id ~ '^({FILE_UPLOAD_ID_PREFIX}|{FILE_DOWNLOAD_ID_PREFIX})_"
+        f"{_IDENTIFIER_SUFFIX}$'",
+        name="transfer_id_is_an_opaque_identifier",
+    ),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _file_id("preserved_version_id", FILE_VERSION_ID_PREFIX),
+    CheckConstraint(
+        f"client_ref ~ '{_REPORT_TRANSFER_CLIENT_REF_PATTERN}'",
+        name="a_file_transfer_is_bound_to_a_client",
+    ),
+    _one_of("kind", FILE_TRANSFER_KINDS, name="a_file_transfer_kind_is_known"),
+    CheckConstraint(
+        f"(kind = 'upload') = (left(transfer_id, 6) = '{FILE_UPLOAD_ID_PREFIX}_')",
+        name="a_file_transfer_id_names_its_kind",
+    ),
+    _file_alias(name="a_file_transfer_workspace_is_an_alias"),
+    _file_path("path", name="a_file_transfer_path_is_bounded"),
+    _file_version("expected_version", name="a_file_transfer_version_is_a_token", nullable=True),
+    CheckConstraint(
+        "kind = 'upload' OR (expected_version IS NOT NULL AND declared_size IS NOT NULL)",
+        name="a_file_download_is_bound_to_a_version",
+    ),
+    CheckConstraint(
+        "kind = 'download' OR preserved_version_id IS NULL",
+        name="only_a_file_download_serves_a_preserved_version",
+    ),
+    CheckConstraint(
+        "declared_size IS NULL OR declared_size >= 0",
+        name="a_file_transfer_declared_size_is_not_negative",
+    ),
+    _report_sha("declared_sha256", name="a_file_transfer_declared_digest_is_sha256", nullable=True),
+    CheckConstraint(
+        "received_bytes >= 0 AND (declared_size IS NULL OR received_bytes <= declared_size)",
+        name="a_file_transfer_receives_at_most_its_declaration",
+    ),
+    CheckConstraint(
+        "kind = 'upload' OR received_bytes = 0", name="a_file_download_receives_nothing"
+    ),
+    _report_sha("token_digest", name="a_file_transfer_token_is_a_digest"),
+    _one_of("state", FILE_TRANSFER_STATES, name="a_file_transfer_state_is_known"),
+    CheckConstraint(
+        "kind = 'upload' OR state IN ('expired', 'open')",
+        name="a_file_download_is_open_or_expired",
+    ),
+    CheckConstraint(
+        "state <> 'finalized' OR declared_size IS NULL OR received_bytes = declared_size",
+        name="a_finalized_file_upload_received_its_declaration",
+    ),
+    CheckConstraint(
+        "(state = 'finalized') = (finalized_at IS NOT NULL)",
+        name="a_file_transfer_finalizes_once",
+    ),
+    CheckConstraint(
+        "created_at < expires_at AND expires_at <= created_at + interval "
+        f"'{FILE_TICKET_TTL_MAX_SECONDS // 3600} hours'",
+        name="a_file_transfer_expires_within_its_ttl",
+    ),
+    CheckConstraint(
+        "finalized_at IS NULL OR finalized_at >= created_at",
+        name="a_file_transfer_finalizes_after_it_began",
+    ),
+    # The owner's open tickets by expiry: the in-process reap (contract trim T6).
+    Index(
+        "file_workspace_transfers_by_owner_state_and_expiry",
+        "owner_principal_id",
+        "state",
+        "expires_at",
+    ),
+)
+
+#: One preserved preimage (contract section 5): the content a replace moved
+#: aside under `.my-pa/versions/<version_id>`, with the version token it had,
+#: its size, its SHA-256 when known and which write replaced it. Append-only.
+file_workspace_versions = Table(
+    "file_workspace_versions",
+    METADATA,
+    Column("version_id", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("workspace_id", Text, nullable=False),
+    Column("path", Text, nullable=False),
+    Column("version", Text, nullable=False),
+    Column("size", BigInteger, nullable=False),
+    Column("sha256", Text),
+    Column("cause", Text, nullable=False),
+    Column("captured_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("version_id", name="file_workspace_versions_pkey"),
+    _file_id("version_id", FILE_VERSION_ID_PREFIX),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _file_alias(name="a_file_version_workspace_is_an_alias"),
+    _file_path("path", name="a_file_version_path_is_bounded"),
+    _file_version("version", name="a_file_version_token_is_a_token"),
+    CheckConstraint("size >= 0", name="a_file_version_size_is_not_negative"),
+    _report_sha("sha256", name="a_file_version_digest_is_sha256", nullable=True),
+    _one_of("cause", FILE_VERSION_CAUSES, name="a_file_version_cause_is_known"),
+    Index(
+        "file_workspace_versions_by_path",
+        "owner_principal_id",
+        "workspace_id",
+        "path",
+        text("captured_at DESC"),
+        text("version_id DESC"),
+    ),
+    Index(
+        "file_workspace_versions_by_workspace",
+        "owner_principal_id",
+        "workspace_id",
+        text("captured_at DESC"),
+        text("version_id DESC"),
+    ),
+)
+
+#: One trashed entry (contract section 5): where it was, its kind, the version
+#: it had and the fingerprint it has in the trash (`trashed_version`, which
+#: `files.restore` compares). Restored at most once, by the guarded update
+#: `a_file_workspace_trash_item_is_restored_once`; never deleted (no purge, T3).
+file_workspace_trash = Table(
+    "file_workspace_trash",
+    METADATA,
+    Column("trash_item_id", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("workspace_id", Text, nullable=False),
+    Column("original_path", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("original_version", Text, nullable=False),
+    Column("trashed_version", Text, nullable=False),
+    Column("size", BigInteger),
+    Column("trashed_at", DateTime(timezone=True), nullable=False),
+    Column("restored_at", DateTime(timezone=True)),
+    Column("restored_path", Text),
+    PrimaryKeyConstraint("trash_item_id", name="file_workspace_trash_pkey"),
+    _file_id("trash_item_id", FILE_TRASH_ITEM_ID_PREFIX),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _file_alias(name="a_file_trash_workspace_is_an_alias"),
+    _file_path("original_path", name="a_file_trash_original_path_is_bounded"),
+    _one_of("kind", FILE_TRASH_KINDS, name="a_file_trash_kind_is_known"),
+    _file_version("original_version", name="a_file_trash_original_version_is_a_token"),
+    _file_version("trashed_version", name="a_file_trash_fingerprint_is_a_token"),
+    CheckConstraint(
+        "(kind = 'file') = (size IS NOT NULL) AND (size IS NULL OR size >= 0)",
+        name="a_file_trash_size_is_a_file_size",
+    ),
+    CheckConstraint(
+        "(restored_at IS NULL) = (restored_path IS NULL)", name="a_file_trash_restore_is_whole"
+    ),
+    CheckConstraint(
+        "restored_at IS NULL OR restored_at >= trashed_at",
+        name="a_file_trash_restores_after_it_was_trashed",
+    ),
+    CheckConstraint(
+        "restored_path IS NULL OR (" + _FILE_PATH_SHAPE.format(column="restored_path") + ")",
+        name="a_file_trash_restored_path_is_bounded",
+    ),
+    Index(
+        "file_workspace_trash_by_path",
+        "owner_principal_id",
+        "workspace_id",
+        "original_path",
+        text("trashed_at DESC"),
+        text("trash_item_id DESC"),
+    ),
+    Index(
+        "file_workspace_trash_by_workspace",
+        "owner_principal_id",
+        "workspace_id",
+        text("trashed_at DESC"),
+        text("trash_item_id DESC"),
+    ),
+)
+
+#: One idempotency receipt (contract section 5): a files write's key, scoped to
+#: the Principal, the client reference and the capability, with the intent
+#: digest of its normalized arguments and its result. The result is a bounded
+#: JSON object of entries and opaque ids, never a body, a text or a token.
+#: Append-only; one per key.
+file_workspace_receipts = Table(
+    "file_workspace_receipts",
+    METADATA,
+    Column("receipt_id", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("client_ref", Text, nullable=False),
+    Column("capability", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("intent_digest", Text, nullable=False),
+    Column("result", JSONB, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("receipt_id", name="file_workspace_receipts_pkey"),
+    _file_id("receipt_id", FILE_RECEIPT_ID_PREFIX),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        f"client_ref ~ '{_REPORT_TRANSFER_CLIENT_REF_PATTERN}'",
+        name="a_file_receipt_is_bound_to_a_client",
+    ),
+    _one_of(
+        "capability", FILE_RECEIPT_CAPABILITIES, name="a_file_receipt_capability_is_a_files_write"
+    ),
+    CheckConstraint(
+        "char_length(idempotency_key) BETWEEN 1 AND 128", name="a_file_receipt_key_is_bounded"
+    ),
+    _report_sha("intent_digest", name="a_file_receipt_intent_is_a_digest"),
+    CheckConstraint(
+        "jsonb_typeof(result) = 'object' AND octet_length(result::text) <= "
+        f"{MAX_FILE_RECEIPT_RESULT_BYTES}",
+        name="a_file_receipt_result_is_a_bounded_object",
+    ),
+    UniqueConstraint(
+        "owner_principal_id",
+        "client_ref",
+        "capability",
+        "idempotency_key",
+        name="one_file_receipt_per_key",
     ),
 )

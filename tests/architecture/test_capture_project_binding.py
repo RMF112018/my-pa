@@ -73,8 +73,11 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: `report_retention_policy_events`; `captures` is untouched. Moved again by
 #: Reports Modernization WP06 A1/A2, which declares the transfer session's client
 #: binding, begin key, fixed chunk limit, owner key and quota index, and
-#: `report_transfer_chunks`; `captures` is untouched.
-TABLES_SHA256: Final = "037c52449c745391205188e90c4c02d72f87f0cf7a9b280a7749fb2862b066b3"
+#: `report_transfer_chunks`; `captures` is untouched. Moved again by the files
+#: workspace WP4 revision, which declares the four files plane tables and imports
+#: their id prefixes, version-token pattern and bounds from `domain.files`;
+#: `captures` is untouched.
+TABLES_SHA256: Final = "35d51b53535054741f06836f639c1feb2569687e1148bf7988036f8ef689df41"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

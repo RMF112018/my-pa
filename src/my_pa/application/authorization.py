@@ -49,6 +49,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from my_pa.application.commands import (
+    AbortFileUpload,
     AbortReportTransfer,
     AcknowledgeConstraintSync,
     AddEntityAddress,
@@ -66,6 +67,8 @@ from my_pa.application.commands import (
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
     AssertRecordAssociation,
+    BeginFileDownload,
+    BeginFileUpload,
     BeginIntelligenceCycle,
     BeginReportTransfer,
     BindEntityIdentifier,
@@ -86,6 +89,7 @@ from my_pa.application.commands import (
     ConfirmIssueProjectLink,
     ConfirmRecordAssociation,
     ContestRecordAssociation,
+    CopyFile,
     CorrectGoodNotes,
     CorrectIssueHandoff,
     CorrectIssueMembership,
@@ -128,6 +132,7 @@ from my_pa.application.commands import (
     EndRecordAssociation,
     EnrollSource,
     FetchSource,
+    FinalizeFileUpload,
     FinalizeReportTransfer,
     GetCanvasWorkspace,
     GetCapabilities,
@@ -139,6 +144,7 @@ from my_pa.application.commands import (
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
+    GetFileHistory,
     GetGeneralReportHistory,
     GetGoodNotesContent,
     GetGoodNotesPullStatus,
@@ -169,6 +175,8 @@ from my_pa.application.commands import (
     ListEntityNames,
     ListEntityObservations,
     ListEntityParticipations,
+    ListFiles,
+    ListFileWorkspaces,
     ListGoodNotesNotebooks,
     ListGoodNotesPages,
     ListGoodNotesRuns,
@@ -202,7 +210,9 @@ from my_pa.application.commands import (
     ListTaskComments,
     ListTasks,
     ListUnresolvedMentions,
+    MakeFileDirectory,
     MergeEntities,
+    MoveFile,
     ObserveEntityMention,
     PlaceReportHold,
     PlanLineageBackfill,
@@ -210,6 +220,7 @@ from my_pa.application.commands import (
     PreviewConstraintSync,
     PreviewEntityMerge,
     PreviewEntitySplit,
+    PreviewFile,
     ProposeRelationshipMemory,
     ProposeScheduleBaseline,
     PublishConstraint,
@@ -262,6 +273,7 @@ from my_pa.application.commands import (
     ReinstateRecordAssociation,
     RejectScheduleBaseline,
     ReleaseReportHold,
+    RenameFile,
     ReopenConstraint,
     ReopenIssue,
     ReorderConstraintCategories,
@@ -273,6 +285,7 @@ from my_pa.application.commands import (
     ResolveUnresolvedMention,
     RestoreCapture,
     RestoreEntity,
+    RestoreFile,
     RestoreGeneralReport,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
@@ -298,6 +311,7 @@ from my_pa.application.commands import (
     SearchCommitmentsV2,
     SearchConstraints,
     SearchEntities,
+    SearchFiles,
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
@@ -310,6 +324,7 @@ from my_pa.application.commands import (
     SetReportRetention,
     SplitEntity,
     StartGsqsB0,
+    StatFile,
     SubmitGoodNotesProposal,
     SubmitKnowledgeAssertion,
     SupersedeEntityAlias,
@@ -317,6 +332,7 @@ from my_pa.application.commands import (
     SupersedeEntityName,
     TransitionConstraint,
     TransitionTask,
+    TrashFile,
     UpdateCommitment,
     UpdateConstraint,
     UpdateConstraintCategory,
@@ -331,6 +347,7 @@ from my_pa.application.commands import (
     WaitingOn,
     WaitingOnV2,
     WithdrawScheduleBaseline,
+    WriteFileText,
 )
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.audit.events import audit_event_for
@@ -877,6 +894,26 @@ def _requested_scope(
             | ReadScheduleBaseline()
             | ReadGoverningScheduleBaseline()
             | CompareScheduleBaseline()
+            # Files workspace (contract section 1.1): every `files.*` name names
+            # the configured workspace alias and a relative path, never a source;
+            # the 17 are read as this empty measurement by `_SCOPELESS`.
+            | ListFileWorkspaces()
+            | ListFiles()
+            | StatFile()
+            | SearchFiles()
+            | PreviewFile()
+            | GetFileHistory()
+            | BeginFileDownload()
+            | MakeFileDirectory()
+            | CopyFile()
+            | BeginFileUpload()
+            | AbortFileUpload()
+            | RenameFile()
+            | MoveFile()
+            | TrashFile()
+            | RestoreFile()
+            | FinalizeFileUpload()
+            | WriteFileText()
         ):
             return frozenset()
         case CreateCapture():

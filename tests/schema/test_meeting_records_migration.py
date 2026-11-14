@@ -44,6 +44,7 @@ from sqlalchemy import Engine, Table, insert, text, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
+from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES as LINEAGE_S2_CAPABILITIES
 from tests.schema.lineage_s2_schema_ahead_contract import S2_PURPOSES as LINEAGE_S2_PURPOSES
 from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES as LINEAGE_S3_CAPABILITIES
@@ -85,7 +86,7 @@ PREVIOUS: Final = "6f6ead27d122"
 #: The chain head these tests run against. `1d9b248e7f83` (WP-RE-01, Record
 #: Events) is additive on `REVISION`, and `0641c354ca85` (CRL-WP-03, Capture
 #: lifecycle) is additive on that, so `REVISION` is no longer the head.
-HEAD: Final = "b77334135653"
+HEAD: Final = "640aaacc78e8"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`,
 #: and therefore the only correct source for this revision's BEFORE literals.
 VOCABULARY_PREDECESSOR: Final = "e6a4c2f91b73"
@@ -169,7 +170,8 @@ def _offline(target: str, *, down: bool = False) -> str:
 def test_the_revision_is_the_single_head_directly_on_the_previous_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "4c37731671fc"
+    assert script.get_revision(HEAD).down_revision == "b77334135653"
+    assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
     assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
     assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
     assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
@@ -193,7 +195,7 @@ def test_the_revision_is_the_single_head_directly_on_the_previous_head() -> None
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 128
+    assert len(list(MIGRATIONS.glob("*.py"))) == 129
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -321,6 +323,8 @@ ADMITTED_LATER_CAPABILITIES: Final = (
     | S5B2_CAPABILITIES
     # Schedule Scenarios S6-3: admitted by `b77334135653`.
     | S63_CAPABILITIES
+    # Files workspace WP4: admitted by its revision (the head).
+    | FILES_CAPABILITIES
     # Reports Modernization WP02 and WP03: admitted by `4c37731671fc` and declared with it.
     | frozenset(
         {
@@ -359,6 +363,7 @@ ADMITTED_LATER_PURPOSES: Final = (
     | LINEAGE_S4_PURPOSES
     | S5B2_PURPOSES
     | S63_PURPOSES
+    | FILES_PURPOSES
     # Reports Modernization WP03: admitted by `4c37731671fc` and declared with it.
     | frozenset({"report_lifecycle", "report_hold", "report_retention"})
 )

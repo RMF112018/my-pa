@@ -551,6 +551,24 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.SCHEDULE_BASELINES_READ, Purpose.SCHEDULE_ANALYSIS_READ),
         (Capability.SCHEDULE_BASELINES_GOVERNING, Purpose.SCHEDULE_ANALYSIS_READ),
         (Capability.SCHEDULE_BASELINES_COMPARE, Purpose.SCHEDULE_ANALYSIS_READ),
+        # Files workspace (contract section 1.1): each name under exactly one purpose.
+        (Capability.FILES_WORKSPACES_LIST, Purpose.FILE_WORKSPACE_READ),
+        (Capability.FILES_LIST, Purpose.FILE_WORKSPACE_READ),
+        (Capability.FILES_STAT, Purpose.FILE_WORKSPACE_READ),
+        (Capability.FILES_SEARCH, Purpose.FILE_WORKSPACE_READ),
+        (Capability.FILES_PREVIEW, Purpose.FILE_WORKSPACE_READ),
+        (Capability.FILES_HISTORY, Purpose.FILE_WORKSPACE_READ),
+        (Capability.FILES_DOWNLOAD_BEGIN, Purpose.FILE_WORKSPACE_READ),
+        (Capability.FILES_MKDIR, Purpose.FILE_WORKSPACE_AUTHORING),
+        (Capability.FILES_COPY, Purpose.FILE_WORKSPACE_AUTHORING),
+        (Capability.FILES_UPLOAD_BEGIN, Purpose.FILE_WORKSPACE_AUTHORING),
+        (Capability.FILES_UPLOAD_ABORT, Purpose.FILE_WORKSPACE_AUTHORING),
+        (Capability.FILES_RENAME, Purpose.FILE_WORKSPACE_AUTHORING),
+        (Capability.FILES_MOVE, Purpose.FILE_WORKSPACE_AUTHORING),
+        (Capability.FILES_TRASH, Purpose.FILE_WORKSPACE_AUTHORING),
+        (Capability.FILES_RESTORE, Purpose.FILE_WORKSPACE_AUTHORING),
+        (Capability.FILES_UPLOAD_FINALIZE, Purpose.FILE_WORKSPACE_AUTHORING),
+        (Capability.FILES_WRITE_TEXT, Purpose.FILE_WORKSPACE_AUTHORING),
     }
 )
 
@@ -654,8 +672,10 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # and no purpose: 255 capabilities, 65 purposes, 257 pairs.
     # Schedule Scenarios S6-3 adds 26 names and 3 purposes, each name under
     # exactly one of the 3: 281 capabilities, 68 purposes, 283 pairs.
-    assert len(PERMITTED_PAIRS) == 283
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 283 == 18825
+    # Files workspace WP5 adds 17 names and 2 purposes, each name under exactly
+    # one of the pair: 298 capabilities, 70 purposes, 300 pairs.
+    assert len(PERMITTED_PAIRS) == 300
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 300 == 20560
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

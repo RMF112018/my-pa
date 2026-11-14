@@ -46,6 +46,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from tests.schema import lineage_schema_ahead_contract as lineage_gap
 from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
+from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES, S2_PURPOSES
 from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES, S3_PURPOSES
 from tests.schema.lineage_s4_schema_ahead_contract import S4_CAPABILITIES, S4_PURPOSES
@@ -82,7 +83,7 @@ REVISION: Final = "264310e0416a"
 PREVIOUS: Final = "b9025e7fb738"
 #: Record lineage S2 (`d020b532ad7d`), S3 (`6f1476b8da52`) and S4 (`c5260943d933`,
 #: ADR-015) are additive on this revision; the S4 revision is the head.
-HEAD: Final = "b77334135653"
+HEAD: Final = "640aaacc78e8"
 #: The S2 revision, the S1 suite's head before the S3 revision.
 S2_REVISION: Final = "d020b532ad7d"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`.
@@ -242,7 +243,7 @@ def test_the_revision_is_the_single_head_on_b9025e7fb738() -> None:
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "5c1e7a9b3d42"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 128
+    assert len(list(MIGRATIONS.glob("*.py"))) == 129
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -375,6 +376,8 @@ def test_at_vocabulary_adds_exactly_the_s1_names() -> None:
         - S5B2_CAPABILITIES
         # Schedule Scenarios S6-3: admitted by `b77334135653`.
         - S63_CAPABILITIES
+        # Files workspace WP4: admitted by its revision (the head).
+        - FILES_CAPABILITIES
         # And Reports Modernization WP02's `reports.publish` and WP03's five, the
         # head's (4c37731671fc).
         - {
@@ -407,6 +410,7 @@ def test_at_vocabulary_adds_exactly_the_s1_names() -> None:
             - S4_PURPOSES
             - S5B2_PURPOSES
             - S63_PURPOSES
+            - FILES_PURPOSES
             # Reports Modernization WP03's purpose, the head's (4c37731671fc).
             - {"report_lifecycle", "report_hold", "report_retention"}
         )

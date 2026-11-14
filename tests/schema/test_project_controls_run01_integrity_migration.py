@@ -47,7 +47,7 @@ PREVIOUS: Final = "c4f1a8e52d90"
 #: (WP-MTG-04, Meeting records), `1d9b248e7f83` (WP-RE-01, Record Events) and then
 #: `0641c354ca85` (CRL-WP-03, Capture lifecycle) are additive on `REVISION`, so
 #: `REVISION` is no longer the head.
-HEAD: Final = "b77334135653"
+HEAD: Final = "640aaacc78e8"
 MIGRATION: Final = (
     ROOT / "migrations" / "versions" / "20260914_e6a4c2f91b73_project_controls_run01_integrity.py"
 )
@@ -133,9 +133,10 @@ def test_revision_identity_and_frozen_vocabulary_are_exact() -> None:
     # Modernization WP02 `reports.publish`, and WP03 its 5 names and
     # `report_lifecycle`, and WP05b its 4 custody names, `report_hold` and
     # `report_retention`, and WP06 its 5 transfer names, and Schedule Scenarios
-    # S6-3 its 26 plane names and 3 purposes.
-    assert len(Capability) == 281
-    assert len(Purpose) == 68
+    # S6-3 its 26 plane names and 3 purposes, and the files workspace WP5 its 17
+    # `files.*` names and 2 purposes.
+    assert len(Capability) == 298
+    assert len(Purpose) == 70
     assert "from my_pa.domain" not in MIGRATION.read_text(encoding="utf-8")
 
 

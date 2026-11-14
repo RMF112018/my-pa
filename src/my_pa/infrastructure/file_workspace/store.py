@@ -1327,7 +1327,9 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             return parent, None, None
         if status is None:
             raise _refuse("path", FilesReason.NOT_FOUND)
-        if not S_ISREG(status.st_mode):
+        if not S_ISREG(status.st_mode) or _hard_linked(status):
+            # A multiply-linked file is never written (contract section 4):
+            # its preimage link would keep a perhaps-outside inode under `versions`.
             raise _refuse("path", FilesReason.UNSUPPORTED_ENTRY)
         if _token(status) != expected_version:
             raise _refuse("path", FilesReason.VERSION_CONFLICT)
@@ -1371,16 +1373,27 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             if error.errno not in _LINK_UNSUPPORTED:
                 raise
             linked = False
-            os.rename(path.name, preimage, src_dir_fd=parent, dst_dir_fd=versions)
+            # Never rename an unverified entry (as `_relocate`): the link may
+            # have failed because the name is now a directory, not the file.
+            probe = self._lstat(parent, path.name)
+            if probe is None or not _same_file(probe, current):
+                raise _refuse("path", FilesReason.EXTERNAL_CHANGE_DETECTED) from None
+            self._rename_absent(parent, path.name, versions, preimage, "preimage_version_id")
         kept = self._lstat(versions, preimage)
-        if kept is None or not _same_file(kept, current):
-            # What reached `versions` is not the observed file: take back only
-            # what this call put there, and leave the replacement in place.
+        # `current` was single-linked (`_target`); this call's link adds one
+        # name, so any other count is a host hard link made after the re-check.
+        if kept is None or not _same_file(kept, current) or kept.st_nlink != (2 if linked else 1):
+            # What reached `versions` is not the observed, single-linked file:
+            # take back only what this call put there, and leave the rest alone.
+            # A fallback rename back blocked by yet another racing entry at the
+            # name leaves the moved object at `versions/<id>` (never read or
+            # followed) and the refusal is still `external_change_detected`.
             if kept is not None:
                 if linked:
                     os.unlink(preimage, dir_fd=versions)
                 else:
-                    self._rename_absent(versions, preimage, parent, path.name, "path")
+                    with suppress(OSError, FilesRefusal):
+                        self._rename_absent(versions, preimage, parent, path.name, "path")
             raise _refuse("path", FilesReason.EXTERNAL_CHANGE_DETECTED)
         os.fsync(versions)
         try:
@@ -1517,11 +1530,17 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             os.fsync(descriptor)
             return position
 
-    def upload_digest(self, upload_id: str) -> tuple[int, str]:
+    def upload_digest(self, upload_id: str) -> tuple[int, str, str]:
         with ExitStack() as stack, _translated():
             staging, name, status = self._staged(stack, upload_id)
             descriptor = self._open_file(stack, staging, name, status, "upload_id")
-            return _hash_descriptor(descriptor)
+            length, sha256 = _hash_descriptor(descriptor)
+            # The digest is bound to the fingerprint it was read under: a change
+            # while hashing moves it, so the bytes are not vouched for.
+            staged_version = _token(status)
+            if _token(os.fstat(descriptor)) != staged_version:
+                raise _refuse("upload_id", FilesReason.EXTERNAL_CHANGE_DETECTED)
+            return length, sha256, staged_version
 
     def discard_upload(self, upload_id: str) -> bool:
         name = _file_id(upload_id, UPLOAD_ID_PREFIX, "upload_id")
@@ -1553,18 +1572,30 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         sha256: str,
         expected_version: str | None = None,
         preimage_version_id: str | None = None,
+        staged_version: str | None = None,
     ) -> FileWorkspacePublication:
         file_path = parse_path(path)
         claimed_length = _bounded_int(length, "length", 0)
         claimed_sha256 = validate_sha256(sha256)
         if expected_version is not None:
             validate_version_token(expected_version)
+        if staged_version is not None:
+            validate_version_token(staged_version, "staged_version")
         with ExitStack() as stack, _translated():
             staging, name, status = self._staged(stack, upload_id)
             descriptor = self._open_file(stack, staging, name, status, "upload_id")
-            staged_length, staged_sha256 = _hash_descriptor(descriptor)
-            if (staged_length, staged_sha256) != (claimed_length, claimed_sha256):
-                raise _refuse("sha256", FilesReason.DIGEST_MISMATCH)
+            if staged_version is None:
+                staged_length, staged_sha256 = _hash_descriptor(descriptor)
+                if (staged_length, staged_sha256) != (claimed_length, claimed_sha256):
+                    raise _refuse("sha256", FilesReason.DIGEST_MISMATCH)
+            else:
+                # Already hashed by `upload_digest` under `staged_version`: the
+                # held descriptor is that inode, unchanged since (`_open_file`
+                # proved it matches `status`), so it is not read again.
+                if _token(status) != staged_version:
+                    raise _refuse("upload_id", FilesReason.EXTERNAL_CHANGE_DETECTED)
+                if status.st_size != claimed_length:
+                    raise _refuse("sha256", FilesReason.DIGEST_MISMATCH)
             if _token(os.fstat(descriptor)) != _token(status):
                 raise _refuse("upload_id", FilesReason.EXTERNAL_CHANGE_DETECTED)
             parent, current, preimage = self._target(

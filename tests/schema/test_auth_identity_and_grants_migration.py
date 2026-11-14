@@ -35,7 +35,7 @@ CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
 WP_MCP_PROJ_02: Final = "b3e9d7a41c25"
-HEAD: Final = "b77334135653"
+HEAD: Final = "640aaacc78e8"
 MIGRATION: Final = (
     ROOT / "migrations/versions/20260907_4e9a1c7b2d60_normalize_auth_identity_and_add_grants.py"
 )
@@ -137,7 +137,8 @@ def test_the_chain_has_exactly_one_head_and_this_revision_is_beneath_it() -> Non
     """
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "4c37731671fc"
+    assert script.get_revision(HEAD).down_revision == "b77334135653"
+    assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
     assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
     assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
     assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
@@ -167,7 +168,7 @@ def test_the_chain_has_exactly_one_head_and_this_revision_is_beneath_it() -> Non
     assert script.get_revision(CONSTRAINT_SYNC).down_revision == SUCCESSOR
     assert script.get_revision(SUCCESSOR).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 128
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 129
 
 
 def test_revision_imports_no_domain_or_persistence_modules() -> None:

@@ -45,6 +45,7 @@ from tests.conftest import (
     staged_search,
 )
 from tests.contract.test_transport_parity import a_permitted_purpose, document, payloads_for
+from tests.files_workspace_samples import FILES_WORKSPACE_CAPABILITIES
 from tests.schedule_scenario_samples import SCHEDULE_SCENARIO_CAPABILITIES
 from tests.transports import McpTransport, mcp_transport
 
@@ -149,12 +150,14 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
         and capability not in _TRANSFER_UPLOADS
         and capability not in SCHEDULE_SCENARIO_CAPABILITIES
+        and capability not in FILES_WORKSPACE_CAPABILITIES
     ]
     # WP05b: the 4 custody names are listed over stdio as the attested confirms
     # are; the handler denies them there (no operator surface). WP06: the 4
     # transfer uploads need a content store and staging this world lacks;
     # `reports.transfer.read_chunk` is listed. Schedule Scenarios S6-3: the 26
-    # plane names need the plane switch this world leaves off.
+    # plane names need the plane switch this world leaves off. Files workspace
+    # WP5: the 17 `files.*` names need a workspace root this world lacks.
     assert len(listed.tools) == 246
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
@@ -164,7 +167,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 281
+    assert len(TOOLS) == 298
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }
@@ -629,6 +632,9 @@ _COMPOSED_CAPABILITIES: Final = (
             Capability.REPORTS_TRANSFER_ABORT,
         }
     )
+    # Files workspace WP5: the 17 `files.*` names, composed only with the
+    # workspace store (`MY_PA_FILES_WORKSPACE_ROOT`).
+    | FILES_WORKSPACE_CAPABILITIES
 )
 
 #: WP06 T14: the transfer uploads this module's in-memory world never composes.
@@ -718,6 +724,8 @@ def test_a_child_with_a_managed_root_publishes_every_locally_available_capabilit
     root.mkdir()
     report_content = tmp_path / "report-content"
     report_content.mkdir()
+    workspace = tmp_path / "files-workspace"
+    workspace.mkdir()
     composed, _errors = _child_tool_list(
         MY_PA_DATABASE_URL=cloned_database_url,
         MY_PA_MANAGED_DOCUMENT_ROOT=str(root),
@@ -758,6 +766,9 @@ def test_a_child_with_a_managed_root_publishes_every_locally_available_capabilit
         # Reports Modernization WP06 T14: the report content root, which composes
         # the content store and the transfer staging the 4 uploads need.
         MY_PA_REPORT_CONTENT_ROOT=str(report_content),
+        # Files workspace WP5: the workspace root, which composes the store the
+        # 17 `files.*` names need. A synthetic `tmp_path` directory, never read.
+        MY_PA_FILES_WORKSPACE_ROOT=str(workspace),
     )
     expected = [
         capability.value

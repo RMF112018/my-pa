@@ -77,8 +77,9 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
     # Schedule Scenarios S6-3 package I10-A: the 26 plane names, held at v12.
-    assert len(CHATLLM_CAPABILITY_POLICY) == 281
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    # Files workspace WP5 (chatllm-data-v14): the 17 `files.*` names.
+    assert len(CHATLLM_CAPABILITY_POLICY) == 298
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
@@ -96,7 +97,8 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # 34 client-usable lineage-plane names, 97 -> 131. CPM Workbench S5b-2
     # (chatllm-data-v11): the 6 Schedule reads, 131 -> 137. Schedule Scenarios
     # S6-3 (chatllm-data-v13): the 22 client-usable plane names, 137 -> 159.
-    assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 159
+    # Files workspace WP5 (chatllm-data-v14): the 17 `files.*` names, 159 -> 176.
+    assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 176
     assert counts[ChatLLMCapabilityClass.COMPATIBILITY_ONLY] == 2
     # KLP-WP-04 (chatllm-data-v7): submit and checkpoint are excluded, 15 -> 17.
     # Record lineage S3: the operator-only backfill pair is excluded, 17 -> 19.

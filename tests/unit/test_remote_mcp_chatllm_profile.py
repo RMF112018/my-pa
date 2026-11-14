@@ -220,6 +220,8 @@ _FULL_PLANE_SETTINGS = SimpleNamespace(
     schedule_enabled=False,
     # Schedule Scenarios S6-3 (chatllm-data-v13): the scenario switch off, its default.
     schedule_scenarios_enabled=False,
+    # Files workspace WP5 (chatllm-data-v14): no workspace root, its default.
+    files_workspace_is_composed=lambda: False,
     # KLP-WP-04: no client is Knowledge-bound, so the ChatLLM profile tooling runs.
     knowledge_discovery_oauth_client_id_set=frozenset,
     knowledge_operator_review_oauth_client_id_set=frozenset,
@@ -290,7 +292,7 @@ def test_profile_apply_adds_the_meeting_grants_once_and_then_converges(
         desired = _grant_v2_catalog(repository)
         code, plan = _profile(repository, "profile-plan", capsys)
         assert code == 1
-        assert plan["profile_version"] == "chatllm-data-v13"
+        assert plan["profile_version"] == "chatllm-data-v14"
         assert plan["healthy"] is False
         assert plan["actions"] == [
             {
@@ -342,7 +344,7 @@ def test_profile_commands_refuse_the_previous_profile_version(
         with pytest.raises(SystemExit) as raised:
             _profile(repository, "profile-apply", capsys, profile_version="chatllm-data-v9")
         assert raised.value.code == 2
-        assert "profile version must be chatllm-data-v13" in capsys.readouterr().err
+        assert "profile version must be chatllm-data-v14" in capsys.readouterr().err
         rows = repository.list_capability_grants(remote_client_id=CLIENT_UUID)
         assert not any(row.capability.startswith("meetings.") for row in rows)
 
@@ -393,7 +395,7 @@ def test_v6_profile_apply_adds_the_knowledge_grants_only_with_the_plane_on(
         )
         plan = json.loads(capsys.readouterr().out)
     assert code == 1
-    assert plan["profile_version"] == "chatllm-data-v13"
+    assert plan["profile_version"] == "chatllm-data-v14"
     assert plan["actions"] == [
         {
             "kind": "add",
@@ -481,7 +483,7 @@ def test_v10_profile_plan_adds_the_lineage_grants_only_with_the_switch_on(
         # The switch off (the stand-in's default): converged, no lineage action.
         code, off = _plan_with(repository, _FULL_PLANE_SETTINGS, capsys)
         assert code == 0 and off["healthy"] is True
-        assert off["profile_version"] == "chatllm-data-v13"
+        assert off["profile_version"] == "chatllm-data-v14"
         assert not set(adds(off)) & every
         # The lineage switch on: exactly the 27 `LINEAGE` adds.
         on = SimpleNamespace(**{**vars(_FULL_PLANE_SETTINGS), "lineage_enabled": True})
@@ -718,7 +720,7 @@ def test_v12_profile_diff_plan_and_apply_show_exactly_the_reports_delta(
         desired = _grant_v11_catalog(repository)
         code, diff = _profile(repository, "profile-diff", capsys)
         assert code == 1
-        assert diff["profile_version"] == "chatllm-data-v13"
+        assert diff["profile_version"] == "chatllm-data-v14"
         assert diff["healthy"] is False
         assert diff["add"] == names
         assert diff["renew"] == []
@@ -731,7 +733,7 @@ def test_v12_profile_diff_plan_and_apply_show_exactly_the_reports_delta(
 
         code, plan = _profile(repository, "profile-plan", capsys)
         assert code == 1
-        assert plan["profile_version"] == "chatllm-data-v13"
+        assert plan["profile_version"] == "chatllm-data-v14"
         assert plan["actions"] == [
             {
                 "kind": "add",
@@ -775,17 +777,20 @@ def test_v12_profile_diff_plan_and_apply_show_exactly_the_reports_delta(
             assert converged["outcomes"][name] == "IMPLEMENTED_COMPOSED_GRANTED"  # type: ignore[index]
 
 
-#: The version after v13, which must not exist. Assembled, not spelled, so a
+#: The version after v14, which must not exist. Assembled, not spelled, so a
 #: repository search for the literal finds nothing. (Reports was one bump,
-#: v11 -> v12; Schedule Scenarios S6-3 is one bump, v12 -> v13.)
-_NONEXISTENT_NEXT_VERSION: Final = "chatllm-data-v" + str(14)
+#: v11 -> v12; Schedule Scenarios S6-3 one, v12 -> v13; the files workspace
+#: WP5 one, v13 -> v14.)
+_NONEXISTENT_NEXT_VERSION: Final = "chatllm-data-v" + str(15)
 
 
-@pytest.mark.parametrize("refused", ["chatllm-data-v12", _NONEXISTENT_NEXT_VERSION])
-def test_v13_profile_commands_refuse_v12_and_the_nonexistent_next_version(
+@pytest.mark.parametrize(
+    "refused", ["chatllm-data-v12", "chatllm-data-v13", _NONEXISTENT_NEXT_VERSION]
+)
+def test_v14_profile_commands_refuse_earlier_versions_and_the_nonexistent_next_version(
     refused: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The v13 commands refuse the previous version and the never-applied next one.
+    """The v14 commands refuse the previous versions and the never-applied next one.
 
     Naming either changes nothing in the store.
     """
@@ -794,7 +799,7 @@ def test_v13_profile_commands_refuse_v12_and_the_nonexistent_next_version(
         with pytest.raises(SystemExit) as raised:
             _profile(repository, "profile-apply", capsys, profile_version=refused)
         assert raised.value.code == 2
-        assert "profile version must be chatllm-data-v13" in capsys.readouterr().err
+        assert "profile version must be chatllm-data-v14" in capsys.readouterr().err
         rows = repository.list_capability_grants(remote_client_id=CLIENT_UUID)
         assert not {row.capability for row in rows} & {c.value for c in _V12_REPORTS_GRANTS}
 
@@ -828,7 +833,7 @@ def test_v13_profile_plan_adds_the_22_scenario_grants_only_with_both_switches(
         assert code == 0
         code, off = _run(repository, "profile-diff", schedule, capsys)
         assert code == 0 and off["healthy"] is True
-        assert off["profile_version"] == "chatllm-data-v13"
+        assert off["profile_version"] == "chatllm-data-v14"
         # The scenario switch without the Schedule switch composes nothing new.
         code, alone = _run(repository, "profile-plan", scenario_only, capsys)
         assert not {
@@ -851,3 +856,46 @@ def test_v13_profile_plan_adds_the_22_scenario_grants_only_with_both_switches(
         } == expected
         assert len(expected) == 22
         assert sum(write for _, write in expected.values()) == 6
+
+
+# ---- Files workspace WP5 (chatllm-data-v14) -----------------------------------------
+
+
+def test_v14_profile_plan_adds_the_17_files_grants_only_with_the_workspace_root(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Files-workspace contract section 12: v14 with no root desires exactly the v13 set.
+
+    A client converged without a workspace root stays healthy; with the root
+    composed, the plan adds exactly the 17 `files.*` names (the 10 writes under
+    `file_workspace_authoring` with the write flag, the 7 reads under
+    `file_workspace_read`), none operator-only. Synthetic in-memory store only.
+    """
+    from my_pa.domain.identity.chatllm_capability_policy import FILES_WORKSPACE_DATA_NAMES
+    from my_pa.domain.identity.operation import is_operator_only, permitted_purposes
+
+    rooted = SimpleNamespace(
+        **{**vars(_FULL_PLANE_SETTINGS), "files_workspace_is_composed": lambda: True}
+    )
+    with _repository() as (_, repository):
+        _grant_v2_catalog(repository)
+        code, _ = _run(repository, "profile-apply", _FULL_PLANE_SETTINGS, capsys)
+        assert code == 0
+        code, off = _run(repository, "profile-diff", _FULL_PLANE_SETTINGS, capsys)
+        assert code == 0 and off["healthy"] is True
+        assert off["profile_version"] == "chatllm-data-v14"
+        code, plan = _run(repository, "profile-plan", rooted, capsys)
+        assert code == 1
+        actions = plan["actions"]
+        assert isinstance(actions, list)
+        assert all(action["kind"] == "add" for action in actions)
+        expected = {}
+        for capability in FILES_WORKSPACE_DATA_NAMES:
+            assert not is_operator_only(capability)
+            (purpose,) = permitted_purposes(capability)
+            expected[capability.value] = (purpose.value, is_write_capability(capability))
+        assert {
+            action["capability"]: (action["purpose"], action["write"]) for action in actions
+        } == expected
+        assert len(expected) == 17
+        assert sum(write for _, write in expected.values()) == 10

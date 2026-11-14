@@ -42,8 +42,25 @@ DISK_RESERVE_BYTES: Final = 20 * _GIB
 MAX_UPLOAD_CHUNK_BYTES: Final = 32 * _MIB
 #: Section 8: one `files.preview` call.
 MAX_PREVIEW_BYTES: Final = 256 * _KIB
-#: Section 8: the UTF-8 encoding of one `files.write_text` text.
-MAX_WRITE_TEXT_BYTES: Final = 1 * _MIB
+#: Section 8: the UTF-8 encoding of one `files.write_text` text (trim T13).
+#:
+#: The largest whole-KiB value whose worst-case `ensure_ascii` JSON encoding
+#: still fits `adapters.normalization.MAX_REQUEST_BYTES` (762,288) on every
+#: transport, so the advertised limit is reachable and a larger text is refused
+#: by the command naming `text`, never by an unnamed transport refusal. The text
+#: admits C0 controls, each one UTF-8 byte that escapes to six (`\u0000`), so
+#: the worst case is 6 JSON bytes per text byte (2-4 byte characters escape to
+#: at most 3 per byte). Everything beside it, at its own bound:
+#:   path            4,096 bytes x 3 (C0 and `\` refused)       = 12,288
+#:   workspace_id    64 chars x 12 (astral surrogate pair)      =    768
+#:   idempotency_key 128 chars x 12                             =  1,536
+#:   request_id      128 chars x 12                             =  1,536
+#:   expected_version 68, principal_id 72                       =    140
+#:   keys, purpose, timestamp, JSON-RPC/facade framing reserve  =  4,096
+#:   total beside the text                                      = 20,364
+#: (762,288 - 20,364) / 6 = 123,654 bytes, so 120 KiB = 122,880 (6x = 737,280;
+#: with the rest 757,644 <= 762,288). 121 KiB (123,904) would not fit.
+MAX_WRITE_TEXT_BYTES: Final = 120 * _KIB
 #: Section 8: list, search and history pages (also the default page size).
 PAGE_SIZE: Final = 200
 #: Section 8: the bounded name walk of `files.search` and a directory copy.

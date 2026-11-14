@@ -122,10 +122,11 @@ INVENTORY: Final[dict[Capability, tuple[str, Purpose, str, bool, bool]]] = {
 
 def test_the_inventory_is_the_26_appended_names() -> None:
     members = list(Capability)
-    assert members[-26:] == list(INVENTORY)
+    # The files workspace WP5 appends its 17 names (and 2 purposes) after these.
+    assert members[-43:-17] == list(INVENTORY)
     assert set(INVENTORY) == _SCHEDULE_SCENARIO_CAPABILITIES == set(SCHEDULE_SCENARIO_COMMAND_TYPES)
-    assert list(Purpose)[-3:] == [_W, _R, _A]
-    assert (len(Capability), len(Purpose)) == (281, 68)
+    assert list(Purpose)[-5:-2] == [_W, _R, _A]
+    assert (len(Capability), len(Purpose)) == (298, 70)
 
 
 @pytest.mark.parametrize("capability", list(INVENTORY), ids=lambda c: c.value)
@@ -200,7 +201,8 @@ def test_the_six_plane_cursor_orders_and_the_37_details_exist() -> None:
         "baselines_created_desc_id_desc",
     ]
     assert len(ScheduleCursorOrder) == 11
-    assert len(SafeDetail) == 396
+    # Files workspace WP5: its 11 reason tokens and 10 field details, 396 -> 417.
+    assert len(SafeDetail) == 417
     for error in ChangeOpError:
         assert SafeDetail(f"change_set_{error.value}").name == f"CHANGE_SET_{error.name}"
 
@@ -264,7 +266,7 @@ def _grant(capability: Capability) -> ChatLLMGrantRecord:
 
 def test_chatllm_classifies_the_26_at_v13() -> None:
     """Sections 15.3 and 15.12.1: 22 `DATA_CONDITIONAL`, the 4 operator names excluded."""
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
     assert _CLIENT_USABLE == SCHEDULE_SCENARIO_DATA_NAMES
     assert (len(_CLIENT_USABLE), len(_OPERATOR_NAMES)) == (22, 4)
     for capability in _CLIENT_USABLE:
@@ -289,9 +291,10 @@ def test_chatllm_classifies_the_26_at_v13() -> None:
     counts = dict.fromkeys(ChatLLMCapabilityClass, 0)
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
-    assert len(CHATLLM_CAPABILITY_POLICY) == 281
+    # Files workspace WP5 (chatllm-data-v14): the 17 `files.*` names, 159 -> 176.
+    assert len(CHATLLM_CAPABILITY_POLICY) == 298
     assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 85
-    assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 159
+    assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 176
     assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 33
     assert ChatLLMCompositionPlanes.__dataclass_fields__["schedule_scenarios"].default is False
 
@@ -313,7 +316,8 @@ def test_v13_targets() -> None:
     assert len(_desired(_planes(**_FULL, **everything, schedule_scenarios=True))) == 237
     assert len(_desired(_planes(constraints=True, **everything))) == 147
     assert len(_desired(_planes(constraints=True, **everything, schedule_scenarios=True))) == 169
-    assert len(_every_composition()) == 1024
+    # Files workspace WP5 (chatllm-data-v14): its own flag, 1,024 -> 2,048.
+    assert len(_every_composition()) == 2048
 
 
 def test_planner_desires_the_22_only_with_both_switches() -> None:
@@ -395,7 +399,7 @@ def test_old_client_stays_healthy_while_the_plane_is_off(held: str) -> None:
         scope=_SCOPE,
     )
     assert healthy_off.is_healthy()
-    assert healthy_off.profile_version == "chatllm-data-v13"
+    assert healthy_off.profile_version == "chatllm-data-v14"
     diff = diff_chatllm_data_profile(
         implemented=_IMPLEMENTED,
         composed=composed_capabilities(_IMPLEMENTED, on),

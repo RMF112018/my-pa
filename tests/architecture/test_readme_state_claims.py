@@ -28,6 +28,7 @@ import pytest
 
 from my_pa.adapters.mcp.server import published_tools
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
+from my_pa.application.file_workspace import FILE_WORKSPACE_CAPABILITIES
 from my_pa.application.service import (
     _ENTITY_CAPABILITIES,
     _ENTITY_WRITE_CAPABILITIES,
@@ -536,6 +537,8 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     255: "Two hundred and fifty-five",
     # Schedule Scenarios S6-3: the 26 plane names, 255 -> 281.
     281: "Two hundred and eighty-one",
+    # Files workspace WP5: the 17 `files.*` names, 281 -> 298.
+    298: "Two hundred and ninety-eight",
 }
 
 
@@ -684,11 +687,14 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
         # Reports Modernization WP06: the four transfer uploads, served only with
         # a report content store and the transfer staging (unset by default).
         or capability in _REPORT_TRANSFER_UPLOAD_CAPABILITIES
+        # Files workspace WP5: the 17 `files.*` names, served only with the
+        # workspace store (`MY_PA_FILES_WORKSPACE_ROOT`, unset by default).
+        or capability in FILE_WORKSPACE_CAPABILITIES
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert implemented == 281
-    assert len(withheld_families) == 157
+    assert implemented == 298
+    assert len(withheld_families) == 174
     assert unwired == set()
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
@@ -751,7 +757,10 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # default grows by one); its four uploads are an eighth withheld family
     # (composed only with the content store and the transfer staging), so the
     # withheld figure grows by four.
-    assert default == 124 and total == 281 and withheld == 157
+    # The files workspace WP5's 17 `files.*` names are a ninth withheld family
+    # (composed only with the workspace store): the default is unchanged and the
+    # withheld figure grows by seventeen.
+    assert default == 124 and total == 298 and withheld == 174
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured

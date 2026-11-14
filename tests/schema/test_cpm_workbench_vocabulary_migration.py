@@ -40,6 +40,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Connection, Engine, insert, text
 from sqlalchemy.exc import DBAPIError
 from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
+from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES, S63_PURPOSES
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
@@ -53,7 +54,7 @@ REVISION: Final = "621ef6786c64"
 PREVIOUS: Final = "6c2306330ceb"
 #: Schedule Scenarios S6-2 (`2a90f91dd786`) is additive on this revision, and Reports
 #: Modernization WP01 (`4c37731671fc`) on it is the head.
-HEAD: Final = "b77334135653"
+HEAD: Final = "640aaacc78e8"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261028_621ef6786c64_cpm_workbench_vocabulary.py"
 #: The head that restates the capability vocabulary after this one (WP02).
@@ -102,13 +103,14 @@ def _literals(block: object) -> list[str]:
 def test_the_revision_is_the_single_head_on_6c2306330ceb() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "4c37731671fc"
+    assert script.get_revision(HEAD).down_revision == "b77334135653"
+    assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
     assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
     assert script.get_revision("2a90f91dd786").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "023f8f7eb499"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 128
+    assert len(list(MIGRATIONS.glob("*.py"))) == 129
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -185,15 +187,19 @@ def test_at_sets_equal_the_live_enums() -> None:
     # head-equals-enum claim moves to its literal; its BEFORE texts are the
     # Reports AT texts byte for byte.
     plane = _namespace(SCHEDULE_SCENARIOS_VOCABULARY_MIGRATION)
+    # Files workspace WP4 restates both sets after revision B; its names are set
+    # aside whether or not the domain declares them yet (WP5).
+    declared -= FILES_CAPABILITIES
     assert plane["_CAPABILITIES_BEFORE_THIS_REVISION"] == head["_CAPABILITIES_AT_THIS_REVISION"]
     assert plane["_PURPOSES_BEFORE_THIS_REVISION"] == head["_PURPOSES_AT_THIS_REVISION"]
     plane_capabilities = _literals(plane["_CAPABILITIES_AT_THIS_REVISION"])
     assert set(plane_capabilities) == declared
     assert len(plane_capabilities) == 292
     assert set(plane_capabilities) - set(head_capabilities) == S63_CAPABILITIES
-    assert set(_literals(plane["_PURPOSES_AT_THIS_REVISION"])) == {
-        member.value for member in Purpose
-    }
+    assert (
+        set(_literals(plane["_PURPOSES_AT_THIS_REVISION"]))
+        == {member.value for member in Purpose} - FILES_PURPOSES
+    )
     declared -= S63_CAPABILITIES
     assert set(head_capabilities) == declared
     assert set(head_capabilities) - set(capabilities) == {
@@ -218,7 +224,9 @@ def test_at_sets_equal_the_live_enums() -> None:
     assert head["_PURPOSES_BEFORE_THIS_REVISION"] == mine["_PURPOSES_AT_THIS_REVISION"]
     head_purposes = _literals(head["_PURPOSES_AT_THIS_REVISION"])
     assert head_purposes == sorted(head_purposes)
-    assert set(head_purposes) == {member.value for member in Purpose} - S63_PURPOSES
+    assert (
+        set(head_purposes) == {member.value for member in Purpose} - S63_PURPOSES - FILES_PURPOSES
+    )
     assert set(head_purposes) - set(purposes) == {
         "report_lifecycle",
         "report_hold",

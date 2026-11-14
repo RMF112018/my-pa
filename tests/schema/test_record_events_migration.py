@@ -46,6 +46,7 @@ from sqlalchemy import Engine, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
+from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.knowledge_schema_ahead_contract import current_gap
 from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES as LINEAGE_S2_CAPABILITIES
 from tests.schema.lineage_s2_schema_ahead_contract import S2_PURPOSES as LINEAGE_S2_PURPOSES
@@ -75,7 +76,7 @@ REVISION: Final = "1d9b248e7f83"
 #: The chain head. `0641c354ca85` (CRL-WP-03, Capture lifecycle) is additive on
 #: `REVISION`, so `REVISION` is no longer the head; a database upgraded to head
 #: stands there, and a refused downgrade leaves it there.
-HEAD: Final = "b77334135653"
+HEAD: Final = "640aaacc78e8"
 PREVIOUS: Final = "7d9a450dfd07"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20260929_1d9b248e7f83_record_events.py"
@@ -144,7 +145,8 @@ def test_the_revision_is_directly_on_7d9a450dfd07_under_one_later_head() -> None
     script = ScriptDirectory.from_config(_config())
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "4c37731671fc"
+    assert script.get_revision(HEAD).down_revision == "b77334135653"
+    assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
     assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
     assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
     assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
@@ -264,6 +266,8 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
         - S5B2_CAPABILITIES
         # Schedule Scenarios S6-3: admitted by `b77334135653`.
         - S63_CAPABILITIES
+        # Files workspace WP4: admitted by its revision (the head).
+        - FILES_CAPABILITIES
         # Reports Modernization WP02 and WP03: admitted by `4c37731671fc`.
         - {
             "reports.publish",
@@ -292,6 +296,7 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
         - LINEAGE_S4_PURPOSES
         - S5B2_PURPOSES
         - S63_PURPOSES
+        - FILES_PURPOSES
         # Reports Modernization WP03: admitted by `4c37731671fc`.
         - {"report_lifecycle", "report_hold", "report_retention"}
     )

@@ -13,7 +13,7 @@ serving process composes them, and the same 34 are the grant set for the ChatGPT
 connector; Issue close and reopen, the 3 `confirm` capabilities and `records.backfill.*`
 stay withheld from every client. The operator's procedure is in
 [`remote-mcp-cloudflare.md`](../../ops/runbooks/remote-mcp-cloudflare.md#record-lineage-client-exposure-p1).
-The current profile is `chatllm-data-v13` (Schedule Scenarios S6-3) adds the 22 client-usable Schedule
+The current profile is `chatllm-data-v14` (files workspace WP5: the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set). `chatllm-data-v13` (Schedule Scenarios S6-3) adds the 22 client-usable Schedule
 Scenarios names (6 writes under `schedule_analysis_authoring`, 16 reads under
 `schedule_analysis_read`) as `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_ENABLED` and
 `MY_PA_SCHEDULE_SCENARIOS_ENABLED` together, and keeps the 4 operator baseline decisions

@@ -102,6 +102,9 @@ class ChatLLMCompositionPlanes:
     #: Schedule Scenarios S6-3 (chatllm-data-v13): `MY_PA_SCHEDULE_SCENARIOS_ENABLED`,
     #: which stacks on the Schedule switch. Default off, as the switch is.
     schedule_scenarios: bool = False
+    #: Files workspace (chatllm-data-v14): `MY_PA_FILES_WORKSPACE_ROOT` is set, so
+    #: the store is composed. Default off, as an unset root is; needs no other plane.
+    files_workspace: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +233,9 @@ def _prerequisite_holds(
         # The service's own condition: the plane is effective only with both
         # switches (`ApplicationService._scenario_plane`).
         return planes.schedule and planes.schedule_scenarios
+    if prerequisite is ChatLLMCompositionPrerequisite.FILES_WORKSPACE:
+        # The service's own condition: a composed store (files contract section 9).
+        return planes.files_workspace
     raise RuntimeError(f"unknown ChatLLM composition prerequisite: {prerequisite!r}")
 
 

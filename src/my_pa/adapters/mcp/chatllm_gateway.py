@@ -82,6 +82,8 @@ _FEATURE_BY_FAMILY: Final[Mapping[str, str]] = {
     "schedule_cpm_runs": "schedule",
     "schedule_scenario_outputs": "schedule",
     "schedule_baselines": "schedule",
+    # Files workspace (files-workspace contract section 12): the 17 `files.*` names.
+    "files": "files",
 }
 
 _WRAPPER_SCHEMA: Final[dict[str, Any]] = {

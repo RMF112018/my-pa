@@ -49,7 +49,7 @@ REVISION: Final = "93f3aa113f58"
 PREVIOUS: Final = "6734f039f7a6"
 #: The chain head: `a591b81f10a2` (Intelligence report type registry) is additive
 #: on `REVISION`, so a database upgraded to head stands there.
-HEAD: Final = "b77334135653"
+HEAD: Final = "640aaacc78e8"
 MIGRATION: Final = VERSIONS / "20261007_93f3aa113f58_intelligence_focus_area_admission.py"
 PLANE_MIGRATION: Final = VERSIONS / "20260820_e9b2c4d7a150_admit_intelligence_artifact_plane.py"
 CHECK_VIOLATION: Final = "23514"
@@ -122,7 +122,8 @@ def test_the_revision_is_directly_on_the_knowledge_revision_under_one_later_head
     """
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "4c37731671fc"
+    assert script.get_revision(HEAD).down_revision == "b77334135653"
+    assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
     assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
     assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
     assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"

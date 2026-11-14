@@ -198,7 +198,11 @@ def test_non_lineage_tool_annotations_are_unchanged() -> None:
         Capability.REPORTS_TRANSFER_ABORT.value,
         Capability.REPORTS_TRANSFER_READ_CHUNK.value,
     }
-    others = frozenset(_tools()) - plane - schedule - {Capability.REPORTS_PUBLISH.value} - wp03
+    # Files workspace WP5: its 17 `files.*` names are new.
+    files = {name for name in _tools() if name.startswith("files.")}
+    others = (
+        frozenset(_tools()) - plane - schedule - {Capability.REPORTS_PUBLISH.value} - wp03 - files
+    )
     assert len(others) == 192
     for name in sorted(others):
         capability = Capability(name)

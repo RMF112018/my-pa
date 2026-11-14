@@ -1026,6 +1026,24 @@ _POST_KLP_CAPABILITIES: Final = frozenset(
         "schedule_baselines.read",
         "schedule_baselines.governing",
         "schedule_baselines.compare",
+        # Files workspace WP5 (files-workspace contract section 1.1).
+        "files.workspaces.list",
+        "files.list",
+        "files.stat",
+        "files.search",
+        "files.preview",
+        "files.history",
+        "files.download.begin",
+        "files.mkdir",
+        "files.copy",
+        "files.upload.begin",
+        "files.upload.abort",
+        "files.rename",
+        "files.move",
+        "files.trash",
+        "files.restore",
+        "files.upload.finalize",
+        "files.write_text",
     }
 )
 _EVENT: Final = "rcev_fastworld000000001"

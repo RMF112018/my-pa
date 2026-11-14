@@ -140,6 +140,16 @@ from my_pa.domain.documents.managed import (
     validate_managed_media_type,
     validate_managed_title,
 )
+from my_pa.domain.files.errors import FilesDomainError
+from my_pa.domain.files.paths import parse_path, validate_name
+from my_pa.domain.files.transfer import parse_file_id, validate_sha256, validate_ttl
+from my_pa.domain.files.versions import parse_version_token
+from my_pa.domain.files.vocabulary import (
+    MAX_PREVIEW_BYTES,
+    MAX_SEARCH_QUERY_CHARACTERS,
+    MAX_WRITE_TEXT_BYTES,
+)
+from my_pa.domain.files.vocabulary import PAGE_SIZE as FILES_PAGE_SIZE
 from my_pa.domain.goodnotes.dates import canonical_date_evidence
 from my_pa.domain.goodnotes.models import (
     NOTE_UNIT_SCHEMA_V1,
@@ -452,12 +462,15 @@ from my_pa.domain.task.lifecycle import (
 from my_pa.domain.task.role import TaskRole
 
 __all__ = [
+    "AbortFileUpload",
     "AddEntityAlias",
     "AddProjectCommand",
     "ArchiveCapture",
     "ArchiveEntity",
     "ArchiveManagedDocument",
     "ArchiveManagedDocumentCommand",
+    "BeginFileDownload",
+    "BeginFileUpload",
     "BeginIntelligenceCycle",
     "BindEntityIdentifier",
     "BulkConfirmTasks",
@@ -468,6 +481,7 @@ __all__ = [
     "Command",
     "CommitIntelligenceArtifact",
     "CompleteGoodNotesPull",
+    "CopyFile",
     "CorrectGoodNotes",
     "CreateCapture",
     "CreateCommitment",
@@ -482,10 +496,12 @@ __all__ = [
     "EnrollSource",
     "EnterFrameCommand",
     "FetchSource",
+    "FinalizeFileUpload",
     "GetCanvasWorkspace",
     "GetCapabilities",
     "GetCommitmentHistory",
     "GetCorpusCoverage",
+    "GetFileHistory",
     "GetGoodNotesContent",
     "GetGoodNotesPullStatus",
     "GetGoodNotesWork",
@@ -504,6 +520,8 @@ __all__ = [
     "ListEntityIdentifiers",
     "ListEntityNames",
     "ListEntityParticipations",
+    "ListFileWorkspaces",
+    "ListFiles",
     "ListGoodNotesNotebooks",
     "ListGoodNotesPages",
     "ListGoodNotesRuns",
@@ -516,8 +534,11 @@ __all__ = [
     "ListSources",
     "ListTaskComments",
     "ListTasks",
+    "MakeFileDirectory",
+    "MoveFile",
     "OpenSituationCommand",
     "PrepareContext",
+    "PreviewFile",
     "PullGoodNotesWork",
     "PutCanvasWorkspace",
     "ReadCapture",
@@ -533,10 +554,12 @@ __all__ = [
     "RecordIntelligenceRunState",
     "RecordRelationshipEventCommand",
     "RecordTask",
+    "RenameFile",
     "Representation",
     "ResolveIntelligenceSet",
     "RestoreCapture",
     "RestoreEntity",
+    "RestoreFile",
     "RestoreManagedDocument",
     "RestoreManagedDocumentCommand",
     "RetireEntityAlias",
@@ -547,21 +570,26 @@ __all__ = [
     "ReviseManagedDocumentCommand",
     "SearchCaptures",
     "SearchCommitments",
+    "SearchFiles",
     "SearchGoodNotes",
     "SearchIntelligenceArtifacts",
     "SearchKnowledge",
     "SearchTasks",
     "StartGsqsB0",
+    "StatFile",
     "SubmitGoodNotesProposal",
     "SupersedeEntityAlias",
     "SupersedeEntityIdentifier",
     "TraceObjectCommand",
     "TransitionTask",
+    "TrashFile",
     "UpdateCommitment",
     "UpdateEntity",
     "UpdateProject",
     "UpdateTask",
     "WaitingOn",
+    "WriteFileText",
+    "parse_files_history_cursor",
 ]
 
 
@@ -18044,6 +18072,527 @@ class CompareScheduleBaseline:
         _schedule_cursor(self.cursor)
 
 
+# --- files workspace (`files.*`, ADR-019, files-workspace contract section 6) --------
+#
+# Every command validates its own shape here, on every transport, before the
+# handler runs: a path against section 3 (`invalid_path` with the field), a
+# version token, an opaque id, the section 8 bounds. A refusal names the field
+# and a closed token and never the value. Whether an alias, entry, ticket or
+# trash item exists is the handler's (`application.file_workspace`).
+
+_FILES_WORKSPACE_ID_MAX: Final = 64
+_FILES_HISTORY_CURSOR_MAX: Final = 2 * 70 + 1
+_FILES_ROUTE_NOTE: Final = (
+    "route is a relative URL path; join it to the remote MCP origin and send "
+    "Authorization: Bearer <token>."
+)
+
+
+def _files_workspace(value: object) -> str:
+    """A workspace alias: a string; an unknown alias is the handler's `not_found`."""
+    if type(value) is not str or not 1 <= len(value) <= _FILES_WORKSPACE_ID_MAX:
+        raise InvalidRequestError(SafeDetail.WORKSPACE_ID)
+    return value
+
+
+def _files_path(value: object, detail: SafeDetail, *, allow_root: bool = False) -> str:
+    """A section 3 path, unchanged, or `invalid_path` naming its field."""
+    try:
+        parse_path(value, detail.value, allow_root=allow_root)
+    except FilesDomainError:
+        refusal = InvalidRequestError(SafeDetail.INVALID_PATH, detail)
+    else:
+        assert isinstance(value, str)  # noqa: S101 - parse_path refused anything else
+        return value
+    raise refusal
+
+
+def _files_name(value: object) -> str:
+    """One path component (`files.rename`'s `new_name`), or `invalid_path`."""
+    try:
+        return validate_name(value, "new_name")
+    except FilesDomainError:
+        refusal = InvalidRequestError(SafeDetail.INVALID_PATH, SafeDetail.NEW_NAME)
+    raise refusal
+
+
+def _files_version(value: object, detail: SafeDetail = SafeDetail.EXPECTED_VERSION) -> None:
+    """An optional `fv1_` version token."""
+    if value is not None and parse_version_token(value) is None:
+        raise InvalidRequestError(detail)
+
+
+def _files_id(value: object, kind: IdKind, detail: SafeDetail) -> None:
+    if type(value) is not str:
+        raise InvalidRequestError(detail)
+    _identifier(value, kind, detail)
+
+
+def _files_page_size(value: object) -> None:
+    if value is not None and (type(value) is not int or not 1 <= value <= FILES_PAGE_SIZE):
+        raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+
+
+def _files_flag(value: object, detail: SafeDetail) -> None:
+    if type(value) is not bool:
+        raise InvalidRequestError(detail)
+
+
+def _files_ttl(value: object) -> None:
+    try:
+        validate_ttl(value)
+    except FilesDomainError:
+        refusal = InvalidRequestError(SafeDetail.TTL_SECONDS)
+    else:
+        return
+    raise refusal
+
+
+def _files_sha256(value: object) -> None:
+    try:
+        validate_sha256(value)
+    except FilesDomainError:
+        refusal = InvalidRequestError(SafeDetail.SHA256)
+    else:
+        return
+    raise refusal
+
+
+def _files_byte_count(value: object, detail: SafeDetail) -> None:
+    if type(value) is not int or value < 0:
+        raise InvalidRequestError(detail)
+
+
+def parse_files_history_cursor(value: str | None) -> tuple[str | None, str | None]:
+    """A `files.history` cursor: the last version and the last trash item it returned.
+
+    `None`, or one or two opaque ids joined by `,` (at most one `fwver_` and one
+    `fwtrs_`); either stream absent from it starts from its newest row.
+    """
+    if value is None:
+        return None, None
+    if type(value) is not str or not 1 <= len(value) <= _FILES_HISTORY_CURSOR_MAX:
+        raise InvalidRequestError(SafeDetail.AFTER)
+    version: str | None = None
+    trash: str | None = None
+    for part in value.split(","):
+        if version is None and parse_file_id(part, IdKind.FILE_VERSION.value) is not None:
+            version = part
+        elif trash is None and parse_file_id(part, IdKind.FILE_TRASH_ITEM.value) is not None:
+            trash = part
+        else:
+            raise InvalidRequestError(SafeDetail.AFTER)
+    return version, trash
+
+
+@dataclass(frozen=True, slots=True)
+class ListFileWorkspaces:
+    """List the file workspaces you can use (alias, writable, limits).
+
+    `files.workspaces.list`: the one configured workspace (trim T8), with
+    `writable` (whether your grants allow a write; it does not reflect a
+    remote writes-disabled switch) and the section 8 limits.
+    """
+
+    capability: ClassVar[Capability] = Capability.FILES_WORKSPACES_LIST
+
+
+@dataclass(frozen=True, slots=True)
+class ListFiles:
+    """List one directory of a file workspace, sorted by name bytes (paged with `after`).
+
+    `path` is workspace-relative (`""` is the root); `after` is the last name
+    of the previous page (`next_after`); `page_size` 1..200, default 200.
+    Reserved names (`.my-pa`, `@eaDir`, `#recycle`, `#snapshot`) are omitted.
+    """
+
+    capability: ClassVar[Capability] = Capability.FILES_LIST
+
+    workspace_id: str
+    path: str
+    after: str | None = None
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        _files_path(self.path, SafeDetail.PATH, allow_root=True)
+        if self.after is not None:
+            if not isinstance(self.after, str):
+                raise InvalidRequestError(SafeDetail.AFTER)
+            try:
+                validate_name(self.after, "after")
+            except FilesDomainError:
+                raise InvalidRequestError(SafeDetail.AFTER) from None
+        _files_page_size(self.page_size)
+
+
+@dataclass(frozen=True, slots=True)
+class StatFile:
+    """Describe one file or directory of a file workspace (its version token; sha256 on request).
+
+    `include_sha256` hashes a file's content (never a directory's).
+    """
+
+    capability: ClassVar[Capability] = Capability.FILES_STAT
+
+    workspace_id: str
+    path: str
+    include_sha256: bool = False
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        _files_path(self.path, SafeDetail.PATH)
+        _files_flag(self.include_sha256, SafeDetail.INCLUDE_SHA256)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchFiles:
+    """Find files and directories by name under a workspace directory (case-insensitive substring).
+
+    A bounded name walk (20,000 entries, depth 32; no content search, no
+    index): `query` is 1..255 characters, `page_size` 1..200. `truncated` is
+    true when the walk cap or the page was reached; there is no continuation.
+    """
+
+    capability: ClassVar[Capability] = Capability.FILES_SEARCH
+
+    workspace_id: str
+    path: str
+    query: str
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        _files_path(self.path, SafeDetail.PATH, allow_root=True)
+        query: object = self.query
+        if type(query) is not str or not 1 <= len(query) <= MAX_SEARCH_QUERY_CHARACTERS:
+            raise InvalidRequestError(SafeDetail.QUERY)
+        _files_page_size(self.page_size)
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewFile:
+    """Read a bounded UTF-8 text window of a workspace file (at most 256 KiB per call).
+
+    Continue with `offset` = `next_offset` (null at the end). Non-UTF-8 content
+    answers `binary: true` and no text. `expected_version` refuses
+    `version_conflict` when the file changed.
+    """
+
+    capability: ClassVar[Capability] = Capability.FILES_PREVIEW
+
+    workspace_id: str
+    path: str
+    offset: int = 0
+    max_bytes: int = MAX_PREVIEW_BYTES
+    expected_version: str | None = None
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        _files_path(self.path, SafeDetail.PATH)
+        _files_byte_count(self.offset, SafeDetail.OFFSET)
+        if type(self.max_bytes) is not int or not 1 <= self.max_bytes <= MAX_PREVIEW_BYTES:
+            raise InvalidRequestError(SafeDetail.MAX_BYTES)
+        _files_version(self.expected_version)
+
+
+@dataclass(frozen=True, slots=True)
+class GetFileHistory:
+    """List the preserved versions and trash items the product recorded, newest first.
+
+    For one `path` (or the whole workspace); external edits have no history.
+    Page with `after` = the previous `next_after`; `page_size` 1..200.
+    """
+
+    capability: ClassVar[Capability] = Capability.FILES_HISTORY
+
+    workspace_id: str
+    path: str | None = None
+    after: str | None = None
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        if self.path is not None:
+            _files_path(self.path, SafeDetail.PATH)
+        if self.after is not None and not isinstance(self.after, str):
+            raise InvalidRequestError(SafeDetail.AFTER)
+        parse_files_history_cursor(self.after)
+        _files_page_size(self.page_size)
+
+
+@dataclass(frozen=True, slots=True)
+class BeginFileDownload:
+    """Open a download ticket for a workspace file or a preserved version (bytes go over HTTP).
+
+    Name exactly one of `path` (with an optional `expected_version`) and
+    `version_id` (a `fwver_` from `files.history`). The answer's
+    `download_token` is shown once; `ttl_seconds` 300..86400, default 3600.
+    """
+
+    capability: ClassVar[Capability] = Capability.FILES_DOWNLOAD_BEGIN
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"ttl_seconds": {"description": f"Ticket lifetime. {_FILES_ROUTE_NOTE}"}}
+    )
+
+    workspace_id: str
+    path: str | None = None
+    version_id: str | None = None
+    expected_version: str | None = None
+    include_sha256: bool = False
+    ttl_seconds: int | None = None
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        if (self.path is None) == (self.version_id is None):
+            raise InvalidRequestError(SafeDetail.PATH, SafeDetail.VERSION_ID)
+        if self.path is not None:
+            _files_path(self.path, SafeDetail.PATH)
+            _files_version(self.expected_version)
+        else:
+            _files_id(self.version_id, IdKind.FILE_VERSION, SafeDetail.VERSION_ID)
+            if self.expected_version is not None:
+                raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        _files_flag(self.include_sha256, SafeDetail.INCLUDE_SHA256)
+        _files_ttl(self.ttl_seconds)
+
+
+@dataclass(frozen=True, slots=True)
+class MakeFileDirectory:
+    """Create a directory in a file workspace (never over an existing entry).
+
+    `parents` creates missing parent directories too (default false).
+    """
+
+    capability: ClassVar[Capability] = Capability.FILES_MKDIR
+
+    workspace_id: str
+    path: str
+    idempotency_key: str
+    parents: bool = False
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        _files_path(self.path, SafeDetail.PATH)
+        _idempotency_key(self.idempotency_key)
+        _files_flag(self.parents, SafeDetail.PARENTS)
+
+
+@dataclass(frozen=True, slots=True)
+class CopyFile:
+    """Copy a workspace file or directory to a new path (never over an existing entry).
+
+    A directory copy is bounded (20,000 entries, depth 32) and by the disk
+    reserve (`too_large`, `quota`). `expected_version` names the source.
+    """
+
+    capability: ClassVar[Capability] = Capability.FILES_COPY
+
+    workspace_id: str
+    path: str
+    to_path: str
+    idempotency_key: str
+    expected_version: str | None = None
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        _files_path(self.path, SafeDetail.PATH)
+        _files_path(self.to_path, SafeDetail.TO_PATH)
+        _idempotency_key(self.idempotency_key)
+        _files_version(self.expected_version)
+
+
+@dataclass(frozen=True, slots=True)
+class BeginFileUpload:
+    """Open an upload ticket to create a workspace file, or to replace one with `expected_version`.
+
+    The bytes go to the answer's `route` over HTTP (HEAD/PATCH, resumable),
+    then `files.upload.finalize`. `size` and `sha256` are optional
+    declarations finalize enforces. The `upload_token` is shown once: a replay
+    of this call answers without it (abort and begin again if it was lost).
+    """
+
+    capability: ClassVar[Capability] = Capability.FILES_UPLOAD_BEGIN
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"ttl_seconds": {"description": f"Ticket lifetime. {_FILES_ROUTE_NOTE}"}}
+    )
+
+    workspace_id: str
+    path: str
+    idempotency_key: str
+    expected_version: str | None = None
+    size: int | None = None
+    sha256: str | None = None
+    ttl_seconds: int | None = None
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        _files_path(self.path, SafeDetail.PATH)
+        _idempotency_key(self.idempotency_key)
+        _files_version(self.expected_version)
+        if self.size is not None:
+            _files_byte_count(self.size, SafeDetail.SIZE)
+        if self.sha256 is not None:
+            _files_sha256(self.sha256)
+        _files_ttl(self.ttl_seconds)
+
+
+@dataclass(frozen=True, slots=True)
+class AbortFileUpload:
+    """Abort one of your open upload tickets and discard its staged bytes."""
+
+    capability: ClassVar[Capability] = Capability.FILES_UPLOAD_ABORT
+
+    workspace_id: str
+    upload_id: str
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        _files_id(self.upload_id, IdKind.FILE_UPLOAD, SafeDetail.UPLOAD_ID)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class RenameFile:
+    """Rename a workspace file or directory within its directory (never over an existing entry)."""
+
+    capability: ClassVar[Capability] = Capability.FILES_RENAME
+
+    workspace_id: str
+    path: str
+    new_name: str
+    idempotency_key: str
+    expected_version: str | None = None
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        _files_path(self.path, SafeDetail.PATH)
+        _files_name(self.new_name)
+        _idempotency_key(self.idempotency_key)
+        _files_version(self.expected_version)
+
+
+@dataclass(frozen=True, slots=True)
+class MoveFile:
+    """Move a workspace file or directory to a new path (never over an existing entry)."""
+
+    capability: ClassVar[Capability] = Capability.FILES_MOVE
+
+    workspace_id: str
+    path: str
+    to_path: str
+    idempotency_key: str
+    expected_version: str | None = None
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        _files_path(self.path, SafeDetail.PATH)
+        _files_path(self.to_path, SafeDetail.TO_PATH)
+        _idempotency_key(self.idempotency_key)
+        _files_version(self.expected_version)
+
+
+@dataclass(frozen=True, slots=True)
+class TrashFile:
+    """Move a workspace file or directory to the recoverable trash (there is no purge).
+
+    A directory goes as one item. Restore it with `files.restore` and the
+    answer's `trash_item_id`.
+    """
+
+    capability: ClassVar[Capability] = Capability.FILES_TRASH
+
+    workspace_id: str
+    path: str
+    idempotency_key: str
+    expected_version: str | None = None
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        _files_path(self.path, SafeDetail.PATH)
+        _idempotency_key(self.idempotency_key)
+        _files_version(self.expected_version)
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreFile:
+    """Restore a trashed entry to its original path or `to_path` (never over an existing entry)."""
+
+    capability: ClassVar[Capability] = Capability.FILES_RESTORE
+
+    workspace_id: str
+    trash_item_id: str
+    idempotency_key: str
+    to_path: str | None = None
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        _files_id(self.trash_item_id, IdKind.FILE_TRASH_ITEM, SafeDetail.TRASH_ITEM_ID)
+        _idempotency_key(self.idempotency_key)
+        if self.to_path is not None:
+            _files_path(self.to_path, SafeDetail.TO_PATH)
+
+
+@dataclass(frozen=True, slots=True)
+class FinalizeFileUpload:
+    """Publish one of your uploads once its staged bytes match `length` and `sha256`.
+
+    A mismatch with the staged bytes or the begin's declarations is
+    `digest_mismatch` and the target is untouched. A replace preserves the
+    previous content (`preimage_version_id`).
+    """
+
+    capability: ClassVar[Capability] = Capability.FILES_UPLOAD_FINALIZE
+
+    workspace_id: str
+    upload_id: str
+    length: int
+    sha256: str
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        _files_id(self.upload_id, IdKind.FILE_UPLOAD, SafeDetail.UPLOAD_ID)
+        _files_byte_count(self.length, SafeDetail.LENGTH)
+        _files_sha256(self.sha256)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class WriteFileText:
+    """Create a UTF-8 text file in a workspace, or replace via `expected_version` (max 120 KiB).
+
+    Without `expected_version` an existing file is `exists`; a replace
+    preserves the previous content (`preimage_version_id`).
+    """
+
+    capability: ClassVar[Capability] = Capability.FILES_WRITE_TEXT
+
+    workspace_id: str
+    path: str
+    text: str = field(repr=False)
+    idempotency_key: str
+    expected_version: str | None = None
+
+    def __post_init__(self) -> None:
+        _files_workspace(self.workspace_id)
+        _files_path(self.path, SafeDetail.PATH)
+        text: object = self.text
+        if type(text) is not str:
+            raise InvalidRequestError(SafeDetail.TEXT)
+        try:
+            size = len(text.encode("utf-8"))
+        except UnicodeEncodeError:
+            raise InvalidRequestError(SafeDetail.TEXT) from None
+        if size > MAX_WRITE_TEXT_BYTES:
+            raise InvalidRequestError(SafeDetail.TOO_LARGE, SafeDetail.TEXT)
+        _idempotency_key(self.idempotency_key)
+        _files_version(self.expected_version)
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -18326,6 +18875,23 @@ type Command = (
     | ReadScheduleBaseline
     | ReadGoverningScheduleBaseline
     | CompareScheduleBaseline
+    | ListFileWorkspaces
+    | ListFiles
+    | StatFile
+    | SearchFiles
+    | PreviewFile
+    | GetFileHistory
+    | BeginFileDownload
+    | MakeFileDirectory
+    | CopyFile
+    | BeginFileUpload
+    | AbortFileUpload
+    | RenameFile
+    | MoveFile
+    | TrashFile
+    | RestoreFile
+    | FinalizeFileUpload
+    | WriteFileText
 )
 
 

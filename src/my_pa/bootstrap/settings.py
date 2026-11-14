@@ -389,6 +389,30 @@ class Settings(StrictModel):
     #: stored in the report content store when one is configured, else refused.
     #: Not a secret. Backward compatible: the default is the WP04 bound.
     report_content_inline_max_bytes: int = Field(default=524288, ge=1, le=524288)
+    #: The files workspace root (ADR-019, files-workspace contract section 9),
+    #: env `MY_PA_FILES_WORKSPACE_ROOT`: the absolute container path of the one
+    #: writable workspace.
+    #:
+    #: **Empty by default, and empty means the plane is absent**: no store is
+    #: composed, no `files.*` name is served, and the ChatLLM `FILES_WORKSPACE`
+    #: prerequisite is false. There is no default location, for the reason
+    #: `managed_document_root` has none.
+    #:
+    #: **Validated where the store is built, not here.** The composition root
+    #: (`bootstrap.gateway.files_workspace_store`) hands it to
+    #: `infrastructure.file_workspace.store`, whose constructor refuses to start
+    #: unless it exists, is a directory, is not a symbolic link, and neither is,
+    #: contains nor lies inside a configured source, managed-document or report
+    #: content root. Not a secret, holds no credential; backward compatible.
+    files_workspace_root: str = ""
+    #: The workspace's logical alias (contract section 2), env
+    #: `MY_PA_FILES_WORKSPACE_ID`, default `mcp`: a lower-case token, the
+    #: pattern the persistence rows enforce (`^[a-z][a-z0-9_]{0,63}$`).
+    files_workspace_id: str = Field(default="mcp", pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    #: Contract section 8: the per-upload ceiling (default 10 GiB) and the
+    #: `statvfs` free-space reserve (default 20 GiB). Not secrets.
+    files_max_upload_bytes: int = Field(default=10737418240, ge=1)
+    files_disk_reserve_bytes: int = Field(default=21474836480, ge=0)
     #: The Frontier MCP surface's kill switch (WP-28).
     #:
     #: **The switch is off by default and the surface serves**, which is the
@@ -773,6 +797,15 @@ class Settings(StrictModel):
         where containment and source-root refusal live.
         """
         return bool(self.managed_document_root.strip())
+
+    def files_workspace_is_composed(self) -> bool:
+        """Whether the files workspace plane is composed (contract section 9).
+
+        True only when a workspace root is configured. Like
+        `managed_documents_are_composed`, callers needing only the boolean must
+        not read the path: it reaches only the store constructor.
+        """
+        return bool(self.files_workspace_root.strip())
 
     #: The single parse of `database_url`, produced by validation and handed on
     #: unchanged. Private because it is not configuration an operator supplies

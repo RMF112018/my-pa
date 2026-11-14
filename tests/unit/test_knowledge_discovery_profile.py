@@ -306,8 +306,9 @@ def test_the_ordinary_chatllm_profile_excludes_submit_and_checkpoint() -> None:
     # added only the two `reports.types.*` names, `chatllm-data-v10` only the
     # record lineage plane, `chatllm-data-v11` only the 6 Schedule reads and
     # `chatllm-data-v12` only the 11 Reports Modernization names, none a
-    # Knowledge name.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v13"
+    # Knowledge name (nor `chatllm-data-v13`'s Schedule Scenarios names nor
+    # `chatllm-data-v14`'s `files.*` names).
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
     assert MATRIX["profile_contract"]["ordinary_chatllm_versions"]["KLP-WP-05"] == (
         "chatllm-data-v8"
     )

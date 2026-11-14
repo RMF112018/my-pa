@@ -323,17 +323,18 @@ operator-run; an agent performs none of them.
    ```
 
 2. **Commissioning (operator-run, not run).** For each ChatLLM client run `profile-diff`,
-   then `profile-plan`, then `profile-apply` at `chatllm-data-v13` (the
+   then `profile-plan`, then `profile-apply` at `chatllm-data-v14` (v14 with
+   `MY_PA_FILES_WORKSPACE_ROOT` unset desires exactly the v13 set; the
    [`managed-knowledge-context.md`](managed-knowledge-context.md) form):
 
    ```sh
    python apps/cli/remote_mcp.py profile-diff --oauth-client-id "$CLIENT" --scope my-pa.read \
-       --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v13
+       --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v14
    python apps/cli/remote_mcp.py profile-plan --oauth-client-id "$CLIENT" --scope my-pa.read \
-       --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v13
+       --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v14
    # operator-gated; only after the go/no-go below
    python apps/cli/remote_mcp.py profile-apply --oauth-client-id "$CLIENT" --scope my-pa.read \
-       --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v13 --apply
+       --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v14 --apply
    ```
 
    **Go/no-go is a set rule, not a count** (R10-F05, R10-N02): (i) the diff shows **no

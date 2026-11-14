@@ -46,6 +46,7 @@ from sqlalchemy import Engine, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
+from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.knowledge_schema_ahead_contract import current_gap
 from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES as LINEAGE_S2_CAPABILITIES
 from tests.schema.lineage_s2_schema_ahead_contract import S2_PURPOSES as LINEAGE_S2_PURPOSES
@@ -265,6 +266,8 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
         - S5B2_CAPABILITIES
         # Schedule Scenarios S6-3: admitted by `b77334135653`.
         - S63_CAPABILITIES
+        # Files workspace WP4: admitted by its revision (the head).
+        - FILES_CAPABILITIES
         # Reports Modernization WP02 and WP03: admitted by `4c37731671fc`.
         - {
             "reports.publish",
@@ -293,6 +296,7 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
         - LINEAGE_S4_PURPOSES
         - S5B2_PURPOSES
         - S63_PURPOSES
+        - FILES_PURPOSES
         # Reports Modernization WP03: admitted by `4c37731671fc`.
         - {"report_lifecycle", "report_hold", "report_retention"}
     )

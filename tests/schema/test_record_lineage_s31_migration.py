@@ -47,6 +47,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from tests.schema import lineage_s31_schema_ahead_contract as gap
 from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES
+from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES
 from tests.schema.lineage_s31_schema_ahead_contract import S31_CAPABILITIES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES
 
@@ -402,6 +403,8 @@ def test_at_vocabulary_adds_exactly_the_s31_names() -> None:
         - S5B2_CAPABILITIES
         # Schedule Scenarios S6-3: admitted by `b77334135653`.
         - S63_CAPABILITIES
+        # Files workspace WP4: admitted by its revision (the head).
+        - FILES_CAPABILITIES
         # And WP03's five, the head's too.
         - {
             "reports.publish",

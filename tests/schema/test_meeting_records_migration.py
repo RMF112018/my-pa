@@ -44,6 +44,7 @@ from sqlalchemy import Engine, Table, insert, text, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
+from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.lineage_s2_schema_ahead_contract import S2_CAPABILITIES as LINEAGE_S2_CAPABILITIES
 from tests.schema.lineage_s2_schema_ahead_contract import S2_PURPOSES as LINEAGE_S2_PURPOSES
 from tests.schema.lineage_s3_schema_ahead_contract import S3_CAPABILITIES as LINEAGE_S3_CAPABILITIES
@@ -322,6 +323,8 @@ ADMITTED_LATER_CAPABILITIES: Final = (
     | S5B2_CAPABILITIES
     # Schedule Scenarios S6-3: admitted by `b77334135653`.
     | S63_CAPABILITIES
+    # Files workspace WP4: admitted by its revision (the head).
+    | FILES_CAPABILITIES
     # Reports Modernization WP02 and WP03: admitted by `4c37731671fc` and declared with it.
     | frozenset(
         {
@@ -360,6 +363,7 @@ ADMITTED_LATER_PURPOSES: Final = (
     | LINEAGE_S4_PURPOSES
     | S5B2_PURPOSES
     | S63_PURPOSES
+    | FILES_PURPOSES
     # Reports Modernization WP03: admitted by `4c37731671fc` and declared with it.
     | frozenset({"report_lifecycle", "report_hold", "report_retention"})
 )

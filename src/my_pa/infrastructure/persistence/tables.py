@@ -21354,7 +21354,7 @@ FILE_RECEIPT_CAPABILITIES: Final = frozenset(
         "files.write_text",
     }
 )
-#: The two capabilities that replace a file's content, and so preserve a preimage.
+#: The capabilities that replace a file's content, and so preserve a preimage.
 FILE_VERSION_CAUSES: Final = frozenset({"files.upload.finalize", "files.write_text"})
 FILE_TRANSFER_KINDS: Final = frozenset({"download", "upload"})
 FILE_TRANSFER_STATES: Final = frozenset({"aborted", "expired", "finalized", "open"})

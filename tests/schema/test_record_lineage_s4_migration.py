@@ -45,6 +45,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
 from tests.schema import lineage_s4_schema_ahead_contract as gap
 from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
+from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.lineage_s4_schema_ahead_contract import S4_CAPABILITIES, S4_PURPOSES
 from tests.schema.lineage_s31_schema_ahead_contract import S31_CAPABILITIES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES, S63_PURPOSES
@@ -215,6 +216,8 @@ def test_at_vocabulary_adds_exactly_the_s4_names() -> None:
         - S5B2_CAPABILITIES
         # Schedule Scenarios S6-3: admitted by `b77334135653`.
         - S63_CAPABILITIES
+        # Files workspace WP4: admitted by its revision (the head).
+        - FILES_CAPABILITIES
         # (and Reports Modernization WP03's five, the head's too).
         - {
             "reports.publish",
@@ -242,6 +245,7 @@ def test_at_vocabulary_adds_exactly_the_s4_names() -> None:
         {purpose.value for purpose in Purpose}
         - S5B2_PURPOSES
         - S63_PURPOSES
+        - FILES_PURPOSES
         - {"report_lifecycle", "report_hold", "report_retention"}
     )
     assert set(purposes_at) == purposes | gap.lineage_s4_admitted_ahead("purpose")

@@ -313,6 +313,9 @@ class FileWorkspaceApplication:
 
     def _workspaces_list(self, call: _Call, command: ListFileWorkspaces) -> dict[str, Any]:
         del command
+        # `writable` reflects the caller's grants only (any files write grant,
+        # or no grant restriction). It does not read the remote process's
+        # writes-disabled switch, which refuses a write at the boundary instead.
         grants = call.authorization.capability_grants
         writable = grants is None or any(
             granted_purposes(capability, grants)

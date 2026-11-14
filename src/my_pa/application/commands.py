@@ -18190,7 +18190,8 @@ class ListFileWorkspaces:
     """List the file workspaces you can use (alias, writable, limits).
 
     `files.workspaces.list`: the one configured workspace (trim T8), with
-    whether you may write to it and the section 8 limits.
+    `writable` (whether your grants allow a write; it does not reflect a
+    remote writes-disabled switch) and the section 8 limits.
     """
 
     capability: ClassVar[Capability] = Capability.FILES_WORKSPACES_LIST
@@ -18562,7 +18563,7 @@ class FinalizeFileUpload:
 
 @dataclass(frozen=True, slots=True)
 class WriteFileText:
-    """Create a UTF-8 text file in a workspace, or replace one with `expected_version` (max 1 MiB).
+    """Create a UTF-8 text file in a workspace, or replace via `expected_version` (max 120 KiB).
 
     Without `expected_version` an existing file is `exists`; a replace
     preserves the previous content (`preimage_version_id`).

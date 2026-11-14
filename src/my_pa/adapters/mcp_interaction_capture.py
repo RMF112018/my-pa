@@ -1093,7 +1093,10 @@ def build_interaction_row(
         omit_request = _unresolved_names(
             exchange.request_body, request.parsed, _TEXT_OMITTED_REQUESTS
         ) or (not request.is_json and _may_carry_text(exchange.request_body))
-        omit_response = _unresolved_names(
+        # Mirrors the request side: a request that could not be parsed, or that
+        # overflowed the buffer, cannot rule out a `files.preview` (its name may
+        # lie past the cut or be `\u`-escaped), so any response `text` is omitted.
+        omit_response = not request.is_json or _unresolved_names(
             exchange.request_body, request.parsed, _TEXT_OMITTED_RESPONSES
         )
     if omit_request:

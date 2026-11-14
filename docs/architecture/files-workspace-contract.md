@@ -100,7 +100,7 @@ Every call takes `workspace_id`. Writes also take `idempotency_key`. Optional ar
 
 | Capability | Arguments | Result |
 |---|---|---|
-| `files.workspaces.list` | (none) | `workspaces: [{workspace_id, writable, limits}]` |
+| `files.workspaces.list` | (none) | `workspaces: [{workspace_id, writable, limits}]`; `writable` reflects the caller's grants only (any `files.*` write grant, or no grant restriction), not the remote writes-disabled switch |
 | `files.list` | `path`, `after?`, `page_size?` (≤ 200, default 200) | `entries[]` sorted by name bytes, `next_after` (last name, or null) |
 | `files.stat` | `path`, `include_sha256?` | entry, `sha256?` |
 | `files.search` | `path` (subtree), `query` (1–255 chars, case-insensitive name substring), `page_size?` (≤ 200) | `entries[]`, `truncated` (walk cap or page reached); no continuation |
@@ -116,7 +116,7 @@ Every call takes `workspace_id`. Writes also take `idempotency_key`. Optional ar
 | `files.trash` | `path`, `expected_version?` | `trash_item_id`, original entry |
 | `files.restore` | `trash_item_id`, `to_path?` | entry |
 | `files.upload.finalize` | `upload_id`, `length`, `sha256` | entry, `preimage_version_id?` |
-| `files.write_text` | `path`, `text` (≤ 1 MiB as UTF-8), `expected_version?` (required to replace) | entry, `preimage_version_id?` |
+| `files.write_text` | `path`, `text` (≤ 120 KiB as UTF-8), `expected_version?` (required to replace) | entry, `preimage_version_id?` |
 
 - A directory copy is staged and then renamed into place. It is bounded by the search walk caps (20,000 entries, depth 32) and by the disk reserve; exceeding them is `too_large`.
 - Trashing a directory moves the whole subtree as one item.
@@ -151,10 +151,12 @@ The set is minimal. Expired and invalid tickets share one token because the clie
 | Ticket TTL | default 3600 s, max 86400 s |
 | Upload request body | ≤ 32 MiB per PATCH (under the tunnel's 100 MB request cap) |
 | Preview | ≤ 256 KiB per call, continued by `offset` |
-| `write_text` | ≤ 1 MiB UTF-8 |
+| `write_text` | ≤ 120 KiB (122,880 bytes) UTF-8 (trim T13) |
 | List / search / history page | 200 entries; `after` cursor for list and history |
 | Search walk | 20,000 entries, depth 32 |
 | Byte-route concurrency | its own per-process cap, default 4, outside the `/mcp` semaphore |
+
+The `write_text` bound is set below the 1 MiB Q3 ceiling because every transport refuses a request above `MAX_REQUEST_BYTES` (762,288 bytes) and a worst-case text (C0 controls, six JSON bytes each under `ensure_ascii`) of 120 KiB is the largest whole-KiB size that still fits beside the other fields at their bounds; the arithmetic is beside `MAX_WRITE_TEXT_BYTES` in `src/my_pa/domain/files/vocabulary.py`.
 
 Zero-byte files are valid everywhere. There is no MIME-type or extension allowlist. There is no tree-wide quota ledger (trim T4).
 
@@ -168,6 +170,8 @@ Zero-byte files are valid everywhere. There is no MIME-type or extension allowli
 | `MY_PA_FILES_DISK_RESERVE_BYTES` | Default 21474836480. |
 
 At composition the store refuses to start unless the root exists, is a directory, and is not a symlink. It also refuses unless the root equals, contains and lies inside none of the configured source, managed-document or report-content roots. The production mount is that one NAS subtree, never `/volume1` or `/volume1/homes`.
+
+The plane is not composed in the restricted MCP database-profile composition: when `MY_PA_MCP_DATABASE_PROFILES_ENABLED` injects a `data_engine`, the gateway composes `file_workspace=None` (`src/my_pa/bootstrap/gateway.py`), so no `files.*` name is served there (fail-closed).
 
 ## 10. Byte routes (remote MCP process only)
 
@@ -214,12 +218,13 @@ Every capability is audited through the existing `authorize` path. Audit records
 - **T4:** tree-wide quota accounting. "Quota" means the max upload size plus the `statvfs` free-space reserve.
 - **T5:** content search and any index. `files.search` is a bounded name walk.
 - **T6:** a separate garbage-collection task. Expired staging is reaped in-process on `upload.begin`.
-- **T7 (amended):** inline Base64 bytes over MCP. Inline content is limited to `files.write_text` (UTF-8, ≤ 1 MiB).
+- **T7 (amended):** inline Base64 bytes over MCP. Inline content is limited to `files.write_text` (UTF-8, ≤ 120 KiB; see T13).
 - **T8:** multiple roots. `files.workspaces.list` returns the single configured workspace.
 - **T9:** persistent per-file ids. Files are addressed by alias, path and version token.
 - **T10:** any sole-writer or atomicity claim against external writers (FW-D04).
 - **T11:** proof of the Abacus scheduled-task bridge. Only the routes and the reference client ship.
 - **T12:** any new process, service, queue or store technology.
+- **T13:** `write_text` bound set below 1 MiB to fit the transport request bound under worst-case escaping (120 KiB; §8).
 
 ## 16. Operator residuals
 

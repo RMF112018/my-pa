@@ -63,6 +63,7 @@ from dataclasses import fields as dataclass_fields
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -96,6 +97,7 @@ import my_pa.adapters.mcp.server as mcp_module
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.capabilities import build_capability_manifest
 from my_pa.application.commands import Command
+from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.application.intelligence import begin_cycle, commit_artifact
 from my_pa.application.service import _HANDLERS
 from my_pa.contracts.ports import KnowledgeRecord, MemoryWriteRequest
@@ -111,6 +113,7 @@ from my_pa.domain.common.identifiers import (
     validate_identifier,
 )
 from my_pa.domain.context.prepared import ContextPlane
+from my_pa.domain.files.vocabulary import MAX_WRITE_TEXT_BYTES
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.intelligence.catalog import (
@@ -3359,6 +3362,71 @@ def test_the_request_ceiling_admits_the_largest_request_the_contract_allows() ->
     # And not wastefully larger: a ceiling far above the worst case would bound
     # nothing in practice.
     assert 2 * encoded > MAX_REQUEST_BYTES
+
+
+def _worst_case_write_text(text_bytes: int) -> dict[str, Any]:
+    """`files.write_text` with every field at its bound in its costliest escape.
+
+    The text is C0 controls (one UTF-8 byte, six `ensure_ascii` JSON bytes); the
+    path is 16 components of 127 two-byte characters and a `"` (255 bytes each,
+    4,095 in all, three JSON bytes per byte); the free-form strings are astral
+    characters, a 12-byte surrogate pair each, at their character bounds.
+    """
+    astral = "\U0010ffff"
+    return {
+        "request_id": astral * 128,
+        "purpose": Purpose.FILE_WORKSPACE_AUTHORING.value,
+        "principal_id": make_identifier(IdKind.PRINCIPAL, "a" * 64),
+        "requested_at": "2026-08-02T12:00:00.000000+00:00",
+        "payload": {
+            "workspace_id": astral * 64,
+            "path": "/".join(["é" * 127 + '"'] * 16),
+            "text": "\x00" * text_bytes,
+            "idempotency_key": astral * 128,
+            "expected_version": "fv1_" + "a" * 64,
+        },
+    }
+
+
+def test_files_write_text_at_its_advertised_limit_fits_every_transport() -> None:
+    """Files-workspace contract section 8 (trim T13): the advertised bound is reachable.
+
+    At exactly `MAX_WRITE_TEXT_BYTES` the worst-case request passes the MCP and
+    CLI re-encoding bound, the HTTP declared-length bound, the remote MCP body
+    bound (direct tool and compact facade, as JSON-RPC) and `normalize`; one
+    byte more still passes every transport and is refused by the command,
+    naming `text`, rather than by an unnamed transport refusal.
+    """
+    capability = Capability.FILES_WRITE_TEXT.value
+    for size in (MAX_WRITE_TEXT_BYTES, MAX_WRITE_TEXT_BYTES + 1):
+        request = _worst_case_write_text(size)
+        assert len(request["payload"]["path"].encode()) == 4095
+        encoded = json.dumps(request).encode()
+        assert len(encoded) <= MAX_REQUEST_BYTES, (size, len(encoded))
+        assert mcp_module._document(request) is request
+        assert cli_module._bounded(request) is request
+        declared = SimpleNamespace(headers={"content-length": str(len(encoded))})
+        assert http_module._declared_length(declared) == len(encoded)  # type: ignore[arg-type]
+        remote_payload = {
+            key: value for key, value in request["payload"].items() if key != "idempotency_key"
+        }
+        for arguments in (
+            {"payload": remote_payload},
+            {"capability": capability, "arguments": {"payload": remote_payload}},
+        ):
+            body = {
+                "jsonrpc": "2.0",
+                "id": "\U0010ffff" * 64,
+                "method": "tools/call",
+                "params": {"name": capability, "arguments": arguments},
+            }
+            assert len(json.dumps(body).encode()) <= MAX_REQUEST_BYTES, size
+        if size == MAX_WRITE_TEXT_BYTES:
+            normalize(capability, request)
+        else:
+            with pytest.raises(InvalidRequestError) as refused:
+                normalize(capability, request)
+            assert refused.value.safe_details == (SafeDetail.TOO_LARGE, SafeDetail.TEXT)
 
 
 def test_the_ceiling_belongs_to_the_normalisation_and_not_to_a_transport() -> None:

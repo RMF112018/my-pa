@@ -2246,8 +2246,37 @@ def test_an_unresolved_request_naming_neither_keeps_its_text(form: str) -> None:
     )
     stored = _serialized(row)
     assert "an ordinary capture" in stored
-    assert "an ordinary reply" in stored
-    assert OMITTED not in stored
+    if form == "batch":
+        assert "an ordinary reply" in stored
+        assert OMITTED not in stored
+    else:
+        # Fail-closed: an unparsed or overflowed request cannot rule out a
+        # `files.preview`, so the response `text` is omitted (the request has no
+        # `text` key and is kept).
+        assert "an ordinary reply" not in stored
+        assert row["request_body_text"] != OMITTED
+
+
+@pytest.mark.parametrize("form", ["invalid", "overflow"])
+def test_an_unparsed_request_omits_any_response_text(form: str) -> None:
+    """A `files.preview` whose name the capture cannot see still has its text omitted.
+
+    The name lies past the buffer cut (overflow) or is `\\u`-escaped in a body that
+    is not JSON (invalid), so nothing in the captured request names the
+    capability; the response's `text` is omitted all the same.
+    """
+    call = _files_call("files.preview", {"payload": {"workspace_id": "mcp", "path": "n.md"}})
+    encoded = json.dumps(call).encode().replace(b"files.preview", b"files.pr\\u0065view")
+    raw, overflowed = (encoded + b",", False) if form == "invalid" else (encoded[:20], True)
+    assert b"files.preview" not in raw
+    envelope = {"result": {"text": _FILE_TEXT, "binary": False, "next_offset": None}}
+    row = _row(
+        _exchange(response=_files_result(envelope), raw_request=raw, request_overflowed=overflowed)
+    )
+    assert row["capability"] is None
+    stored = _serialized(row)
+    assert _FILE_TEXT not in stored
+    assert OMITTED in stored
 
 
 def test_an_unresolved_batch_naming_neither_keeps_a_text_value() -> None:

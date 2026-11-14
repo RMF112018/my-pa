@@ -8,22 +8,30 @@ create a capability grant.
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
 
-from sqlalchemy import Connection
+from sqlalchemy import Connection, select
 
+from my_pa.contracts.ports import RemoteClientStanding, RemoteClientStandingReader
 from my_pa.domain.identity.binding import capture_principal_id
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.identity.user_account import TokenClaimsError
-from my_pa.infrastructure.persistence.remote_identity import RemoteIdentityRepository
+from my_pa.domain.reports.creator import CreatorKind, derive_creator
+from my_pa.domain.reports.transfer import client_ref_of
+from my_pa.infrastructure.persistence.remote_identity import (
+    RemoteIdentityRepository,
+    remote_clients,
+)
 
 __all__ = [
+    "DurableRemoteClientStanding",
     "OriginTokenContext",
     "RemoteAuthContext",
     "RemoteAuthenticationError",
@@ -170,3 +178,70 @@ class RemoteAuthenticator:
         if not separator or scheme.lower() != "bearer" or not token or " " in token:
             raise ValueError
         return token
+
+
+class DurableRemoteClientStanding(RemoteClientStandingReader):
+    """The files byte routes' per-request client re-check (files-workspace contract §10).
+
+    The same rows and rules as `RemoteAuthenticator`, by the same
+    `RemoteIdentityRepository.authenticate`: client enabled, not revoked, not
+    expired and bound to the operator; remote access on; grants unrevoked,
+    unexpired, `v1`, for this resource; write grants dropped unless the client
+    and the global write switches are both on. A byte route carries a ticket,
+    not an OAuth token, so the scope ceiling is the configured scope set rather
+    than one token's scopes -- a token's scopes only narrow grants, never add
+    one, so this is no wider than any token the client could hold.
+
+    The ticket names its client only by the derived reference
+    (`remote_client:<pseudonym>`), so the client is found by deriving each
+    registered client's reference and comparing in constant time; the
+    registry is a handful of operator-registered rows. Every failure (no
+    match, a store error) is the one `None`.
+    """
+
+    def __init__(
+        self,
+        *,
+        connections: ConnectionProvider,
+        resource: str,
+        scopes: frozenset[str],
+    ) -> None:
+        if not resource.strip():
+            raise ValueError("resource is required")
+        self._connections = connections
+        self._resource = resource.strip()
+        self._scopes = frozenset(scopes)
+
+    def standing(self, client_ref: str, *, now: datetime) -> RemoteClientStanding | None:
+        if type(client_ref) is not str or not self._scopes:
+            return None
+        if not client_ref.startswith(f"{CreatorKind.REMOTE_CLIENT.value}:"):
+            return None
+        resolved = None
+        oauth_client_id: str | None = None
+        try:
+            with self._connections() as connection:
+                for candidate in connection.execute(
+                    select(remote_clients.c.oauth_client_id)
+                ).scalars():
+                    derived = client_ref_of(derive_creator(CreatorKind.REMOTE_CLIENT, candidate))
+                    if hmac.compare_digest(derived.encode("utf-8"), client_ref.encode("utf-8")):
+                        oauth_client_id = candidate
+                        break
+                if oauth_client_id is not None:
+                    resolved = RemoteIdentityRepository(connection).authenticate(
+                        oauth_client_id=oauth_client_id,
+                        token_scopes=self._scopes,
+                        resource=self._resource,
+                        now=now,
+                    )
+        except Exception:  # One safe surface: a store failure is a refusal.
+            resolved = None
+        if resolved is None or oauth_client_id is None:
+            return None
+        return RemoteClientStanding(
+            oauth_client_id=oauth_client_id,
+            principal_id=capture_principal_id(resolved.principal_id),
+            capability_purposes=resolved.capability_purposes,
+            write_allowed=resolved.write_allowed,
+        )

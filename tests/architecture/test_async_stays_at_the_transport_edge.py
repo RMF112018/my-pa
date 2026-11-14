@@ -41,6 +41,11 @@ EVAL_MCP_ADAPTER = PACKAGE / "adapters" / "gsqs_remote_eval_mcp.py"
 #: ASGI is a coroutine interface, so a tee over it cannot be synchronous; it is
 #: admitted as one more exact, counted edge rather than as a subtree.
 INTERACTION_CAPTURE = PACKAGE / "adapters" / "mcp_interaction_capture.py"
+#: The files byte routes on the remote MCP process (files-workspace contract
+#: section 10). A streamed request body and a streamed response are ASGI
+#: coroutines; every store and database call they make runs in a worker thread.
+#: Admitted as one more exact, counted edge.
+FILES_TRANSFER_ADAPTER = PACKAGE / "adapters" / "http" / "files_transfer.py"
 
 #: Every node that makes a module asynchronous. `AsyncFunctionDef` is the
 #: coroutine, and the other three are the statements that can only appear inside
@@ -72,7 +77,7 @@ def test_there_is_async_to_confine() -> None:
         p
         for p in _modules(PACKAGE)
         if not p.is_relative_to(ASYNC_SUBTREE)
-        and p not in {OAUTH_ADAPTER, EVAL_MCP_ADAPTER, INTERACTION_CAPTURE}
+        and p not in {OAUTH_ADAPTER, EVAL_MCP_ADAPTER, INTERACTION_CAPTURE, FILES_TRANSFER_ADAPTER}
     ],
     ids=lambda p: str(p.name),
 )
@@ -143,6 +148,16 @@ def test_the_interaction_capture_async_surface_is_exact_and_bounded() -> None:
     assert found.count("AsyncFunctionDef") == 4, found
     assert found.count("Await") == 6, found
     assert found.count("AsyncWith") == 0, found
+    assert found.count("AsyncFor") == 0, found
+
+
+def test_the_files_transfer_async_surface_is_exact_and_bounded() -> None:
+    """The ASGI endpoint, its upload/append/finalize/download steps, the thread
+    offload, the loop-side body read and the download body generator."""
+    found = _async_nodes(FILES_TRANSFER_ADAPTER)
+    assert found.count("AsyncFunctionDef") == 8, found
+    assert found.count("Await") == 26, found
+    assert found.count("AsyncWith") == 1, found
     assert found.count("AsyncFor") == 0, found
 
 

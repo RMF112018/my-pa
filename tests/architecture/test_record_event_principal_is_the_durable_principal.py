@@ -107,6 +107,15 @@ NOT_A_CALLER: Final = frozenset(
 #: Claim 1: every principal construction, by (path, callee, argument).
 MINT_SITES: Final = frozenset(
     {
+        # Files byte routes (files-workspace contract section 10): the finalize's
+        # Principal is the ticket row's owner, which `FileTransferGate.authenticate`
+        # has just required to equal the Principal the ticket's remote client is
+        # durably bound to (`identity.remote_clients`); never a request field.
+        (
+            "src/my_pa/application/file_transfer.py",
+            "Principal",
+            "self.ticket.owner_principal_id",
+        ),
         (
             "src/my_pa/application/goodnotes_gsqs_b0_stdio_session.py",
             "capture_principal_id",

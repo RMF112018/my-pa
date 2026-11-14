@@ -790,10 +790,14 @@ been applied; the plane is absent until `MY_PA_FILES_WORKSPACE_ROOT` is set.
   `Retry-After: 1`) and the per-upload lock do not span processes; across
   processes the store's offset check and the row's offset CAS serialize.
 - **Byte requests are authenticated before they hold anything.** A bad ticket
-  is 401 before it takes a slot or waits on an upload's lock; the digest and
-  grant check runs in the event loop's default executor with no cap of its own,
-  so a flood of well-formed bad tickets costs database round trips and
-  executor threads, not slots.
+  is 401 before it takes a slot or waits on an upload's lock. The digest and
+  grant check runs in the event loop's default executor, shared with `/mcp`,
+  under its own per-process cap (8 by default, twice the slot count): past it
+  a request is 503 `unavailable` with `Retry-After: 1` at once, so a flood of
+  well-formed bad tickets holds at most that many database round trips and
+  executor threads, and while it lasts valid byte requests are 503 as well
+  (the cap protects the shared executor, not the routes' availability). The
+  cap is per process, like the slot cap.
 - **A download is bounded but not resumable server-side.** A reader that stops
   reading for 30 s, a stream past 600 s, or a ticket that expires or loses its
   grant (re-checked every 5 s) is cut short of `Content-Length` with the
@@ -819,6 +823,8 @@ Evidence: `docs/decisions/ADR-019-nas-mcp-file-workspace.md`,
 `tests/integration/test_files_workspace_vertical_slice.py::test_a_planted_symlink_is_never_followed`,
 `tests/security/test_files_transfer_negative.py::test_the_slot_cap_answers_503_with_retry_after`,
 `tests/security/test_files_transfer_negative.py::test_bad_tickets_never_take_a_slot_nor_wait_on_an_upload_lock`,
+`tests/security/test_files_transfer_auth_cap.py::test_exhausted_auth_permits_are_503_at_once_and_come_back`,
+`tests/security/test_files_transfer_auth_cap.py::test_a_cancelled_check_keeps_its_permit_until_its_thread_returns`,
 `tests/security/test_files_transfer_negative.py::test_a_stalled_download_reader_releases_its_slot_after_the_idle_bound`,
 `tests/security/test_files_transfer_negative.py::test_a_download_stops_mid_stream_on_revocation_expiry_or_its_deadline`,
 `tests/unit/test_my_pa_files_client.py::test_a_lost_completing_response_then_401_is_unknown_not_failure`.

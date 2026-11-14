@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Five hundred and fourteen Python modules under `src/my_pa` and nine hundred and seventy-six test modules —
+Five hundred and fourteen Python modules under `src/my_pa` and nine hundred and seventy-seven test modules —
 
-**Current-tree remeasurement (Files workspace WP7, branch `feat/files-workspace-pr3`, 2026-11-14):** the two commands below count 514 source modules and 976 test modules: the WP6b 514/975 below plus the one test module `tests/integration/test_files_workspace_vertical_slice.py`. Previously five hundred and fourteen and nine hundred and seventy-five.
+**Current-tree remeasurement (Files workspace PR3 FIX2, branch `feat/files-workspace-pr3`, 2026-11-14):** the two commands below count 514 source modules and 977 test modules: the WP7 514/976 below plus the one test module `tests/security/test_files_transfer_auth_cap.py`. Previously five hundred and fourteen and nine hundred and seventy-six.
+
+**Historical remeasurement (Files workspace WP7, branch `feat/files-workspace-pr3`, 2026-11-14):** the two commands below counted 514 source modules and 976 test modules: the WP6b 514/975 below plus the one test module `tests/integration/test_files_workspace_vertical_slice.py`. Previously five hundred and fourteen and nine hundred and seventy-five.
 
 **Historical remeasurement (Files workspace WP6b, branch `feat/files-workspace-pr3`, 2026-11-14):** the two commands below counted 514 source modules and 975 test modules: the WP6a 514/974 below plus the one test module `tests/unit/test_my_pa_files_client.py` (the reference client `scripts/my_pa_files.py` is not under `src/my_pa`). Previously five hundred and fourteen and nine hundred and seventy-four.
 

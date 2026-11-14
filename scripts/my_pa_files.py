@@ -431,9 +431,11 @@ def _publish_no_clobber(part: Path, out: Path) -> None:
     at `out` while the bytes arrive must not be replaced silently. A hard link
     is created only when `out` is free (`FileExistsError` otherwise), then the
     part is unlinked. Where the filesystem has no hard links, `out` is reserved
-    with `O_CREAT | O_EXCL` and the part replaces that reservation atomically.
-    On a conflict `OUT.part` (and its `.etag` marker) are kept for inspection
-    and the client exits 1 (`EXIT_LOCAL`).
+    with `O_CREAT | O_EXCL` and the part replaces that reservation atomically;
+    if that replace fails, the empty reservation is removed before the error
+    propagates, so no 0-byte `out` is left behind. On a conflict `OUT.part`
+    (and its `.etag` marker) are kept for inspection and the client exits 1
+    (`EXIT_LOCAL`).
     """
     conflict = ClientError(
         EXIT_LOCAL,
@@ -443,12 +445,16 @@ def _publish_no_clobber(part: Path, out: Path) -> None:
         os.link(part, out, follow_symlinks=False)
     except FileExistsError:
         raise conflict from None
-    except OSError:  # no hard links here: reserve the name, then replace it
+    except (OSError, NotImplementedError):  # no hard links: reserve the name, replace it
         try:
             os.close(os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
         except FileExistsError:
             raise conflict from None
-        part.replace(out)
+        try:
+            part.replace(out)
+        except BaseException:
+            out.unlink(missing_ok=True)  # the reservation is ours and still empty
+            raise
         return
     part.unlink()
 

@@ -488,6 +488,42 @@ def test_download_publishes_without_hard_links_by_reserving_out(
     assert sorted(path.name for path in tmp_path.iterdir()) == ["out.bin"]
 
 
+def test_publish_falls_back_when_hard_links_are_not_implemented(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    part, out = tmp_path / "out.bin.part", tmp_path / "out.bin"
+    part.write_bytes(b"verified")
+
+    def not_implemented(*_args: object, **_kwargs: object) -> None:
+        raise NotImplementedError("follow_symlinks unavailable on this platform")
+
+    monkeypatch.setattr(client.os, "link", not_implemented)
+    client._publish_no_clobber(part, out)
+    assert out.read_bytes() == b"verified"
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["out.bin"]
+
+
+def test_publish_removes_its_reservation_when_the_replace_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    part, out = tmp_path / "out.bin.part", tmp_path / "out.bin"
+    part.write_bytes(b"verified")
+
+    def no_links(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError("hard links not supported")
+
+    def failing_replace(_self: Path, _target: object) -> Path:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(client.os, "link", no_links)
+    monkeypatch.setattr(Path, "replace", failing_replace)
+    with pytest.raises(OSError, match="replace failed"):
+        client._publish_no_clobber(part, out)
+    # No 0-byte OUT is left behind, and the verified bytes stay in OUT.part.
+    assert not out.exists()
+    assert part.read_bytes() == b"verified"
+
+
 def test_download_resumes_a_partial_part_with_range_and_if_match(
     server: tuple[Stub, str], tmp_path: Path
 ) -> None:

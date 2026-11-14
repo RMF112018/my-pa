@@ -25,6 +25,17 @@ the gate decides. The rules the transport itself owns:
   holds a slot or queues behind an upload. A PATCH authenticates again once
   it holds the upload's lock, since the ticket or the offset may change while
   it waits.
+- **Bounded authentication.** The pre-slot check has its own per-process cap
+  (default twice the slot count), separate from the `/mcp` `auth_slots`: it
+  is taken without waiting, so a request that finds none free is the same 503
+  `unavailable` with `Retry-After` as a full slot count, and nothing queues on
+  the shared default executor. A permit is returned when its worker thread
+  returns, not when the request is cancelled, so a client that disconnects
+  mid-check frees nothing early and leaks nothing. The PATCH re-check under the
+  lock and a download's periodic re-check run while the request already holds
+  a slot, so they are bounded by the slot count and do not take a permit (no
+  request ever waits on both): worker threads in flight stay at most the auth
+  cap plus the slot count.
 - **Concurrency.** Its own per-process slot count (default 4), separate from
   the `/mcp` semaphores: an authenticated request that finds none free is 503
   with `Retry-After` and nothing read. Concurrent PATCHes of one upload are
@@ -87,6 +98,7 @@ from my_pa.domain.files.transfer import (
 from my_pa.domain.files.vocabulary import FilesReason
 
 __all__ = [
+    "AUTH_SLOTS_PER_TRANSFER_SLOT",
     "BODY_IDLE_TIMEOUT_SECONDS",
     "DOWNLOADS_PATH",
     "DOWNLOAD_DEADLINE_SECONDS",
@@ -114,6 +126,9 @@ DOWNLOAD_DEADLINE_SECONDS: Final = 600.0
 #: work), so an expiry or a revocation stops it within about this long.
 DOWNLOAD_RECHECK_SECONDS: Final = 5.0
 RETRY_AFTER_SECONDS: Final = 1
+#: The pre-slot authentication cap per transfer slot: a flood of well-formed
+#: bogus tickets holds at most this many default-executor threads per slot.
+AUTH_SLOTS_PER_TRANSFER_SLOT: Final = 2
 
 _NO_STORE: Final = {"Cache-Control": "no-store"}
 _CONTENT_LENGTH: Final = re.compile(r"\A(?:0|[1-9][0-9]{0,18})\Z")
@@ -182,6 +197,8 @@ def _failure(error: BaseException) -> JSONResponse:
         return _error("denied", None, 403)
     if isinstance(error, FileWorkspaceUnavailableError):
         return _error("unavailable", None, 503)
+    if isinstance(error, _AuthBusy):
+        return _busy()
     if isinstance(error, _BodyTimeout):
         return _error("unavailable", None, 408)
     if isinstance(error, TimeoutError):  # the upload's lock stayed held past the idle bound
@@ -210,6 +227,10 @@ def _envelope_answer(envelope: ResponseEnvelope) -> JSONResponse:
 
 class _BodyTimeout(Exception):  # noqa: N818 - internal signal, never rendered
     """The body stalled past the idle bound or the PATCH passed its deadline."""
+
+
+class _AuthBusy(Exception):  # noqa: N818 - internal signal, rendered as `_busy()`
+    """Every pre-slot authentication permit is in use."""
 
 
 class _StreamStopped(Exception):  # noqa: N818 - internal signal, never rendered
@@ -302,6 +323,7 @@ class _FileTransferEndpoint:
         kind: FileTransferKind,
         *,
         slots: list[int],
+        auth_slots: list[int],
         upload_locks: dict[str, tuple[asyncio.Lock, int]],
         body_idle_timeout_seconds: float,
         patch_deadline_seconds: float,
@@ -311,6 +333,7 @@ class _FileTransferEndpoint:
         self._gate = gate
         self._kind = kind
         self._slots = slots
+        self._auth_slots = auth_slots
         self._locks = upload_locks
         self._idle = body_idle_timeout_seconds
         self._deadline = patch_deadline_seconds
@@ -345,25 +368,54 @@ class _FileTransferEndpoint:
         held.releases.append(forget)
         return lock
 
-    async def _offload(self, held: _Held, call: Callable[[], _T]) -> _T:
-        """`call()` in a worker thread; the request keeps what it holds until it returns."""
+    async def _offload(
+        self,
+        held: _Held,
+        call: Callable[[], _T],
+        on_done: Callable[[object], None] | None = None,
+    ) -> _T:
+        """`call()` in a worker thread; the request keeps what it holds until it returns.
+
+        `on_done` runs when the thread returns, even if the request was cancelled.
+        """
         task = asyncio.ensure_future(asyncio.to_thread(call))
+        if on_done is not None:
+            task.add_done_callback(on_done)
         held.running = task
         return await asyncio.shield(task)
 
     async def _authenticate(
-        self, held: _Held, transfer_id: str, authorization: str | None
+        self,
+        held: _Held,
+        transfer_id: str,
+        authorization: str | None,
+        *,
+        holds_slot: bool = False,
     ) -> FileTransferAccess:
-        """The ticket and its client's standing; called before any slot or lock is taken.
+        """The ticket and its client's standing.
 
         A header that cannot carry a ticket token is refused on the loop, with
         no thread; anything else is the gate's digest and grant check, offloaded.
+        Before a slot (`holds_slot` false) the check takes one auth permit
+        without waiting -- none free is `_AuthBusy` -- and gives it back when
+        its thread returns, whatever became of the request meanwhile. A request
+        that already holds a slot is bounded by the slot count and takes none.
         """
         if ticket_token_from_authorization(authorization) is None:
             raise FilesRefusal("ticket", FilesReason.TICKET_INVALID)
         gate, kind = self._gate, self._kind
+        give: Callable[[object], None] | None = None
+        if not holds_slot:
+            permits = self._auth_slots
+            if permits[0] <= 0:
+                raise _AuthBusy
+            permits[0] -= 1
+
+            def give(_done: object) -> None:
+                permits[0] += 1
+
         return await self._offload(
-            held, lambda: gate.authenticate(kind, transfer_id, authorization)
+            held, lambda: gate.authenticate(kind, transfer_id, authorization), give
         )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -423,7 +475,7 @@ class _FileTransferEndpoint:
             await lock.acquire()
         held.lock = lock
         # Again under the lock: the ticket may have closed while this waited.
-        access = await self._authenticate(held, upload_id, authorization)
+        access = await self._authenticate(held, upload_id, authorization, holds_slot=True)
         offset = await self._offload(
             held, lambda: gate.check_append(access, presented, content_length)
         )
@@ -525,7 +577,7 @@ class _FileTransferEndpoint:
                     raise _StreamStopped
                 try:
                     if now >= recheck_at:
-                        await self._authenticate(held, download_id, authorization)
+                        await self._authenticate(held, download_id, authorization, holds_slot=True)
                         recheck_at = time.monotonic() + recheck_every
                     chunk = await self._offload(held, lambda: next(chunks, None))
                 except Exception:
@@ -558,14 +610,26 @@ def build_file_transfer_routes(
     gate: FileTransferGate,
     *,
     max_concurrent: int = MAX_CONCURRENT_TRANSFERS,
+    max_concurrent_authentications: int | None = None,
     body_idle_timeout_seconds: float = BODY_IDLE_TIMEOUT_SECONDS,
     patch_deadline_seconds: float = PATCH_DEADLINE_SECONDS,
     download_deadline_seconds: float = DOWNLOAD_DEADLINE_SECONDS,
     download_recheck_seconds: float = DOWNLOAD_RECHECK_SECONDS,
 ) -> Sequence[BaseRoute]:
-    """The two section 10 routes over one gate, sharing one slot count."""
+    """The two section 10 routes over one gate, sharing one slot count.
+
+    They also share one pre-slot authentication cap,
+    `max_concurrent_authentications` (default `AUTH_SLOTS_PER_TRANSFER_SLOT`
+    times `max_concurrent`).
+    """
+    auth_cap = (
+        AUTH_SLOTS_PER_TRANSFER_SLOT * max_concurrent
+        if max_concurrent_authentications is None
+        else max_concurrent_authentications
+    )
     if (
         max_concurrent < 1
+        or auth_cap < 1
         or min(
             body_idle_timeout_seconds,
             patch_deadline_seconds,
@@ -576,6 +640,7 @@ def build_file_transfer_routes(
     ):
         raise ValueError("byte-route bounds must be positive")
     slots = [max_concurrent]
+    auth_slots = [auth_cap]
     locks: dict[str, tuple[asyncio.Lock, int]] = {}
 
     def endpoint(kind: FileTransferKind) -> _FileTransferEndpoint:
@@ -583,6 +648,7 @@ def build_file_transfer_routes(
             gate,
             kind,
             slots=slots,
+            auth_slots=auth_slots,
             upload_locks=locks,
             body_idle_timeout_seconds=body_idle_timeout_seconds,
             patch_deadline_seconds=patch_deadline_seconds,

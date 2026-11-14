@@ -77,7 +77,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: workspace WP4 revision, which declares the four files plane tables and imports
 #: their id prefixes, version-token pattern and bounds from `domain.files`;
 #: `captures` is untouched.
-TABLES_SHA256: Final = "cb56f696a3627cf3e0501259fa1f3217cbdc5b910cd5daee36d50eda6f522d6c"
+TABLES_SHA256: Final = "35d51b53535054741f06836f639c1feb2569687e1148bf7988036f8ef689df41"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

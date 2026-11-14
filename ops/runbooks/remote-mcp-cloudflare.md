@@ -252,8 +252,10 @@ all-port allowance is not supported.
 
 Inspect the rendered model: it must contain no `ports`, no database service,
 no Docker socket, and only `/mcp`, `/healthz`, OAuth discovery, registration,
-authorization, token, revocation, and protected-resource routes followed by the
-404 catch-all. `/readyz` is intentionally not an edge route. Validate the tunnel
+authorization, token, revocation, and protected-resource routes, and the two
+files byte routes `^/files/v1/uploads/[^/]+$` and `^/files/v1/downloads/[^/]+$`
+([`files-workspace.md`](files-workspace.md); they answer 404 while the files
+plane is not composed), followed by the 404 catch-all. `/readyz` is intentionally not an edge route. Validate the tunnel
 ownership/UUID with the operator's authenticated
 Cloudflare tooling; do not paste its output into tickets or logs if it contains
 account or credential data.

@@ -158,6 +158,13 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
     "scripts/migration/generate_target_schema.py": (
         "the operator script that renders that DDL, writing under an explicit `--output` directory."
     ),
+    "scripts/my_pa_files.py": (
+        "Files workspace WP6b: the operator's stdlib reference client for the byte "
+        "routes. It writes only the explicit download OUT the operator names (via "
+        "`OUT.part`, an `OUT.part.etag` resume marker and an atomic rename), refusing "
+        "an existing OUT without --overwrite; it runs on a client machine, never "
+        "inside the product, and opens no managed, source or workspace root."
+    ),
     "scripts/migration/build_disposition_registry.py": (
         "writes the migration disposition registry to an explicit output path."
     ),

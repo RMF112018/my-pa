@@ -31,6 +31,9 @@ EDGE_COMMAND = [
 ]
 PROJECT = "my-pa-remote-mcp"
 CANONICAL_DATA_NETWORK = "my-pa-nas-contract_data-plane"
+WORKSPACE_DESTINATION = "/srv/my-pa/workspaces/mcp"
+#: `/volume1/homes` and its ancestors (`/volume1`, `/`) are never a workspace source.
+HOMES_ROOT = PurePosixPath("/volume1/homes")
 
 
 def docker() -> str:
@@ -134,6 +137,24 @@ def violations(
             "/srv/my-pa/managed-documents",
         )
     ]
+    # The files workspace plane is optional: no mount, no new requirement. When
+    # it is mounted it must be writable, one subtree (never the share or the
+    # homes root), and disjoint from every other app mount (ADR-019).
+    workspace = app_mounts.get(WORKSPACE_DESTINATION)
+    if workspace is not None:
+        if workspace.get("RW") is not True:
+            errors.append("workspace_mount_not_writable")
+        workspace_source = workspace.get("Source")
+        if (
+            not isinstance(workspace_source, str)
+            or not PurePosixPath(workspace_source).is_absolute()
+        ):
+            errors.append("workspace_mount_source_identity")
+        else:
+            workspace_path = PurePosixPath(workspace_source)
+            if workspace_path == HOMES_ROOT or workspace_path in HOMES_ROOT.parents:
+                errors.append("workspace_mount_too_broad")
+            sources.append(workspace_source)
     if not all(
         isinstance(source, str) and PurePosixPath(source).is_absolute() for source in sources
     ):

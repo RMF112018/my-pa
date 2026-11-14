@@ -790,7 +790,8 @@ been applied; the plane is absent until `MY_PA_FILES_WORKSPACE_ROOT` is set.
   `Retry-After: 1`) and the per-upload lock do not span processes; across
   processes the store's offset check and the row's offset CAS serialize.
 - **Byte requests are authenticated before they hold anything.** A bad ticket
-  is 401 before it takes a slot or waits on an upload's lock. The digest and
+  is 401 before it takes a slot or waits on an upload's lock, and before any
+  upload header is parsed, so a malformed header never turns it into a 400. The digest and
   grant check runs in the event loop's default executor, shared with `/mcp`,
   under its own per-process cap (8 by default, twice the slot count): past it
   a request is 503 `unavailable` with `Retry-After: 1` at once, so a flood of
@@ -803,6 +804,8 @@ been applied; the plane is absent until `MY_PA_FILES_WORKSPACE_ROOT` is set.
   grant (re-checked every 5 s) is cut short of `Content-Length` with the
   connection closed; the client resumes with `Range`. Bytes already in the
   kernel's and the transport's buffers still reach the reader after a cut.
+  The held-open file is closed on every exit -- 200, 206, 416, a refused read,
+  a cut stream or a cancelled request -- once its opening thread returns.
 - **The audit is minimal** (T14). One `authorize` row per call records the
   policy decision, so a handler refusal after authorization is `allowed`; there
   is no workspace id, opaque id, byte size or handler outcome, and HEAD/PATCH
@@ -827,6 +830,9 @@ Evidence: `docs/decisions/ADR-019-nas-mcp-file-workspace.md`,
 `tests/security/test_files_transfer_auth_cap.py::test_a_cancelled_check_keeps_its_permit_until_its_thread_returns`,
 `tests/security/test_files_transfer_negative.py::test_a_stalled_download_reader_releases_its_slot_after_the_idle_bound`,
 `tests/security/test_files_transfer_negative.py::test_a_download_stops_mid_stream_on_revocation_expiry_or_its_deadline`,
+`tests/security/test_files_transfer_negative.py::test_repeated_unsatisfiable_ranges_close_every_file_they_open`,
+`tests/security/test_files_transfer_auth_cap.py::test_every_download_exit_closes_its_reader_exactly_once`,
+`tests/security/test_files_transfer_auth_cap.py::test_a_download_cancelled_after_its_open_closes_the_reader`,
 `tests/unit/test_my_pa_files_client.py::test_a_lost_completing_response_then_401_is_unknown_not_failure`.
 
 ---

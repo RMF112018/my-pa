@@ -157,7 +157,7 @@ def test_the_files_transfer_async_surface_is_exact_and_bounded() -> None:
     body generator and its bounded send."""
     found = _async_nodes(FILES_TRANSFER_ADAPTER)
     assert found.count("AsyncFunctionDef") == 10, found
-    assert found.count("Await") == 31, found
+    assert found.count("Await") == 30, found
     assert found.count("AsyncWith") == 2, found
     assert found.count("AsyncFor") == 0, found
 

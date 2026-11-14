@@ -524,6 +524,33 @@ def test_publish_removes_its_reservation_when_the_replace_fails(
     assert part.read_bytes() == b"verified"
 
 
+@pytest.mark.parametrize("taken_by", ["another_file", "written_into"])
+def test_a_failed_replace_never_removes_what_is_no_longer_its_reservation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, taken_by: str
+) -> None:
+    part, out = tmp_path / "out.bin.part", tmp_path / "out.bin"
+    part.write_bytes(b"verified")
+
+    def no_links(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError("hard links not supported")
+
+    def failing_replace(_self: Path, _target: object) -> Path:
+        # Between the reservation and the failure, someone else took `out`.
+        if taken_by == "another_file":
+            out.unlink()
+            out.write_bytes(b"someone else's")
+        else:
+            out.write_bytes(b"written into the reservation")
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(client.os, "link", no_links)
+    monkeypatch.setattr(Path, "replace", failing_replace)
+    with pytest.raises(OSError, match="replace failed"):
+        client._publish_no_clobber(part, out)
+    assert out.exists(), "a file that is no longer the empty reservation was removed"
+    assert part.read_bytes() == b"verified"
+
+
 def test_download_resumes_a_partial_part_with_range_and_if_match(
     server: tuple[Stub, str], tmp_path: Path
 ) -> None:

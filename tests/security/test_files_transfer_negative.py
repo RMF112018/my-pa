@@ -19,6 +19,8 @@ remote client, tickets begun through `invoke`. It proves:
   so a flood of them against a live upload starves no valid request;
 * a download whose reader stalls releases its slot after the idle bound, and an
   expired ticket, a revoked grant or the deadline stops a stream mid-way;
+* every held-open download file is closed again, a 416 included -- repeated
+  unsatisfiable ranges leak no descriptor;
 * no answer, header or log record carries the token, the path or body bytes,
   and the MCP interaction log does not see `/files/v1/*`.
 """
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import http.client
 import logging
+import os
 import socket
 import time
 from collections.abc import Iterator
@@ -59,6 +62,7 @@ from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.files.errors import FilesRefusal
 from my_pa.domain.files.vocabulary import MAX_UPLOAD_CHUNK_BYTES, FilesReason
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.file_workspace import store
 from my_pa.infrastructure.persistence.remote_identity import (
     RemoteIdentityRepository,
     remote_capability_grants,
@@ -126,6 +130,17 @@ def test_every_bad_ticket_is_one_undistinguished_401(harness: Harness) -> None:
         ):
             assert answer.status_code == 401, headers
             assert _body(answer, TICKET_INVALID) == TICKET_INVALID
+    # Authenticated before any header is parsed: malformed upload headers with a
+    # bad ticket are the same 401, never the 400 a valid ticket would earn.
+    for malformed in (
+        {},
+        {"Upload-Offset": "-1"},
+        {"Upload-Offset": "0", "Upload-Complete": "length=1, sha256=" + "0" * 64},
+    ):
+        for headers in ({}, {"Authorization": f"Bearer {unknown}"}):
+            answer = harness.client.patch(path, content=b"x", headers={**headers, **malformed})
+            assert answer.status_code == 401, (headers, malformed)
+            assert answer.json() == TICKET_INVALID
     # An id of the other kind on each route, with its own valid token.
     wrong_route = harness.client.get(f"/files/v1/downloads/{upload_id}", harness.bearer(token))
     assert (wrong_route.status_code, _body(wrong_route, TICKET_INVALID)) == (401, TICKET_INVALID)
@@ -586,6 +601,42 @@ def test_a_download_stops_mid_stream_on_revocation_expiry_or_its_deadline(
 
 
 # ---- privacy ------------------------------------------------------------------------
+
+
+def test_repeated_unsatisfiable_ranges_close_every_file_they_open(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness.write("r.txt", "0123456789")
+    harness.write("empty.txt", "")
+    sized = harness.begin_download("r.txt")
+    empty = harness.begin_download("empty.txt")
+    counts = {"opened": 0, "closed": 0}
+    held = store._HeldFile
+    original_init, original_close = held.__init__, held.close
+
+    def counting_init(self: Any, descriptor: int, status: os.stat_result) -> None:  # noqa: ANN401
+        counts["opened"] += 1
+        original_init(self, descriptor, status)
+
+    def counting_close(self: Any) -> None:  # noqa: ANN401
+        if self._descriptor is not None:
+            counts["closed"] += 1
+        original_close(self)
+
+    monkeypatch.setattr(held, "__init__", counting_init)
+    monkeypatch.setattr(held, "close", counting_close)
+    rounds = 25
+    for _ in range(rounds):
+        past = harness.get(sized["download_id"], sized["download_token"], Range="bytes=10-")
+        assert past.status_code == 416
+        zero = harness.get(empty["download_id"], empty["download_token"], Range="bytes=0-")
+        assert zero.status_code == 416
+    assert harness.get(sized["download_id"], sized["download_token"]).status_code == 200
+    deadline = time.monotonic() + 10
+    while counts["closed"] < counts["opened"]:
+        assert time.monotonic() < deadline, counts
+        time.sleep(0.01)
+    assert counts == {"opened": 2 * rounds + 1, "closed": 2 * rounds + 1}
 
 
 def test_no_answer_or_log_record_carries_a_token_a_path_or_body_bytes(

@@ -424,6 +424,18 @@ def _fsync_directory(directory: Path) -> None:
         os.close(descriptor)
 
 
+def _remove_reservation(out: Path, reserved: os.stat_result) -> None:
+    """Unlink `out` only while it is still the empty file this client reserved."""
+    try:
+        current = out.lstat()
+    except OSError:
+        return
+    if (current.st_dev, current.st_ino) == (reserved.st_dev, reserved.st_ino) and (
+        current.st_size == 0
+    ):
+        out.unlink(missing_ok=True)
+
+
 def _publish_no_clobber(part: Path, out: Path) -> None:
     """Move the verified `part` to `out` unless something now holds `out`.
 
@@ -432,8 +444,10 @@ def _publish_no_clobber(part: Path, out: Path) -> None:
     is created only when `out` is free (`FileExistsError` otherwise), then the
     part is unlinked. Where the filesystem has no hard links, `out` is reserved
     with `O_CREAT | O_EXCL` and the part replaces that reservation atomically;
-    if that replace fails, the empty reservation is removed before the error
-    propagates, so no 0-byte `out` is left behind. On a conflict `OUT.part`
+    if that replace fails, the reservation is removed before the error
+    propagates -- only while `out` is still that same empty file (device,
+    inode, size 0), never something that took the name meanwhile -- so no
+    0-byte `out` of ours is left behind. On a conflict `OUT.part`
     (and its `.etag` marker) are kept for inspection and the client exits 1
     (`EXIT_LOCAL`).
     """
@@ -447,13 +461,17 @@ def _publish_no_clobber(part: Path, out: Path) -> None:
         raise conflict from None
     except (OSError, NotImplementedError):  # no hard links: reserve the name, replace it
         try:
-            os.close(os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+            descriptor = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:
             raise conflict from None
         try:
+            reserved = os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+        try:
             part.replace(out)
         except BaseException:
-            out.unlink(missing_ok=True)  # the reservation is ours and still empty
+            _remove_reservation(out, reserved)
             raise
         return
     part.unlink()

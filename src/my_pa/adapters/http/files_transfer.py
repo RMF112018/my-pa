@@ -462,12 +462,14 @@ class _FileTransferEndpoint:
             if access.ticket.declared_size is not None:
                 headers["Upload-Length"] = str(access.ticket.declared_size)
             return Response(status_code=204, headers=headers)
+        # Authenticated first -- an unauthenticated caller only ever learns the
+        # one 401 -- and refused before it may hold a slot or queue behind the
+        # upload's lock.
+        await self._authenticate(held, upload_id, authorization)
         presented = parse_upload_offset(request.headers.get("upload-offset"))
         raw_complete = request.headers.get("upload-complete")
         completion = None if raw_complete is None else parse_upload_complete(raw_complete)
         content_length = _content_length(request)
-        # Refused before it may hold a slot or queue behind the upload's lock.
-        await self._authenticate(held, upload_id, authorization)
         if not self._take_slot(held):
             return _busy()
         lock = self._lock_for(upload_id, held)
@@ -523,10 +525,21 @@ class _FileTransferEndpoint:
             await _busy()(scope, receive, send)
             return
         deadline = time.monotonic() + self._download_deadline
-        reader = None
+
+        def hold_reader(done: object) -> None:
+            # Registered when the opening thread returns -- before this request
+            # resumes, and even if it was cancelled while the thread ran -- so
+            # every exit (stream, 206, 416, failure, cancellation) closes the
+            # reader exactly once, ahead of the slot it was opened under.
+            if (
+                isinstance(done, asyncio.Future)
+                and not done.cancelled()
+                and done.exception() is None
+            ):
+                held.releases.append(done.result().close)
+
         try:
-            reader = await self._offload(held, lambda: gate.open_download(access))
-            opened = reader
+            opened = await self._offload(held, lambda: gate.open_download(access), hold_reader)
             try:
                 selected = parse_range(range_header, opened.size)
             except RangeNotSatisfiableError:
@@ -546,8 +559,6 @@ class _FileTransferEndpoint:
             chunks = await self._offload(held, lambda: opened.read_range(start, length))
             first = await self._offload(held, lambda: next(chunks, None))
         except Exception as error:
-            if reader is not None:
-                await self._offload(held, reader.close)
             await _failure(error)(scope, receive, send)
             return
         headers = {
@@ -600,10 +611,7 @@ class _FileTransferEndpoint:
             headers=headers,
             media_type="application/octet-stream",
         )
-        try:
-            await response(scope, receive, bounded_send)
-        finally:
-            held.releases.append(opened.close)
+        await response(scope, receive, bounded_send)
 
 
 def build_file_transfer_routes(

@@ -191,3 +191,8 @@ upload; do not assume failure.
 - An Abacus scheduled-run proof using the reference client is unverified (T11).
 - Limits: 10 GiB per upload, 20 GiB free-space reserve, 32 MiB per PATCH, 4
   concurrent byte-route requests per process, ticket TTL 1 h (max 24 h).
+- Audit is the generic `authorize` row per call (principal, capability,
+  purpose, allowed/denied, policy version, denial reason). It has no workspace
+  id, opaque ids, sizes or handler outcome, and byte-route chunks are not
+  audited (contract §11, trim T14). The full list is in
+  [`docs/operations/mcv-limitations.md`](../../docs/operations/mcv-limitations.md).

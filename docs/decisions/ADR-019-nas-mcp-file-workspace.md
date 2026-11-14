@@ -47,4 +47,4 @@ AGENTS.md is not amended: this ADR is the route AGENTS.md §4 names for changing
 
 ## Implementation status
 
-PR1 (this contract, the pure domain, and the filesystem store) is in progress on `feat/files-workspace`. Capabilities, policy, migration and persistence (PR2) and the byte routes, reference client and ops artifacts (PR3) follow. Deployment, the NAS mount overlay, NAS ACLs, tunnel route admission and client grants are operator-gated and not authorized by this ADR's acceptance.
+PR1 (this contract, the pure domain, and the filesystem store) and PR2 (migration, persistence, the 17 capabilities, policy and ChatLLM v14) are merged on `main`. PR3 (`feat/files-workspace-pr3`) delivers WP6 (the byte routes, the reference client and the ops artifacts) and WP7 (the synthetic vertical slice and documentation closure). The files audit is the generic `authorize` decision row only (contract §11); a richer files audit is deferred (contract trim T14). Deployment, the NAS mount overlay, NAS ACLs, tunnel route admission and client grants are operator-gated and not authorized by this ADR's acceptance.

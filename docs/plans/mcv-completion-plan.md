@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Five hundred and fourteen Python modules under `src/my_pa` and nine hundred and seventy-five test modules —
+Five hundred and fourteen Python modules under `src/my_pa` and nine hundred and seventy-six test modules —
 
-**Current-tree remeasurement (Files workspace WP6b, branch `feat/files-workspace-pr3`, 2026-11-14):** the two commands below count 514 source modules and 975 test modules: the WP6a 514/974 below plus the one test module `tests/unit/test_my_pa_files_client.py` (the reference client `scripts/my_pa_files.py` is not under `src/my_pa`). Previously five hundred and fourteen and nine hundred and seventy-four.
+**Current-tree remeasurement (Files workspace WP7, branch `feat/files-workspace-pr3`, 2026-11-14):** the two commands below count 514 source modules and 976 test modules: the WP6b 514/975 below plus the one test module `tests/integration/test_files_workspace_vertical_slice.py`. Previously five hundred and fourteen and nine hundred and seventy-five.
+
+**Historical remeasurement (Files workspace WP6b, branch `feat/files-workspace-pr3`, 2026-11-14):** the two commands below counted 514 source modules and 975 test modules: the WP6a 514/974 below plus the one test module `tests/unit/test_my_pa_files_client.py` (the reference client `scripts/my_pa_files.py` is not under `src/my_pa`). Previously five hundred and fourteen and nine hundred and seventy-four.
 
 **Historical remeasurement (Files workspace WP6a, branch `feat/files-workspace-pr3`, 2026-11-14):** the two commands below counted 514 source modules and 974 test modules: the WP5 512/972 below plus the two source modules `src/my_pa/application/file_transfer.py` and `src/my_pa/adapters/http/files_transfer.py` and the two test modules `tests/contract/test_files_transfer_routes.py` and `tests/security/test_files_transfer_negative.py`. Previously five hundred and twelve and nine hundred and seventy-two.
 

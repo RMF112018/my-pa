@@ -1,6 +1,6 @@
 # Files workspace contract (`files.*`)
 
-- **Status:** Frozen by WP1 under [ADR-019](../decisions/ADR-019-nas-mcp-file-workspace.md) (Accepted by operator directive 2026-11-13). Later work packages implement this text; a change to a name, rule or limit here is a contract change made in this file first.
+- **Status:** Frozen by WP1 under [ADR-019](../decisions/ADR-019-nas-mcp-file-workspace.md) (Accepted by operator directive 2026-11-13). Later work packages implement this text; a change to a name, rule or limit here is a contract change made in this file first. PR1 (WP1–3) and PR2 (WP4–5) are merged on `main`; PR3 (WP6–7, `feat/files-workspace-pr3`) delivers the byte routes, the reference client and the closure recorded in §10, §11 and T14. Deployment stays operator-gated (§16).
 - **Base:** `main@57d5b1399d59d7afe9fe08063d9bb842c9062dd2`, branch `feat/files-workspace`.
 - **Not authorized here:** deployment, NAS mounts or ACLs, tunnel changes, grants, production migration.
 
@@ -184,9 +184,39 @@ The routes are added through `create_remote_mcp_app(..., additional_routes=...)`
 - **Errors** are JSON `{error, reason}` with the §7 status codes. They never echo the token, a path or body bytes.
 - A stdlib reference client `scripts/my_pa_files.py` (WP6) exercises upload with resume and download with Range and SHA-256 verification.
 
+### 10.1 As delivered (WP6a/WP6b)
+
+The routes answer these statuses beyond §7, each as JSON `{error, reason}` with a `null` reason unless a §7 token applies:
+
+| Status | When |
+|---|---|
+| 400 `invalid_request` | any query string (a token in it included); a multi-range or malformed `Range`; a malformed `Upload-Offset`, `Upload-Complete` or `Content-Length` |
+| 405 `invalid_request` (`Allow: GET`) | any method but GET on a download route, HEAD included |
+| 408 `unavailable` | no body byte for 30 s (`BODY_IDLE_TIMEOUT_SECONDS`), or a PATCH past 600 s (`PATCH_DEADLINE_SECONDS`) |
+| 422 `unsupported` / `unsupported_entry` | the ticket's target became an `other` entry, or a directory where a file is needed |
+| 503 `unavailable` + `Retry-After: 1` | the per-process byte-route slot cap (4) is full, or another PATCH of the same upload holds its lock |
+
+Behaviour a client must know (each bounded by a test where one exists):
+
+- **A completing PATCH retried after its finalize committed answers 401** `ticket_invalid`, not a replay: the ticket closed when the finalize committed. The reference client exits 5 ("outcome unknown") and the caller verifies with `files.stat` (`test_a_completing_patch_retried_after_its_finalize_committed_is_401` in `tests/integration/test_files_workspace_vertical_slice.py`; client side `test_a_lost_completing_response_then_401_is_unknown_not_failure` in `tests/unit/test_my_pa_files_client.py`).
+- **A change after the download headers left** cannot become a 412: the store re-checks the version before every 1 MiB chunk and the stream stops short of `Content-Length`. The server does not close the connection then, so a reader sees the truncation as its read timeout; the client's SHA-256 check catches it when `include_sha256` was requested, and the retry is 412 (`test_a_change_after_the_headers_truncates_the_stream`).
+- **After an interrupted append** (disconnect, 408) the staged file may hold more bytes than the row's offset; HEAD reports the staged bytes and the next PATCH or finalize reconciles the row (`test_begin_bytes_interrupt_resume_finalize_list_stat_download`).
+- **Concurrency is per process.** The slot cap and the per-upload lock live in one process; across processes the store's offset check and the row's offset CAS serialize (`test_the_slot_cap_answers_503_with_retry_after` in `tests/security/test_files_transfer_negative.py`).
+- **`If-Match` is ignored by the server.** The reference client resumes a download only when its stored ETag matches the server's, and restarts otherwise.
+- **Tickets bind the hashed client reference.** The per-request grant re-check finds the ticket's client by scanning registered clients and comparing in constant time (a small table).
+- Production runs uvicorn with `access_log=False`; a test server's access log would show the request line (never a token, which is a header).
+
 ## 11. Audit and logging
 
-Every capability is audited through the existing `authorize` path. Audit records capability, outcome, reason token, `workspace_id`, opaque ids (`fwupl`/`fwdnl`/`fwver`/`fwtrs`/`fwrcp`) and byte sizes. It never records file bodies, `write_text` text, preview text, tokens, or host paths. Byte-route requests are not separately audited per chunk: begin and finalize are the audited events. The MCP interaction log must omit the `text` argument of `files.write_text` and the `text` result of `files.preview`, in addition to its existing `*token*` redaction (WP5/WP6 requirement).
+Each `files.*` call is audited once, by `authorize` (`src/my_pa/application/authorization.py`), as one `knowledge.audit_events` row: its audit id, correlation id and timestamp, principal, capability, purpose, outcome (`allowed` or `denied`), policy version, the policy denial reason when denied, and `scope_source_id_count` (always 0: the names are scopeless). Those are the table's only columns. It does **not** record `workspace_id`, opaque ids (`fwupl`/`fwdnl`/`fwver`/`fwtrs`/`fwrcp`), byte sizes or the handler's outcome (trim T14).
+
+- The row records the policy decision, not what the handler then did: a refusal raised after authorization (`version_conflict`, `exists`, `digest_mismatch`, `not_found`, `unsupported_entry`, ...) is audited `allowed`.
+- Byte-route HEAD, PATCH chunks and GET requests are not audited. A completing PATCH runs `files.upload.finalize` through `invoke` and is audited as `files.upload.finalize`, exactly as the MCP tool is.
+- It never records file bodies, `write_text` text, preview text, tokens, paths or host paths; `AuditEvent` has no field that could hold them.
+
+The MCP interaction log omits the `text` argument of `files.write_text` and the `text` result of `files.preview`, in addition to its existing `*token*` redaction. The byte routes are outside the `/mcp` interaction log: it wraps `/mcp` only.
+
+Bounded by `test_the_audit_records_the_decision_and_nothing_about_the_file` and the audit assertions in `tests/integration/test_files_workspace_vertical_slice.py`.
 
 ## 12. ChatLLM and façade
 
@@ -225,6 +255,7 @@ Every capability is audited through the existing `authorize` path. Audit records
 - **T11:** proof of the Abacus scheduled-task bridge. Only the routes and the reference client ship.
 - **T12:** any new process, service, queue or store technology.
 - **T13:** `write_text` bound set below 1 MiB to fit the transport request bound under worst-case escaping (120 KiB; §8).
+- **T14:** a richer files audit (workspace id, opaque ids, byte sizes, the handler's outcome) is deferred. The audit is the generic `authorize` row (§11).
 
 ## 16. Operator residuals
 

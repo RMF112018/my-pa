@@ -767,6 +767,49 @@ Evidence: `ops/runbooks/managed-knowledge-context.md`,
 `tests/contract/test_knowledge_manager_identity.py::test_the_gateway_strips_submit_and_checkpoint_from_an_ordinary_chatllm_client`,
 `tests/database/test_knowledge_manager_identity.py::test_a_manager_accepts_and_corrects_requires_operator_cases_as_attested`.
 
+## 17. The files workspace is built and proven on a synthetic root, not commissioned
+
+ADR-019 and `docs/architecture/files-workspace-contract.md` add one read-write
+folder for every connected client, through the `files.*` family and the byte
+routes on the remote MCP process. The vertical slice runs begin, bytes through
+`scripts/my_pa_files.py`, an interrupted and resumed upload, finalize, list,
+stat, download and SHA-256 equality on a `tmp_path` root and a local
+PostgreSQL. No NAS mount, ACL, tunnel rule, grant or production migration has
+been applied; the plane is absent until `MY_PA_FILES_WORKSPACE_ROOT` is set.
+
+- **No atomicity against external writers** (contract T10). SMB and DSM edits
+  are not serialized; the store re-checks the fingerprint before every rename
+  and reports `external_change_detected`, and the remaining check-to-rename
+  window is documented, not closed. A change after a download's headers left
+  truncates the stream short of `Content-Length` instead of becoming a 412; the
+  connection is not closed then, so a reader sees it as its read timeout.
+- **No retention or purge** (T3). `.my-pa/versions` preimages and
+  `.my-pa/trash` items grow until the operator sets a retention policy; trash
+  restores, and nothing deletes.
+- **Byte-route concurrency is per process.** The slot cap (4, then 503 with
+  `Retry-After: 1`) and the per-upload lock do not span processes; across
+  processes the store's offset check and the row's offset CAS serialize.
+- **The audit is minimal** (T14). One `authorize` row per call records the
+  policy decision, so a handler refusal after authorization is `allowed`; there
+  is no workspace id, opaque id, byte size or handler outcome, and HEAD/PATCH
+  chunks and GETs are not audited.
+- **A completing PATCH retried after its finalize committed answers 401**, not
+  a replay; the reference client exits 5 and the caller verifies with
+  `files.stat`.
+- **The Abacus scheduled-run bridge is unverified** (T11). Only the routes and
+  the reference client ship.
+
+Evidence: `docs/decisions/ADR-019-nas-mcp-file-workspace.md`,
+`ops/runbooks/files-workspace.md`,
+`tests/integration/test_files_workspace_vertical_slice.py::test_begin_bytes_interrupt_resume_finalize_list_stat_download`,
+`tests/integration/test_files_workspace_vertical_slice.py::test_a_change_after_the_headers_truncates_the_stream`,
+`tests/integration/test_files_workspace_vertical_slice.py::test_a_replace_leaves_a_downloadable_preimage_and_trash_restores`,
+`tests/integration/test_files_workspace_vertical_slice.py::test_the_audit_records_the_decision_and_nothing_about_the_file`,
+`tests/integration/test_files_workspace_vertical_slice.py::test_a_completing_patch_retried_after_its_finalize_committed_is_401`,
+`tests/integration/test_files_workspace_vertical_slice.py::test_a_planted_symlink_is_never_followed`,
+`tests/security/test_files_transfer_negative.py::test_the_slot_cap_answers_503_with_retry_after`,
+`tests/unit/test_my_pa_files_client.py::test_a_lost_completing_response_then_401_is_unknown_not_failure`.
+
 ---
 
 New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy

@@ -22,7 +22,10 @@ request is made here, synchronously, off the event loop:
   with the ticket's owner, `REMOTE_CLIENT`, the client's OAuth id and its
   freshly read grants -- the same `authorize` audit, CAS and refusals as the MCP
   tool. Its idempotency key is derived from the upload id
-  (`files-route-finalize:<upload id>`), so a retried completing PATCH replays.
+  (`files-route-finalize:<upload id>`). A completing PATCH retried after that
+  finalize committed does not reach it: the ticket is closed, so the retry is
+  401 `ticket_invalid` and the caller verifies with `files.stat` (contract
+  section 10.1).
 
 Refusals are the domain's `FilesRefusal` (a section 7 token), `FilesArgumentError`
 (a malformed header), `RangeNotSatisfiableError`, `DeniedError`, or the store's

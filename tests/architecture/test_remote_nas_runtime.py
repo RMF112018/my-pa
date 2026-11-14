@@ -93,7 +93,7 @@ def test_cloudflared_renderer_is_exact_and_refuses_overwrite(tmp_path: Path) -> 
     )
     text = output.read_text()
     assert "__" not in text
-    assert text.count("hostname: mcp.example.com") == 9
+    assert text.count("hostname: mcp.example.com") == 11
     assert "http_status:404" in text
     with pytest.raises(FileExistsError):
         renderer.render(
@@ -427,3 +427,241 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
             },
         )
     ) == {"origin_host_port", "source_mount_not_read_only"}
+
+
+def _live_gate_shape(gate: ModuleType) -> tuple[dict, dict, dict[str, object]]:
+    """A passing app/edge/postgres shape for the live gate (as admitted above)."""
+
+    def state(*, image: str, networks: tuple[str, ...], mounts: list[dict[str, object]]) -> dict:
+        app = image.startswith("app")
+        return {
+            "Config": {
+                "Image": image,
+                "User": "10001:10001",
+                "Cmd": gate.APP_COMMAND if app else gate.EDGE_COMMAND,
+            },
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "HostConfig": {
+                "ReadonlyRootfs": True,
+                "Privileged": False,
+                "CapDrop": ["ALL"],
+                "CapAdd": None,
+                "Devices": [],
+                "SecurityOpt": ["no-new-privileges:true"],
+                "PortBindings": {},
+                "Init": True,
+                "RestartPolicy": {"Name": "unless-stopped"},
+                "CpusetCpus": "0" if app else "1",
+                "CpusetMems": "",
+                "CpuShares": 0,
+                "NanoCpus": 0,
+                "CpuPeriod": 0,
+                "CpuQuota": 0,
+                "CpuCount": 0,
+                "CpuPercent": 0,
+                "CpuRealtimePeriod": 0,
+                "CpuRealtimeRuntime": 0,
+                "PidsLimit": None,
+                "Ulimits": None,
+                "Memory": (768 if app else 256) * 1024 * 1024,
+                "MemoryReservation": 0,
+                "MemorySwap": (1536 if app else 512) * 1024 * 1024,
+                "MemorySwappiness": None,
+                "OomKillDisable": False,
+                "BlkioWeight": 0,
+            },
+            "Mounts": mounts,
+            "NetworkSettings": {"Networks": {name: {} for name in networks}},
+        }
+
+    app = state(
+        image="app@sha256:exact",
+        networks=("my-pa-remote-mcp_mcp-origin", "my-pa-nas-contract_data-plane"),
+        mounts=[
+            {"Source": "/volume1/my-pa/config", "Destination": "/srv/my-pa/config", "RW": False},
+            {"Source": "/volume1/sources", "Destination": "/srv/my-pa/sources", "RW": False},
+            {
+                "Source": "/volume1/my-pa/managed",
+                "Destination": "/srv/my-pa/managed-documents",
+                "RW": True,
+            },
+        ],
+    )
+    edge = state(
+        image="edge@sha256:exact",
+        networks=("my-pa-remote-mcp_mcp-origin", "my-pa-remote-mcp_cloudflare-egress"),
+        mounts=[
+            {
+                "Source": "/nas/cloudflared/config.yml",
+                "Destination": "/etc/cloudflared/config.yml",
+                "RW": False,
+            },
+            {
+                "Source": "/nas/cloudflared/credentials",
+                "Destination": "/run/secrets/cloudflared",
+                "RW": False,
+            },
+        ],
+    )
+    context: dict[str, object] = {
+        "app_image": "app@sha256:exact",
+        "edge_image": "edge@sha256:exact",
+        "data_network": "my-pa-nas-contract_data-plane",
+        "networks": {
+            "my-pa-nas-contract_data-plane": {
+                "Name": "my-pa-nas-contract_data-plane",
+                "Internal": True,
+                "Labels": {
+                    "com.docker.compose.project": "my-pa-nas-contract",
+                    "com.docker.compose.network": "data-plane",
+                },
+                "Containers": {"postgres-id": {}},
+            },
+            "my-pa-remote-mcp_mcp-origin": {"Internal": True},
+            "my-pa-remote-mcp_cloudflare-egress": {"Internal": False},
+        },
+        "postgres_resources": {
+            "status": "verified",
+            "data_network": "my-pa-nas-contract_data-plane",
+            "postgres_container_id": "postgres-id",
+            "postgres_image_id": "sha256:postgres",
+        },
+        "postgres": {
+            "Id": "postgres-id",
+            "Image": "sha256:postgres",
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": "my-pa-nas-contract",
+                    "com.docker.compose.service": "postgres",
+                }
+            },
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "NetworkSettings": {"Networks": {"my-pa-nas-contract_data-plane": {}}},
+        },
+    }
+    return app, edge, context
+
+
+def _with_workspace(app: dict, source: object, *, rw: object = True) -> dict:
+    mounts = [
+        *app["Mounts"],
+        {"Source": source, "Destination": "/srv/my-pa/workspaces/mcp", "RW": rw},
+    ]
+    return {**app, "Mounts": mounts}
+
+
+def test_live_gate_workspace_mount_is_optional() -> None:
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    app, edge, context = _live_gate_shape(gate)
+    assert gate.violations(app, edge, **context) == []
+
+
+def test_live_gate_accepts_one_writable_disjoint_workspace_subtree() -> None:
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    app, edge, context = _live_gate_shape(gate)
+    mounted = _with_workspace(app, "/volume1/homes/bfetting/MCP")
+    assert gate.violations(mounted, edge, **context) == []
+
+
+def test_live_gate_refuses_a_read_only_workspace_mount() -> None:
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    app, edge, context = _live_gate_shape(gate)
+    for rw in (False, None, "true"):
+        mounted = _with_workspace(app, "/volume1/homes/bfetting/MCP", rw=rw)
+        assert gate.violations(mounted, edge, **context) == ["workspace_mount_not_writable"], rw
+
+
+@pytest.mark.parametrize("source", ["/", "/volume1", "/volume1/", "/volume1/homes"])
+def test_live_gate_refuses_the_share_or_homes_root_as_workspace(source: str) -> None:
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    app, edge, context = _live_gate_shape(gate)
+    errors = gate.violations(_with_workspace(app, source), edge, **context)
+    assert "workspace_mount_too_broad" in errors
+    assert "workspace_mount_not_writable" not in errors
+
+
+@pytest.mark.parametrize("source", ["/volume1/homes/bfetting", "/volume1/homes/someone"])
+def test_live_gate_refuses_a_whole_home_as_workspace(source: str) -> None:
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    app, edge, context = _live_gate_shape(gate)
+    errors = gate.violations(_with_workspace(app, source), edge, **context)
+    assert errors == ["workspace_mount_too_broad", "workspace_mount_source_mismatch"]
+    # Even configured to it, a whole home is too broad.
+    configured = gate.violations(
+        _with_workspace(app, source), edge, **context, admitted_workspace_source=source
+    )
+    assert configured == ["workspace_mount_too_broad"]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "/volume1/homes/bfetting/Other",  # a sibling subtree
+        "/volume1/homes/bfetting/MCP/inner",  # inside the admitted subtree
+        "/volume1/homes/bfetting/MCP/",  # not the exact spelling
+        "/volume1/homes/other/MCP",  # another user's folder of the same name
+        "/volume1/docker",  # outside the homes tree
+    ],
+)
+def test_live_gate_requires_exactly_the_admitted_workspace_source(source: str) -> None:
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    app, edge, context = _live_gate_shape(gate)
+    errors = gate.violations(_with_workspace(app, source), edge, **context)
+    assert errors == ["workspace_mount_source_mismatch"]
+
+
+@pytest.mark.parametrize("source", [None, "", "volume1/homes/bfetting/MCP", 7])
+def test_live_gate_refuses_a_relative_or_missing_workspace_source(source: object) -> None:
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    app, edge, context = _live_gate_shape(gate)
+    errors = gate.violations(_with_workspace(app, source), edge, **context)
+    assert errors == ["workspace_mount_source_identity"]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "/volume1/my-pa/config",  # equal to the config source
+        "/volume1/my-pa",  # an ancestor of config and managed
+        "/volume1/my-pa/managed/inner",  # inside the managed source
+        "/volume1/sources/MCP",  # inside the read-only sources
+    ],
+)
+def test_live_gate_refuses_a_workspace_overlapping_another_mount(source: str) -> None:
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    app, edge, context = _live_gate_shape(gate)
+    # Configured to the overlapping path itself, so only the overlap remains.
+    errors = gate.violations(
+        _with_workspace(app, source), edge, **context, admitted_workspace_source=source
+    )
+    assert errors == ["app_mount_overlap"]
+
+
+@pytest.mark.parametrize(
+    ("overlay", "service"),
+    [
+        ("ops/nas/compose.files-workspace.gateway.example.yml", "gateway"),
+        ("ops/nas/remote/compose.files-workspace.remote.example.yml", "my-pa-mcp-remote"),
+    ],
+)
+def test_files_workspace_overlays_bind_one_writable_subtree(overlay: str, service: str) -> None:
+    text = (ROOT / overlay).read_text(encoding="utf-8")
+    body = [line for line in text.splitlines() if line and not line.startswith("#")]
+    assert body == [
+        "services:",
+        f"  {service}:",
+        "    environment:",
+        "      MY_PA_FILES_WORKSPACE_ROOT: /srv/my-pa/workspaces/mcp",
+        "      MY_PA_FILES_WORKSPACE_ID: mcp",
+        '      MY_PA_FILES_MAX_UPLOAD_BYTES: "10737418240"',
+        '      MY_PA_FILES_DISK_RESERVE_BYTES: "21474836480"',
+        "    volumes:",
+        "      - type: bind",
+        "        source: /volume1/homes/bfetting/MCP",
+        "        target: /srv/my-pa/workspaces/mcp",
+        "        read_only: false",
+    ]
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    assert gate.WORKSPACE_DESTINATION == "/srv/my-pa/workspaces/mcp"
+    assert gate.WORKSPACE_SOURCE == "/volume1/homes/bfetting/MCP"  # the bind source above
+    assert "ops/runbooks/files-workspace.md" in text

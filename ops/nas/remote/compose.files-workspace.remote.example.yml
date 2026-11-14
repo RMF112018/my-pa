@@ -1,0 +1,19 @@
+# Files workspace plane (ADR-019, files-workspace contract sections 9 and 10) for the
+# remote MCP process, which also serves the /files/v1 byte routes.
+# Used WITH ops/nas/remote/compose.yml (+ the live overlays already in the container's
+# com.docker.compose.project.config_files label), project my-pa-remote-mcp.
+# Same host subtree as compose.files-workspace.gateway.example.yml. Runbook:
+# ops/runbooks/files-workspace.md. Not a secret. MY_PA_REMOTE_UID needs read-write ACL on
+# the subtree first; live-gate.py refuses a read-only, too-broad or overlapping mount.
+services:
+  my-pa-mcp-remote:
+    environment:
+      MY_PA_FILES_WORKSPACE_ROOT: /srv/my-pa/workspaces/mcp
+      MY_PA_FILES_WORKSPACE_ID: mcp
+      MY_PA_FILES_MAX_UPLOAD_BYTES: "10737418240"
+      MY_PA_FILES_DISK_RESERVE_BYTES: "21474836480"
+    volumes:
+      - type: bind
+        source: /volume1/homes/bfetting/MCP
+        target: /srv/my-pa/workspaces/mcp
+        read_only: false

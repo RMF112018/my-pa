@@ -745,6 +745,11 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # origin record it indexes. Both values are server-composed; a mismatch is
     # refused before the registry can resolve any authenticated Principal.
     "application/producer_origin.py": (("origin", "principal_id"),),
+    # Files byte routes (files-workspace contract section 10): the standing is
+    # the durable re-read of the ticket's remote client, server-resolved from
+    # `identity.remote_clients`. It is read once, to refuse a ticket whose owner
+    # is no longer the Principal that client is bound to.
+    "application/file_transfer.py": (("standing", "principal_id"),),
     "application/goodnotes.py": (
         ("page", "principal_id"),
         ("page", "principal_id"),

@@ -309,6 +309,7 @@ def test_real_gateway_startup_observes_versions_before_each_transport_serves(
 
     class Runtime:
         service = object()
+        file_transfer = None
         authenticate = None
         remote_client = None
         apple_authenticate = None
@@ -642,6 +643,7 @@ def test_remote_mcp_observes_only_authenticated_request_principals_before_contex
     class Runtime:
         principal = None
         service = object()
+        file_transfer = None
         webauthn = None
         work_engine = SimpleNamespace(begin=lambda: None)
 

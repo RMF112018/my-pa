@@ -85,6 +85,7 @@ from typing import Final, Literal
 import uvicorn
 
 from my_pa.adapters.http import REMOTE_CAPTURE_PATH, create_http_app
+from my_pa.adapters.http.files_transfer import build_file_transfer_routes
 from my_pa.adapters.http.oauth import build_origin_oauth_routes
 from my_pa.adapters.mcp import RemoteAccessContext, create_remote_mcp_app, serve_stdio
 from my_pa.adapters.mcp.chatllm_gateway import OPERATOR_TOOL, READ_TOOL, WRITE_TOOL
@@ -485,9 +486,18 @@ def _mcp_remote(args: argparse.Namespace) -> int:
         resource=settings.oauth_audience,
         authorization_servers=(settings.oauth_authorization_server,),
         scopes=frozenset(settings.oauth_scopes.split()),
-        additional_routes=build_origin_oauth_routes(
-            authorization_server,
-            operator_secret=settings.oauth_operator_secret,
+        additional_routes=(
+            *build_origin_oauth_routes(
+                authorization_server,
+                operator_secret=settings.oauth_operator_secret,
+            ),
+            # Files workspace (contract section 10): the byte routes, only when
+            # the plane is composed; absent, `/files/v1/*` is 404.
+            *(
+                ()
+                if runtime.file_transfer is None
+                else build_file_transfer_routes(runtime.file_transfer)
+            ),
         ),
     )
     served, close_interaction_log = with_interaction_log(settings, app)

@@ -454,6 +454,8 @@ UNRELATED_CALLS: Final = frozenset(
         ("src/my_pa/infrastructure/file_workspace/store.py", "link", "os"),
         ("ops/nas/write-postgres-backup-runtime-attestation.py", "link", "os"),
         ("ops/nas/generate-runtime-admission.py", "link", "os"),
+        # Files workspace WP6: the reference client's no-overwrite download publish.
+        ("scripts/my_pa_files.py", "link", "os"),
     }
 )
 

@@ -1,6 +1,6 @@
 # Files workspace contract (`files.*`)
 
-- **Status:** Frozen by WP1 under [ADR-019](../decisions/ADR-019-nas-mcp-file-workspace.md) (Accepted by operator directive 2026-11-13). Later work packages implement this text; a change to a name, rule or limit here is a contract change made in this file first.
+- **Status:** Frozen by WP1 under [ADR-019](../decisions/ADR-019-nas-mcp-file-workspace.md) (Accepted by operator directive 2026-11-13). Later work packages implement this text; a change to a name, rule or limit here is a contract change made in this file first. PR1 (WP1–3) and PR2 (WP4–5) are merged on `main`; PR3 (WP6–7, `feat/files-workspace-pr3`) delivers the byte routes, the reference client and the closure recorded in §10, §11 and T14. Deployment stays operator-gated (§16).
 - **Base:** `main@57d5b1399d59d7afe9fe08063d9bb842c9062dd2`, branch `feat/files-workspace`.
 - **Not authorized here:** deployment, NAS mounts or ACLs, tunnel changes, grants, production migration.
 
@@ -169,7 +169,7 @@ Zero-byte files are valid everywhere. There is no MIME-type or extension allowli
 | `MY_PA_FILES_MAX_UPLOAD_BYTES` | Default 10737418240. |
 | `MY_PA_FILES_DISK_RESERVE_BYTES` | Default 21474836480. |
 
-At composition the store refuses to start unless the root exists, is a directory, and is not a symlink. It also refuses unless the root equals, contains and lies inside none of the configured source, managed-document or report-content roots. The production mount is that one NAS subtree, never `/volume1` or `/volume1/homes`.
+At composition the store refuses to start unless the root exists, is a directory, and is not a symlink. It also refuses unless the root equals, contains and lies inside none of the configured source, managed-document or report-content roots. The production mount is that one NAS subtree, never `/volume1`, `/volume1/homes` or a whole home; `ops/nas/remote/live-gate.py` requires the remote MCP container's workspace bind source to be exactly `/volume1/homes/bfetting/MCP` (`WORKSPACE_SOURCE`, pinned to the overlay's `source:`).
 
 The plane is not composed in the restricted MCP database-profile composition: when `MY_PA_MCP_DATABASE_PROFILES_ENABLED` injects a `data_engine`, the gateway composes `file_workspace=None` (`src/my_pa/bootstrap/gateway.py`), so no `files.*` name is served there (fail-closed).
 
@@ -177,16 +177,52 @@ The plane is not composed in the restricted MCP database-profile composition: wh
 
 The routes are added through `create_remote_mcp_app(..., additional_routes=...)`. They are not mounted on the private HTTP gateway, and generic `/v1/{capability}` is never used for bytes. The public tunnel admits exactly `^/files/v1/uploads/[^/]+$` and `^/files/v1/downloads/[^/]+$`.
 
-- **Auth.** `Authorization: Bearer gfwtk_…` is checked against the ticket digest before any body byte is read. Every request also re-checks that the ticket's client still holds an active grant for the capability that issued it (`files.upload.begin`, `files.download.begin`), so revocation takes effect immediately. Query strings are refused (400). Path ids must match the ticket.
+- **Auth.** `Authorization: Bearer gfwtk_…` is checked against the ticket digest before any body byte is read, and before the request takes a byte-route slot or waits on an upload's lock. Every request also re-checks that the ticket's client still holds an active grant for the capability that issued it (`files.upload.begin`, `files.download.begin`), so revocation takes effect immediately. Query strings are refused (400). Path ids must match the ticket.
 - **`HEAD /files/v1/uploads/{id}`** returns 204 with `Upload-Offset: <n>`, `Upload-Length` (if declared) and `Cache-Control: no-store`.
 - **`PATCH /files/v1/uploads/{id}`** requires `Upload-Offset` to equal the current offset (`offset_mismatch` otherwise). The raw body is streamed from `request.stream()` to the staging file at that offset, never buffered whole, then fsynced. The response is 204 with the new `Upload-Offset`. A final request may carry `Upload-Complete: sha256=<64 hex>, length=<n>`. That invokes the same `files.upload.finalize` handler, with the same audit, CAS and refusals as the MCP tool, and returns 200 with its JSON result. A PATCH with an empty body and `Upload-Complete` finalizes without appending. Interrupted uploads resume by HEAD then PATCH.
 - **`GET /files/v1/downloads/{id}`** streams the file, with optional single `Range: bytes=a-b` (206) and 416 for an unsatisfiable range. It sends `ETag: "<version token>"`, `X-Content-SHA256` (only when the ticket carries a sha256), `Content-Length` and `Content-Type: application/octet-stream`. If the file's current version differs from the ticket's, it returns 412 `external_change_detected`. A download ticket may serve many range requests until it expires.
 - **Errors** are JSON `{error, reason}` with the §7 status codes. They never echo the token, a path or body bytes.
 - A stdlib reference client `scripts/my_pa_files.py` (WP6) exercises upload with resume and download with Range and SHA-256 verification.
 
+### 10.1 As delivered (WP6a/WP6b)
+
+The routes answer these statuses beyond §7, each as JSON `{error, reason}` with a `null` reason unless a §7 token applies:
+
+| Status | When |
+|---|---|
+| 400 `invalid_request` | any query string (a token in it included); a multi-range or malformed `Range`; a malformed `Upload-Offset`, `Upload-Complete` or `Content-Length` |
+| 405 `invalid_request` (`Allow: GET`) | any method but GET on a download route, HEAD included |
+| 408 `unavailable` | no body byte for 30 s (`BODY_IDLE_TIMEOUT_SECONDS`), or a PATCH past 600 s (`PATCH_DEADLINE_SECONDS`) |
+| (stream cut) | a GET whose reader accepts no bytes for 30 s (`BODY_IDLE_TIMEOUT_SECONDS`), one streaming past 600 s (`DOWNLOAD_DEADLINE_SECONDS`), or one whose ticket expired or grant was revoked (re-checked every 5 s, `DOWNLOAD_RECHECK_SECONDS`): the headers already left, so the body stops short of `Content-Length` and the connection is closed; the client resumes with `Range` |
+| 422 `unsupported` / `unsupported_entry` | the ticket's target became an `other` entry, or a directory where a file is needed |
+| 503 `unavailable` + `Retry-After: 1` | a request with a ticket-shaped bearer finds the per-process pre-slot authentication cap (8, twice the slot count) in use; an authenticated request finds the per-process byte-route slot cap (4) full; or another PATCH of the same upload holds its lock past 30 s |
+
+Behaviour a client must know (each bounded by a test where one exists):
+
+- **Order of checks.** A query string (400) or a non-GET download (405) is refused first. Then the ticket is authenticated -- a header that cannot carry a `gfwtk_` token on the event loop, anything else (digest and grant re-check) in a worker thread -- and a refused request answers 401 or 403 there, holding no slot and waiting on no lock. A PATCH's `Upload-Offset`, `Upload-Complete` and `Content-Length` are parsed only after that, so an unauthenticated caller always gets the one undistinguished 401, never a 400 for a malformed header (`test_every_bad_ticket_is_one_undistinguished_401` in `tests/security/test_files_transfer_negative.py`); a declared length over the cap is still 413 before any body byte is read. Only then does it take a slot (503 when none is free), and a PATCH the upload's lock, after which the ticket is authenticated again (it may have closed while the PATCH waited) before the offset and length checks. The authentication threads share the event loop's default executor with `/mcp`, so the pre-slot check has its own per-process cap (default 8, `AUTH_SLOTS_PER_TRANSFER_SLOT` times the slot count; `max_concurrent_authentications` in `build_file_transfer_routes`), separate from `/mcp`'s: a permit is taken without waiting, none free is the same 503 `unavailable` with `Retry-After: 1` as a full slot count, and a permit is returned when its worker thread returns -- not when the request is cancelled -- so a disconnecting client neither frees one early nor leaks one. The PATCH re-check under the lock and a download's periodic re-check run while the request holds a slot, so they are bounded by the slot count and take no permit; authentication threads in flight stay at most the auth cap plus the slot count (`test_bad_tickets_never_take_a_slot_nor_wait_on_an_upload_lock` in `tests/security/test_files_transfer_negative.py`; `test_exhausted_auth_permits_are_503_at_once_and_come_back` and `test_a_cancelled_check_keeps_its_permit_until_its_thread_returns` in `tests/security/test_files_transfer_auth_cap.py`).
+- **Downloads are bounded like uploads.** Each send is bounded by the idle bound, so a reader that stops reading gives its slot back within about 30 s; the stream by its deadline; and the ticket and grants are re-read every 5 s between 1 MiB chunks, so an expiry or a revocation stops a stream already running (`test_a_stalled_download_reader_releases_its_slot_after_the_idle_bound`, `test_a_download_stops_mid_stream_on_revocation_expiry_or_its_deadline`). A reader of a large file over a slow link is cut at the deadline and resumes with `Range`, as the reference client does.
+- **The held-open file is released on every exit.** The download reader (an open descriptor bound to the ticket's version) is registered for release when its opening thread returns -- before the request resumes, and even if it was cancelled meanwhile -- so a 200 or 206 stream, a 416, a refused read, a cut stream and a cancelled request each close it exactly once, before the request's slot is given back, and never while a worker thread of the request is still running (`test_repeated_unsatisfiable_ranges_close_every_file_they_open` in `tests/security/test_files_transfer_negative.py`; `test_every_download_exit_closes_its_reader_exactly_once` and `test_a_download_cancelled_after_its_open_closes_the_reader` in `tests/security/test_files_transfer_auth_cap.py`).
+
+- **A completing PATCH retried after its finalize committed answers 401** `ticket_invalid`, not a replay: the ticket closed when the finalize committed. The reference client exits 5 ("outcome unknown") and the caller verifies with `files.stat` (`test_a_completing_patch_retried_after_its_finalize_committed_is_401` in `tests/integration/test_files_workspace_vertical_slice.py`; client side `test_a_lost_completing_response_then_401_is_unknown_not_failure` in `tests/unit/test_my_pa_files_client.py`).
+- **A change after the download headers left** cannot become a 412: the store re-checks the version before every 1 MiB chunk and the stream stops short of `Content-Length`, and the server closes the connection (uvicorn logs one `ASGI callable returned without completing response.` line, which names nothing); the client's SHA-256 check catches it when `include_sha256` was requested, and the retry is 412 (`test_a_change_after_the_headers_truncates_the_stream`).
+- **The reference client never clobbers a new `OUT`.** Without `--overwrite` it publishes the verified `.part` with a hard link that fails when `OUT` exists (reserving `OUT` with `O_EXCL` where hard links are unsupported, and removing that empty reservation if the replace then fails), so an `OUT` that appeared during the download is exit 1 with the bytes kept in `OUT.part` for inspection; `--overwrite` replaces atomically (`test_download_never_clobbers_an_out_that_appeared_during_the_download` in `tests/unit/test_my_pa_files_client.py`).
+- **After an interrupted append** (disconnect, 408) the staged file may hold more bytes than the row's offset; HEAD reports the staged bytes and the next PATCH or finalize reconciles the row (`test_begin_bytes_interrupt_resume_finalize_list_stat_download`).
+- **Concurrency is per process.** The slot cap and the per-upload lock live in one process; across processes the store's offset check and the row's offset CAS serialize (`test_the_slot_cap_answers_503_with_retry_after` in `tests/security/test_files_transfer_negative.py`).
+- **`If-Match` is ignored by the server.** The reference client resumes a download only when its stored ETag matches the server's, and restarts otherwise.
+- **Tickets bind the hashed client reference.** The per-request grant re-check finds the ticket's client by scanning registered clients and comparing in constant time (a small table).
+- Production runs uvicorn with `access_log=False`; a test server's access log would show the request line (never a token, which is a header).
+
 ## 11. Audit and logging
 
-Every capability is audited through the existing `authorize` path. Audit records capability, outcome, reason token, `workspace_id`, opaque ids (`fwupl`/`fwdnl`/`fwver`/`fwtrs`/`fwrcp`) and byte sizes. It never records file bodies, `write_text` text, preview text, tokens, or host paths. Byte-route requests are not separately audited per chunk: begin and finalize are the audited events. The MCP interaction log must omit the `text` argument of `files.write_text` and the `text` result of `files.preview`, in addition to its existing `*token*` redaction (WP5/WP6 requirement).
+Each `files.*` call is audited once, by `authorize` (`src/my_pa/application/authorization.py`), as one `knowledge.audit_events` row: its audit id, correlation id and timestamp, principal, capability, purpose, outcome (`allowed` or `denied`), policy version, the policy denial reason when denied, and `scope_source_id_count` (always 0: the names are scopeless). Those are the table's only columns. It does **not** record `workspace_id`, opaque ids (`fwupl`/`fwdnl`/`fwver`/`fwtrs`/`fwrcp`), byte sizes or the handler's outcome (trim T14).
+
+- The row records the policy decision, not what the handler then did: a refusal raised after authorization (`version_conflict`, `exists`, `digest_mismatch`, `not_found`, `unsupported_entry`, ...) is audited `allowed`.
+- Byte-route HEAD, PATCH chunks and GET requests are not audited. A completing PATCH runs `files.upload.finalize` through `invoke` and is audited as `files.upload.finalize`, exactly as the MCP tool is.
+- It never records file bodies, `write_text` text, preview text, tokens, paths or host paths; `AuditEvent` has no field that could hold them.
+
+The MCP interaction log omits the `text` argument of `files.write_text` and the `text` result of `files.preview`, in addition to its existing `*token*` redaction. The byte routes are outside the `/mcp` interaction log: it wraps `/mcp` only.
+
+Bounded by `test_the_audit_records_the_decision_and_nothing_about_the_file` and the audit assertions in `tests/integration/test_files_workspace_vertical_slice.py`.
 
 ## 12. ChatLLM and façade
 
@@ -225,6 +261,7 @@ Every capability is audited through the existing `authorize` path. Audit records
 - **T11:** proof of the Abacus scheduled-task bridge. Only the routes and the reference client ship.
 - **T12:** any new process, service, queue or store technology.
 - **T13:** `write_text` bound set below 1 MiB to fit the transport request bound under worst-case escaping (120 KiB; §8).
+- **T14:** a richer files audit (workspace id, opaque ids, byte sizes, the handler's outcome) is deferred. The audit is the generic `authorize` row (§11).
 
 ## 16. Operator residuals
 

@@ -31,6 +31,14 @@ EDGE_COMMAND = [
 ]
 PROJECT = "my-pa-remote-mcp"
 CANONICAL_DATA_NETWORK = "my-pa-nas-contract_data-plane"
+WORKSPACE_DESTINATION = "/srv/my-pa/workspaces/mcp"
+#: The one admitted workspace bind source: the overlays'
+#: (`ops/nas/remote/compose.files-workspace.remote.example.yml`) `source:`. A
+#: mounted workspace must be exactly this path.
+WORKSPACE_SOURCE = "/volume1/homes/bfetting/MCP"
+#: `/volume1/homes`, its ancestors (`/volume1`, `/`) and a whole home
+#: (`/volume1/homes/<user>`) are never a workspace source, whatever is configured.
+HOMES_ROOT = PurePosixPath("/volume1/homes")
 
 
 def docker() -> str:
@@ -55,6 +63,7 @@ def violations(
     networks: Mapping[str, Mapping[str, Any]],
     postgres_resources: Mapping[str, Any],
     postgres: Mapping[str, Any],
+    admitted_workspace_source: str = WORKSPACE_SOURCE,
 ) -> list[str]:
     errors: list[str] = []
     for name, state, expected in (("app", app, app_image), ("edge", edge, edge_image)):
@@ -134,6 +143,31 @@ def violations(
             "/srv/my-pa/managed-documents",
         )
     ]
+    # The files workspace plane is optional: no mount, no new requirement. When
+    # it is mounted it must be writable, exactly the configured subtree (and
+    # never the share, the homes root or a whole home), and disjoint from every
+    # other app mount (ADR-019).
+    workspace = app_mounts.get(WORKSPACE_DESTINATION)
+    if workspace is not None:
+        if workspace.get("RW") is not True:
+            errors.append("workspace_mount_not_writable")
+        workspace_source = workspace.get("Source")
+        if (
+            not isinstance(workspace_source, str)
+            or not PurePosixPath(workspace_source).is_absolute()
+        ):
+            errors.append("workspace_mount_source_identity")
+        else:
+            workspace_path = PurePosixPath(workspace_source)
+            if (
+                workspace_path == HOMES_ROOT
+                or workspace_path in HOMES_ROOT.parents
+                or workspace_path.parent == HOMES_ROOT
+            ):
+                errors.append("workspace_mount_too_broad")
+            if workspace_source != admitted_workspace_source:
+                errors.append("workspace_mount_source_mismatch")
+            sources.append(workspace_source)
     if not all(
         isinstance(source, str) and PurePosixPath(source).is_absolute() for source in sources
     ):

@@ -243,6 +243,11 @@ class FileWorkspaceApplication:
             Capability.FILES_WRITE_TEXT: self._write_text,
         }
 
+    @property
+    def store(self) -> FileWorkspaceStore:
+        """The composed store, shared with the byte routes' gate (contract section 10)."""
+        return self._store
+
     # ---- the one entry point ------------------------------------------------------
 
     def handle(

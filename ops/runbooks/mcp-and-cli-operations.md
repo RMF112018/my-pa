@@ -436,6 +436,38 @@ Arguments larger than the transport ceiling are refused the same way, and the
 oversized value is not echoed. The ceiling is the HTTP transport's own constant,
 imported rather than restated, so all three transports enforce one number.
 
+## Files workspace bytes (ADR-019)
+
+File bytes never travel as tool arguments. A client moves them in this order
+(contract `docs/architecture/files-workspace-contract.md` §10;
+operations in [`files-workspace.md`](files-workspace.md)):
+
+1. Call `files.upload.begin` (or `files.download.begin`). The result carries a
+   relative `route` (`/files/v1/uploads/<id>`, `/files/v1/downloads/<id>`) and
+   an `upload_token` / `download_token`, shown once.
+2. Join the route to the remote MCP origin and send the token only as
+   `Authorization: Bearer`. **Never put it in a URL**: a query string is
+   refused (400), token or not.
+3. Use the reference client, which reads the ticket from `MY_PA_FILES_TICKET`
+   or `--token-file`, never the command line:
+
+   ```sh
+   MY_PA_FILES_TICKET=... python scripts/my_pa_files.py upload ./local.bin \
+       --origin https://<remote MCP host> --route /files/v1/uploads/<id>
+   ```
+
+4. **Resume** by running it again with the same ticket: it asks HEAD for the
+   server's offset and continues from there (uploads), or resumes `OUT.part`
+   with `Range` while the ETag matches (downloads). The server cuts a download
+   whose reader stalls for 30 s, that streams past 600 s, or whose ticket
+   expires or loses its grant; the client's retries resume it the same way.
+   Without `--overwrite` the client never replaces an `OUT` that appeared
+   during the download: it exits 1 and keeps the verified bytes in `OUT.part`.
+5. **Verify.** Pass `sha256` to `files.upload.begin` and `include_sha256` to
+   `files.download.begin`; the client checks the bytes. Exit status 5 means a
+   completing request lost its answer and the ticket is now closed (401): check
+   `files.stat` before beginning again.
+
 ## Meeting records (WP-MTG-01 through WP-MTG-06)
 
 Meeting records are product-owned application data: a Meeting is written only

@@ -172,7 +172,7 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
@@ -191,6 +191,7 @@ from my_pa.application.entity_reenrichment import (
     ProductionReenrichmentCaller,
     ReenrichmentWork,
 )
+from my_pa.application.file_transfer import FileTransferGate
 from my_pa.application.file_workspace import FileWorkspaceApplication
 from my_pa.application.goodnotes_orchestrator import rollout_stage_permits
 from my_pa.application.native_sources import NativeSourceController
@@ -285,6 +286,7 @@ from my_pa.infrastructure.report_content_stores.filesystem import (
 from my_pa.infrastructure.report_content_stores.staging import FilesystemReportTransferStaging
 from my_pa.infrastructure.security.entra_token import EntraTokenVerifier, jwks_signing_key_source
 from my_pa.infrastructure.security.principal_identity import PrincipalIdentityService
+from my_pa.infrastructure.security.remote_oauth import DurableRemoteClientStanding
 from my_pa.infrastructure.security.webauthn_ceremony import (
     CeremonyResult,
     WebAuthnCeremonyService,
@@ -1130,6 +1132,11 @@ class GatewayRuntime:
     #: selects the runtime and never maps attested tenant/object identifiers.
     #: Default `None` keeps test constructions that omit ceremony safe.
     webauthn: Callable[..., Any] | None = None
+    #: Files workspace (contract section 10): the byte routes' gate, composed
+    #: exactly when the files plane is (`MY_PA_FILES_WORKSPACE_ROOT` set, not a
+    #: restricted composition) and an OAuth audience is configured. Only the
+    #: remote MCP process mounts routes over it; `None` mounts none (404).
+    file_transfer: FileTransferGate | None = None
 
     def close(self) -> None:
         """Release every pool. Safe to call after a failed start."""
@@ -1389,7 +1396,14 @@ def build_gateway_runtime(
         if settings.apple_ingress_enabled
         else None
     )
-    return GatewayRuntime(
+    # Files workspace (contract section 9): composed only when
+    # `MY_PA_FILES_WORKSPACE_ROOT` is set and never in a restricted composition
+    # -- an injected `data_engine` is a fixed MCP database role holding no
+    # privilege on the files plane tables.
+    file_workspace = (
+        _file_workspace_application(settings, work_engine) if data_engine is None else None
+    )
+    runtime = GatewayRuntime(
         service=ApplicationService(
             unit_of_work=unit_of_work,
             limits=settings.effective_limits(),
@@ -1482,13 +1496,8 @@ def build_gateway_runtime(
             # WP06 T13/T14: the same root's `transfer` staging (`None` when no
             # root: the four transfer uploads are withheld).
             report_transfer_staging=report_transfer_staging(settings, work_engine),
-            # Files workspace (contract section 9): composed only when
-            # `MY_PA_FILES_WORKSPACE_ROOT` is set and never in a restricted
-            # composition -- an injected `data_engine` is a fixed MCP database
-            # role holding no privilege on the files plane tables.
-            file_workspace=(
-                _file_workspace_application(settings, work_engine) if data_engine is None else None
-            ),
+            # Files workspace (contract section 9): composed above.
+            file_workspace=file_workspace,
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, control_engine) if entra else None,
@@ -1512,4 +1521,24 @@ def build_gateway_runtime(
         audit_engine=audit_engine,
         program_read_engine=program_read_engine,
         webauthn=_compose_webauthn_handler(settings, control_engine),
+    )
+    if file_workspace is None or not settings.oauth_audience.strip():
+        return runtime
+    # Contract section 10: the byte routes share the handlers' store and unit of
+    # work, and re-read the ticket's client on the control engine per request.
+    return replace(
+        runtime,
+        file_transfer=FileTransferGate(
+            service=runtime.service,
+            store=file_workspace.store,
+            unit_of_work=unit_of_work,
+            standing=DurableRemoteClientStanding(
+                connections=control_engine.begin,
+                resource=settings.oauth_audience,
+                scopes=frozenset(settings.oauth_scopes.split()),
+            ),
+            workspace_id=settings.files_workspace_id,
+            max_upload_bytes=settings.files_max_upload_bytes,
+            remote_writes_enabled=settings.remote_writes_enabled,
+        ),
     )

@@ -115,6 +115,8 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesSemanticProposal,
     GoodNotesSemanticReviewCase,
 )
+from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.lineage.backfill import CaptureVersionPin
 from my_pa.domain.lineage.model import EvidenceAnchor, RecordRef
 from my_pa.domain.lineage.vocabulary import (
@@ -13744,3 +13746,41 @@ class FileWorkspaceRepository(ABC):
         `conflict`). A `result` holding a key named `text` or ending in
         `_token`, at any depth, is refused.
         """
+
+
+# --- files byte-route grant re-check (contract section 10, WP6a) ----------------------
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteClientStanding:
+    """One remote client's durable standing, read afresh for one byte-route request.
+
+    What `RemoteIdentityRepository.authenticate` resolves for the client with no
+    bearer token in hand: its OAuth client id (the finalize's
+    `authenticated_client_id`), the Principal it is bound to, its active
+    (unrevoked, unexpired) grants as `(capability, purpose)` pairs, and whether
+    writes are allowed (client and global switches). A write grant is absent
+    from `capability_purposes` whenever writes are not allowed, as at `/mcp`.
+    """
+
+    oauth_client_id: str = field(repr=False)
+    principal_id: str
+    capability_purposes: frozenset[tuple[Capability, Purpose | None]]
+    write_allowed: bool
+
+
+class RemoteClientStandingReader(ABC):
+    """The byte routes' durable re-check of the client a ticket names (section 10).
+
+    A ticket holds only the server-derived client reference
+    (`remote_client:<pseudonym>`, `domain.reports.transfer.client_ref_of`),
+    never the OAuth client id, so the reader finds the client whose derived
+    reference it is. Called once per request, in its own short transaction, so
+    a revoked grant, a disabled or revoked client, or remote access switched off
+    takes effect on the next request. `None` is every refusal: no such client,
+    disabled, revoked or expired, or remote access off.
+    """
+
+    @abstractmethod
+    def standing(self, client_ref: str, *, now: datetime) -> RemoteClientStanding | None:
+        """The current standing of the remote client `client_ref` names, or `None`."""

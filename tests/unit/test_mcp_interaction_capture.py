@@ -1119,6 +1119,7 @@ def test_mcp_remote_serves_the_wrapped_app_and_closes_the_log_in_its_finally(
     class Runtime:
         principal = None
         service = object()
+        file_transfer = None
         work_engine = SimpleNamespace(begin=lambda: None, connect=lambda: None)
 
         def close(self) -> None:

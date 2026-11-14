@@ -182,7 +182,8 @@ _ARGUMENT_DETAILS: Final[Mapping[str, SafeDetail]] = {
 
 
 def _refusal(reason: FilesReason) -> ApplicationError:
-    return _REFUSAL_CODES[reason](SafeDetail(reason.value))
+    error_type = _REFUSAL_CODES[reason]
+    return error_type(SafeDetail(reason.value))
 
 
 @contextmanager
@@ -219,7 +220,7 @@ class FileWorkspaceApplication:
         workspace_id: str,
         max_upload_bytes: int,
     ) -> None:
-        self._store: Final = store
+        self._store = store
         self._workspace_id: Final = workspace_id
         self._max_upload_bytes: Final = max_upload_bytes
         self._handlers: Final[Mapping[Capability, Callable[..., dict[str, Any]]]] = {

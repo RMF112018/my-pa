@@ -32,8 +32,12 @@ answer 404), and ChatLLM `chatllm-data-v14` desires exactly the v13 set.
    `MY_PA_NAS_MANAGED_ROOT`, `MY_PA_NAS_CONFIG_ROOT` and the report-content root
    are none of those (compare against the live env files, do not guess). The
    store refuses to start on an overlap, and `ops/nas/remote/live-gate.py`
-   refuses a read-only, too-broad or overlapping workspace mount on the remote
-   MCP container.
+   refuses a read-only, too-broad (the share, the homes root or a whole home)
+   or overlapping workspace mount on the remote MCP container, and any source
+   other than exactly `/volume1/homes/bfetting/MCP`
+   (`workspace_mount_source_mismatch`; the gate's `WORKSPACE_SOURCE`, pinned to
+   the overlay). A different folder means changing the overlay and the gate
+   together.
 
 ## 2. NAS ACL
 

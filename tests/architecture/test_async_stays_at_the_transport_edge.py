@@ -153,11 +153,12 @@ def test_the_interaction_capture_async_surface_is_exact_and_bounded() -> None:
 
 def test_the_files_transfer_async_surface_is_exact_and_bounded() -> None:
     """The ASGI endpoint, its upload/append/finalize/download steps, the thread
-    offload, the loop-side body read and the download body generator."""
+    offload, the pre-slot authentication, the loop-side body read, the download
+    body generator and its bounded send."""
     found = _async_nodes(FILES_TRANSFER_ADAPTER)
-    assert found.count("AsyncFunctionDef") == 8, found
-    assert found.count("Await") == 26, found
-    assert found.count("AsyncWith") == 1, found
+    assert found.count("AsyncFunctionDef") == 10, found
+    assert found.count("Await") == 31, found
+    assert found.count("AsyncWith") == 2, found
     assert found.count("AsyncFor") == 0, found
 
 

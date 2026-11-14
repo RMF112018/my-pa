@@ -267,9 +267,9 @@ def test_a_completing_patch_retried_after_its_finalize_committed_is_401(slice_: 
 def test_a_change_after_the_headers_truncates_the_stream(slice_: Slice) -> None:
     """The stream stops short of `Content-Length`; a retry is then a 412.
 
-    The server neither sends the rest nor closes the connection today, so a
-    reader sees the truncation as its read timeout (the reference client's
-    `--timeout`, default 60 s); both are accepted here.
+    The server does not send the rest and closes the connection, so a reader
+    sees an incomplete read (a server that left it open would surface as the
+    reader's timeout instead); both are accepted here.
     """
     body = os.urandom(17 * 1024 * 1024)
     slice_.put("moving.bin", body)

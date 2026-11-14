@@ -178,6 +178,8 @@ class Harness:
         remote_writes_enabled: bool = True,
         max_upload_bytes: int = 1 << 20,
         body_idle_timeout_seconds: float = 30.0,
+        download_deadline_seconds: float = 600.0,
+        download_recheck_seconds: float = 5.0,
     ) -> None:
         self.root = root
         self.engine = create_database_engine(url)
@@ -241,6 +243,8 @@ class Harness:
                 self.gate,
                 max_concurrent=max_concurrent,
                 body_idle_timeout_seconds=body_idle_timeout_seconds,
+                download_deadline_seconds=download_deadline_seconds,
+                download_recheck_seconds=download_recheck_seconds,
             ),
         )
         self._stack = ExitStack()

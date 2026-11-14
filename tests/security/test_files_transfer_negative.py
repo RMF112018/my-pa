@@ -15,6 +15,10 @@ remote client, tickets begun through `invoke`. It proves:
   streamed past the ceiling are 413 and the staged offset is unchanged;
 * the per-process slot cap answers 503 with `Retry-After`; a stalled body
   releases its slot after the idle bound (408);
+* a bad ticket is refused before it takes a slot or waits on an upload's lock,
+  so a flood of them against a live upload starves no valid request;
+* a download whose reader stalls releases its slot after the idle bound, and an
+  expired ticket, a revoked grant or the deadline stops a stream mid-way;
 * no answer, header or log record carries the token, the path or body bytes,
   and the MCP interaction log does not see `/files/v1/*`.
 """
@@ -23,6 +27,7 @@ from __future__ import annotations
 
 import http.client
 import logging
+import socket
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -420,6 +425,162 @@ def test_a_stalled_body_releases_its_slot_after_the_idle_bound(
         resumed = built.patch(upload_id, token, b" world", 5)
         assert resumed.status_code == 204
         assert resumed.headers["Upload-Offset"] == "11"
+    finally:
+        built.close()
+
+
+def test_bad_tickets_never_take_a_slot_nor_wait_on_an_upload_lock(
+    harness: Harness,
+) -> None:
+    """With the cap at 4 and one upload streaming (its lock held), six PATCHes
+    with bad tickets -- four against the live upload -- are 401 at once, and
+    valid HEAD, PATCH and GET requests still get a slot."""
+    upload_id, token = harness.begin_upload("live.bin")
+    other_id, other_token = harness.begin_upload("other.bin")
+    harness.write("free.txt", "download while flooded")
+    ticket = harness.begin_download("free.txt")
+    held = _open_chunked_patch(harness.client.port, upload_id, token)
+    flood: list[http.client.HTTPConnection] = []
+    try:
+        deadline = time.monotonic() + 10
+        while harness.head(upload_id, token).headers["Upload-Offset"] != "5":
+            assert time.monotonic() < deadline, "the live PATCH never streamed"
+            time.sleep(0.05)
+        unknown = "gfwtk_" + "c" * 64
+        for target, bad in (
+            (upload_id, other_token),  # a real token of another upload
+            (upload_id, unknown),
+            (upload_id, ticket["download_token"]),  # the other kind
+            (upload_id, None),  # no Authorization at all
+            (other_id, token),
+            (other_id, unknown),
+        ):
+            connection = http.client.HTTPConnection("127.0.0.1", harness.client.port, timeout=10)
+            connection.putrequest("PATCH", f"/files/v1/uploads/{target}")
+            if bad is not None:
+                connection.putheader("Authorization", f"Bearer {bad}")
+            connection.putheader("Upload-Offset", "0")
+            connection.putheader("Content-Length", "64")  # announced, never sent
+            connection.endheaders()
+            flood.append(connection)
+        started = time.monotonic()
+        for connection in flood:
+            response = connection.getresponse()
+            assert response.status == 401
+            assert response.read() == b'{"error":"denied","reason":"ticket_invalid"}'
+        assert time.monotonic() - started < 5, "a bad ticket waited (the idle bound is 30 s)"
+        # Every refused request answered and held nothing: valid ones still run.
+        assert harness.head(other_id, other_token).status_code == 204
+        resumed = harness.patch(other_id, other_token, b"abc", 0)
+        assert (resumed.status_code, resumed.headers["Upload-Offset"]) == (204, "3")
+        served = harness.get(ticket["download_id"], ticket["download_token"])
+        assert (served.status_code, served.content) == (200, b"download while flooded")
+        held.send(b"0\r\n\r\n")
+        response = held.getresponse()
+        assert (response.status, response.getheader("Upload-Offset")) == (204, "5")
+    finally:
+        for connection in flood:
+            connection.close()
+        held.close()
+
+
+_BIG_DOWNLOAD_BYTES = 16 << 20
+
+
+def _open_unread_get(port: int, download_id: str, token: str) -> socket.socket:
+    """A GET whose reader keeps a tiny receive window and reads only when told."""
+    reader = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    reader.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    reader.settimeout(10)
+    reader.connect(("127.0.0.1", port))
+    reader.sendall(
+        (
+            f"GET /files/v1/downloads/{download_id} HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\n\r\n"
+        ).encode()
+    )
+    return reader
+
+
+def _read_until_closed(reader: socket.socket) -> int:
+    """Every byte left, to the server's close; a hang past the timeout fails."""
+    total = 0
+    try:
+        while block := reader.recv(1 << 16):
+            total += len(block)
+    except TimeoutError:
+        raise AssertionError("the server never closed the stopped stream") from None
+    return total
+
+
+def _big_download(harness: Harness) -> dict[str, Any]:
+    (harness.root / "big.bin").write_bytes(b"\x5a" * _BIG_DOWNLOAD_BYTES)
+    return harness.begin_download("big.bin")
+
+
+def test_a_stalled_download_reader_releases_its_slot_after_the_idle_bound(
+    cloned_database_url: str, tmp_path: Path
+) -> None:
+    built = _build(cloned_database_url, tmp_path, max_concurrent=1, body_idle_timeout_seconds=1.0)
+    try:
+        upload_id, token = built.begin_upload("waiting.bin")
+        ticket = _big_download(built)
+        reader = _open_unread_get(
+            built.client.port, ticket["download_id"], ticket["download_token"]
+        )
+        try:
+            deadline = time.monotonic() + 10
+            seen_busy = False
+            answer = built.head(upload_id, token)
+            while answer.status_code != 204:
+                assert answer.status_code == 503
+                seen_busy = True
+                assert time.monotonic() < deadline, "the stalled GET never released its slot"
+                time.sleep(0.02)
+                answer = built.head(upload_id, token)
+            assert seen_busy, "the GET never held the only slot"
+            # The stream was cut, not finished, and the connection is closed.
+            assert _read_until_closed(reader) < _BIG_DOWNLOAD_BYTES
+        finally:
+            reader.close()
+    finally:
+        built.close()
+
+
+@pytest.mark.parametrize("change", ["revoked", "expired", "deadline"])
+def test_a_download_stops_mid_stream_on_revocation_expiry_or_its_deadline(
+    cloned_database_url: str, tmp_path: Path, change: str
+) -> None:
+    built = _build(
+        cloned_database_url,
+        tmp_path,
+        max_concurrent=1,
+        download_recheck_seconds=0.05,
+        download_deadline_seconds=1.0 if change == "deadline" else 600.0,
+    )
+    try:
+        upload_id, token = built.begin_upload("after.bin")
+        ticket = _big_download(built)
+        clock = built.gate._clock
+        reader = _open_unread_get(
+            built.client.port, ticket["download_id"], ticket["download_token"]
+        )
+        try:
+            received = len(reader.recv(1 << 16))
+            assert received > 0
+            if change == "revoked":
+                _revoke_grant(built, "files.download.begin")
+            elif change == "expired":
+                # Time passes the ticket's expiry: the gate's clock moves past it.
+                built.gate._clock = lambda: datetime.now(UTC) + timedelta(days=2)
+            time.sleep(1.2)
+            received += _read_until_closed(reader)
+            assert received < _BIG_DOWNLOAD_BYTES, change
+        finally:
+            reader.close()
+            built.gate._clock = clock
+        # The stopped stream gave its slot back.
+        assert built.head(upload_id, token).status_code == 204
     finally:
         built.close()
 

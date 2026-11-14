@@ -782,13 +782,23 @@ been applied; the plane is absent until `MY_PA_FILES_WORKSPACE_ROOT` is set.
   and reports `external_change_detected`, and the remaining check-to-rename
   window is documented, not closed. A change after a download's headers left
   truncates the stream short of `Content-Length` instead of becoming a 412; the
-  connection is not closed then, so a reader sees it as its read timeout.
+  server then closes the connection.
 - **No retention or purge** (T3). `.my-pa/versions` preimages and
   `.my-pa/trash` items grow until the operator sets a retention policy; trash
   restores, and nothing deletes.
 - **Byte-route concurrency is per process.** The slot cap (4, then 503 with
   `Retry-After: 1`) and the per-upload lock do not span processes; across
   processes the store's offset check and the row's offset CAS serialize.
+- **Byte requests are authenticated before they hold anything.** A bad ticket
+  is 401 before it takes a slot or waits on an upload's lock; the digest and
+  grant check runs in the event loop's default executor with no cap of its own,
+  so a flood of well-formed bad tickets costs database round trips and
+  executor threads, not slots.
+- **A download is bounded but not resumable server-side.** A reader that stops
+  reading for 30 s, a stream past 600 s, or a ticket that expires or loses its
+  grant (re-checked every 5 s) is cut short of `Content-Length` with the
+  connection closed; the client resumes with `Range`. Bytes already in the
+  kernel's and the transport's buffers still reach the reader after a cut.
 - **The audit is minimal** (T14). One `authorize` row per call records the
   policy decision, so a handler refusal after authorization is `allowed`; there
   is no workspace id, opaque id, byte size or handler outcome, and HEAD/PATCH
@@ -808,6 +818,9 @@ Evidence: `docs/decisions/ADR-019-nas-mcp-file-workspace.md`,
 `tests/integration/test_files_workspace_vertical_slice.py::test_a_completing_patch_retried_after_its_finalize_committed_is_401`,
 `tests/integration/test_files_workspace_vertical_slice.py::test_a_planted_symlink_is_never_followed`,
 `tests/security/test_files_transfer_negative.py::test_the_slot_cap_answers_503_with_retry_after`,
+`tests/security/test_files_transfer_negative.py::test_bad_tickets_never_take_a_slot_nor_wait_on_an_upload_lock`,
+`tests/security/test_files_transfer_negative.py::test_a_stalled_download_reader_releases_its_slot_after_the_idle_bound`,
+`tests/security/test_files_transfer_negative.py::test_a_download_stops_mid_stream_on_revocation_expiry_or_its_deadline`,
 `tests/unit/test_my_pa_files_client.py::test_a_lost_completing_response_then_401_is_unknown_not_failure`.
 
 ---

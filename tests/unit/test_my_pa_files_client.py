@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import ModuleType
+from typing import BinaryIO
 
 import pytest
 from _pytest.capture import CaptureResult
@@ -445,6 +446,46 @@ def test_download_refuses_an_existing_out_unless_overwrite(
     assert out.read_bytes() == b"old"
     assert client.main(_download(origin, out, "--overwrite"), ENV) == 0
     assert out.read_bytes() == b"new"
+
+
+def test_download_never_clobbers_an_out_that_appeared_during_the_download(
+    server: tuple[Stub, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub, origin = server
+    stub.content = b"downloaded bytes"
+    out = tmp_path / "out.bin"
+    verify = client.file_sha256
+
+    def racing(handle: BinaryIO) -> tuple[str, int]:
+        out.write_bytes(b"someone else")  # OUT appears after the early check
+        return verify(handle)
+
+    monkeypatch.setattr(client, "file_sha256", racing)
+    assert client.main(_download(origin, out), ENV) == client.EXIT_LOCAL
+    assert out.read_bytes() == b"someone else"
+    assert (tmp_path / "out.bin.part").read_bytes() == b"downloaded bytes"
+    # --overwrite keeps the atomic replace, the race included.
+    (tmp_path / "out.bin.part").unlink()
+    (tmp_path / "out.bin.part.etag").unlink(missing_ok=True)
+    assert client.main(_download(origin, out, "--overwrite"), ENV) == 0
+    assert out.read_bytes() == b"downloaded bytes"
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["out.bin"]
+
+
+def test_download_publishes_without_hard_links_by_reserving_out(
+    server: tuple[Stub, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub, origin = server
+    stub.content = b"no hard links here"
+    out = tmp_path / "out.bin"
+
+    def no_links(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError("hard links not supported")
+
+    monkeypatch.setattr(client.os, "link", no_links)
+    assert client.main(_download(origin, out), ENV) == 0
+    assert out.read_bytes() == b"no hard links here"
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["out.bin"]
 
 
 def test_download_resumes_a_partial_part_with_range_and_if_match(

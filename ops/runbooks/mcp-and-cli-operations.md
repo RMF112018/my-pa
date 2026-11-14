@@ -458,7 +458,11 @@ operations in [`files-workspace.md`](files-workspace.md)):
 
 4. **Resume** by running it again with the same ticket: it asks HEAD for the
    server's offset and continues from there (uploads), or resumes `OUT.part`
-   with `Range` while the ETag matches (downloads).
+   with `Range` while the ETag matches (downloads). The server cuts a download
+   whose reader stalls for 30 s, that streams past 600 s, or whose ticket
+   expires or loses its grant; the client's retries resume it the same way.
+   Without `--overwrite` the client never replaces an `OUT` that appeared
+   during the download: it exits 1 and keeps the verified bytes in `OUT.part`.
 5. **Verify.** Pass `sha256` to `files.upload.begin` and `include_sha256` to
    `files.download.begin`; the client checks the bytes. Exit status 5 means a
    completing request lost its answer and the ticket is now closed (401): check

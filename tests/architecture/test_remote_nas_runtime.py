@@ -580,6 +580,36 @@ def test_live_gate_refuses_the_share_or_homes_root_as_workspace(source: str) -> 
     assert "workspace_mount_not_writable" not in errors
 
 
+@pytest.mark.parametrize("source", ["/volume1/homes/bfetting", "/volume1/homes/someone"])
+def test_live_gate_refuses_a_whole_home_as_workspace(source: str) -> None:
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    app, edge, context = _live_gate_shape(gate)
+    errors = gate.violations(_with_workspace(app, source), edge, **context)
+    assert errors == ["workspace_mount_too_broad", "workspace_mount_source_mismatch"]
+    # Even configured to it, a whole home is too broad.
+    configured = gate.violations(
+        _with_workspace(app, source), edge, **context, admitted_workspace_source=source
+    )
+    assert configured == ["workspace_mount_too_broad"]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "/volume1/homes/bfetting/Other",  # a sibling subtree
+        "/volume1/homes/bfetting/MCP/inner",  # inside the admitted subtree
+        "/volume1/homes/bfetting/MCP/",  # not the exact spelling
+        "/volume1/homes/other/MCP",  # another user's folder of the same name
+        "/volume1/docker",  # outside the homes tree
+    ],
+)
+def test_live_gate_requires_exactly_the_admitted_workspace_source(source: str) -> None:
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    app, edge, context = _live_gate_shape(gate)
+    errors = gate.violations(_with_workspace(app, source), edge, **context)
+    assert errors == ["workspace_mount_source_mismatch"]
+
+
 @pytest.mark.parametrize("source", [None, "", "volume1/homes/bfetting/MCP", 7])
 def test_live_gate_refuses_a_relative_or_missing_workspace_source(source: object) -> None:
     gate = _module(ROOT / "ops/nas/remote/live-gate.py")
@@ -600,7 +630,10 @@ def test_live_gate_refuses_a_relative_or_missing_workspace_source(source: object
 def test_live_gate_refuses_a_workspace_overlapping_another_mount(source: str) -> None:
     gate = _module(ROOT / "ops/nas/remote/live-gate.py")
     app, edge, context = _live_gate_shape(gate)
-    errors = gate.violations(_with_workspace(app, source), edge, **context)
+    # Configured to the overlapping path itself, so only the overlap remains.
+    errors = gate.violations(
+        _with_workspace(app, source), edge, **context, admitted_workspace_source=source
+    )
     assert errors == ["app_mount_overlap"]
 
 
@@ -630,4 +663,5 @@ def test_files_workspace_overlays_bind_one_writable_subtree(overlay: str, servic
     ]
     gate = _module(ROOT / "ops/nas/remote/live-gate.py")
     assert gate.WORKSPACE_DESTINATION == "/srv/my-pa/workspaces/mcp"
+    assert gate.WORKSPACE_SOURCE == "/volume1/homes/bfetting/MCP"  # the bind source above
     assert "ops/runbooks/files-workspace.md" in text

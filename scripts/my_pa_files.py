@@ -28,8 +28,11 @@ finalize JSON result is printed on stdout.
 `OUT.part`; a partial `.part` whose recorded ETag (`OUT.part.etag`) matches the
 server's is resumed with `Range` (and `If-Match`), anything else restarts from
 zero. The whole file is then checked against `X-Content-SHA256` (when the
-server sends it) and `--sha256` (when given), fsynced, and moved into place
-with `os.replace`. A mismatch deletes the `.part` and fails.
+server sends it) and `--sha256` (when given), fsynced, and moved into place:
+with `--overwrite` by `os.replace`, otherwise without clobbering (a hard link
+that fails if OUT now exists), so an OUT that appeared during the download is
+exit 1 with the verified bytes kept in `OUT.part`. A mismatch deletes the
+`.part` and fails.
 
 Memory is bounded by one 1 MiB block in both directions.
 
@@ -421,6 +424,35 @@ def _fsync_directory(directory: Path) -> None:
         os.close(descriptor)
 
 
+def _publish_no_clobber(part: Path, out: Path) -> None:
+    """Move the verified `part` to `out` unless something now holds `out`.
+
+    The early `OUT exists` check runs before the download; a file that appears
+    at `out` while the bytes arrive must not be replaced silently. A hard link
+    is created only when `out` is free (`FileExistsError` otherwise), then the
+    part is unlinked. Where the filesystem has no hard links, `out` is reserved
+    with `O_CREAT | O_EXCL` and the part replaces that reservation atomically.
+    On a conflict `OUT.part` (and its `.etag` marker) are kept for inspection
+    and the client exits 1 (`EXIT_LOCAL`).
+    """
+    conflict = ClientError(
+        EXIT_LOCAL,
+        "OUT appeared during the download; the verified bytes are kept in OUT.part",
+    )
+    try:
+        os.link(part, out, follow_symlinks=False)
+    except FileExistsError:
+        raise conflict from None
+    except OSError:  # no hard links here: reserve the name, then replace it
+        try:
+            os.close(os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        except FileExistsError:
+            raise conflict from None
+        part.replace(out)
+        return
+    part.unlink()
+
+
 def download(
     out: Path,
     target: Target,
@@ -527,7 +559,10 @@ def download(
         if expected is not None and expected.lower() != actual:
             _discard(part, marker)
             raise ClientError(EXIT_DIGEST, "the downloaded bytes do not match the expected SHA-256")
-    part.replace(out)  # atomic within the directory
+    if overwrite:
+        part.replace(out)  # atomic within the directory
+    else:
+        _publish_no_clobber(part, out)
     _discard(marker)
     _fsync_directory(out.parent)
     return {"bytes": size, "sha256": actual, "server_sha256_checked": seen["sha256"] is not None}

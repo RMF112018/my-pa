@@ -18,9 +18,16 @@ the gate decides. The rules the transport itself owns:
   declared `Content-Length` over 32 MiB, or past what the ticket may still
   hold, is 413 `too_large`; the offset must match (409 `offset_mismatch`,
   carrying the current `Upload-Offset`).
+- **Authentication first.** Every request is authenticated before it takes a
+  slot or waits on an upload's lock: a request without a ticket-shaped bearer
+  is answered on the loop, any other is checked in a worker thread (the
+  loop's default executor), and a refused one is answered then -- it never
+  holds a slot or queues behind an upload. A PATCH authenticates again once
+  it holds the upload's lock, since the ticket or the offset may change while
+  it waits.
 - **Concurrency.** Its own per-process slot count (default 4), separate from
-  the `/mcp` semaphores: a request that finds none free is 503 with
-  `Retry-After` and nothing read. Concurrent PATCHes of one upload are
+  the `/mcp` semaphores: an authenticated request that finds none free is 503
+  with `Retry-After` and nothing read. Concurrent PATCHes of one upload are
   serialized by a per-upload lock, behind the store's offset check and the
   row's offset CAS.
 - **Off the event loop.** Every store and database call runs in a worker
@@ -30,6 +37,13 @@ the gate decides. The rules the transport itself owns:
   bounded by `body_idle_timeout_seconds` and the whole PATCH by
   `patch_deadline_seconds` (408 when either passes); a thread the request no
   longer waits for keeps its slot and its upload lock until it returns.
+- **Bounded downloads.** Each send of a GET's response is bounded by the same
+  idle bound (a reader that stops reading), the whole stream by
+  `download_deadline_seconds`, and the ticket and grants are re-checked every
+  `download_recheck_seconds` between chunks, so an expiry or a revocation
+  stops the stream. A stream stopped for any of these reasons (or because the
+  file changed) ends short of `Content-Length` and the connection is closed;
+  the client resumes with `Range`.
 - **Privacy.** Nothing here logs. Errors are JSON `{error, reason}` -- a public
   code and a section 7 token or `null` -- and never carry a token, a path or a
   body byte. The interaction log wraps `/mcp` only, so these routes are not
@@ -48,7 +62,7 @@ from typing import Any, Final, TypeVar
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import BaseRoute, Route
-from starlette.types import Receive, Scope, Send
+from starlette.types import Message, Receive, Scope, Send
 
 from my_pa.application.errors import ApplicationError, DeniedError
 from my_pa.application.file_transfer import (
@@ -68,12 +82,15 @@ from my_pa.domain.files.transfer import (
     parse_range,
     parse_upload_complete,
     parse_upload_offset,
+    ticket_token_from_authorization,
 )
 from my_pa.domain.files.vocabulary import FilesReason
 
 __all__ = [
     "BODY_IDLE_TIMEOUT_SECONDS",
     "DOWNLOADS_PATH",
+    "DOWNLOAD_DEADLINE_SECONDS",
+    "DOWNLOAD_RECHECK_SECONDS",
     "MAX_CONCURRENT_TRANSFERS",
     "PATCH_DEADLINE_SECONDS",
     "UPLOADS_PATH",
@@ -90,6 +107,12 @@ BODY_IDLE_TIMEOUT_SECONDS: Final = 30.0
 #: The longest one PATCH may stream: 32 MiB at about 56 KiB/s. A slow-drip
 #: client that never idles past the bound above still cannot hold a slot longer.
 PATCH_DEADLINE_SECONDS: Final = 600.0
+#: The longest one GET may stream, the PATCH deadline's twin: a slow reader of
+#: a large file is cut there and resumes with `Range` (the reference client does).
+DOWNLOAD_DEADLINE_SECONDS: Final = 600.0
+#: How often a streaming GET re-reads its ticket and grants (one short unit of
+#: work), so an expiry or a revocation stops it within about this long.
+DOWNLOAD_RECHECK_SECONDS: Final = 5.0
 RETRY_AFTER_SECONDS: Final = 1
 
 _NO_STORE: Final = {"Cache-Control": "no-store"}
@@ -143,6 +166,10 @@ def _refusal(reason: FilesReason, headers: dict[str, str] | None = None) -> JSON
     return _error(code, reason.value, status, headers)
 
 
+def _busy() -> JSONResponse:
+    return _error("unavailable", None, 503, {"Retry-After": str(RETRY_AFTER_SECONDS)})
+
+
 def _failure(error: BaseException) -> JSONResponse:
     """The one JSON answer for anything the gate or the store raised; names no value."""
     if isinstance(error, UploadOffsetMismatch):
@@ -183,6 +210,10 @@ def _envelope_answer(envelope: ResponseEnvelope) -> JSONResponse:
 
 class _BodyTimeout(Exception):  # noqa: N818 - internal signal, never rendered
     """The body stalled past the idle bound or the PATCH passed its deadline."""
+
+
+class _StreamStopped(Exception):  # noqa: N818 - internal signal, never rendered
+    """A download stream ends short: its deadline, a re-check or a read refused it."""
 
 
 async def _next_chunk(stream: AsyncIterator[bytes]) -> bytes | None:
@@ -274,6 +305,8 @@ class _FileTransferEndpoint:
         upload_locks: dict[str, tuple[asyncio.Lock, int]],
         body_idle_timeout_seconds: float,
         patch_deadline_seconds: float,
+        download_deadline_seconds: float,
+        download_recheck_seconds: float,
     ) -> None:
         self._gate = gate
         self._kind = kind
@@ -281,6 +314,8 @@ class _FileTransferEndpoint:
         self._locks = upload_locks
         self._idle = body_idle_timeout_seconds
         self._deadline = patch_deadline_seconds
+        self._download_deadline = download_deadline_seconds
+        self._recheck = download_recheck_seconds
 
     # ---- shared plumbing --------------------------------------------------------
 
@@ -316,6 +351,21 @@ class _FileTransferEndpoint:
         held.running = task
         return await asyncio.shield(task)
 
+    async def _authenticate(
+        self, held: _Held, transfer_id: str, authorization: str | None
+    ) -> FileTransferAccess:
+        """The ticket and its client's standing; called before any slot or lock is taken.
+
+        A header that cannot carry a ticket token is refused on the loop, with
+        no thread; anything else is the gate's digest and grant check, offloaded.
+        """
+        if ticket_token_from_authorization(authorization) is None:
+            raise FilesRefusal("ticket", FilesReason.TICKET_INVALID)
+        gate, kind = self._gate, self._kind
+        return await self._offload(
+            held, lambda: gate.authenticate(kind, transfer_id, authorization)
+        )
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         request = Request(scope, receive)
         if scope.get("query_string"):
@@ -325,10 +375,6 @@ class _FileTransferEndpoint:
             await _error("invalid_request", None, 405, {"Allow": "GET"})(scope, receive, send)
             return
         held = _Held()
-        if not self._take_slot(held):
-            busy = _error("unavailable", None, 503, {"Retry-After": str(RETRY_AFTER_SECONDS)})
-            await busy(scope, receive, send)
-            return
         try:
             if self._kind is FileTransferKind.DOWNLOAD:
                 await self._download(request, held, scope, receive, send)
@@ -356,9 +402,9 @@ class _FileTransferEndpoint:
         if upload_id is None:
             return _refusal(FilesReason.TICKET_INVALID)
         if request.method == "HEAD":
-            access = await self._offload(
-                held, lambda: gate.authenticate(FileTransferKind.UPLOAD, upload_id, authorization)
-            )
+            access = await self._authenticate(held, upload_id, authorization)
+            if not self._take_slot(held):
+                return _busy()
             offset = await self._offload(held, lambda: gate.upload_offset(access))
             headers = {**_NO_STORE, "Upload-Offset": str(offset)}
             if access.ticket.declared_size is not None:
@@ -368,13 +414,16 @@ class _FileTransferEndpoint:
         raw_complete = request.headers.get("upload-complete")
         completion = None if raw_complete is None else parse_upload_complete(raw_complete)
         content_length = _content_length(request)
+        # Refused before it may hold a slot or queue behind the upload's lock.
+        await self._authenticate(held, upload_id, authorization)
+        if not self._take_slot(held):
+            return _busy()
         lock = self._lock_for(upload_id, held)
         async with asyncio.timeout(self._idle):
             await lock.acquire()
         held.lock = lock
-        access = await self._offload(
-            held, lambda: gate.authenticate(FileTransferKind.UPLOAD, upload_id, authorization)
-        )
+        # Again under the lock: the ticket may have closed while this waited.
+        access = await self._authenticate(held, upload_id, authorization)
         offset = await self._offload(
             held, lambda: gate.check_append(access, presented, content_length)
         )
@@ -410,11 +459,20 @@ class _FileTransferEndpoint:
         path_id = request.path_params.get("transfer_id")
         authorization = request.headers.get("authorization")
         range_header = request.headers.get("range")
+        try:
+            download_id = gate.parse_id(FileTransferKind.DOWNLOAD, path_id)
+            if download_id is None:
+                raise FilesRefusal("ticket", FilesReason.TICKET_INVALID)
+            access = await self._authenticate(held, download_id, authorization)
+        except Exception as error:
+            await _failure(error)(scope, receive, send)
+            return
+        if not self._take_slot(held):
+            await _busy()(scope, receive, send)
+            return
+        deadline = time.monotonic() + self._download_deadline
         reader = None
         try:
-            access = await self._offload(
-                held, lambda: gate.authenticate(FileTransferKind.DOWNLOAD, path_id, authorization)
-            )
             reader = await self._offload(held, lambda: gate.open_download(access))
             opened = reader
             try:
@@ -451,16 +509,38 @@ class _FileTransferEndpoint:
         if selected is not None:
             headers["Content-Range"] = selected.content_range
 
+        recheck_every = self._recheck
+        idle = self._idle
+
         async def body() -> AsyncIterator[bytes]:
-            # A change found after the headers left cannot become a 412: the
-            # stream stops short of `Content-Length`, which the client detects.
+            # After the headers left nothing can become a status: a changed
+            # file, the deadline, an expired ticket or a revoked grant stops the
+            # stream short of `Content-Length` and the connection is closed.
             chunk = first
-            try:
-                while chunk is not None:
-                    yield chunk
+            recheck_at = time.monotonic() + recheck_every
+            while chunk is not None:
+                yield chunk
+                now = time.monotonic()
+                if now >= deadline:
+                    raise _StreamStopped
+                try:
+                    if now >= recheck_at:
+                        await self._authenticate(held, download_id, authorization)
+                        recheck_at = time.monotonic() + recheck_every
                     chunk = await self._offload(held, lambda: next(chunks, None))
-            except Exception:
-                return
+                except Exception:
+                    raise _StreamStopped from None
+
+        async def bounded_send(message: Message) -> None:
+            # A reader that stops reading blocks this send (transport flow
+            # control); past the idle bound, or the deadline, the stream stops.
+            limit = idle
+            if message.get("body"):
+                limit = min(idle, deadline - time.monotonic())
+                if limit <= 0:
+                    raise _StreamStopped
+            async with asyncio.timeout(limit):
+                await send(message)
 
         response = StreamingResponse(
             body(),
@@ -469,7 +549,7 @@ class _FileTransferEndpoint:
             media_type="application/octet-stream",
         )
         try:
-            await response(scope, receive, send)
+            await response(scope, receive, bounded_send)
         finally:
             held.releases.append(opened.close)
 
@@ -480,9 +560,20 @@ def build_file_transfer_routes(
     max_concurrent: int = MAX_CONCURRENT_TRANSFERS,
     body_idle_timeout_seconds: float = BODY_IDLE_TIMEOUT_SECONDS,
     patch_deadline_seconds: float = PATCH_DEADLINE_SECONDS,
+    download_deadline_seconds: float = DOWNLOAD_DEADLINE_SECONDS,
+    download_recheck_seconds: float = DOWNLOAD_RECHECK_SECONDS,
 ) -> Sequence[BaseRoute]:
     """The two section 10 routes over one gate, sharing one slot count."""
-    if max_concurrent < 1 or body_idle_timeout_seconds <= 0 or patch_deadline_seconds <= 0:
+    if (
+        max_concurrent < 1
+        or min(
+            body_idle_timeout_seconds,
+            patch_deadline_seconds,
+            download_deadline_seconds,
+            download_recheck_seconds,
+        )
+        <= 0
+    ):
         raise ValueError("byte-route bounds must be positive")
     slots = [max_concurrent]
     locks: dict[str, tuple[asyncio.Lock, int]] = {}
@@ -495,6 +586,8 @@ def build_file_transfer_routes(
             upload_locks=locks,
             body_idle_timeout_seconds=body_idle_timeout_seconds,
             patch_deadline_seconds=patch_deadline_seconds,
+            download_deadline_seconds=download_deadline_seconds,
+            download_recheck_seconds=download_recheck_seconds,
         )
 
     return (

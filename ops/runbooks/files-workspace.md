@@ -204,9 +204,13 @@ re-checks the issuing grant, so revocation is immediate.
    process logs a warning. After the tunnel rule above is live, ask ChatGPT
    for `_commissioning/probe.bin`, click the link it shows, compare the
    SHA-256, and click it again: the second click must be a plain 404. Each
-   completed download writes `files browser download completed
-   client=<id> size=<n>` (logger `my_pa.files.browser_download`) to the
-   remote MCP log; the link itself is never logged. Rollback: empty the
+   completed download writes `<time> INFO my_pa.files.browser_download files
+   browser download completed client=<id> size=<n>` to the remote MCP
+   container's stderr (`docker logs`); the route attaches that one handler
+   itself, because the process configures no logging and would otherwise drop
+   INFO. The WARNING lines (`files handle refused ...`, and the composition
+   warning for client ids without a public host) reach stderr through
+   Python's last-resort handler. The link itself is never logged. Rollback: empty the
    setting and recreate the service.
 
 **Client exit status 5 ("outcome unknown").** A completing PATCH whose response

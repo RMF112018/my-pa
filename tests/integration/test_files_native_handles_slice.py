@@ -724,6 +724,24 @@ def browser(cloned_database_url: str, tmp_path: Path) -> Iterator[_Browser]:
         harness.close()
 
 
+def _settled(browser: _Browser, path: str) -> bool:
+    """Whether the link's row reached `expired` within 5 s (the server settles after the bytes)."""
+    import time
+
+    link_id = path.rsplit("/", 1)[-1].split(".", 1)[0]
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        with browser.h.engine.begin() as connection:
+            state = connection.execute(
+                text("SELECT state FROM knowledge.file_workspace_transfers WHERE transfer_id = :i"),
+                {"i": link_id},
+            ).scalar_one()
+        if state == "expired":
+            return True
+        time.sleep(0.02)
+    return False
+
+
 def _refusal(answer: tuple[int, dict[str, str], bytes]) -> tuple[int, bytes, str | None]:
     status, headers, body = answer
     return status, body, headers.get("content-type")
@@ -755,19 +773,9 @@ def test_a_browser_link_downloads_five_mib_once_with_exact_headers(
     )
     assert head[1]["content-disposition"] == headers["content-disposition"]
     # The server settles the link just after the last byte left; wait for it.
-    import time
-
-    def lines() -> list[str]:
-        return [r.getMessage() for r in caplog.records if r.name == "my_pa.files.browser_download"]
-
-    deadline = time.monotonic() + 5
-    while not lines() and time.monotonic() < deadline:
-        time.sleep(0.02)
+    assert _settled(browser, path)
     # Single use: the second GET is the plain 404.
     assert _refusal(browser.request("GET", path)) == (404, b"", None)
-    # The operator line names the client and size, never the token or path.
-    lines = lines()  # type: ignore[assignment]
-    assert lines == [f"files browser download completed client={OAUTH_CLIENT} size={len(BIG)}"]
     assert token not in caplog.text and token[6:] not in caplog.text
     assert "weird" not in caplog.text
     # No row, receipt or audit holds the token.
@@ -864,3 +872,55 @@ def test_no_free_slot_or_auth_permit_is_the_same_404(browser: _Browser) -> None:
     assert _refusal(browser.request("GET", path)) == (404, b"", None)
     endpoint._auth_slots[0] = saved_auth[0]
     assert browser.request("GET", path)[0] == 200
+
+
+def test_the_completion_line_reaches_stderr_with_no_logging_configured(
+    cloned_database_url: str, tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """The real process configures no logging: the INFO line must still reach stderr, once."""
+    import time
+
+    from my_pa.adapters.http import files_transfer
+
+    logger = files_transfer.BROWSER_LOGGER
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+    logger.setLevel(logging.NOTSET)
+    logger.propagate = True
+    root = tmp_path / "workspace"
+    root.mkdir()
+    harness = Harness(cloned_database_url, root)
+    rig = _Browser(harness)  # builds the routes: attaches the one stderr handler
+    try:
+        (root / "secret-name.bin").write_bytes(b"synthetic completion")
+        path = _path(rig.begin("secret-name.bin")["browser_download"])
+        token = path.rsplit(".", 1)[-1]
+        capfd.readouterr()
+        assert rig.request("GET", path)[0] == 200
+        deadline = time.monotonic() + 10
+        err = ""
+        while "completed" not in err and time.monotonic() < deadline:
+            time.sleep(0.02)
+            err += capfd.readouterr().err
+        lines = [line for line in err.splitlines() if "files browser download completed" in line]
+        assert len(lines) == 1, (err, logger.handlers, logger.level, logger.propagate)
+        assert re.fullmatch(
+            r"\S+ \S+ INFO my_pa\.files\.browser_download files browser download completed "
+            + re.escape(f"client={OAUTH_CLIENT} size=20"),
+            lines[0],
+        ), lines[0]
+        assert token[6:] not in err and "secret-name" not in err and "/files/" not in err
+        # Building the routes again adds no second handler.
+        rig2 = _Browser(harness)
+        rig2.close()
+        assert (
+            sum(
+                isinstance(item, files_transfer._BrowserCompletionHandler)
+                for item in logger.handlers
+            )
+            == 1
+        )
+        assert logger.propagate is False
+    finally:
+        rig.close()
+        harness.close()

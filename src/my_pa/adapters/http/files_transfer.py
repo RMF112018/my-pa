@@ -67,6 +67,7 @@ import asyncio
 import concurrent.futures
 import logging
 import re
+import sys
 import time
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from typing import Any, Final, TypeVar
@@ -808,6 +809,28 @@ class _BrowserTokenRedaction(logging.Filter):
         return True
 
 
+class _BrowserCompletionHandler(logging.StreamHandler):  # type: ignore[type-arg]
+    """Section 17.6: the operator's completion line, on stderr, in a real process.
+
+    `apps/gateway.py` configures no logging, so the root logger stays at
+    WARNING and Python's last-resort handler drops INFO: without its own
+    handler the line would never be seen. This one handler is attached to the
+    browser logger alone (which then does not propagate), so no global logging
+    configuration changes and nothing is printed twice.
+    """
+
+
+def _emit_browser_completions_to_stderr() -> None:
+    logger = BROWSER_LOGGER
+    if not any(isinstance(item, _BrowserCompletionHandler) for item in logger.handlers):
+        handler = _BrowserCompletionHandler(sys.stderr)
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+
 def _redact_browser_tokens_in_access_log() -> None:
     logger = logging.getLogger("uvicorn.access")
     if not any(isinstance(item, _BrowserTokenRedaction) for item in logger.filters):
@@ -879,6 +902,7 @@ def build_file_transfer_routes(
     ]
     if browser_downloads:
         _redact_browser_tokens_in_access_log()
+        _emit_browser_completions_to_stderr()
         # Section 17.6: mounted only when the feature is on; any method reaches
         # the endpoint, which answers everything but GET and HEAD with its 404.
         routes.append(

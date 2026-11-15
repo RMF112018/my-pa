@@ -274,7 +274,7 @@ def main() -> int:
     parser.add_argument("--data-network", required=True)
     parser.add_argument("--postgres-resources", required=True)
     args = parser.parse_args()
-    network_names = (
+    network_names: tuple[str, ...] = (
         args.data_network,
         f"{PROJECT}_mcp-origin",
         f"{PROJECT}_cloudflare-egress",

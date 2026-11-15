@@ -70,7 +70,7 @@ import re
 import sys
 import time
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
-from typing import Any, Final, TypeVar
+from typing import Any, Final, TextIO, TypeVar
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
@@ -646,6 +646,7 @@ class _BrowserDownloadEndpoint(_FileTransferEndpoint):
     def __init__(self, gate: FileTransferGate, **bounds: Any) -> None:  # noqa: ANN401
         super().__init__(gate, FileTransferKind.DOWNLOAD, **bounds)
         self._active: set[str] = set()
+        self._settling: set[asyncio.Future[None]] = set()
 
     @staticmethod
     async def _not_found(scope: Scope, receive: Receive, send: Send) -> None:
@@ -743,33 +744,47 @@ class _BrowserDownloadEndpoint(_FileTransferEndpoint):
         async def body() -> AsyncIterator[bytes]:
             chunk = first
             sent = 0
+            settled = False
             recheck_at = time.monotonic() + recheck_every
-            while chunk is not None:
-                yield chunk
-                sent += len(chunk)
-                now = time.monotonic()
-                if now >= deadline:
-                    raise _StreamStopped
-                try:
-                    if now >= recheck_at:
-                        await self._authenticate_link(held, segment, holds_slot=True)
-                        recheck_at = time.monotonic() + recheck_every
-                    chunk = await self._offload(held, lambda: next(chunks, None))
-                except Exception:
-                    raise _StreamStopped from None
-            if sent != size:
-                raise _StreamStopped
 
             # Every byte was handed to the transport: the link is spent. The
-            # line is written in the settling thread, so a client that hangs up
-            # right after its last byte cannot cancel it away.
+            # line is written in a worker thread that no cancellation reaches,
+            # so a client that hangs up right after its last byte cannot cancel
+            # it away.
             def settle() -> None:
                 if gate.consume_browser(access):
                     BROWSER_LOGGER.info(
                         "files browser download completed client=%s size=%s", client_id, size
                     )
 
-            await self._offload(held, settle)
+            try:
+                while chunk is not None:
+                    yield chunk
+                    sent += len(chunk)
+                    now = time.monotonic()
+                    if now >= deadline:
+                        raise _StreamStopped
+                    try:
+                        if now >= recheck_at:
+                            await self._authenticate_link(held, segment, holds_slot=True)
+                            recheck_at = time.monotonic() + recheck_every
+                        chunk = await self._offload(held, lambda: next(chunks, None))
+                    except Exception:
+                        raise _StreamStopped from None
+                if sent != size:
+                    raise _StreamStopped
+                settled = True
+                await self._offload(held, settle)
+            finally:
+                # The generator only resumes past the last `yield` once the
+                # transport took that chunk, so `sent == size` here means the
+                # whole body went out even if the client's hang-up cancelled
+                # this request while it waited for the next (empty) chunk.
+                if sent == size and not settled:
+                    settled = True
+                    task = asyncio.ensure_future(asyncio.to_thread(settle))
+                    self._settling.add(task)
+                    task.add_done_callback(self._settling.discard)
 
         async def bounded_send(message: Message) -> None:
             limit = idle
@@ -817,13 +832,28 @@ class _BrowserCompletionHandler(logging.StreamHandler):  # type: ignore[type-arg
     handler the line would never be seen. This one handler is attached to the
     browser logger alone (which then does not propagate), so no global logging
     configuration changes and nothing is printed twice.
+
+    The stream is resolved at emit time, not bound at construction, so a
+    redirected or replaced `sys.stderr` (a test capture, a supervisor) is
+    always the one written to.
     """
+
+    def __init__(self) -> None:
+        logging.Handler.__init__(self)
+
+    @property
+    def stream(self) -> TextIO:
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, _value: TextIO) -> None:
+        return None
 
 
 def _emit_browser_completions_to_stderr() -> None:
     logger = BROWSER_LOGGER
     if not any(isinstance(item, _BrowserCompletionHandler) for item in logger.handlers):
-        handler = _BrowserCompletionHandler(sys.stderr)
+        handler = _BrowserCompletionHandler()
         handler.setLevel(logging.INFO)
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
         logger.addHandler(handler)

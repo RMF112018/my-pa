@@ -187,7 +187,12 @@ upload; do not assume failure.
 ## 8. Limits and residuals
 
 - No retention or purge: `.my-pa/versions` and `.my-pa/trash` grow until an
-  operator-set retention policy exists (contract T3).
+  operator-set retention policy exists (contract T3). The operator's decision of
+  2026-11-15 is **keep everything**: nothing deletes automatically, and deleting
+  files under `.my-pa/` by hand orphans their database rows and breaks restore.
+  Measure growth with `ops/nas/remote/files-workspace-size-report.sh` (read-only;
+  run it on the NAS with `sudo -n sh`). It reports each control directory and
+  warns when free space is within twice the 20 GiB reserve. Revisit when it does.
 - The subtree is not in the database backup. Backing up
   `/volume1/homes/bfetting/MCP` (including `.my-pa/`) is the operator's.
 - External writers (SMB, DSM) are not serialized; changes surface as

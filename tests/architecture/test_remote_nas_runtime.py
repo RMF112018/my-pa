@@ -668,7 +668,7 @@ def test_files_workspace_overlays_bind_one_writable_subtree(overlay: str, servic
     assert "ops/runbooks/files-workspace.md" in text
 
 
-HANDLE_EGRESS = "my-pa-remote-mcp_handle-egress"
+CLOUDFLARE_EGRESS = "my-pa-remote-mcp_cloudflare-egress"
 
 
 def _with_network(state: dict, name: str) -> dict:
@@ -676,28 +676,25 @@ def _with_network(state: dict, name: str) -> dict:
     return {**state, "NetworkSettings": {"Networks": networks}}
 
 
-def test_live_gate_accepts_the_handle_egress_network_on_the_app_only() -> None:
+def test_live_gate_accepts_the_cloudflare_egress_network_on_the_app() -> None:
     gate = _module(ROOT / "ops/nas/remote/live-gate.py")
     app, edge, context = _live_gate_shape(gate)
-    context["networks"] = {**context["networks"], HANDLE_EGRESS: {"Internal": False}}  # type: ignore[dict-item]
-    assert gate.violations(_with_network(app, HANDLE_EGRESS), edge, **context) == []
+    assert gate.violations(_with_network(app, CLOUDFLARE_EGRESS), edge, **context) == []
 
 
-def test_live_gate_refuses_an_internal_handle_egress_network() -> None:
+def test_live_gate_refuses_an_internal_cloudflare_egress_network_for_the_app() -> None:
     gate = _module(ROOT / "ops/nas/remote/live-gate.py")
     app, edge, context = _live_gate_shape(gate)
-    context["networks"] = {**context["networks"], HANDLE_EGRESS: {"Internal": True}}  # type: ignore[dict-item]
-    errors = gate.violations(_with_network(app, HANDLE_EGRESS), edge, **context)
-    assert errors == [f"network_internalness:{HANDLE_EGRESS}"]
+    context["networks"] = {**context["networks"], CLOUDFLARE_EGRESS: {"Internal": True}}  # type: ignore[dict-item]
+    errors = gate.violations(_with_network(app, CLOUDFLARE_EGRESS), edge, **context)
+    assert errors == [f"network_internalness:{CLOUDFLARE_EGRESS}"]
 
 
-def test_live_gate_refuses_the_handle_egress_network_on_the_edge() -> None:
+def test_live_gate_refuses_a_dedicated_handle_egress_network() -> None:
     gate = _module(ROOT / "ops/nas/remote/live-gate.py")
     app, edge, context = _live_gate_shape(gate)
-    context["networks"] = {**context["networks"], HANDLE_EGRESS: {"Internal": False}}  # type: ignore[dict-item]
-    assert gate.violations(app, _with_network(edge, HANDLE_EGRESS), **context) == [
-        "edge_network_identity"
-    ]
+    errors = gate.violations(_with_network(app, "my-pa-remote-mcp_handle-egress"), edge, **context)
+    assert errors == ["app_network_identity"]
 
 
 def test_live_gate_refuses_any_other_extra_app_network() -> None:
@@ -707,7 +704,7 @@ def test_live_gate_refuses_any_other_extra_app_network() -> None:
     assert errors == ["app_network_identity"]
 
 
-def test_handle_egress_overlay_adds_only_one_non_published_network() -> None:
+def test_handle_egress_overlay_joins_the_app_to_the_cloudflare_egress_network() -> None:
     text = (ROOT / "ops/nas/remote/compose.files-handle-egress.remote.example.yml").read_text(
         encoding="utf-8"
     )
@@ -715,8 +712,6 @@ def test_handle_egress_overlay_adds_only_one_non_published_network() -> None:
     assert body == [
         "services:",
         "  my-pa-mcp-remote:",
-        "    networks: [data-plane, mcp-origin, handle-egress]",
-        "networks:",
-        "  handle-egress: {}",
+        "    networks: [data-plane, mcp-origin, cloudflare-egress]",
     ]
     assert "ops/runbooks/files-workspace.md" in text

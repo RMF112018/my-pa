@@ -195,18 +195,11 @@ def violations(
     cloudflare_network = f"{PROJECT}_cloudflare-egress"
     app_networks = set(app.get("NetworkSettings", {}).get("Networks", {}))
     edge_networks = set(edge.get("NetworkSettings", {}).get("Networks", {}))
-    # Files-workspace contract section 17.2: the optional handle-egress overlay adds exactly one
-    # more network to the app (never the edge); it must be non-internal so handle fetches can leave.
-    handle_network = f"{PROJECT}_handle-egress"
+    # Files-workspace contract section 17.2: the optional handle-egress overlay joins the app to the
+    # existing non-internal cloudflare-egress network (checked below) so handle fetches can leave.
     base_networks = {data_network, origin_network}
-    if app_networks not in (base_networks, base_networks | {handle_network}):
+    if app_networks not in (base_networks, base_networks | {cloudflare_network}):
         errors.append("app_network_identity")
-    if handle_network in app_networks:
-        handle_state = networks.get(handle_network)
-        if handle_state is None:
-            errors.append("missing_network_identity")
-        elif handle_state.get("Internal") is not False:
-            errors.append(f"network_internalness:{handle_network}")
     if edge_networks != {origin_network, cloudflare_network}:
         errors.append("edge_network_identity")
     expected_internal = {
@@ -274,7 +267,7 @@ def main() -> int:
     parser.add_argument("--data-network", required=True)
     parser.add_argument("--postgres-resources", required=True)
     args = parser.parse_args()
-    network_names: tuple[str, ...] = (
+    network_names = (
         args.data_network,
         f"{PROJECT}_mcp-origin",
         f"{PROJECT}_cloudflare-egress",
@@ -286,9 +279,6 @@ def main() -> int:
         return 1
     postgres_id = str(resources.get("postgres_container_id", ""))
     app_state = _inspect(args.app_container)
-    handle_network = f"{PROJECT}_handle-egress"
-    if handle_network in app_state.get("NetworkSettings", {}).get("Networks", {}):
-        network_names = (*network_names, handle_network)
     errors = violations(
         app_state,
         _inspect(args.edge_container),

@@ -182,9 +182,10 @@ re-checks the issuing grant, so revocation is immediate.
    the allowed hosts; no tunnel rule changes (handle fetches are outbound and
    resource reads ride `/mcp`). Both of the app's networks are `internal`, so
    add the overlay `ops/nas/remote/compose.files-handle-egress.remote.example.yml`
-   (one extra non-internal network `my-pa-remote-mcp_handle-egress`, app only,
-   no published port) to the remote compose invocation; `live-gate.py` accepts
-   exactly that network and refuses it on the edge or when internal. Without
+   to the remote compose invocation: it joins the app to the existing
+   non-internal `cloudflare-egress` network (already admitted by the DSM
+   firewall; no new subnet or firewall rule). `live-gate.py` accepts exactly
+   that one extra app network and still requires it non-internal. Without
    it every handle fetch is `file_handle_refused` with `cause=resolve_failed`.
    Remove the overlay and recreate to cut the route.
    If ChatGPT gets `file_handle_refused`, read the remote MCP container's log

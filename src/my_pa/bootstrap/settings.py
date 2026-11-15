@@ -421,6 +421,11 @@ class Settings(StrictModel):
         default=".blob.core.windows.net,.oaiusercontent.com",
         pattern=r"^\s*(?:\.[a-z0-9-]+(?:\.[a-z0-9-]+)+\s*(?:,\s*\.[a-z0-9-]+(?:\.[a-z0-9-]+)+\s*)*)?$",
     )
+    #: Contract section 17.6: the OAuth client ids that get a single-use browser
+    #: download link, comma-separated. Empty (the default) is the feature off.
+    files_browser_download_client_ids: str = ""
+    #: Contract section 17.6: a browser link's lifetime, 60..900 s.
+    files_browser_download_ttl_seconds: int = Field(default=300, ge=60, le=900)
     #: Contract section 17.2: one handle fetch's whole deadline, 1..60 s.
     files_handle_fetch_deadline_seconds: int = Field(default=25, ge=1, le=60)
     #: The Frontier MCP surface's kill switch (WP-28).

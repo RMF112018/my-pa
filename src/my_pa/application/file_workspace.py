@@ -48,6 +48,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
@@ -105,9 +106,12 @@ from my_pa.domain.common.time import format_rfc3339
 from my_pa.domain.files.errors import FilesArgumentError, FilesRefusal
 from my_pa.domain.files.paths import parse_path
 from my_pa.domain.files.transfer import (
+    BROWSER_DOWNLOAD_INSTRUCTIONS,
     UploadCompletion,
     UploadDeclaration,
+    browser_link_segment,
     download_transfer,
+    mint_browser_token,
     mint_ticket_token,
     transfer_url,
     upload_transfer,
@@ -132,7 +136,13 @@ from my_pa.domain.reports.creator import CreatorKind, derive_creator
 from my_pa.domain.reports.transfer import client_ref_of
 from my_pa.domain.source.registry import issue_identifier
 
-__all__ = ["DOWNLOAD_RESOURCE_PREFIX", "FILE_WORKSPACE_CAPABILITIES", "FileWorkspaceApplication"]
+__all__ = [
+    "BROWSER_DOWNLOAD_ROUTE",
+    "DOWNLOAD_RESOURCE_PREFIX",
+    "FILE_WORKSPACE_CAPABILITIES",
+    "BrowserDownloads",
+    "FileWorkspaceApplication",
+]
 
 #: The 17 names this module serves (contract section 1.1).
 FILE_WORKSPACE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
@@ -160,6 +170,19 @@ FILE_WORKSPACE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 #: Section 10: the relative byte routes a ticket names.
 _UPLOAD_ROUTE: Final = "/files/v1/uploads/"
 _DOWNLOAD_ROUTE: Final = "/files/v1/downloads/"
+#: Section 17.6: the browser download route a single-use link names.
+BROWSER_DOWNLOAD_ROUTE: Final = "/files/v1/browser-downloads/"
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserDownloads:
+    """Section 17.6's composition: who gets a browser link, for how long, at which origin."""
+
+    client_ids: frozenset[str]
+    ttl_seconds: int
+    public_origin: str
+
+
 #: Section 17.3: the MCP resource URI a download ticket is also readable at.
 DOWNLOAD_RESOURCE_PREFIX: Final = "mcp-files://downloads/"
 #: How many due tickets one `files.upload.begin` expires (trim T6).
@@ -237,6 +260,7 @@ class FileWorkspaceApplication:
         max_upload_bytes: int,
         handle_fetcher: FileHandleFetcher | None = None,
         public_origin: str | None = None,
+        browser_downloads: BrowserDownloads | None = None,
     ) -> None:
         self._store = store
         self._workspace_id: Final = workspace_id
@@ -244,6 +268,8 @@ class FileWorkspaceApplication:
         self._handle_fetcher: Final = handle_fetcher
         #: Section 17.5: the origin a ticket's `transfer.url` is joined to.
         self._public_origin: Final = public_origin
+        #: Section 17.6: `None` (the default) is the feature off.
+        self._browser: Final = browser_downloads
         self._handlers: Final[Mapping[Capability, Callable[..., dict[str, Any]]]] = {
             Capability.FILES_WORKSPACES_LIST: self._workspaces_list,
             Capability.FILES_LIST: self._list,
@@ -518,7 +544,57 @@ class FileWorkspaceApplication:
         }
         if command.include_sha256:
             answer["sha256"] = sha256
+        link = self._browser_link(
+            call, path=path, version=version, size=size, sha256=sha256, preserved=preserved
+        )
+        if link is not None:
+            answer["browser_download"] = link
         return answer
+
+    def _browser_link(
+        self,
+        call: _Call,
+        *,
+        path: str,
+        version: str,
+        size: int,
+        sha256: str | None,
+        preserved: FileVersionRecord | None,
+    ) -> dict[str, Any] | None:
+        """Section 17.6: a single-use browser link, for an allowlisted remote client only."""
+        browser = self._browser
+        authorization = call.authorization
+        if (
+            browser is None
+            or authorization.transport is not CaptureTransport.REMOTE_CLIENT
+            or authorization.authenticated_client_id not in browser.client_ids
+        ):
+            return None
+        link_id = issue_identifier(IdKind.FILE_DOWNLOAD)
+        token, digest = mint_browser_token()
+        row = call.rows.create_transfer(
+            transfer_id=link_id,
+            principal_id=call.owner,
+            client_ref=call.client_ref,
+            kind=FileTransferKind.DOWNLOAD,
+            workspace_id=self._workspace_id,
+            path=path,
+            expected_version=version,
+            preserved_version_id=None if preserved is None else preserved.version_id,
+            declared_size=size,
+            declared_sha256=sha256,
+            token_digest=digest,
+            created_at=call.at,
+            expires_at=call.at + timedelta(seconds=browser.ttl_seconds),
+        )
+        return {
+            "url": browser.public_origin.rstrip("/")
+            + BROWSER_DOWNLOAD_ROUTE
+            + browser_link_segment(link_id, token),
+            "expires_at": format_rfc3339(row.expires_at),
+            "single_use": True,
+            "instructions": BROWSER_DOWNLOAD_INSTRUCTIONS,
+        }
 
     # ---- writes ---------------------------------------------------------------------
 

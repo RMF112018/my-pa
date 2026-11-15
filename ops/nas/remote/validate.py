@@ -156,6 +156,7 @@ def validate(root: Path = ROOT) -> list[str]:
             "^/oauth/revoke$",
             "^/files/v1/uploads/[^/]+$",
             "^/files/v1/downloads/[^/]+$",
+            "^/files/v1/browser-downloads/[^/]+$",
         ]
         or "- service: http_status:404" not in tunnel
     ):

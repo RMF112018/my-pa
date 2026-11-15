@@ -524,6 +524,10 @@ def _is_credential_key(key: str) -> bool:
     return normalized in REDACTED_KEYS or normalized.endswith(REDACTED_KEY_SUFFIXES)
 
 
+#: Contract sections 1.4 and 17.6: the files plane's opaque bearer tokens.
+_FILE_TOKEN: Final = re.compile(r"gfw(?:bd|tk)_[0-9a-f]{64}")
+
+
 def _redact_string_patterns(value: str) -> tuple[str, int]:
     """Credential-shaped runs in one string.
 
@@ -559,6 +563,11 @@ def _redact_string_patterns(value: str) -> tuple[str, int]:
     value, found = _BEARER.subn(lambda match: f"{match.group(1)} {REDACTED}", value)
     count += found
     value, found = _BASIC.subn(lambda match: f"{match.group(1)} {REDACTED}", value)
+    count += found
+    # Files-workspace contract section 17.6: a browser link's `gfwbd_` token
+    # (and a `gfwtk_` ticket token) wherever it appears -- a link URL in a tool
+    # result's text included -- whatever key, if any, carries it.
+    value, found = _FILE_TOKEN.subn(REDACTED, value)
     count += found
     jwt = [0]
     value = _DOTTED_RUN.sub(lambda match: _redact_dotted_run(match, jwt), value)

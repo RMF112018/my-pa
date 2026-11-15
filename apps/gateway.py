@@ -497,7 +497,11 @@ def _mcp_remote(args: argparse.Namespace) -> int:
             *(
                 ()
                 if runtime.file_transfer is None
-                else build_file_transfer_routes(runtime.file_transfer)
+                else build_file_transfer_routes(
+                    runtime.file_transfer,
+                    # Contract section 17.6: the browser link route, only when on.
+                    browser_downloads=bool(runtime.file_transfer.browser_client_ids),
+                )
             ),
         ),
         # Contract section 17.3: download tickets readable as MCP resources,

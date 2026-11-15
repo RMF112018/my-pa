@@ -174,9 +174,12 @@ def test_the_files_transfer_async_surface_is_exact_and_bounded() -> None:
     offload, the pre-slot authentication, the loop-side body read, the download
     body generator and its bounded send."""
     found = _async_nodes(FILES_TRANSFER_ADAPTER)
-    assert found.count("AsyncFunctionDef") == 10, found
-    assert found.count("Await") == 30, found
-    assert found.count("AsyncWith") == 2, found
+    # Files-workspace contract section 17.6 adds the browser link endpoint: its
+    # 404, link authentication, call, serve, body generator and bounded send --
+    # 10 -> 16 coroutines, 30 -> 48 awaits, 2 -> 3 `async with`.
+    assert found.count("AsyncFunctionDef") == 16, found
+    assert found.count("Await") == 48, found
+    assert found.count("AsyncWith") == 3, found
     assert found.count("AsyncFor") == 0, found
 
 

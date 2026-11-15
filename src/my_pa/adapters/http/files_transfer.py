@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import logging
 import re
 import time
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
@@ -90,6 +91,8 @@ from my_pa.domain.files.errors import (
 )
 from my_pa.domain.files.transfer import (
     UploadCompletion,
+    content_disposition,
+    parse_browser_link,
     parse_range,
     parse_upload_complete,
     parse_upload_offset,
@@ -100,6 +103,7 @@ from my_pa.domain.files.vocabulary import FilesReason
 __all__ = [
     "AUTH_SLOTS_PER_TRANSFER_SLOT",
     "BODY_IDLE_TIMEOUT_SECONDS",
+    "BROWSER_DOWNLOADS_PATH",
     "DOWNLOADS_PATH",
     "DOWNLOAD_DEADLINE_SECONDS",
     "DOWNLOAD_RECHECK_SECONDS",
@@ -111,6 +115,18 @@ __all__ = [
 
 UPLOADS_PATH: Final = "/files/v1/uploads/"
 DOWNLOADS_PATH: Final = "/files/v1/downloads/"
+#: Contract section 17.6: the single-use browser link route.
+BROWSER_DOWNLOADS_PATH: Final = "/files/v1/browser-downloads/"
+#: Section 17.6: the operator's completion line (no path, no token).
+BROWSER_LOGGER: Final = logging.getLogger("my_pa.files.browser_download")
+#: Section 17.6: every browser refusal is these same bytes.
+_BROWSER_HEADERS: Final = {
+    "Content-Type": "application/octet-stream",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy": "sandbox",
+}
 #: Contract section 8: the byte routes' own per-process cap.
 MAX_CONCURRENT_TRANSFERS: Final = 4
 #: The longest one wait for the next body chunk may take, the remote MCP
@@ -614,6 +630,190 @@ class _FileTransferEndpoint:
         await response(scope, receive, bounded_send)
 
 
+class _BrowserDownloadEndpoint(_FileTransferEndpoint):
+    """`GET|HEAD /files/v1/browser-downloads/{segment}` (contract section 17.6).
+
+    The link is the credential. Every refusal is one undistinguished, empty
+    `404`, decided before a slot is taken where it can be: a query string, any
+    other method, a malformed segment, the feature off, then -- under one
+    pre-slot permit, in a thread -- the link's row, its client's standing, its
+    grant and the allowlist; then a slot, then the file at the link's version.
+    A completed GET settles the link (single use); a HEAD, a cut or a failed GET
+    never does. Shares the byte routes' slot and pre-slot caps.
+    """
+
+    def __init__(self, gate: FileTransferGate, **bounds: Any) -> None:  # noqa: ANN401
+        super().__init__(gate, FileTransferKind.DOWNLOAD, **bounds)
+        self._active: set[str] = set()
+
+    @staticmethod
+    async def _not_found(scope: Scope, receive: Receive, send: Send) -> None:
+        await Response(status_code=404, headers={"Cache-Control": "no-store"})(scope, receive, send)
+
+    async def _authenticate_link(
+        self, held: _Held, segment: object, *, holds_slot: bool = False
+    ) -> FileTransferAccess:
+        gate = self._gate
+        give: Callable[[object], None] | None = None
+        if not holds_slot:
+            permits = self._auth_slots
+            if permits[0] <= 0:
+                raise _AuthBusy
+            permits[0] -= 1
+
+            def give(_done: object) -> None:
+                permits[0] += 1
+
+        return await self._offload(held, lambda: gate.authenticate_browser(segment), give)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        request = Request(scope, receive)
+        segment = request.path_params.get("segment")
+        held = _Held()
+        try:
+            if (
+                scope.get("query_string")
+                or request.method not in {"GET", "HEAD"}
+                or not self._gate.browser_client_ids
+                or parse_browser_link(segment) is None
+            ):
+                await self._not_found(scope, receive, send)
+                return
+            await self._serve(request, held, str(segment), scope, receive, send)
+        except Exception:  # noqa: S110 - the client left; nothing to answer, nothing to log
+            pass
+        finally:
+            held.release()
+
+    async def _serve(
+        self,
+        request: Request,
+        held: _Held,
+        segment: str,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        gate = self._gate
+        try:
+            access = await self._authenticate_link(held, segment)
+        except Exception:
+            await self._not_found(scope, receive, send)
+            return
+        link_id = access.ticket.transfer_id
+        if link_id in self._active or not self._take_slot(held):
+            await self._not_found(scope, receive, send)
+            return
+        self._active.add(link_id)
+        held.releases.append(lambda: self._active.discard(link_id))
+
+        def hold_reader(done: object) -> None:
+            if (
+                isinstance(done, asyncio.Future)
+                and not done.cancelled()
+                and done.exception() is None
+            ):
+                held.releases.append(done.result().close)
+
+        try:
+            opened = await self._offload(held, lambda: gate.open_download(access), hold_reader)
+        except Exception:
+            await self._not_found(scope, receive, send)
+            return
+        size = opened.size
+        headers = {
+            **_BROWSER_HEADERS,
+            "Content-Disposition": content_disposition(access.ticket.path.rsplit("/", 1)[-1]),
+            "Content-Length": str(size),
+        }
+        if request.method == "HEAD":
+            await Response(status_code=200, headers=headers)(scope, receive, send)
+            return
+        try:
+            chunks = await self._offload(held, lambda: opened.read_range(0, size))
+            first = await self._offload(held, lambda: next(chunks, None))
+        except Exception:
+            await self._not_found(scope, receive, send)
+            return
+        deadline = time.monotonic() + self._download_deadline
+        recheck_every, idle = self._recheck, self._idle
+        client_id = access.standing.oauth_client_id
+
+        async def body() -> AsyncIterator[bytes]:
+            chunk = first
+            sent = 0
+            recheck_at = time.monotonic() + recheck_every
+            while chunk is not None:
+                yield chunk
+                sent += len(chunk)
+                now = time.monotonic()
+                if now >= deadline:
+                    raise _StreamStopped
+                try:
+                    if now >= recheck_at:
+                        await self._authenticate_link(held, segment, holds_slot=True)
+                        recheck_at = time.monotonic() + recheck_every
+                    chunk = await self._offload(held, lambda: next(chunks, None))
+                except Exception:
+                    raise _StreamStopped from None
+            if sent != size:
+                raise _StreamStopped
+
+            # Every byte was handed to the transport: the link is spent. The
+            # line is written in the settling thread, so a client that hangs up
+            # right after its last byte cannot cancel it away.
+            def settle() -> None:
+                if gate.consume_browser(access):
+                    BROWSER_LOGGER.info(
+                        "files browser download completed client=%s size=%s", client_id, size
+                    )
+
+            await self._offload(held, settle)
+
+        async def bounded_send(message: Message) -> None:
+            limit = idle
+            if message.get("body"):
+                limit = min(idle, deadline - time.monotonic())
+                if limit <= 0:
+                    raise _StreamStopped
+            async with asyncio.timeout(limit):
+                await send(message)
+
+        await StreamingResponse(body(), status_code=200, headers=headers)(
+            scope, receive, bounded_send
+        )
+
+
+_BROWSER_TOKEN_TEXT: Final = re.compile(r"gfwbd_[0-9a-f]{64}")
+
+
+class _BrowserTokenRedaction(logging.Filter):
+    """Section 17.6: a browser link's token never reaches an access log line.
+
+    Production runs uvicorn with `access_log=False`, but a process configured
+    otherwise would log the request line, whose path *is* the credential. This
+    filter rewrites the token out of any `uvicorn.access` record first.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = _BROWSER_TOKEN_TEXT.sub("gfwbd_[REDACTED]", record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                _BROWSER_TOKEN_TEXT.sub("gfwbd_[REDACTED]", value)
+                if isinstance(value, str)
+                else value
+                for value in record.args
+            )
+        return True
+
+
+def _redact_browser_tokens_in_access_log() -> None:
+    logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(item, _BrowserTokenRedaction) for item in logger.filters):
+        logger.addFilter(_BrowserTokenRedaction())
+
+
 def build_file_transfer_routes(
     gate: FileTransferGate,
     *,
@@ -623,6 +823,7 @@ def build_file_transfer_routes(
     patch_deadline_seconds: float = PATCH_DEADLINE_SECONDS,
     download_deadline_seconds: float = DOWNLOAD_DEADLINE_SECONDS,
     download_recheck_seconds: float = DOWNLOAD_RECHECK_SECONDS,
+    browser_downloads: bool = False,
 ) -> Sequence[BaseRoute]:
     """The two section 10 routes over one gate, sharing one slot count.
 
@@ -664,7 +865,7 @@ def build_file_transfer_routes(
             download_recheck_seconds=download_recheck_seconds,
         )
 
-    return (
+    routes: list[BaseRoute] = [
         Route(
             UPLOADS_PATH + "{transfer_id}",
             endpoint(FileTransferKind.UPLOAD),
@@ -675,4 +876,24 @@ def build_file_transfer_routes(
             endpoint(FileTransferKind.DOWNLOAD),
             methods=["GET"],
         ),
-    )
+    ]
+    if browser_downloads:
+        _redact_browser_tokens_in_access_log()
+        # Section 17.6: mounted only when the feature is on; any method reaches
+        # the endpoint, which answers everything but GET and HEAD with its 404.
+        routes.append(
+            Route(
+                BROWSER_DOWNLOADS_PATH + "{segment}",
+                _BrowserDownloadEndpoint(
+                    gate,
+                    slots=slots,
+                    auth_slots=auth_slots,
+                    upload_locks=locks,
+                    body_idle_timeout_seconds=body_idle_timeout_seconds,
+                    patch_deadline_seconds=patch_deadline_seconds,
+                    download_deadline_seconds=download_deadline_seconds,
+                    download_recheck_seconds=download_recheck_seconds,
+                ),
+            )
+        )
+    return tuple(routes)

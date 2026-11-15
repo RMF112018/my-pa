@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
+import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
@@ -50,6 +52,11 @@ from my_pa.domain.identity.secret_digests import (
 from my_pa.domain.reports.content import canonical_json
 
 __all__ = [
+    "BROWSER_DOWNLOAD_INSTRUCTIONS",
+    "BROWSER_DOWNLOAD_TTL_DEFAULT_SECONDS",
+    "BROWSER_DOWNLOAD_TTL_MAX_SECONDS",
+    "BROWSER_DOWNLOAD_TTL_MIN_SECONDS",
+    "BROWSER_TOKEN_PREFIX",
     "DOWNLOAD_ID_PREFIX",
     "RECEIPT_ID_PREFIX",
     "TICKET_TOKEN_ENV",
@@ -62,9 +69,13 @@ __all__ = [
     "UploadCompletion",
     "UploadDeclaration",
     "advance_upload_offset",
+    "browser_link_segment",
     "check_upload_offset",
+    "content_disposition",
     "download_transfer",
+    "mint_browser_token",
     "mint_ticket_token",
+    "parse_browser_link",
     "parse_file_id",
     "parse_range",
     "parse_upload_complete",
@@ -462,3 +473,72 @@ def download_transfer(url: str) -> dict[str, object]:
         "headers": {},
         "usage": usage,
     }
+
+
+# --- browser download links (contract section 17.6) ----------------------------------
+
+BROWSER_TOKEN_PREFIX: Final = "gfwbd"  # noqa: S105 - a prefix, not a secret
+_BROWSER_TOKEN: Final = re.compile(r"\Agfwbd_([0-9a-f]{64})\Z")
+#: Section 17.6: the instructions a browser link travels with. Static.
+BROWSER_DOWNLOAD_INSTRUCTIONS: Final = (
+    "Show this link to the user as a clickable link. Do not fetch it yourself."
+)
+BROWSER_DOWNLOAD_TTL_DEFAULT_SECONDS: Final = 300
+BROWSER_DOWNLOAD_TTL_MIN_SECONDS: Final = 60
+BROWSER_DOWNLOAD_TTL_MAX_SECONDS: Final = 900
+_DISPOSITION_DROPPED: Final = frozenset('/\\"%;')
+_ASCII_SAFE: Final = re.compile(r"[^A-Za-z0-9._ ()+,=@~-]")
+
+
+#: Domain separation: a browser token's stored digest is never a ticket token's,
+#: so `gfwtk_` + the same hex cannot open the row on the ticket route (where it
+#: would be a multi-use, Range-capable ticket instead of a single-use link).
+_BROWSER_DIGEST_DOMAIN: Final = b"my-pa files browser download\x00"
+
+
+def _browser_digest(raw: bytes) -> str:
+    return digest_bytes(_BROWSER_DIGEST_DOMAIN + raw)
+
+
+def mint_browser_token() -> tuple[str, str]:
+    """A fresh browser link token, `(presented, digest)`: `gfwbd_` + 64 hex; digest stored."""
+    raw, _ticket_digest = issue_opaque_token()
+    return f"{BROWSER_TOKEN_PREFIX}_{encode_opaque_token(raw)}", _browser_digest(raw)
+
+
+def browser_link_segment(download_id: str, token: str) -> str:
+    """The one URL path segment of a browser link: `<download_id>.<token>`."""
+    return f"{download_id}.{token}"
+
+
+def parse_browser_link(segment: object) -> tuple[str, str] | None:
+    """`(download_id, token digest)` of a well-formed link segment, else `None`. Never raises."""
+    if type(segment) is not str or len(segment) > 160:
+        return None
+    download_id, dot, token = segment.partition(".")
+    if dot != "." or parse_file_id(download_id, DOWNLOAD_ID_PREFIX) is None:
+        return None
+    match = _BROWSER_TOKEN.match(token)
+    if match is None:
+        return None
+    return download_id, _browser_digest(bytes.fromhex(match.group(1)))
+
+
+def _disposition_name(name: object) -> str:
+    """The name with separators, controls, quotes, `;` and `%` removed (may be empty)."""
+    if type(name) is not str:
+        return ""
+    kept = "".join(
+        character
+        for character in name
+        if character not in _DISPOSITION_DROPPED and unicodedata.category(character)[0] != "C"
+    )
+    return kept.strip().strip(".")
+
+
+def content_disposition(name: object) -> str:
+    """RFC 6266 `attachment` with an ASCII `filename` and an RFC 5987 `filename*`."""
+    cleaned = _disposition_name(name) or "download"
+    ascii_name = _ASCII_SAFE.sub("_", cleaned)[:200] or "download"
+    encoded = urllib.parse.quote(cleaned[:200], safe="")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"

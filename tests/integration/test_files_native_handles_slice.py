@@ -591,3 +591,276 @@ async def test_an_abacus_shaped_client_omits_the_handle_and_runs_the_ticket_reci
     _run(_recipe(download["transfer"]["usage"], file=str(out)), download["download_token"])
     assert out.read_bytes() == body
     assert hashlib.sha256(out.read_bytes()).hexdigest() == download["sha256"]
+
+
+# ---- browser download links (contract section 17.6) ----------------------------------------
+
+from contextlib import ExitStack  # noqa: E402
+from datetime import UTC, datetime, timedelta  # noqa: E402
+
+from my_pa.adapters.http.files_transfer import build_file_transfer_routes  # noqa: E402
+from my_pa.application.commands import BeginFileDownload  # noqa: E402
+from my_pa.application.file_workspace import BrowserDownloads  # noqa: E402
+from my_pa.contracts.v1.envelope import RequestMetadata  # noqa: E402
+from my_pa.domain.capture.submission import CaptureTransport  # noqa: E402
+from my_pa.domain.common.identifiers import IdKind  # noqa: E402
+from my_pa.domain.source.registry import issue_identifier  # noqa: E402
+from my_pa.infrastructure.persistence.remote_identity import (  # noqa: E402
+    remote_capability_grants,
+)
+from tests.wire import serve  # noqa: E402
+
+_BROWSER_HEADERS: Final = {
+    "content-type": "application/octet-stream",
+    "x-content-type-options": "nosniff",
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+    "content-security-policy": "sandbox",
+}
+BIG: Final = bytes((index * 7 + 1) % 256 for index in range(5 * 1024 * 1024))
+
+
+class _Browser:
+    """The harness database, a service issuing links and the routes serving them."""
+
+    def __init__(
+        self, harness: Harness, *, allow: frozenset[str] = frozenset({OAUTH_CLIENT})
+    ) -> None:
+        self.h = harness
+        self.now = datetime.now(UTC)
+        audit = SqlAlchemyAuditSink(harness.audit_engine)
+
+        def unit_of_work() -> UnitOfWork:
+            return SqlAlchemyUnitOfWork(harness.engine, audit=audit)
+
+        store = FilesystemFileWorkspaceStore(harness.root, disk_reserve_bytes=0)
+        files = FileWorkspaceApplication(
+            store,
+            workspace_id=WORKSPACE,
+            max_upload_bytes=8 << 20,
+            browser_downloads=BrowserDownloads(
+                client_ids=frozenset({OAUTH_CLIENT}),
+                ttl_seconds=300,
+                public_origin="https://files.example.invalid",
+            ),
+        )
+        self.service = ApplicationService(
+            unit_of_work=unit_of_work, limits=LIMITS, file_workspace=files
+        )
+        self.gate = FileTransferGate(
+            service=self.service,
+            store=store,
+            unit_of_work=unit_of_work,
+            standing=DurableRemoteClientStanding(
+                connections=harness.engine.begin, resource=RESOURCE, scopes=frozenset({SCOPE})
+            ),
+            workspace_id=WORKSPACE,
+            max_upload_bytes=8 << 20,
+            remote_writes_enabled=True,
+            clock=lambda: self.now,
+            browser_client_ids=allow,
+        )
+        self.routes = build_file_transfer_routes(
+            self.gate, download_recheck_seconds=0.05, browser_downloads=bool(allow)
+        )
+        from starlette.applications import Starlette
+
+        self._stack = ExitStack()
+        self.port = self._stack.enter_context(serve(Starlette(routes=list(self.routes)))).port
+
+    def close(self) -> None:
+        self._stack.close()
+
+    def begin(self, path: str, *, client: str | None = OAUTH_CLIENT) -> dict[str, Any]:
+        envelope = self.service.invoke(
+            RequestMetadata(
+                request_id=issue_identifier(IdKind.CORRELATION),
+                capability=Capability.FILES_DOWNLOAD_BEGIN,
+                purpose=next(p for c, p in GRANTS if c is Capability.FILES_DOWNLOAD_BEGIN),
+                principal_id=PRINCIPAL,
+                requested_at=datetime.now(UTC),
+            ),
+            BeginFileDownload(workspace_id=WORKSPACE, path=path, include_sha256=True),
+            principal=Principal(
+                principal_id=PRINCIPAL, kind=PrincipalKind.OPERATOR, authenticated=True
+            ),
+            transport=CaptureTransport.REMOTE_CLIENT if client else CaptureTransport.LOCAL,
+            capability_grants=GRANTS if client else None,
+            authenticated_client_id=client,
+        )
+        assert envelope.error is None, envelope.error
+        return dict(envelope.to_canonical_dict()["result"])
+
+    def request(
+        self, method: str, path: str, *, read: int | None = None
+    ) -> tuple[int, dict[str, str], bytes]:
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+        try:
+            connection.request(method, path)
+            response = connection.getresponse()
+            headers = {name.lower(): value for name, value in response.getheaders()}
+            body = response.read(read) if read is not None else response.read()
+            return response.status, headers, body
+        finally:
+            connection.close()
+
+
+def _path(link: dict[str, Any]) -> str:
+    url = str(link["url"])
+    assert url.startswith("https://files.example.invalid/files/v1/browser-downloads/")
+    return url.removeprefix("https://files.example.invalid")
+
+
+@pytest.fixture
+def browser(cloned_database_url: str, tmp_path: Path) -> Iterator[_Browser]:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    harness = Harness(cloned_database_url, root)
+    rig = _Browser(harness)
+    try:
+        yield rig
+    finally:
+        rig.close()
+        harness.close()
+
+
+def _refusal(answer: tuple[int, dict[str, str], bytes]) -> tuple[int, bytes, str | None]:
+    status, headers, body = answer
+    return status, body, headers.get("content-type")
+
+
+def test_a_browser_link_downloads_five_mib_once_with_exact_headers(
+    browser: _Browser, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    (browser.h.root / 'we"ird;na%me.bin').write_bytes(BIG)
+    begun = browser.begin('we"ird;na%me.bin')
+    link = begun["browser_download"]
+    assert link["single_use"] is True
+    assert link["instructions"] == (
+        "Show this link to the user as a clickable link. Do not fetch it yourself."
+    )
+    path = _path(link)
+    token = path.rsplit(".", 1)[-1]
+    head = browser.request("HEAD", path)
+    assert head[0] == 200 and head[2] == b""
+    status, headers, body = browser.request("GET", path)
+    assert status == 200 and body == BIG
+    assert hashlib.sha256(body).hexdigest() == begun["sha256"]
+    for name, value in _BROWSER_HEADERS.items():
+        assert headers[name] == value, name
+    assert headers["content-length"] == str(len(BIG))
+    assert headers["content-disposition"] == (
+        "attachment; filename=\"weirdname.bin\"; filename*=UTF-8''weirdname.bin"
+    )
+    assert head[1]["content-disposition"] == headers["content-disposition"]
+    # The server settles the link just after the last byte left; wait for it.
+    import time
+
+    def lines() -> list[str]:
+        return [r.getMessage() for r in caplog.records if r.name == "my_pa.files.browser_download"]
+
+    deadline = time.monotonic() + 5
+    while not lines() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    # Single use: the second GET is the plain 404.
+    assert _refusal(browser.request("GET", path)) == (404, b"", None)
+    # The operator line names the client and size, never the token or path.
+    lines = lines()  # type: ignore[assignment]
+    assert lines == [f"files browser download completed client={OAUTH_CLIENT} size={len(BIG)}"]
+    assert token not in caplog.text and token[6:] not in caplog.text
+    assert "weird" not in caplog.text
+    # No row, receipt or audit holds the token.
+    rows = _Slice(browser.h, _blob_server()).rows_text()
+    assert token not in rows and token[6:] not in rows
+
+
+def test_an_interrupted_get_and_a_head_do_not_consume(browser: _Browser) -> None:
+    (browser.h.root / "big.bin").write_bytes(BIG)
+    path = _path(browser.begin("big.bin")["browser_download"])
+    for _ in range(2):
+        assert browser.request("HEAD", path)[0] == 200
+    status, _headers, partial = browser.request("GET", path, read=1024)
+    assert status == 200 and len(partial) == 1024
+    status, _headers, body = browser.request("GET", path)
+    assert status == 200 and body == BIG
+
+
+def test_every_refusal_is_the_same_empty_404(browser: _Browser) -> None:
+    (browser.h.root / "a.bin").write_bytes(b"synthetic a")
+    link = _path(browser.begin("a.bin")["browser_download"])
+    expired = _path(browser.begin("a.bin")["browser_download"])
+    revoked = _path(browser.begin("a.bin")["browser_download"])
+    changed_file = browser.h.root / "c.bin"
+    changed_file.write_bytes(b"synthetic before")
+    changed = _path(browser.begin("c.bin")["browser_download"])
+    gone_file = browser.h.root / "g.bin"
+    gone_file.write_bytes(b"synthetic gone")
+    gone = _path(browser.begin("g.bin")["browser_download"])
+    head, _, _ = link.rpartition(".")
+    answers = [
+        browser.request("GET", "/files/v1/browser-downloads/nonsense"),
+        browser.request("GET", head + ".gfwbd_" + "0" * 64),
+        browser.request("GET", link + "?x=1"),
+        browser.request("POST", link),
+        browser.request("PUT", link),
+        browser.request("DELETE", link),
+    ]
+    changed_file.write_bytes(b"synthetic after, changed")
+    answers.append(browser.request("GET", changed))
+    gone_file.unlink()
+    answers.append(browser.request("GET", gone))
+    browser.now = datetime.now(UTC) + timedelta(seconds=301)
+    answers.append(browser.request("GET", expired))
+    browser.now = datetime.now(UTC)
+    with browser.h.engine.begin() as connection:
+        connection.execute(
+            update(remote_capability_grants)
+            .where(remote_capability_grants.c.capability == "files.download.begin")
+            .values(revoked_at=datetime.now(UTC))
+        )
+    answers.append(browser.request("GET", revoked))
+    assert len(answers) == 10
+    for answer in answers:
+        status, headers, body = answer
+        assert (status, body) == (404, b""), answer
+        assert headers.get("cache-control") == "no-store"
+        assert "content-disposition" not in headers
+    assert len({(a[0], a[2], a[1].get("content-type")) for a in answers}) == 1
+    # The untouched link was never consumed by any of that.
+    with browser.h.engine.begin() as connection:
+        connection.execute(update(remote_capability_grants).values(revoked_at=None))
+    assert browser.request("GET", link)[0] == 200
+
+
+def test_a_client_removed_from_the_allowlist_gets_404(browser: _Browser) -> None:
+    (browser.h.root / "a.bin").write_bytes(b"synthetic a")
+    path = _path(browser.begin("a.bin")["browser_download"])
+    other = _Browser(browser.h, allow=frozenset({"some-other-client"}))
+    try:
+        assert _refusal(other.request("GET", path)) == (404, b"", None)
+    finally:
+        other.close()
+    assert browser.request("GET", path)[0] == 200
+
+
+def test_no_link_unless_the_remote_client_is_allowlisted(browser: _Browser) -> None:
+    (browser.h.root / "a.bin").write_bytes(b"synthetic a")
+    assert "browser_download" not in browser.begin("a.bin", client=None)
+    assert "browser_download" in browser.begin("a.bin")
+    # The default slice composes no browser feature at all.
+    assert "browser_download" not in browser.h.begin_download("a.bin")
+
+
+def test_no_free_slot_or_auth_permit_is_the_same_404(browser: _Browser) -> None:
+    (browser.h.root / "a.bin").write_bytes(b"synthetic a")
+    path = _path(browser.begin("a.bin")["browser_download"])
+    endpoint = browser.routes[-1].app  # type: ignore[attr-defined]
+    saved_slots, saved_auth = list(endpoint._slots), list(endpoint._auth_slots)
+    endpoint._slots[0] = 0
+    assert _refusal(browser.request("GET", path)) == (404, b"", None)
+    endpoint._slots[0] = saved_slots[0]
+    endpoint._auth_slots[0] = 0
+    assert _refusal(browser.request("GET", path)) == (404, b"", None)
+    endpoint._auth_slots[0] = saved_auth[0]
+    assert browser.request("GET", path)[0] == 200

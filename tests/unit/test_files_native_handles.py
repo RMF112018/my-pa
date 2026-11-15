@@ -16,6 +16,7 @@ import hashlib
 import http.client
 import json
 import logging
+import re
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -641,3 +642,149 @@ def test_a_refusal_logs_one_warning_with_cause_and_host_only(
         assert leaked not in caplog.text, leaked
     # Nothing of the diagnostic reaches a row or receipt.
     assert world.rows.receipts == {} and world.rows.transfers == {}
+
+
+# ---- browser download links (section 17.6) -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "header"),
+    [
+        ("report.pdf", "attachment; filename=\"report.pdf\"; filename*=UTF-8''report.pdf"),
+        ("../../etc/passwd", "attachment; filename=\"etcpasswd\"; filename*=UTF-8''etcpasswd"),
+        ('a"b;c%d.txt', "attachment; filename=\"abcd.txt\"; filename*=UTF-8''abcd.txt"),
+        (
+            "Résumé 2026.pdf",
+            'attachment; filename="R_sum_ 2026.pdf"; '
+            "filename*=UTF-8''R%C3%A9sum%C3%A9%202026.pdf",
+        ),
+        ("\x00\x1f\x7f..", "attachment; filename=\"download\"; filename*=UTF-8''download"),
+        ("", "attachment; filename=\"download\"; filename*=UTF-8''download"),
+        (
+            "a\r\nSet-Cookie: x",
+            "attachment; filename=\"aSet-Cookie_ x\"; filename*=UTF-8''aSet-Cookie%3A%20x",
+        ),
+    ],
+)
+def test_the_disposition_filename_is_sanitized(name: str, header: str) -> None:
+    from my_pa.domain.files.transfer import content_disposition
+
+    assert content_disposition(name) == header
+    assert "\r" not in header and "\n" not in header
+
+
+def test_a_browser_token_is_distinct_and_domain_separated_from_a_ticket() -> None:
+    from my_pa.domain.files.transfer import (
+        browser_link_segment,
+        mint_browser_token,
+        parse_browser_link,
+        ticket_token_digest,
+    )
+
+    token, digest = mint_browser_token()
+    assert re.fullmatch(r"gfwbd_[0-9a-f]{64}", token)
+    parsed = parse_browser_link(browser_link_segment("fwdnl_abcdefgh", token))
+    assert parsed == ("fwdnl_abcdefgh", digest)
+    # The same hex presented as a ticket token opens nothing.
+    assert ticket_token_digest("gfwtk_" + token[6:]) != digest
+    for bad in (
+        "",
+        "fwdnl_abcdefgh",
+        "fwupl_abcdefgh." + token,
+        "fwdnl_abcdefgh.gfwtk_" + token[6:],
+        "fwdnl_abcdefgh." + token + "x",
+        7,
+        None,
+    ):
+        assert parse_browser_link(bad) is None, bad
+
+
+def _browser_world(tmp_path: Path, enabled: bool) -> _HandleWorld:
+    from my_pa.application.file_workspace import BrowserDownloads
+
+    root = tmp_path / "workspace"
+    root.mkdir(parents=True)
+    world = _HandleWorld(root, None)
+    world.files = FileWorkspaceApplication(
+        world.store,
+        workspace_id=WORKSPACE,
+        max_upload_bytes=MAX_UPLOAD,
+        browser_downloads=BrowserDownloads(
+            client_ids=frozenset({"allowed-client"}),
+            ttl_seconds=300,
+            public_origin="https://mcp.example.invalid",
+        )
+        if enabled
+        else None,
+    )
+    (root / "d.bin").write_bytes(b"synthetic")
+    return world
+
+
+def test_only_an_allowlisted_remote_client_gets_a_browser_link(tmp_path: Path) -> None:
+    from my_pa.application.commands import BeginFileDownload
+
+    world = _browser_world(tmp_path, enabled=True)
+    begin = BeginFileDownload(workspace_id=WORKSPACE, path="d.bin")
+    grants = frozenset({(Capability.FILES_DOWNLOAD_BEGIN, Purpose.FILE_WORKSPACE_READ)})
+    answer = world.run(begin, grants=grants, client="allowed-client")
+    link = answer["browser_download"]
+    assert set(link) == {"url", "expires_at", "single_use", "instructions"}
+    assert re.fullmatch(
+        r"https://mcp\.example\.invalid/files/v1/browser-downloads/fwdnl_\w+\.gfwbd_[0-9a-f]{64}",
+        link["url"],
+    )
+    assert answer["resource_uri"].startswith("mcp-files://downloads/")
+    assert "transfer" in answer
+    assert "browser_download" not in world.run(begin, grants=grants, client="other-client")
+    assert "browser_download" not in world.run(begin)  # a local caller
+    off = _browser_world(tmp_path / "off", enabled=False)
+    assert "browser_download" not in off.run(begin, grants=grants, client="allowed-client")
+
+
+def test_the_feature_is_off_by_default_and_off_without_a_public_host(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from my_pa.bootstrap.gateway import files_browser_download_client_ids, files_browser_downloads
+    from my_pa.bootstrap.settings import Settings
+
+    base = {"database_url": "postgresql+psycopg://h/db"}
+    assert files_browser_downloads(Settings(**base)) is None
+    caplog.set_level(logging.WARNING)
+    hostless = Settings(**base, files_browser_download_client_ids="a, b")
+    assert files_browser_download_client_ids(hostless) == frozenset()
+    assert "MY_PA_REMOTE_MCP_PUBLIC_HOST is not" in caplog.text
+    hosted = Settings(
+        **base,
+        files_browser_download_client_ids="a, b",
+        remote_mcp_public_host="mcp.example.invalid",
+    )
+    composed = files_browser_downloads(hosted)
+    assert composed is not None and composed.client_ids == {"a", "b"}
+    assert composed.ttl_seconds == 300 and composed.public_origin == "https://mcp.example.invalid"
+    for ttl in (59, 901):
+        with pytest.raises(ValueError):
+            Settings(**base, files_browser_download_ttl_seconds=ttl)
+
+
+def test_a_browser_token_is_redacted_from_the_interaction_log_and_access_log() -> None:
+    from my_pa.adapters.http.files_transfer import _BrowserTokenRedaction
+    from my_pa.adapters.mcp_interaction_capture import redact_json, redact_text
+
+    token = "gfwbd_" + "ab" * 32
+    url = f"https://mcp.example.invalid/files/v1/browser-downloads/fwdnl_x.{token}"
+    envelope = json.dumps({"result": {"browser_download": {"url": url}}})
+    redacted, count, _ = redact_json({"content": [{"type": "text", "text": envelope}]})
+    assert token not in json.dumps(redacted) and count >= 1
+    assert token not in redact_text(f"GET {url}")[0]
+    record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:1", "GET", f"/files/v1/browser-downloads/fwdnl_x.{token}", "1.1", 200),
+        None,
+    )
+    assert _BrowserTokenRedaction().filter(record)
+    assert token not in record.getMessage() and "gfwbd_[REDACTED]" in record.getMessage()

@@ -171,6 +171,7 @@ exactly the cycle above, at exactly five concurrent requests.
 from __future__ import annotations
 
 import functools
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -192,7 +193,7 @@ from my_pa.application.entity_reenrichment import (
     ReenrichmentWork,
 )
 from my_pa.application.file_transfer import FileTransferGate
-from my_pa.application.file_workspace import FileWorkspaceApplication
+from my_pa.application.file_workspace import BrowserDownloads, FileWorkspaceApplication
 from my_pa.application.goodnotes_orchestrator import rollout_stage_permits
 from my_pa.application.native_sources import NativeSourceController
 from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
@@ -728,6 +729,44 @@ def _file_workspace_application(
             if settings.remote_mcp_public_host.strip()
             else None
         ),
+        browser_downloads=files_browser_downloads(settings),
+    )
+
+
+#: Composition notices for the operator (contract section 17.6); never a value.
+_COMPOSITION_LOGGER: Final = logging.getLogger("my_pa.bootstrap.files")
+
+
+def files_browser_download_client_ids(settings: Settings) -> frozenset[str]:
+    """Contract section 17.6: the allowlist, or empty when the feature cannot run.
+
+    Empty when unset (the default, feature off), and also when no remote MCP
+    public host is configured -- a link needs an absolute https URL -- which is
+    a configuration the operator is told about once, on the server log.
+    """
+    ids = frozenset(
+        item.strip()
+        for item in settings.files_browser_download_client_ids.split(",")
+        if item.strip()
+    )
+    if ids and not settings.remote_mcp_public_host.strip():
+        _COMPOSITION_LOGGER.warning(
+            "files browser downloads off: MY_PA_FILES_BROWSER_DOWNLOAD_CLIENT_IDS is set "
+            "but MY_PA_REMOTE_MCP_PUBLIC_HOST is not"
+        )
+        return frozenset()
+    return ids
+
+
+def files_browser_downloads(settings: Settings) -> BrowserDownloads | None:
+    """The section 17.6 composition for the handlers, or `None` (feature off)."""
+    ids = files_browser_download_client_ids(settings)
+    if not ids:
+        return None
+    return BrowserDownloads(
+        client_ids=ids,
+        ttl_seconds=settings.files_browser_download_ttl_seconds,
+        public_origin=f"https://{settings.remote_mcp_public_host.strip()}",
     )
 
 
@@ -1570,5 +1609,6 @@ def build_gateway_runtime(
             workspace_id=settings.files_workspace_id,
             max_upload_bytes=settings.files_max_upload_bytes,
             remote_writes_enabled=settings.remote_writes_enabled,
+            browser_client_ids=files_browser_download_client_ids(settings),
         ),
     )

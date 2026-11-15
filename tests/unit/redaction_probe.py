@@ -140,6 +140,13 @@ def _decreasing_start_tokens(token: str) -> Any:  # noqa: ANN401
 _PATTERN_SHAPES: dict[str, list[Any]] = {
     "_BEARER": [_repeat("bearer "), _repeat("Bearer", " "), _decreasing_start_tokens("bearer")],
     "_BASIC": [_repeat("basic ", "a"), _repeat("Basic aaaaaaa"), _repeat("basic", " ")],
+    # Files-workspace contract section 17.6: a fixed-length token, near misses
+    # one hex digit short and an unterminated prefix run.
+    "_FILE_TOKEN": [
+        _repeat("gfwbd_", "a" * 63, " "),
+        _repeat("gfwtk_", "0" * 63),
+        _repeat("gfw"),
+    ],
     "_EQUALS_LINE": [
         _repeat("\npassword", " "),
         _repeat("\n" + " " * 70 + "token", "="),

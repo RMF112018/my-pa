@@ -254,8 +254,11 @@ Inspect the rendered model: it must contain no `ports`, no database service,
 no Docker socket, and only `/mcp`, `/healthz`, OAuth discovery, registration,
 authorization, token, revocation, and protected-resource routes, and the two
 files byte routes `^/files/v1/uploads/[^/]+$` and `^/files/v1/downloads/[^/]+$`
+and the browser download route `^/files/v1/browser-downloads/[^/]+$`
 ([`files-workspace.md`](files-workspace.md); they answer 404 while the files
-plane is not composed), followed by the 404 catch-all. `/readyz` is intentionally not an edge route. Validate the tunnel
+plane is not composed, and the browser route also while
+`MY_PA_FILES_BROWSER_DOWNLOAD_CLIENT_IDS` is empty; adding the third rule to
+the live tunnel is operator-gated), followed by the 404 catch-all. `/readyz` is intentionally not an edge route. Validate the tunnel
 ownership/UUID with the operator's authenticated
 Cloudflare tooling; do not paste its output into tickets or logs if it contains
 account or credential data.

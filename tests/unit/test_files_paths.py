@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+from pathlib import Path
 
 import pytest
 
@@ -62,7 +63,7 @@ def test_ordinary_paths_are_accepted_unchanged(value: str) -> None:
         "./a",
         "/a",
         "/",
-        "a/",
+        "a//",
         "a//b",
         "//",
         "/../etc/passwd",
@@ -221,6 +222,10 @@ def test_generated_traversal_shapes_are_all_refused() -> None:
     for size in (1, 2, 3):
         for parts in itertools.product(atoms, repeat=size):
             value = "/".join(parts)
+            # Section 3 rule 1 (2026-11-15): one trailing `/` after a non-empty
+            # component is dropped, so `a/` is `a`; `a//`, `/` and `` are not.
+            if len(parts) > 1 and parts[-1] == "" and parts[-2] != "":
+                parts = parts[:-1]
             if any(part in hostile for part in parts):
                 with pytest.raises(FilesRefusal):
                     parse_path(value)
@@ -228,3 +233,107 @@ def test_generated_traversal_shapes_are_all_refused() -> None:
                 assert parse_path(value) == WorkspacePath(parts)
             checked += 1
     assert checked == 8 + 64 + 512
+
+
+# ---- section 3 rule 1: one trailing slash (operator decision 2026-11-15) -------------------
+
+
+@pytest.mark.parametrize(
+    ("given", "canonical"),
+    [
+        ("reproof/", "reproof"),
+        ("a/b/", "a/b"),
+        ("Résumé/", "Résumé"),
+        ("file.txt/", "file.txt"),
+        (".DS_Store/", ".DS_Store"),
+    ],
+)
+def test_one_trailing_slash_is_dropped(given: str, canonical: str) -> None:
+    assert parse_path(given).text == canonical
+    assert parse_path(given) == parse_path(canonical)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "/",
+        "//",
+        "a//",
+        "a/b//",
+        "/a/",
+        "a/./",
+        "a/../",
+        "../",
+        "./",
+        ".my-pa/",
+        ".MY-PA/",
+        "a/.my-pa/",
+        "@eaDir/",
+        "#recycle/",
+        "a\\b/",
+        "a\x00/",
+        "a/\x00/",
+        "\ud800/",
+    ],
+)
+def test_a_trailing_slash_never_admits_a_refused_shape(value: str) -> None:
+    with pytest.raises(FilesRefusal) as caught:
+        parse_path(value)
+    assert caught.value.reason is FilesReason.INVALID_PATH
+
+
+def test_the_root_with_a_slash_is_still_refused_where_the_root_is_allowed() -> None:
+    assert parse_path("", allow_root=True).is_root
+    with pytest.raises(FilesRefusal):
+        parse_path("/", allow_root=True)
+
+
+def test_commands_store_the_canonical_path_so_x_and_x_slash_replay_identically(
+    tmp_path: Path,
+) -> None:
+    from my_pa.application.commands import (
+        CopyFile,
+        ListFiles,
+        MakeFileDirectory,
+        MoveFile,
+        RestoreFile,
+        StatFile,
+        TrashFile,
+        WriteFileText,
+    )
+    from tests.unit.test_file_workspace_application import WORKSPACE, _World
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+    world = _World(root)
+    made = world.run(MakeFileDirectory(workspace_id=WORKSPACE, path="dir/", idempotency_key="k1"))
+    assert made["path"] == "dir" and made["replayed"] is False
+    again = world.run(MakeFileDirectory(workspace_id=WORKSPACE, path="dir", idempotency_key="k1"))
+    assert again["replayed"] is True
+    assert MakeFileDirectory(workspace_id=WORKSPACE, path="dir/", idempotency_key="k").path == "dir"
+    world.run(
+        WriteFileText(workspace_id=WORKSPACE, path="dir/f.txt/", text="x", idempotency_key="k2")
+    )
+    assert world.run(StatFile(workspace_id=WORKSPACE, path="dir/f.txt/"))["path"] == "dir/f.txt"
+    listed = world.run(ListFiles(workspace_id=WORKSPACE, path="dir/"))
+    assert [entry["path"] for entry in listed["entries"]] == ["dir/f.txt"]
+    copied = world.run(
+        CopyFile(workspace_id=WORKSPACE, path="dir/f.txt", to_path="g.txt/", idempotency_key="k3")
+    )
+    assert copied["path"] == "g.txt"
+    moved = world.run(
+        MoveFile(workspace_id=WORKSPACE, path="g.txt/", to_path="h.txt/", idempotency_key="k4")
+    )
+    assert moved["path"] == "h.txt"
+    trashed = world.run(TrashFile(workspace_id=WORKSPACE, path="h.txt/", idempotency_key="k5"))
+    restored = world.run(
+        RestoreFile(
+            workspace_id=WORKSPACE,
+            trash_item_id=trashed["trash_item_id"],
+            to_path="i.txt/",
+            idempotency_key="k6",
+        )
+    )
+    assert restored["path"] == "i.txt"
+    for receipt in world.rows.receipts.values():
+        assert not str(receipt.result).count("/'"), receipt.result

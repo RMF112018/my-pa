@@ -27,6 +27,14 @@ writes the audit event: capability, purpose and outcome). Here:
 - **Tickets** are minted with the `reports.transfer` helpers (`gfwtk_`, digest
   only stored; TTL default 3600 s, 300..86400). `files.upload.begin` first
   expires the caller's due tickets and discards their staging (trim T6).
+- **Native file handles** (contract section 17.2): `files.upload.begin` with
+  `source_file` checks the target, streams the handle's `download_url` through
+  the composed `FileHandleFetcher` into a fresh staging file -- before the
+  workspace lock, so a slow fetch never holds it -- then, under the lock and
+  the receipt, records an upload row, closes it at once and publishes through
+  the same finalize path as `files.upload.finalize`. The URL is read here only
+  to hand it to the fetcher: it reaches no row, receipt, answer or error.
+  `files.download.begin` also answers `name` and `resource_uri` (section 17.3).
 
 The filesystem is not transactional. A store mutation that succeeded is not
 undone if a later row write fails and the transaction rolls back; the
@@ -39,7 +47,8 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
@@ -78,6 +87,7 @@ from my_pa.application.errors import (
 )
 from my_pa.application.lineage_visibility import require_read_grant, require_write_grant
 from my_pa.contracts.ports import (
+    FileHandleFetcher,
     FileHistoryPage,
     FileTransferKind,
     FileTransferRecord,
@@ -96,9 +106,15 @@ from my_pa.domain.common.time import format_rfc3339
 from my_pa.domain.files.errors import FilesArgumentError, FilesRefusal
 from my_pa.domain.files.paths import parse_path
 from my_pa.domain.files.transfer import (
+    BROWSER_DOWNLOAD_INSTRUCTIONS,
     UploadCompletion,
     UploadDeclaration,
+    browser_link_segment,
+    download_transfer,
+    mint_browser_token,
     mint_ticket_token,
+    transfer_url,
+    upload_transfer,
     verify_staged,
     write_intent_digest,
 )
@@ -120,7 +136,13 @@ from my_pa.domain.reports.creator import CreatorKind, derive_creator
 from my_pa.domain.reports.transfer import client_ref_of
 from my_pa.domain.source.registry import issue_identifier
 
-__all__ = ["FILE_WORKSPACE_CAPABILITIES", "FileWorkspaceApplication"]
+__all__ = [
+    "BROWSER_DOWNLOAD_ROUTE",
+    "DOWNLOAD_RESOURCE_PREFIX",
+    "FILE_WORKSPACE_CAPABILITIES",
+    "BrowserDownloads",
+    "FileWorkspaceApplication",
+]
 
 #: The 17 names this module serves (contract section 1.1).
 FILE_WORKSPACE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
@@ -148,6 +170,21 @@ FILE_WORKSPACE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 #: Section 10: the relative byte routes a ticket names.
 _UPLOAD_ROUTE: Final = "/files/v1/uploads/"
 _DOWNLOAD_ROUTE: Final = "/files/v1/downloads/"
+#: Section 17.6: the browser download route a single-use link names.
+BROWSER_DOWNLOAD_ROUTE: Final = "/files/v1/browser-downloads/"
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserDownloads:
+    """Section 17.6's composition: who gets a browser link, for how long, at which origin."""
+
+    client_ids: frozenset[str]
+    ttl_seconds: int
+    public_origin: str
+
+
+#: Section 17.3: the MCP resource URI a download ticket is also readable at.
+DOWNLOAD_RESOURCE_PREFIX: Final = "mcp-files://downloads/"
 #: How many due tickets one `files.upload.begin` expires (trim T6).
 _REAP_LIMIT: Final = 64
 
@@ -164,6 +201,8 @@ _REFUSAL_CODES: Final[Mapping[FilesReason, type[ApplicationError]]] = {
     FilesReason.DIGEST_MISMATCH: ConflictError,
     FilesReason.OFFSET_MISMATCH: ConflictError,
     FilesReason.TICKET_INVALID: DeniedError,
+    FilesReason.FILE_HANDLE_UNSUPPORTED: UnsupportedError,
+    FilesReason.FILE_HANDLE_REFUSED: InvalidRequestError,
 }
 
 #: A domain argument fault's field, as the public detail naming it.
@@ -219,10 +258,18 @@ class FileWorkspaceApplication:
         *,
         workspace_id: str,
         max_upload_bytes: int,
+        handle_fetcher: FileHandleFetcher | None = None,
+        public_origin: str | None = None,
+        browser_downloads: BrowserDownloads | None = None,
     ) -> None:
         self._store = store
         self._workspace_id: Final = workspace_id
         self._max_upload_bytes: Final = max_upload_bytes
+        self._handle_fetcher: Final = handle_fetcher
+        #: Section 17.5: the origin a ticket's `transfer.url` is joined to.
+        self._public_origin: Final = public_origin
+        #: Section 17.6: `None` (the default) is the feature off.
+        self._browser: Final = browser_downloads
         self._handlers: Final[Mapping[Capability, Callable[..., dict[str, Any]]]] = {
             Capability.FILES_WORKSPACES_LIST: self._workspaces_list,
             Capability.FILES_LIST: self._list,
@@ -486,15 +533,87 @@ class FileWorkspaceApplication:
             "download_id": download_id,
             "download_token": token,
             "route": _DOWNLOAD_ROUTE + download_id,
+            "transfer": download_transfer(
+                transfer_url(_DOWNLOAD_ROUTE + download_id, self._public_origin)
+            ),
+            "resource_uri": DOWNLOAD_RESOURCE_PREFIX + download_id,
+            "name": parse_path(path).name,
             "size": size,
             "version": version,
             "expires_at": format_rfc3339(ticket.expires_at),
         }
         if command.include_sha256:
             answer["sha256"] = sha256
+        link = self._browser_link(
+            call, path=path, version=version, size=size, sha256=sha256, preserved=preserved
+        )
+        if link is not None:
+            answer["browser_download"] = link
         return answer
 
+    def _browser_link(
+        self,
+        call: _Call,
+        *,
+        path: str,
+        version: str,
+        size: int,
+        sha256: str | None,
+        preserved: FileVersionRecord | None,
+    ) -> dict[str, Any] | None:
+        """Section 17.6: a single-use browser link, for an allowlisted remote client only."""
+        browser = self._browser
+        authorization = call.authorization
+        if (
+            browser is None
+            or authorization.transport is not CaptureTransport.REMOTE_CLIENT
+            or authorization.authenticated_client_id not in browser.client_ids
+        ):
+            return None
+        link_id = issue_identifier(IdKind.FILE_DOWNLOAD)
+        token, digest = mint_browser_token()
+        row = call.rows.create_transfer(
+            transfer_id=link_id,
+            principal_id=call.owner,
+            client_ref=call.client_ref,
+            kind=FileTransferKind.DOWNLOAD,
+            workspace_id=self._workspace_id,
+            path=path,
+            expected_version=version,
+            preserved_version_id=None if preserved is None else preserved.version_id,
+            declared_size=size,
+            declared_sha256=sha256,
+            token_digest=digest,
+            created_at=call.at,
+            expires_at=call.at + timedelta(seconds=browser.ttl_seconds),
+        )
+        return {
+            "url": browser.public_origin.rstrip("/")
+            + BROWSER_DOWNLOAD_ROUTE
+            + browser_link_segment(link_id, token),
+            "expires_at": format_rfc3339(row.expires_at),
+            "single_use": True,
+            "instructions": BROWSER_DOWNLOAD_INSTRUCTIONS,
+        }
+
     # ---- writes ---------------------------------------------------------------------
+
+    def _receipt_answer(
+        self, call: _Call, command: Command, arguments: Mapping[str, object]
+    ) -> dict[str, Any] | None:
+        """A taken key's stored answer (`replayed: true`), `conflict`, or `None` when free."""
+        capability = command.capability.value
+        existing = call.rows.get_receipt(
+            principal_id=call.owner,
+            client_ref=call.client_ref,
+            capability=capability,
+            idempotency_key=getattr(command, "idempotency_key"),  # noqa: B009
+        )
+        if existing is None:
+            return None
+        if existing.intent_digest != write_intent_digest(capability, arguments):
+            raise ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        return {**existing.result, "replayed": True}
 
     def _write(
         self,
@@ -678,6 +797,8 @@ class FileWorkspaceApplication:
     # ---- uploads --------------------------------------------------------------------
 
     def _upload_begin(self, call: _Call, command: BeginFileUpload) -> dict[str, Any]:
+        if command.source_file is not None:
+            return self._ingest_handle(call, command, command.source_file)
         arguments = {
             "workspace_id": self._workspace_id,
             "path": command.path,
@@ -719,6 +840,10 @@ class FileWorkspaceApplication:
                 "upload_id": upload_id,
                 "upload_token": token,
                 "route": _UPLOAD_ROUTE + upload_id,
+                "transfer": upload_transfer(
+                    transfer_url(_UPLOAD_ROUTE + upload_id, self._public_origin),
+                    MAX_UPLOAD_CHUNK_BYTES,
+                ),
                 "offset": 0,
                 "chunk_max_bytes": MAX_UPLOAD_CHUNK_BYTES,
                 "expires_at": format_rfc3339(ticket.expires_at),
@@ -804,75 +929,159 @@ class FileWorkspaceApplication:
             ticket = self._owned_upload(call, command.upload_id)
             if not ticket.usable_at(call.at):
                 raise _refusal(FilesReason.TICKET_INVALID)
-            # Hashed once: the publication re-checks this fingerprint rather
-            # than reading the staged bytes again under the workspace lock.
-            staged_length, staged_sha256, staged_version = self._store.upload_digest(
-                command.upload_id
-            )
-            verify_staged(
-                UploadCompletion(sha256=command.sha256, length=command.length),
-                UploadDeclaration(
-                    size=ticket.declared_size,
-                    sha256=ticket.declared_sha256,
-                    ttl_seconds=TICKET_TTL_DEFAULT_SECONDS,
-                ),
-                staged_length=staged_length,
-                staged_sha256=staged_sha256,
-            )
-            # The verified staged bytes are the upload's truth; the row's offset
-            # (moved by the byte routes) is brought to them, forward only, before
-            # the `finalized` state demands they agree.
-            if ticket.received_bytes != staged_length and (
-                staged_length < ticket.received_bytes
-                or call.rows.advance_offset(
-                    command.upload_id,
-                    principal_id=call.owner,
-                    expected_offset=ticket.received_bytes,
-                    new_offset=staged_length,
-                    now=call.at,
-                )
-                is None
-            ):
-                raise _refusal(FilesReason.OFFSET_MISMATCH)
-            if ticket.expected_version is None:
-                published = self._store.publish_upload(
-                    command.upload_id,
-                    ticket.path,
-                    length=command.length,
-                    sha256=command.sha256,
-                    staged_version=staged_version,
-                )
-            else:
-                replaced = self._replaced(
-                    ticket.path,
-                    ticket.expected_version,
-                    drift=FilesReason.EXTERNAL_CHANGE_DETECTED,
-                )
-                published = self._store.publish_upload(
-                    command.upload_id,
-                    ticket.path,
-                    length=command.length,
-                    sha256=command.sha256,
-                    expected_version=ticket.expected_version,
-                    preimage_version_id=issue_identifier(IdKind.FILE_VERSION),
-                    staged_version=staged_version,
-                )
-                self._record_preimage(
-                    call, published.preimage_version_id, replaced, "upload.finalize"
-                )
-            if (
-                call.rows.settle_transfer(
-                    command.upload_id,
-                    principal_id=call.owner,
-                    state=FileTransferState.FINALIZED,
-                    now=call.at,
-                )
-                is None
-            ):  # pragma: no cover - the ticket was locked open above
-                raise InternalError()
-            return self._published(published.entry, published.preimage_version_id)
+            return self._finalize_open(call, ticket, length=command.length, sha256=command.sha256)
 
         return self._write(call, command, arguments, perform)
+
+    def _finalize_open(
+        self, call: _Call, ticket: FileTransferRecord, *, length: int, sha256: str
+    ) -> dict[str, Any]:
+        """Verify an open, usable upload ticket's staged bytes and publish them (section 5)."""
+        upload_id = ticket.transfer_id
+        # Hashed once: the publication re-checks this fingerprint rather
+        # than reading the staged bytes again under the workspace lock.
+        staged_length, staged_sha256, staged_version = self._store.upload_digest(upload_id)
+        verify_staged(
+            UploadCompletion(sha256=sha256, length=length),
+            UploadDeclaration(
+                size=ticket.declared_size,
+                sha256=ticket.declared_sha256,
+                ttl_seconds=TICKET_TTL_DEFAULT_SECONDS,
+            ),
+            staged_length=staged_length,
+            staged_sha256=staged_sha256,
+        )
+        # The verified staged bytes are the upload's truth; the row's offset
+        # (moved by the byte routes) is brought to them, forward only, before
+        # the `finalized` state demands they agree.
+        if ticket.received_bytes != staged_length and (
+            staged_length < ticket.received_bytes
+            or call.rows.advance_offset(
+                upload_id,
+                principal_id=call.owner,
+                expected_offset=ticket.received_bytes,
+                new_offset=staged_length,
+                now=call.at,
+            )
+            is None
+        ):
+            raise _refusal(FilesReason.OFFSET_MISMATCH)
+        if ticket.expected_version is None:
+            published = self._store.publish_upload(
+                upload_id,
+                ticket.path,
+                length=length,
+                sha256=sha256,
+                staged_version=staged_version,
+            )
+        else:
+            replaced = self._replaced(
+                ticket.path,
+                ticket.expected_version,
+                drift=FilesReason.EXTERNAL_CHANGE_DETECTED,
+            )
+            published = self._store.publish_upload(
+                upload_id,
+                ticket.path,
+                length=length,
+                sha256=sha256,
+                expected_version=ticket.expected_version,
+                preimage_version_id=issue_identifier(IdKind.FILE_VERSION),
+                staged_version=staged_version,
+            )
+            self._record_preimage(call, published.preimage_version_id, replaced, "upload.finalize")
+        if (
+            call.rows.settle_transfer(
+                upload_id,
+                principal_id=call.owner,
+                state=FileTransferState.FINALIZED,
+                now=call.at,
+            )
+            is None
+        ):  # pragma: no cover - the ticket was locked open above
+            raise InternalError()
+        return self._published(published.entry, published.preimage_version_id)
+
+    # ---- native file handles (section 17.2) --------------------------------------------
+
+    def _ingest_handle(
+        self, call: _Call, command: BeginFileUpload, handle: Mapping[str, object]
+    ) -> dict[str, Any]:
+        """Fetch a client's native file handle into staging, then publish it in this call."""
+        fetcher = self._handle_fetcher
+        if fetcher is None:
+            raise _refusal(FilesReason.FILE_HANDLE_UNSUPPORTED)
+        url, file_id = handle.get("download_url"), handle.get("file_id")
+        if not isinstance(url, str) or not isinstance(file_id, str):  # pragma: no cover
+            raise InvalidRequestError(SafeDetail.SOURCE_FILE)  # the command checked both
+        arguments = {
+            "workspace_id": self._workspace_id,
+            "path": command.path,
+            "expected_version": command.expected_version,
+            "size": command.size,
+            "sha256": command.sha256,
+            # The handle's identity by digest only; never the bearer URL.
+            "source_file_id_sha256": hashlib.sha256(file_id.encode("utf-8")).hexdigest(),
+        }
+        declaration = UploadDeclaration.of(
+            size=command.size, sha256=command.sha256, max_upload_bytes=self._max_upload_bytes
+        )
+        # A retried key replays (or conflicts) before anything is fetched; the
+        # receipt is read again under the lock by `_write`.
+        replayed = self._receipt_answer(call, command, arguments)
+        if replayed is not None:
+            return replayed
+        self._check_upload_target(command.path, command.expected_version)
+        cap = self._max_upload_bytes if declaration.size is None else declaration.size
+        upload_id = issue_identifier(IdKind.FILE_UPLOAD)
+        self._store.begin_upload(upload_id)
+        try:
+            length, digest = self._fetch_into(fetcher, url, upload_id, cap)
+
+            def perform() -> dict[str, Any]:
+                self._reap(call)
+                _token, token_digest = mint_ticket_token()  # never issued: closed below
+                ticket = call.rows.create_transfer(
+                    transfer_id=upload_id,
+                    principal_id=call.owner,
+                    client_ref=call.client_ref,
+                    kind=FileTransferKind.UPLOAD,
+                    workspace_id=self._workspace_id,
+                    path=command.path,
+                    expected_version=command.expected_version,
+                    preserved_version_id=None,
+                    declared_size=declaration.size,
+                    declared_sha256=declaration.sha256,
+                    token_digest=token_digest,
+                    created_at=call.at,
+                    expires_at=call.at + timedelta(seconds=TICKET_TTL_MIN_SECONDS),
+                )
+                published = self._finalize_open(call, ticket, length=length, sha256=digest)
+                return {"upload_id": upload_id, **published, "size": length, "sha256": digest}
+
+            return self._write(call, command, arguments, perform)
+        finally:
+            # Published bytes were renamed out of staging; anything left is
+            # a refused, replayed or failed ingest's, and is never needed.
+            with suppress(FilesRefusal, FileWorkspaceUnavailableError):
+                self._store.discard_upload(upload_id)
+
+    def _fetch_into(
+        self, fetcher: FileHandleFetcher, url: str, upload_id: str, cap: int
+    ) -> tuple[int, str]:
+        """Stream the handle's body onto the staging file; its length and SHA-256."""
+        hasher = hashlib.sha256()
+        with fetcher.open(url, max_bytes=cap) as body:
+            if body.declared_length is not None:
+                self._store.ensure_free_space(body.declared_length)
+
+            def hashed() -> Iterator[bytes]:
+                for chunk in body.chunks:
+                    hasher.update(chunk)
+                    yield chunk
+
+            length = self._store.append_upload(upload_id, 0, hashed(), limit=cap)
+        return length, hasher.hexdigest()
 
     # ---- replacement ------------------------------------------------------------------
 

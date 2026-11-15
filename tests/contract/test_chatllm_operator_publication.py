@@ -72,7 +72,18 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
         import json
 
         names = {tool.name for tool in (await session.list_tools()).tools}
-        assert names == {"my_pa.describe", "my_pa.read", "my_pa.write", "my_pa.operator"}
+        # Contract 17.4: the four top-level files tools are published to a compact
+        # client whose files grants make it eligible; they add no capability names.
+        assert names == {
+            "my_pa.describe",
+            "my_pa.read",
+            "my_pa.write",
+            "my_pa.operator",
+            "files.upload.begin",
+            "files.download.begin",
+            "files.list",
+            "files.search",
+        }
         capabilities: set[str] = set()
         cursor = None
         while True:

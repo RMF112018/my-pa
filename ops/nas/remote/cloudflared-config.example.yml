@@ -71,4 +71,12 @@ ingress:
     originRequest:
       connectTimeout: 10s
       httpHostHeader: __MCP_HOSTNAME__
+  # Files-workspace contract section 17.6: single-use browser download links
+  # (operator-authorized 2026-11-15). Answers 404 unless the feature is on.
+  - hostname: __MCP_HOSTNAME__
+    path: ^/files/v1/browser-downloads/[^/]+$
+    service: http://my-pa-mcp-remote:8766
+    originRequest:
+      connectTimeout: 10s
+      httpHostHeader: __MCP_HOSTNAME__
   - service: http_status:404

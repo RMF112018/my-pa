@@ -88,6 +88,11 @@ MODULES: Final[frozenset[str]] = frozenset(
 #:   would be building its own request pair.
 #: * `adapters.remote_request` — remote MCP envelope composition. It stamps
 #:   server-owned metadata and refuses caller copies; it does not authorize.
+#: * `adapters.remote_resources` — the shapes (a protocol, a template record and
+#:   a refusal carrying a closed token) between `remote.py`'s `resources/read`
+#:   and the files plane's resource source (files-workspace contract section
+#:   17.3). Shapes only: what a read may open is decided by the source, behind
+#:   the files gate, never here.
 #: * `adapters.mcp.tools` — this package's own module.
 #: * `application.commands` — the command *types*, read to derive schemas. Types,
 #:   not behaviour: `tools.py` never constructs one.
@@ -101,6 +106,10 @@ MODULES: Final[frozenset[str]] = frozenset(
 #:   `issue_identifier`, to mint the correlation identifier a refusal that never
 #:   reached the application must still carry.
 #: * `domain.identity.operation` — the `Capability` enum, read to name tools.
+#: * `domain.identity.chatllm_capability_policy` — presentation data only: the
+#:   closed set of primary file names a compact-façade client is also offered as
+#:   top-level tools (files-workspace contract section 17.4). Intersected with
+#:   the request's already-granted set; it grants nothing.
 #: * `domain.identity.principal` — the `Principal` type it is handed.
 #: * `my_pa` — `__version__`, published in `initialize`.
 ADMISSIBLE_IMPORTS: Final[frozenset[str]] = frozenset(
@@ -112,6 +121,7 @@ ADMISSIBLE_IMPORTS: Final[frozenset[str]] = frozenset(
         "my_pa.adapters.mcp.tools",
         "my_pa.adapters.normalization",
         "my_pa.adapters.remote_request",
+        "my_pa.adapters.remote_resources",
         "my_pa.application.commands",
         "my_pa.application.errors",
         "my_pa.application.service",
@@ -120,6 +130,7 @@ ADMISSIBLE_IMPORTS: Final[frozenset[str]] = frozenset(
         "my_pa.contracts.v1.errors",
         "my_pa.domain.common.identifiers",
         "my_pa.domain.common.time",
+        "my_pa.domain.identity.chatllm_capability_policy",
         "my_pa.domain.identity.operation",
         "my_pa.domain.identity.principal",
         "my_pa.domain.identity.purpose",
@@ -137,6 +148,13 @@ ADMISSIBLE_FOREIGN_IMPORTS: Final[frozenset[str]] = frozenset(
     {
         "__future__",
         "asyncio",
+        # Files-workspace contract section 17.3: `remote.py` streams a resource
+        # read's base64 into the SDK's own answer around a random placeholder
+        # (`secrets.token_hex`), and refuses a read as a JSON-RPC error
+        # (`mcp.shared.exceptions.MCPError`, the SDK's error type, not a server).
+        "base64",
+        "secrets",
+        "mcp.shared.exceptions",
         "collections.abc",
         "contextlib",
         "dataclasses",
@@ -370,6 +388,18 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
                 ("files.write_text", "path"),
             )
         ),
+        # ADR-019 Amendment 1 (files-workspace contract section 17.2): a native
+        # file handle on `files.upload.begin`. Its names are the client
+        # platform's file-object shape, fixed by its file-param scan, not ours.
+        # `download_url` is never a workspace location: the fetcher accepts only
+        # https to an allowlisted host suffix, resolved once to public addresses
+        # and pinned, with no redirect, and streams the body into the contained
+        # store's own staging; the workspace location stays the call's `path`.
+        # `file_name` is never used (finding F3) and `file_id` is digested only.
+        ("files.upload.begin", "source_file"),
+        ("files.upload.begin", "download_url"),
+        ("files.upload.begin", "file_id"),
+        ("files.upload.begin", "file_name"),
         # Reports Modernization WP02 (contract D): an association names what a
         # standalone report is about, not where a file lives. `target_kind` is a
         # closed enum; a resolvable `target_ref` must name a record the caller's
@@ -799,7 +829,9 @@ def test_the_location_scan_would_catch_one() -> None:
     # Plus Schedule Scenarios S6-3's 6 client-usable plane writes' boolean
     # `user_directed` claim. Plus the files workspace WP5's 16 workspace-relative
     # `path`/`to_path` fields on the `files.*` names (contract sections 2-3).
-    assert len(EXEMPT_PROPERTIES) == 90
+    # Plus ADR-019 Amendment 1's 4 native-handle names on `files.upload.begin`
+    # (`source_file` and its `download_url`, `file_id`, `file_name`).
+    assert len(EXEMPT_PROPERTIES) == 94
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

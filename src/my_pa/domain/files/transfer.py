@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
+import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
@@ -50,8 +52,14 @@ from my_pa.domain.identity.secret_digests import (
 from my_pa.domain.reports.content import canonical_json
 
 __all__ = [
+    "BROWSER_DOWNLOAD_INSTRUCTIONS",
+    "BROWSER_DOWNLOAD_TTL_DEFAULT_SECONDS",
+    "BROWSER_DOWNLOAD_TTL_MAX_SECONDS",
+    "BROWSER_DOWNLOAD_TTL_MIN_SECONDS",
+    "BROWSER_TOKEN_PREFIX",
     "DOWNLOAD_ID_PREFIX",
     "RECEIPT_ID_PREFIX",
+    "TICKET_TOKEN_ENV",
     "TICKET_TOKEN_PATTERN",
     "TICKET_TOKEN_PREFIX",
     "TRASH_ITEM_ID_PREFIX",
@@ -61,14 +69,21 @@ __all__ = [
     "UploadCompletion",
     "UploadDeclaration",
     "advance_upload_offset",
+    "browser_link_segment",
     "check_upload_offset",
+    "content_disposition",
+    "download_transfer",
+    "mint_browser_token",
     "mint_ticket_token",
+    "parse_browser_link",
     "parse_file_id",
     "parse_range",
     "parse_upload_complete",
     "parse_upload_offset",
     "ticket_token_digest",
     "ticket_token_from_authorization",
+    "transfer_url",
+    "upload_transfer",
     "validate_sha256",
     "validate_ttl",
     "verify_staged",
@@ -397,3 +412,133 @@ def write_intent_digest(capability: str, arguments: Mapping[str, object]) -> str
     except (TypeError, ValueError):
         raise FilesArgumentError("arguments", "type") from None
     return hashlib.sha256(document).hexdigest()
+
+
+# --- agent-usable ticket transfers (contract section 17.5) ---------------------------
+
+#: The environment variable the recipe reads a ticket token from: the reference
+#: client's (`scripts/my_pa_files.py`), so the token never appears in the text.
+TICKET_TOKEN_ENV: Final = "MY_PA_FILES_TICKET"  # noqa: S105 - a variable name
+
+
+def transfer_url(route: str, public_origin: str | None) -> str:
+    """The ticket's route joined to the public origin, or the relative route."""
+    return route if not public_origin else public_origin.rstrip("/") + route
+
+
+def upload_transfer(url: str, chunk_max_bytes: int) -> dict[str, object]:
+    """How an agent completes an upload ticket over HTTP. Static text; no token."""
+    usage = (
+        f"Upload the file in one request (when it is at most {chunk_max_bytes} bytes): "
+        f'curl -sS -f -X PATCH "{url}" '
+        f'-H "Authorization: Bearer ${TICKET_TOKEN_ENV}" '
+        '-H "Upload-Offset: 0" '
+        '-H "Upload-Complete: sha256=<sha256>, length=<length>" '
+        '-H "Content-Type: application/octet-stream" '
+        "--data-binary @<file> "
+        f"-- with {TICKET_TOKEN_ENV} set to upload_token, <sha256> the file's lowercase "
+        "SHA-256 hex and <length> its byte count; a 200 answer is the finalized entry. "
+        f"A larger file: PATCH pieces of at most {chunk_max_bytes} bytes, each with "
+        "Upload-Offset set to the bytes already sent, the last also with Upload-Complete; "
+        "to resume, HEAD the url (same Authorization) and continue from its Upload-Offset. "
+        "Then verify with files.stat (include_sha256: true) on the same path."
+    )
+    return {
+        "method": "PATCH",
+        "url": url,
+        "auth_header_name": "Authorization",
+        "headers": {
+            "Upload-Offset": "0",
+            "Upload-Complete": "sha256=<sha256>, length=<length>",
+            "Content-Type": "application/octet-stream",
+        },
+        "usage": usage,
+    }
+
+
+def download_transfer(url: str) -> dict[str, object]:
+    """How an agent fetches a download ticket over HTTP. Static text; no token."""
+    usage = (
+        f'Download: curl -sS -f "{url}" '
+        f'-H "Authorization: Bearer ${TICKET_TOKEN_ENV}" -o <file> '
+        f"-- with {TICKET_TOKEN_ENV} set to download_token. To resume a cut transfer "
+        'add -H "Range: bytes=<n>-" (n = bytes already received) and append. '
+        "Verify the file's SHA-256 against sha256 (begin with include_sha256: true), "
+        "or with files.stat (include_sha256: true)."
+    )
+    return {
+        "method": "GET",
+        "url": url,
+        "auth_header_name": "Authorization",
+        "headers": {},
+        "usage": usage,
+    }
+
+
+# --- browser download links (contract section 17.6) ----------------------------------
+
+BROWSER_TOKEN_PREFIX: Final = "gfwbd"  # noqa: S105 - a prefix, not a secret
+_BROWSER_TOKEN: Final = re.compile(r"\Agfwbd_([0-9a-f]{64})\Z")
+#: Section 17.6: the instructions a browser link travels with. Static.
+BROWSER_DOWNLOAD_INSTRUCTIONS: Final = (
+    "Show this link to the user as a clickable link. Do not fetch it yourself."
+)
+BROWSER_DOWNLOAD_TTL_DEFAULT_SECONDS: Final = 300
+BROWSER_DOWNLOAD_TTL_MIN_SECONDS: Final = 60
+BROWSER_DOWNLOAD_TTL_MAX_SECONDS: Final = 900
+_DISPOSITION_DROPPED: Final = frozenset('/\\"%;')
+_ASCII_SAFE: Final = re.compile(r"[^A-Za-z0-9._ ()+,=@~-]")
+
+
+#: Domain separation: a browser token's stored digest is never a ticket token's,
+#: so `gfwtk_` + the same hex cannot open the row on the ticket route (where it
+#: would be a multi-use, Range-capable ticket instead of a single-use link).
+_BROWSER_DIGEST_DOMAIN: Final = b"my-pa files browser download\x00"
+
+
+def _browser_digest(raw: bytes) -> str:
+    return digest_bytes(_BROWSER_DIGEST_DOMAIN + raw)
+
+
+def mint_browser_token() -> tuple[str, str]:
+    """A fresh browser link token, `(presented, digest)`: `gfwbd_` + 64 hex; digest stored."""
+    raw, _ticket_digest = issue_opaque_token()
+    return f"{BROWSER_TOKEN_PREFIX}_{encode_opaque_token(raw)}", _browser_digest(raw)
+
+
+def browser_link_segment(download_id: str, token: str) -> str:
+    """The one URL path segment of a browser link: `<download_id>.<token>`."""
+    return f"{download_id}.{token}"
+
+
+def parse_browser_link(segment: object) -> tuple[str, str] | None:
+    """`(download_id, token digest)` of a well-formed link segment, else `None`. Never raises."""
+    if type(segment) is not str or len(segment) > 160:
+        return None
+    download_id, dot, token = segment.partition(".")
+    if dot != "." or parse_file_id(download_id, DOWNLOAD_ID_PREFIX) is None:
+        return None
+    match = _BROWSER_TOKEN.match(token)
+    if match is None:
+        return None
+    return download_id, _browser_digest(bytes.fromhex(match.group(1)))
+
+
+def _disposition_name(name: object) -> str:
+    """The name with separators, controls, quotes, `;` and `%` removed (may be empty)."""
+    if type(name) is not str:
+        return ""
+    kept = "".join(
+        character
+        for character in name
+        if character not in _DISPOSITION_DROPPED and unicodedata.category(character)[0] != "C"
+    )
+    return kept.strip().strip(".")
+
+
+def content_disposition(name: object) -> str:
+    """RFC 6266 `attachment` with an ASCII `filename` and an RFC 5987 `filename*`."""
+    cleaned = _disposition_name(name) or "download"
+    ascii_name = _ASCII_SAFE.sub("_", cleaned)[:200] or "download"
+    encoded = urllib.parse.quote(cleaned[:200], safe="")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"

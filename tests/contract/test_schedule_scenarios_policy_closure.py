@@ -202,7 +202,10 @@ def test_the_six_plane_cursor_orders_and_the_37_details_exist() -> None:
     ]
     assert len(ScheduleCursorOrder) == 11
     # Files workspace WP5: its 11 reason tokens and 10 field details, 396 -> 417.
-    assert len(SafeDetail) == 417
+    # ADR-019 Amendment 1 (contract section 17): 2 handle tokens and the
+    # `source_file` field detail, 417 -> 420.
+    # Contract section 17.4's quoted-capability hint, 420 -> 421.
+    assert len(SafeDetail) == 421
     for error in ChangeOpError:
         assert SafeDetail(f"change_set_{error.value}").name == f"CHANGE_SET_{error.name}"
 

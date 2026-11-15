@@ -16,6 +16,17 @@ request is made here, synchronously, off the event loop:
   `files.download.begin`) under its purpose, and for uploads writes allowed
   (client, global, and this process's `MY_PA_REMOTE_WRITES_ENABLED`). Any miss
   is `DeniedError` (HTTP 403), so a revocation takes effect on the next request.
+- **Resource reads** (contract section 17.3): `authenticate_resource` opens a
+  download ticket by id for an authenticated `/mcp` request -- no ticket token
+  -- only when the ticket is the request's Principal's, issued to the same
+  OAuth client (constant-time compare of the derived client reference), of this
+  workspace and usable now; then the same standing re-check. Every miss is the
+  one `ticket_invalid`, so another client's ticket and an unknown id are alike.
+- **Browser links** (contract section 17.6): `authenticate_browser` opens the
+  single-use link row by its id and the `gfwbd_` token's domain-separated
+  digest (constant time), then the same standing re-check plus the client still
+  in the browser allowlist; `consume_browser` settles it after a completed GET.
+  Every miss is one refusal the route renders as its undistinguished 404.
 - **Short transactions.** Authentication is one unit of work, the body is
   streamed with none open, and the offset CAS is a second one.
 - **Finalize** is `files.upload.finalize` through `ApplicationService.invoke`
@@ -34,6 +45,7 @@ Refusals are the domain's `FilesRefusal` (a section 7 token), `FilesArgumentErro
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -45,6 +57,7 @@ from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import (
     FileTransferKind,
     FileTransferRecord,
+    FileTransferState,
     FileWorkspaceReader,
     FileWorkspaceStore,
     RemoteClientStanding,
@@ -60,6 +73,7 @@ from my_pa.domain.files.transfer import (
     UPLOAD_ID_PREFIX,
     UploadCompletion,
     check_upload_offset,
+    parse_browser_link,
     parse_file_id,
     ticket_token_digest,
     ticket_token_from_authorization,
@@ -68,7 +82,8 @@ from my_pa.domain.files.vocabulary import MAX_UPLOAD_CHUNK_BYTES, FilesReason
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
-from my_pa.domain.reports.creator import CreatorKind
+from my_pa.domain.reports.creator import CreatorKind, derive_creator
+from my_pa.domain.reports.transfer import client_ref_of
 from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
@@ -136,6 +151,7 @@ class FileTransferGate:
         max_upload_bytes: int,
         remote_writes_enabled: bool,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        browser_client_ids: frozenset[str] = frozenset(),
     ) -> None:
         self._service = service
         self._store = store
@@ -145,6 +161,8 @@ class FileTransferGate:
         self._max_upload_bytes: Final = max_upload_bytes
         self._remote_writes_enabled: Final = remote_writes_enabled
         self._clock = clock
+        #: Section 17.6: empty is the browser route off.
+        self.browser_client_ids: Final = browser_client_ids
 
     # ---- authentication ---------------------------------------------------------
 
@@ -174,6 +192,71 @@ class FileTransferGate:
             or not ticket.client_ref.startswith(_REMOTE_CLIENT_REF)
         ):
             raise _ticket_invalid()
+        return self._standing_checked(kind, ticket, now)
+
+    def authenticate_resource(
+        self, path_id: object, *, principal_id: str, oauth_client_id: str | None
+    ) -> FileTransferAccess:
+        """A download ticket read as an MCP resource by the client it was issued to."""
+        transfer_id = self.parse_id(FileTransferKind.DOWNLOAD, path_id)
+        if transfer_id is None or not oauth_client_id:
+            raise _ticket_invalid()
+        client_ref = client_ref_of(derive_creator(CreatorKind.REMOTE_CLIENT, oauth_client_id))
+        now = self._clock()
+        with self._unit_of_work() as unit_of_work:
+            ticket = unit_of_work.file_workspace.get_transfer(
+                transfer_id, principal_id=principal_id
+            )
+        if (
+            ticket is None
+            or ticket.transfer_id != transfer_id
+            or ticket.kind is not FileTransferKind.DOWNLOAD
+            or ticket.workspace_id != self._workspace_id
+            or not ticket.usable_at(now)
+            or not hmac.compare_digest(ticket.client_ref.encode(), client_ref.encode())
+        ):
+            raise _ticket_invalid()
+        return self._standing_checked(FileTransferKind.DOWNLOAD, ticket, now)
+
+    def authenticate_browser(self, segment: object) -> FileTransferAccess:
+        """A browser link's row, its client's fresh standing, and the allowlist (17.6)."""
+        parsed = parse_browser_link(segment)
+        if parsed is None or not self.browser_client_ids:
+            raise _ticket_invalid()
+        download_id, digest = parsed
+        now = self._clock()
+        with self._unit_of_work() as unit_of_work:
+            ticket = unit_of_work.file_workspace.authenticate_ticket(
+                download_id, digest, kind=FileTransferKind.DOWNLOAD, now=now
+            )
+        if (
+            ticket is None
+            or ticket.transfer_id != download_id
+            or ticket.workspace_id != self._workspace_id
+            or not ticket.client_ref.startswith(_REMOTE_CLIENT_REF)
+        ):
+            raise _ticket_invalid()
+        access = self._standing_checked(FileTransferKind.DOWNLOAD, ticket, now)
+        if access.standing.oauth_client_id not in self.browser_client_ids:
+            raise DeniedError()
+        return access
+
+    def consume_browser(self, access: FileTransferAccess) -> bool:
+        """Settle a browser link after its completed GET: whether this call consumed it."""
+        ticket = access.ticket
+        with self._unit_of_work() as unit_of_work:
+            settled = unit_of_work.file_workspace.settle_transfer(
+                ticket.transfer_id,
+                principal_id=ticket.owner_principal_id,
+                state=FileTransferState.EXPIRED,
+                now=self._clock(),
+            )
+        return settled is not None
+
+    def _standing_checked(
+        self, kind: FileTransferKind, ticket: FileTransferRecord, now: datetime
+    ) -> FileTransferAccess:
+        """The ticket's client's fresh standing, or `DeniedError` (see the docstring)."""
         standing = self._standing.standing(ticket.client_ref, now=now)
         capability, purpose = _ISSUER[kind]
         if (

@@ -93,7 +93,8 @@ def test_cloudflared_renderer_is_exact_and_refuses_overwrite(tmp_path: Path) -> 
     )
     text = output.read_text()
     assert "__" not in text
-    assert text.count("hostname: mcp.example.com") == 11
+    # 11 before the files-workspace contract section 17.6 browser download rule.
+    assert text.count("hostname: mcp.example.com") == 12
     assert "http_status:404" in text
     with pytest.raises(FileExistsError):
         renderer.render(

@@ -13,6 +13,9 @@ from typing import Final
 __all__ = [
     "BYTE_ROUTE_CONCURRENCY",
     "DISK_RESERVE_BYTES",
+    "HANDLE_FETCH_DEADLINE_DEFAULT_SECONDS",
+    "HANDLE_FETCH_DEADLINE_MAX_SECONDS",
+    "HANDLE_HOST_SUFFIXES_DEFAULT",
     "MAX_COMPONENT_BYTES",
     "MAX_PATH_BYTES",
     "MAX_PREVIEW_BYTES",
@@ -77,6 +80,18 @@ TICKET_TTL_MAX_SECONDS: Final = 86400
 #: Section 8: the byte routes' own per-process concurrency cap (default).
 BYTE_ROUTE_CONCURRENCY: Final = 4
 
+#: Section 17 (native file handles, ADR-019 amendment): the whole server-side
+#: fetch of one handle's `download_url` -- connect, headers and body -- is cut at
+#: this deadline. The default sits under the remote MCP call timeout (30 s) so
+#: the tool answers the outcome rather than a timeout; the ceiling is the
+#: platform link lifetime the proof bounded (usable at 60 s, refused by 300 s).
+HANDLE_FETCH_DEADLINE_DEFAULT_SECONDS: Final = 25
+HANDLE_FETCH_DEADLINE_MAX_SECONDS: Final = 60
+#: Section 17: the host suffixes a handle's `download_url` may name by default
+#: (`MY_PA_FILES_HANDLE_HOST_SUFFIXES`); the proof observed ChatGPT's file links
+#: on Azure blob storage only.
+HANDLE_HOST_SUFFIXES_DEFAULT: Final = (".blob.core.windows.net", ".oaiusercontent.com")
+
 #: Section 3 rule 4.
 MAX_COMPONENT_BYTES: Final = 255
 MAX_PATH_BYTES: Final = 4096
@@ -102,3 +117,10 @@ class FilesReason(StrEnum):
     DIGEST_MISMATCH = "digest_mismatch"
     OFFSET_MISMATCH = "offset_mismatch"
     TICKET_INVALID = "ticket_invalid"
+    #: Section 17: a native file handle was given but this process composes no
+    #: handle fetcher (no allowed host suffix), so it cannot be ingested.
+    FILE_HANDLE_UNSUPPORTED = "file_handle_unsupported"
+    #: Section 17: the handle's `download_url` was refused or could not be
+    #: fetched (scheme, host, address, redirect, status, TLS, network, deadline).
+    #: One token for every cause, so it is no probing oracle.
+    FILE_HANDLE_REFUSED = "file_handle_refused"

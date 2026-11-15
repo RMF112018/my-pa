@@ -612,6 +612,28 @@ FILES_WORKSPACE_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
+#: Files workspace native handles (ADR-019 Amendment 1, files-workspace contract
+#: section 17.4; operator ruling 2026-11-15): the primary file names a
+#: compact-façade client is *also* offered as top-level MCP tools, under their
+#: canonical names, beside `my_pa.describe/read/write` -- a native file param is
+#: filled only at a tool's top level, which a façade wrapper cannot offer. The
+#: same capability, handler, grants, policy, audit and server-stamped
+#: idempotency key; listed only when the name is in the request's eligible set
+#: (composed plane, the client's grant, remote writes for the write). All 17
+#: stay reachable through the façade. Presentation, never a grant.
+FILES_COMPACT_TOP_LEVEL_NAMES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.FILES_UPLOAD_BEGIN,
+        Capability.FILES_DOWNLOAD_BEGIN,
+        Capability.FILES_LIST,
+        Capability.FILES_SEARCH,
+    }
+)
+#: The same four as the tool names a transport publishes.
+COMPACT_TOP_LEVEL_TOOL_NAMES: Final[frozenset[str]] = frozenset(
+    capability.value for capability in FILES_COMPACT_TOP_LEVEL_NAMES
+)
+
 _COMPATIBILITY_REPLACEMENTS: Final[Mapping[Capability, Capability]] = MappingProxyType(
     {
         Capability.CONTINUITY_TASKS_CREATE: Capability.TASKS_CREATE,

@@ -46,6 +46,12 @@ INTERACTION_CAPTURE = PACKAGE / "adapters" / "mcp_interaction_capture.py"
 #: coroutines; every store and database call they make runs in a worker thread.
 #: Admitted as one more exact, counted edge.
 FILES_TRANSFER_ADAPTER = PACKAGE / "adapters" / "http" / "files_transfer.py"
+#: Download tickets as MCP resources (files-workspace contract section 17.3):
+#: the resource source's open and its bounded stream; every gate and store call
+#: runs in a worker thread. Admitted as one more exact, counted edge, with the
+#: protocol module whose three `async def` signatures it implements.
+FILES_RESOURCES_ADAPTER = PACKAGE / "adapters" / "http" / "files_resources.py"
+REMOTE_RESOURCES_SEAM = PACKAGE / "adapters" / "remote_resources.py"
 
 #: Every node that makes a module asynchronous. `AsyncFunctionDef` is the
 #: coroutine, and the other three are the statements that can only appear inside
@@ -77,7 +83,15 @@ def test_there_is_async_to_confine() -> None:
         p
         for p in _modules(PACKAGE)
         if not p.is_relative_to(ASYNC_SUBTREE)
-        and p not in {OAUTH_ADAPTER, EVAL_MCP_ADAPTER, INTERACTION_CAPTURE, FILES_TRANSFER_ADAPTER}
+        and p
+        not in {
+            OAUTH_ADAPTER,
+            EVAL_MCP_ADAPTER,
+            INTERACTION_CAPTURE,
+            FILES_TRANSFER_ADAPTER,
+            FILES_RESOURCES_ADAPTER,
+            REMOTE_RESOURCES_SEAM,
+        }
     ],
     ids=lambda p: str(p.name),
 )
@@ -120,9 +134,13 @@ def test_the_async_surface_remains_confined_and_bounded() -> None:
     found: list[str] = []
     for path in _modules(ASYNC_SUBTREE):
         found += _async_nodes(path)
-    assert found.count("AsyncFunctionDef") == 8, found
-    assert found.count("Await") == 11, found
-    assert found.count("AsyncWith") == 3, found
+    # Files-workspace contract section 17.3 adds 7 coroutines to `remote.py`:
+    # the deferred response's send and release (and release's bounded send and
+    # base64 write), and the three resource handlers -- 8 -> 15, 11 -> 24
+    # awaits, 3 -> 4 `async with` (the bounded send's idle timeout).
+    assert found.count("AsyncFunctionDef") == 15, found
+    assert found.count("Await") == 24, found
+    assert found.count("AsyncWith") == 4, found
     assert found.count("AsyncFor") == 0, found
 
 
@@ -156,9 +174,12 @@ def test_the_files_transfer_async_surface_is_exact_and_bounded() -> None:
     offload, the pre-slot authentication, the loop-side body read, the download
     body generator and its bounded send."""
     found = _async_nodes(FILES_TRANSFER_ADAPTER)
-    assert found.count("AsyncFunctionDef") == 10, found
-    assert found.count("Await") == 30, found
-    assert found.count("AsyncWith") == 2, found
+    # Files-workspace contract section 17.6 adds the browser link endpoint: its
+    # 404, link authentication, call, serve, body generator and bounded send --
+    # 10 -> 16 coroutines, 30 -> 48 awaits, 2 -> 3 `async with`.
+    assert found.count("AsyncFunctionDef") == 16, found
+    assert found.count("Await") == 48, found
+    assert found.count("AsyncWith") == 3, found
     assert found.count("AsyncFor") == 0, found
 
 
@@ -207,3 +228,15 @@ def test_a_docstring_that_mentions_await_does_not_fire(tmp_path: Path) -> None:
     planted = tmp_path / "planted.py"
     planted.write_text('"""This module does not await; async def stays at the edge."""\n', "utf-8")
     assert _async_nodes(planted) == []
+
+
+def test_the_files_resources_async_surface_is_exact_and_bounded() -> None:
+    """The resource source's open, its stream, its tracked offload and its close;
+    the seam's three protocol signatures."""
+    found = _async_nodes(FILES_RESOURCES_ADAPTER)
+    assert found.count("AsyncFunctionDef") == 4, found
+    assert found.count("Await") == 5, found
+    assert found.count("AsyncWith") == 0, found
+    assert found.count("AsyncFor") == 0, found
+    seam = _async_nodes(REMOTE_RESOURCES_SEAM)
+    assert seam == ["AsyncFunctionDef"] * 3, seam

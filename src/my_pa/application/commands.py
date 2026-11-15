@@ -18096,14 +18096,13 @@ def _files_workspace(value: object) -> str:
 
 
 def _files_path(value: object, detail: SafeDetail, *, allow_root: bool = False) -> str:
-    """A section 3 path, unchanged, or `invalid_path` naming its field."""
+    """A section 3 path in its canonical form (rule 1's trailing `/` dropped), or `invalid_path`."""
     try:
-        parse_path(value, detail.value, allow_root=allow_root)
+        parsed = parse_path(value, detail.value, allow_root=allow_root)
     except FilesDomainError:
         refusal = InvalidRequestError(SafeDetail.INVALID_PATH, detail)
     else:
-        assert isinstance(value, str)  # noqa: S101 - parse_path refused anything else
-        return value
+        return parsed.text
     raise refusal
 
 
@@ -18163,6 +18162,36 @@ def _files_byte_count(value: object, detail: SafeDetail) -> None:
         raise InvalidRequestError(detail)
 
 
+#: Contract section 17.2: a native file handle's keys and each value's bound.
+#: Only `download_url` and `file_id` are required -- the shape the client
+#: platform's file-param scan demands -- and `file_name`/`mime_type` are
+#: accepted and never used (proof finding F3).
+_FILES_SOURCE_FILE_BOUNDS: Final[Mapping[str, int]] = MappingProxyType(
+    {"download_url": 8192, "file_id": 256, "file_name": 1024, "mime_type": 1024}
+)
+_FILES_SOURCE_FILE_REQUIRED: Final = frozenset({"download_url", "file_id"})
+
+
+def _files_source_file(value: object) -> None:
+    """A section 17.2 handle object, or `invalid_request` on `source_file`.
+
+    Checks the shape only; whether the URL may be fetched is the fetcher's.
+    Never echoes a value: the URL is a bearer credential.
+    """
+    if value is None:
+        return
+    if type(value) is not dict or not value.keys() >= _FILES_SOURCE_FILE_REQUIRED:
+        raise InvalidRequestError(SafeDetail.SOURCE_FILE)
+    for key, item in value.items():
+        bound = _FILES_SOURCE_FILE_BOUNDS.get(key) if type(key) is str else None
+        if bound is None:
+            raise InvalidRequestError(SafeDetail.SOURCE_FILE)
+        if item is None and key not in _FILES_SOURCE_FILE_REQUIRED:
+            continue
+        if type(item) is not str or not 1 <= len(item) <= bound:
+            raise InvalidRequestError(SafeDetail.SOURCE_FILE)
+
+
 def parse_files_history_cursor(value: str | None) -> tuple[str | None, str | None]:
     """A `files.history` cursor: the last version and the last trash item it returned.
 
@@ -18215,7 +18244,7 @@ class ListFiles:
 
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
-        _files_path(self.path, SafeDetail.PATH, allow_root=True)
+        object.__setattr__(self, "path", _files_path(self.path, SafeDetail.PATH, allow_root=True))
         if self.after is not None:
             if not isinstance(self.after, str):
                 raise InvalidRequestError(SafeDetail.AFTER)
@@ -18241,7 +18270,7 @@ class StatFile:
 
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
-        _files_path(self.path, SafeDetail.PATH)
+        object.__setattr__(self, "path", _files_path(self.path, SafeDetail.PATH))
         _files_flag(self.include_sha256, SafeDetail.INCLUDE_SHA256)
 
 
@@ -18263,7 +18292,7 @@ class SearchFiles:
 
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
-        _files_path(self.path, SafeDetail.PATH, allow_root=True)
+        object.__setattr__(self, "path", _files_path(self.path, SafeDetail.PATH, allow_root=True))
         query: object = self.query
         if type(query) is not str or not 1 <= len(query) <= MAX_SEARCH_QUERY_CHARACTERS:
             raise InvalidRequestError(SafeDetail.QUERY)
@@ -18289,7 +18318,7 @@ class PreviewFile:
 
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
-        _files_path(self.path, SafeDetail.PATH)
+        object.__setattr__(self, "path", _files_path(self.path, SafeDetail.PATH))
         _files_byte_count(self.offset, SafeDetail.OFFSET)
         if type(self.max_bytes) is not int or not 1 <= self.max_bytes <= MAX_PREVIEW_BYTES:
             raise InvalidRequestError(SafeDetail.MAX_BYTES)
@@ -18314,7 +18343,7 @@ class GetFileHistory:
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
         if self.path is not None:
-            _files_path(self.path, SafeDetail.PATH)
+            object.__setattr__(self, "path", _files_path(self.path, SafeDetail.PATH))
         if self.after is not None and not isinstance(self.after, str):
             raise InvalidRequestError(SafeDetail.AFTER)
         parse_files_history_cursor(self.after)
@@ -18348,7 +18377,7 @@ class BeginFileDownload:
         if (self.path is None) == (self.version_id is None):
             raise InvalidRequestError(SafeDetail.PATH, SafeDetail.VERSION_ID)
         if self.path is not None:
-            _files_path(self.path, SafeDetail.PATH)
+            object.__setattr__(self, "path", _files_path(self.path, SafeDetail.PATH))
             _files_version(self.expected_version)
         else:
             _files_id(self.version_id, IdKind.FILE_VERSION, SafeDetail.VERSION_ID)
@@ -18374,7 +18403,7 @@ class MakeFileDirectory:
 
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
-        _files_path(self.path, SafeDetail.PATH)
+        object.__setattr__(self, "path", _files_path(self.path, SafeDetail.PATH))
         _idempotency_key(self.idempotency_key)
         _files_flag(self.parents, SafeDetail.PARENTS)
 
@@ -18397,8 +18426,8 @@ class CopyFile:
 
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
-        _files_path(self.path, SafeDetail.PATH)
-        _files_path(self.to_path, SafeDetail.TO_PATH)
+        object.__setattr__(self, "path", _files_path(self.path, SafeDetail.PATH))
+        object.__setattr__(self, "to_path", _files_path(self.to_path, SafeDetail.TO_PATH))
         _idempotency_key(self.idempotency_key)
         _files_version(self.expected_version)
 
@@ -18416,7 +18445,27 @@ class BeginFileUpload:
     capability: ClassVar[Capability] = Capability.FILES_UPLOAD_BEGIN
 
     mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
-        {"ttl_seconds": {"description": f"Ticket lifetime. {_FILES_ROUTE_NOTE}"}}
+        {
+            "ttl_seconds": {"description": f"Ticket lifetime. {_FILES_ROUTE_NOTE}"},
+            # Contract section 17.2. All four properties declared and only two
+            # required: the shape a client's native file param is filled into.
+            "source_file": {
+                "type": "object",
+                "description": (
+                    "Optional; only for hosts that supply file objects for an attached "
+                    "file. When given, the server fetches it and stores it at path in "
+                    "this one call (no ticket). Omit it (the default) to get an upload "
+                    "ticket with a ready transfer recipe."
+                ),
+                "properties": {
+                    "download_url": {"type": "string"},
+                    "file_id": {"type": "string"},
+                    "file_name": {"type": "string"},
+                    "mime_type": {"type": "string"},
+                },
+                "required": ["download_url", "file_id"],
+            },
+        }
     )
 
     workspace_id: str
@@ -18426,10 +18475,12 @@ class BeginFileUpload:
     size: int | None = None
     sha256: str | None = None
     ttl_seconds: int | None = None
+    #: Section 17.2's handle. Kept out of `repr`: its URL is a bearer credential.
+    source_file: dict[str, object] | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
-        _files_path(self.path, SafeDetail.PATH)
+        object.__setattr__(self, "path", _files_path(self.path, SafeDetail.PATH))
         _idempotency_key(self.idempotency_key)
         _files_version(self.expected_version)
         if self.size is not None:
@@ -18437,6 +18488,9 @@ class BeginFileUpload:
         if self.sha256 is not None:
             _files_sha256(self.sha256)
         _files_ttl(self.ttl_seconds)
+        _files_source_file(self.source_file)
+        if self.source_file is not None and self.ttl_seconds is not None:
+            raise InvalidRequestError(SafeDetail.TTL_SECONDS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -18469,7 +18523,7 @@ class RenameFile:
 
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
-        _files_path(self.path, SafeDetail.PATH)
+        object.__setattr__(self, "path", _files_path(self.path, SafeDetail.PATH))
         _files_name(self.new_name)
         _idempotency_key(self.idempotency_key)
         _files_version(self.expected_version)
@@ -18489,8 +18543,8 @@ class MoveFile:
 
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
-        _files_path(self.path, SafeDetail.PATH)
-        _files_path(self.to_path, SafeDetail.TO_PATH)
+        object.__setattr__(self, "path", _files_path(self.path, SafeDetail.PATH))
+        object.__setattr__(self, "to_path", _files_path(self.to_path, SafeDetail.TO_PATH))
         _idempotency_key(self.idempotency_key)
         _files_version(self.expected_version)
 
@@ -18512,7 +18566,7 @@ class TrashFile:
 
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
-        _files_path(self.path, SafeDetail.PATH)
+        object.__setattr__(self, "path", _files_path(self.path, SafeDetail.PATH))
         _idempotency_key(self.idempotency_key)
         _files_version(self.expected_version)
 
@@ -18533,7 +18587,7 @@ class RestoreFile:
         _files_id(self.trash_item_id, IdKind.FILE_TRASH_ITEM, SafeDetail.TRASH_ITEM_ID)
         _idempotency_key(self.idempotency_key)
         if self.to_path is not None:
-            _files_path(self.to_path, SafeDetail.TO_PATH)
+            object.__setattr__(self, "to_path", _files_path(self.to_path, SafeDetail.TO_PATH))
 
 
 @dataclass(frozen=True, slots=True)
@@ -18579,7 +18633,7 @@ class WriteFileText:
 
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
-        _files_path(self.path, SafeDetail.PATH)
+        object.__setattr__(self, "path", _files_path(self.path, SafeDetail.PATH))
         text: object = self.text
         if type(text) is not str:
             raise InvalidRequestError(SafeDetail.TEXT)

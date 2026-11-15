@@ -90,12 +90,16 @@ deploy recipe's arguments; it must pass with the workspace mount present.
 
 ## 4. Cloudflare Tunnel
 
-The byte routes are public only through two exact path rules, already in
-`ops/nas/remote/cloudflared-config.example.yml` (11 hostname rules before the
+The byte routes are public only through exact path rules in
+`ops/nas/remote/cloudflared-config.example.yml` (12 hostname rules before the
 404 catch-all; `validate.py` pins the list):
 
 - `^/files/v1/uploads/[^/]+$`
 - `^/files/v1/downloads/[^/]+$`
+- `^/files/v1/browser-downloads/[^/]+$` (contract §17.6, browser download
+  links; added 2026-11-15 and operator-gated: the live tunnel has only the
+  first two until the operator re-renders and restarts `cloudflared`; until
+  then a browser link answers the catch-all 404)
 
 Keep a copy of the current rendered config, render the new one to a fresh path
 (the renderer refuses to overwrite), move it into place, and restart only
@@ -163,6 +167,52 @@ re-checks the issuing grant, so revocation is immediate.
    Then `files.stat`, `files.trash` and `files.restore` on it, compare the bytes,
    and delete the ticket files. Expect `.my-pa/` to appear in the folder.
 
+4. **Native file handles (contract §17), ChatGPT only.** With the ChatGPT
+   connector granted `files.upload.begin` and `files.download.begin`, and
+   remote writes on: refresh the connector's tool list, attach a small
+   synthetic file and ask it to save it to `_commissioning/handle.bin`; compare
+   `files.stat` with `include_sha256` against the local SHA-256. Then ask for
+   `_commissioning/handle.bin` back and compare the delivered file's SHA-256.
+   Nothing in the remote MCP log may show the attachment's link: no log line
+   names a `download_url` (the server logs none, and the interaction log
+   redacts the key). Settings: `MY_PA_FILES_HANDLE_HOST_SUFFIXES` (default
+   `.blob.core.windows.net,.oaiusercontent.com`; empty refuses every handle
+   `file_handle_unsupported`) and `MY_PA_FILES_HANDLE_FETCH_DEADLINE_SECONDS`
+   (default 25, at most 60). The remote MCP container needs outbound HTTPS to
+   the allowed hosts; no tunnel rule changes (handle fetches are outbound and
+   resource reads ride `/mcp`).
+   If ChatGPT gets `file_handle_refused`, read the remote MCP container's log
+   for the one line `files handle refused cause=<cause> host=<host>` (logger
+   `my_pa.files.handle_fetch`, WARNING). `cause=host_not_allowed` names the
+   host the platform now uses: add a suffix covering it (leading `.`, e.g.
+   `.oaiusercontent.com`) to `MY_PA_FILES_HANDLE_HOST_SUFFIXES`, comma-separated
+   with the existing value, and recreate the service. The line never contains
+   the URL or its query; still treat the log as operator-only.
+
+5. **Abacus ticket recipe (contract §17.5).** With the Abacus connector
+   granted the files names (and `files.upload.finalize`), refresh its tool
+   list and ask it to upload a small synthetic file from its sandbox to
+   `_commissioning/abacus.bin` and to download it back, using the answer's
+   `transfer.usage`; compare SHA-256 both ways. `transfer.url` is absolute only
+   when `MY_PA_REMOTE_MCP_PUBLIC_HOST` is set.
+
+6. **Browser download links (contract §17.6), ChatGPT.** Off by default. Set
+   `MY_PA_FILES_BROWSER_DOWNLOAD_CLIENT_IDS` to the ChatGPT connector's OAuth
+   client id (comma-separated for several) and optionally
+   `MY_PA_FILES_BROWSER_DOWNLOAD_TTL_SECONDS` (default 300, 60..900);
+   `MY_PA_REMOTE_MCP_PUBLIC_HOST` must be set, or the feature stays off and the
+   process logs a warning. After the tunnel rule above is live, ask ChatGPT
+   for `_commissioning/probe.bin`, click the link it shows, compare the
+   SHA-256, and click it again: the second click must be a plain 404. Each
+   completed download writes `<time> INFO my_pa.files.browser_download files
+   browser download completed client=<id> size=<n>` to the remote MCP
+   container's stderr (`docker logs`); the route attaches that one handler
+   itself, because the process configures no logging and would otherwise drop
+   INFO. The WARNING lines (`files handle refused ...`, and the composition
+   warning for client ids without a public host) reach stderr through
+   Python's last-resort handler. The link itself is never logged. Rollback: empty the
+   setting and recreate the service.
+
 **Client exit status 5 ("outcome unknown").** A completing PATCH whose response
 was lost may still have committed the finalize; the ticket is then closed and
 answers 401. The client reports this distinctly from a refusal (3). Check with
@@ -200,6 +250,15 @@ upload; do not assume failure.
 - An Abacus scheduled-run proof using the reference client is unverified (T11).
 - Limits: 10 GiB per upload, 20 GiB free-space reserve, 32 MiB per PATCH, 4
   concurrent byte-route requests per process, ticket TTL 1 h (max 24 h).
+- Native handles (contract §17): ChatGPT uploads by `source_file` and
+  downloads by `resource_link` + `resources/read`; Abacus keeps the ticket
+  routes from its sandbox. Verified only with the synthetic proof (to 50 MiB);
+  larger files, the exact link lifetime (between 1 and 5 minutes) and the
+  publicly reported missing-file-param flake are unverified. A handle ingest
+  must finish inside the 25 s fetch deadline (under the 30 s remote call
+  timeout); a slower file is `file_handle_refused`. The allowed host suffix is
+  a platform-drift risk: if OpenAI moves its file host, handles fail closed
+  until the setting is changed. No `files.fetch_url` exists (trim T15).
 - Audit is the generic `authorize` row per call (principal, capability,
   purpose, allowed/denied, policy version, denial reason). It has no workspace
   id, opaque ids, sizes or handler outcome, and byte-route chunks are not

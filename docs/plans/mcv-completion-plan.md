@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Five hundred and fourteen Python modules under `src/my_pa` and nine hundred and seventy-seven test modules —
+Five hundred and seventeen Python modules under `src/my_pa` and nine hundred and eighty-two test modules —
 
-**Current-tree remeasurement (Files workspace PR3 FIX2, branch `feat/files-workspace-pr3`, 2026-11-14):** the two commands below count 514 source modules and 977 test modules: the WP7 514/976 below plus the one test module `tests/security/test_files_transfer_auth_cap.py`. Previously five hundred and fourteen and nine hundred and seventy-six.
+**Current-tree remeasurement (Files native handles, ADR-019 Amendment 1, branch `feat/files-native-handles`, 2026-11-15):** the two commands below count 517 source modules and 982 test modules: the PR3 FIX2 514/977 below plus the three source modules `src/my_pa/infrastructure/file_workspace/handle_fetch.py`, `src/my_pa/adapters/http/files_resources.py` and `src/my_pa/adapters/remote_resources.py` and the five test modules `tests/unit/test_files_handle_fetch.py`, `tests/unit/test_files_native_handles.py`, `tests/unit/test_files_download_resources.py`, `tests/contract/test_files_native_handles_mcp.py` and `tests/integration/test_files_native_handles_slice.py`. Previously five hundred and fourteen and nine hundred and seventy-seven.
+
+**Historical remeasurement (Files workspace PR3 FIX2, branch `feat/files-workspace-pr3`, 2026-11-14):** the two commands below counted 514 source modules and 977 test modules: the WP7 514/976 below plus the one test module `tests/security/test_files_transfer_auth_cap.py`. Previously five hundred and fourteen and nine hundred and seventy-six.
 
 **Historical remeasurement (Files workspace WP7, branch `feat/files-workspace-pr3`, 2026-11-14):** the two commands below counted 514 source modules and 976 test modules: the WP6b 514/975 below plus the one test module `tests/integration/test_files_workspace_vertical_slice.py`. Previously five hundred and fourteen and nine hundred and seventy-five.
 

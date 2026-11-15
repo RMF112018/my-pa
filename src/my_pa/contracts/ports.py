@@ -13273,6 +13273,34 @@ class FileWorkspaceReader(ABC):
         """Release the descriptor; idempotent."""
 
 
+@dataclass(frozen=True, slots=True)
+class FetchedFileBody:
+    """The body of one fetched native file handle (files-workspace contract section 17).
+
+    `declared_length` is the response's `Content-Length` when it sent one (already
+    checked against the fetch's byte cap); `chunks` streams the body in bounded
+    pieces and raises a section 7 `FilesRefusal` (`too_large`,
+    `file_handle_refused`) the moment the cap or the deadline is passed.
+    """
+
+    declared_length: int | None
+    chunks: Iterator[bytes] = field(repr=False)
+
+
+class FileHandleFetcher(ABC):
+    """Fetch the bytes behind a client-supplied native file handle's `download_url`.
+
+    The URL is a bearer credential of the client platform: an implementation
+    never logs, stores, returns or puts it (or any part of it) in an error. Every
+    refusal is a `FilesRefusal` naming `source_file` with a section 7 token, or
+    `FileWorkspaceUnavailableError` when its own concurrency cap is full.
+    """
+
+    @abstractmethod
+    def open(self, url: str, *, max_bytes: int) -> AbstractContextManager[FetchedFileBody]:
+        """Validate and connect, check the declared length, and yield the streaming body."""
+
+
 class FileWorkspaceStore(ABC):
     """The contained filesystem of one file workspace root (contract sections 2-6, 8).
 

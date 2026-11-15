@@ -85,6 +85,7 @@ from typing import Final, Literal
 import uvicorn
 
 from my_pa.adapters.http import REMOTE_CAPTURE_PATH, create_http_app
+from my_pa.adapters.http.files_resources import WorkspaceDownloadResources
 from my_pa.adapters.http.files_transfer import build_file_transfer_routes
 from my_pa.adapters.http.oauth import build_origin_oauth_routes
 from my_pa.adapters.mcp import RemoteAccessContext, create_remote_mcp_app, serve_stdio
@@ -496,8 +497,19 @@ def _mcp_remote(args: argparse.Namespace) -> int:
             *(
                 ()
                 if runtime.file_transfer is None
-                else build_file_transfer_routes(runtime.file_transfer)
+                else build_file_transfer_routes(
+                    runtime.file_transfer,
+                    # Contract section 17.6: the browser link route, only when on.
+                    browser_downloads=bool(runtime.file_transfer.browser_client_ids),
+                )
             ),
+        ),
+        # Contract section 17.3: download tickets readable as MCP resources,
+        # over the same gate, only when the byte routes are composed.
+        resources=(
+            None
+            if runtime.file_transfer is None
+            else WorkspaceDownloadResources(runtime.file_transfer)
         ),
     )
     served, close_interaction_log = with_interaction_log(settings, app)

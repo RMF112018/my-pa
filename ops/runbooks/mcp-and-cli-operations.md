@@ -468,6 +468,35 @@ operations in [`files-workspace.md`](files-workspace.md)):
    completing request lost its answer and the ticket is now closed (401): check
    `files.stat` before beginning again.
 
+**Clients with native file handles (ChatGPT; ADR-019 Amendment 1, contract
+§17).** Which path a client uses is fixed by what it can do, not by its name:
+
+| Client | Upload | Download |
+|---|---|---|
+| ChatGPT (also when served the compact façade: `files.upload.begin`, `files.download.begin`, `files.list` and `files.search` are top-level tools beside `my_pa.*`, contract §17.4; real-ChatGPT behaviour of these descriptors awaits a re-proof) | Attach the file and call `files.upload.begin` with `path`; the client fills the top-level `source_file` (declared by `_meta["openai/fileParams"]`). The server fetches it and stores it in that one call: no ticket, no route. | Call `files.download.begin`. When the client is in `MY_PA_FILES_BROWSER_DOWNLOAD_CLIENT_IDS` the result carries `browser_download.url`, a single-use link (5 min by default) to show the user as a clickable link -- the Codex runtime does not read the `resource_link` (re-proof 2026-11-15, contract §17.6). Otherwise the `resource_link`. |
+| Abacus (sandbox HTTP; no native handle) | Call `files.upload.begin` without `source_file` (top-level when served the compact façade, contract §17.4/§17.5). The answer's `transfer` names the method, URL and headers and its `usage` is a ready `curl` command reading the token from `MY_PA_FILES_TICKET` (set it to `upload_token`); the agent runs it in its sandbox, then checks `files.stat` with `include_sha256`. | Call `files.download.begin`; run `transfer.usage` with `MY_PA_FILES_TICKET` set to `download_token` (resume with `Range`). The `resource_link` is not delivered as a file in Abacus. |
+| CLI / browser | The ticket flow above, or the reference client. | The ticket flow above. |
+
+Prompt guidance for a ChatGPT connector: "To save an attached file to the
+workspace, call `files.upload.begin` with the destination `path` and the file
+attached; to give the user a workspace file, call `files.download.begin` and
+return the file it links." A replace still needs `expected_version`. A
+refusal `file_handle_refused` means the link could not be used (expired after
+about a minute, or not an allowed host): attach the file again.
+`file_handle_unsupported` means this server composes no handle fetcher. A file
+that cannot be fetched within the 25 s deadline is refused; there is no
+`files.fetch_url` and no base64 path for files.
+
+A façade call whose `capability` is wrapped in quotes or backticks (`"files.write_text"`) is refused `unsupported` with the safe detail `capability_name_has_quotes` when the unquoted name is one the caller may use through that tool: send the bare name (contract §17.4).
+
+Prompt guidance for an Abacus connector: "To save a file from your sandbox to
+the workspace, call `files.upload.begin` with the destination `path` (never
+`source_file`), then run the `transfer.usage` command in your sandbox with
+`MY_PA_FILES_TICKET` set to `upload_token`; to fetch a workspace file, call
+`files.download.begin` and run its `transfer.usage` with `download_token`."
+Abacus against the deployed routes is unverified until an operator-authorized
+re-proof, and whether an Abacus scheduled task has a sandbox VM is unknown.
+
 ## Meeting records (WP-MTG-01 through WP-MTG-06)
 
 Meeting records are product-owned application data: a Meeting is written only

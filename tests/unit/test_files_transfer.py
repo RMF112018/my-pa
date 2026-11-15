@@ -70,6 +70,9 @@ def test_section_8_limits_and_section_7_tokens() -> None:
         "digest_mismatch",
         "offset_mismatch",
         "ticket_invalid",
+        # Section 17.2 (ADR-019 Amendment 1): the native file handle tokens.
+        "file_handle_unsupported",
+        "file_handle_refused",
     }
 
 

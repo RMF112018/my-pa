@@ -25,6 +25,7 @@ from my_pa.domain.files.vocabulary import (
 __all__ = [
     "ROOT",
     "WorkspacePath",
+    "canonical_path",
     "is_reserved_name",
     "parse_path",
     "validate_name",
@@ -127,6 +128,23 @@ class WorkspacePath:
 ROOT: Final = WorkspacePath(())
 
 
+def canonical_path(value: object) -> object:
+    """Rule 1's one tolerated trailing `/`, dropped; anything else returned unchanged.
+
+    Only a single `/` after a non-empty, non-`/` character: `a/` is `a`, while
+    `/`, `a//` and `` keep their shape so the component rules refuse them as
+    before. Never validates; `parse_path` does.
+    """
+    if (
+        type(value) is str
+        and len(value) > 1
+        and value[-1] == _SEPARATOR
+        and value[-2] != _SEPARATOR
+    ):
+        return value[:-1]
+    return value
+
+
 def parse_path(value: object, field: str = "path", *, allow_root: bool = False) -> WorkspacePath:
     """Validate `value` against section 3 and split it.
 
@@ -135,6 +153,7 @@ def parse_path(value: object, field: str = "path", *, allow_root: bool = False) 
     parent resolution); elsewhere the empty path is refused like any other
     empty component.
     """
+    value = canonical_path(value)
     if type(value) is not str:
         raise _refuse(field)
     if value == "":

@@ -1,6 +1,6 @@
 # Files workspace contract (`files.*`)
 
-- **Status:** Frozen by WP1 under [ADR-019](../decisions/ADR-019-nas-mcp-file-workspace.md) (Accepted by operator directive 2026-11-13). Later work packages implement this text; a change to a name, rule or limit here is a contract change made in this file first. PR1 (WP1–3) and PR2 (WP4–5) are merged on `main`; PR3 (WP6–7, `feat/files-workspace-pr3`) delivers the byte routes, the reference client and the closure recorded in §10, §11 and T14. Deployment stays operator-gated (§16).
+- **Status:** Frozen by WP1 under [ADR-019](../decisions/ADR-019-nas-mcp-file-workspace.md) (Accepted by operator directive 2026-11-13). Later work packages implement this text; a change to a name, rule or limit here is a contract change made in this file first. PR1 (WP1–3) and PR2 (WP4–5) are merged on `main`; PR3 (WP6–7, `feat/files-workspace-pr3`) delivers the byte routes, the reference client and the closure recorded in §10, §11 and T14. ADR-019 Amendment 1 (2026-11-15) adds native file handles and MCP resource delivery (§17, `feat/files-native-handles`); it changes §6, §7, §9, §11 and §15 here first. Deployment stays operator-gated (§16).
 - **Base:** `main@57d5b1399d59d7afe9fe08063d9bb842c9062dd2`, branch `feat/files-workspace`.
 - **Not authorized here:** deployment, NAS mounts or ACLs, tunnel changes, grants, production migration.
 
@@ -68,8 +68,8 @@ A ticket token is `gfwtk_` followed by 64 lowercase hex characters (32 CSPRNG by
 
 A path is validated as a whole, then split on `/` and validated per component. Every refusal is `invalid_path`.
 
-1. It must be relative. A leading `/` is refused, and so is a trailing `/`. It is a `str` encoded as UTF-8 and must be well-formed (no lone surrogates).
-2. No component may be empty. That covers `//`, a leading or trailing `/`, and an empty path where an entry is required. No component may be `.` or `..`.
+1. It must be relative. A leading `/` is refused. **Exactly one trailing `/` after a non-empty path is accepted and dropped** (operator decision 2026-11-15, after real ChatGPT sent `reproof/` to `files.list`): `reproof/` is `reproof`, for a directory or a file alike (no `ENOTDIR` emulation). The dropped form is the canonical path everywhere -- in the command, every result, receipt and intent digest -- so `x` and `x/` replay identically. `/` alone, `//`, `a//`, `a/./`, `a/../` and a reserved name with a trailing `/` (`.my-pa/`) are refused as before. It is a `str` encoded as UTF-8 and must be well-formed (no lone surrogates).
+2. No component may be empty (after rule 1's single trailing-`/` trim). That covers `//`, a leading `/`, a doubled trailing `//`, and an empty path where an entry is required. No component may be `.` or `..`.
 3. NUL is refused. So are the other C0 controls U+0001–U+001F and U+007F. **The backslash `\` is refused**, because SMB clients treat it as a separator, so a name containing it would mean different files to different writers.
 4. Each component is at most 255 bytes in UTF-8. The whole path is at most 4096 bytes.
 5. **Reserved names** are refused as any component, at any depth, compared with ASCII case folding: `.my-pa` (the control directory), `@eaDir`, `#recycle`, `#snapshot`. Folding defends against case-insensitive SMB views of a case-sensitive volume. Listing and search silently omit entries with these names. `.DS_Store` and other dotfiles are ordinary entries.
@@ -106,10 +106,10 @@ Every call takes `workspace_id`. Writes also take `idempotency_key`. Optional ar
 | `files.search` | `path` (subtree), `query` (1–255 chars, case-insensitive name substring), `page_size?` (≤ 200) | `entries[]`, `truncated` (walk cap or page reached); no continuation |
 | `files.preview` | `path`, `offset?`, `max_bytes?` (≤ 262144), `expected_version?` | `text`, `next_offset` (null at EOF), `version`; non-UTF-8 content gives `binary: true` and no text; the cut never splits a character, so a window may exceed `max_bytes` only to return a single character wider than the limit (≤ 4 bytes) |
 | `files.history` | `path?`, `after?`, `page_size?` (≤ 200) | product-recorded preimage versions and trash items for the path (or the workspace), newest first; external edits have no history |
-| `files.download.begin` | `path` + `expected_version?`, or `version_id`; `include_sha256?`; `ttl_seconds?` | `download_id`, `download_token`, `route`, `size`, `version`, `sha256?`, `expires_at` |
+| `files.download.begin` | `path` + `expected_version?`, or `version_id`; `include_sha256?`; `ttl_seconds?` | `download_id`, `download_token`, `route`, `transfer` (§17.5), `browser_download?` (§17.6), `resource_uri`, `name`, `size`, `version`, `sha256?`, `expires_at` (§17.3) |
 | `files.mkdir` | `path`, `parents?` (default false) | entry |
 | `files.copy` | `path`, `to_path`, `expected_version?` | entry at `to_path` |
-| `files.upload.begin` | `path`, `expected_version?` (required to replace), `size?`, `sha256?`, `ttl_seconds?` | `upload_id`, `upload_token`, `route`, `offset` (0), `chunk_max_bytes`, `expires_at` |
+| `files.upload.begin` | `path`, `expected_version?` (required to replace), `size?`, `sha256?`, `ttl_seconds?`, `source_file?` (§17.2) | `upload_id`, `upload_token`, `route`, `transfer` (§17.5), `offset` (0), `chunk_max_bytes`, `expires_at`; with `source_file`: `upload_id`, `entry`, `preimage_version_id?`, `size`, `sha256` |
 | `files.upload.abort` | `upload_id` | `aborted: true` |
 | `files.rename` | `path`, `new_name` (one component), `expected_version?` | entry |
 | `files.move` | `path`, `to_path`, `expected_version?` | entry |
@@ -139,6 +139,8 @@ Files refusals use the existing public `ErrorCode`s. The specific reason is a ne
 | `digest_mismatch` | `conflict` | 409 | finalize length or SHA-256 differs from the staged bytes or declared values |
 | `offset_mismatch` | `conflict` | 409 | `Upload-Offset` is not the current staged offset (response carries the current `Upload-Offset`) |
 | `ticket_invalid` | `denied` | 401 | token unknown, malformed, expired, used, aborted, or bound to another route |
+| `file_handle_unsupported` | `unsupported` | — | a `source_file` was given and this process composes no handle fetcher (§17.2) |
+| `file_handle_refused` | `invalid_request` | — | the `source_file` URL was refused or could not be fetched: scheme, host, address, redirect, status, TLS, network or deadline (§17.2) |
 
 The set is minimal. Expired and invalid tickets share one token because the client's remedy is the same (begin a new ticket), and distinguishing them would only give a probing oracle. Grant revocation reuses the existing `denied` path (HTTP 403). Idempotency misuse reuses `conflict` on `idempotency_key`. A Range the file cannot satisfy is HTTP 416 with no reason token.
 
@@ -168,6 +170,10 @@ Zero-byte files are valid everywhere. There is no MIME-type or extension allowli
 | `MY_PA_FILES_WORKSPACE_ID` | The alias, default `mcp`; a lower-case token. |
 | `MY_PA_FILES_MAX_UPLOAD_BYTES` | Default 10737418240. |
 | `MY_PA_FILES_DISK_RESERVE_BYTES` | Default 21474836480. |
+| `MY_PA_FILES_HANDLE_HOST_SUFFIXES` | Comma-separated host suffixes a native handle's `download_url` may name, each with a leading `.`; default `.blob.core.windows.net,.oaiusercontent.com` (the Azure blob host seen in the proof, `oaisdmntprcentralus.blob.core.windows.net`, and the host real ChatGPT used at the 2026-11-15 re-proof, `sdmntprcentralus.oaiusercontent.com`). Empty composes no handle fetcher (`file_handle_unsupported`). §17.2. |
+| `MY_PA_FILES_BROWSER_DOWNLOAD_CLIENT_IDS` | Comma-separated OAuth client ids that get a browser download link (§17.6). **Empty (the default) turns the feature off.** |
+| `MY_PA_FILES_BROWSER_DOWNLOAD_TTL_SECONDS` | A browser link's lifetime; default 300, 60..900. §17.6. |
+| `MY_PA_FILES_HANDLE_FETCH_DEADLINE_SECONDS` | The whole-fetch deadline of one handle; default 25, at most 60. §17.2. |
 
 At composition the store refuses to start unless the root exists, is a directory, and is not a symlink. It also refuses unless the root equals, contains and lies inside none of the configured source, managed-document or report-content roots. The production mount is that one NAS subtree, never `/volume1`, `/volume1/homes` or a whole home; `ops/nas/remote/live-gate.py` requires the remote MCP container's workspace bind source to be exactly `/volume1/homes/bfetting/MCP` (`WORKSPACE_SOURCE`, pinned to the overlay's `source:`).
 
@@ -175,7 +181,7 @@ The plane is not composed in the restricted MCP database-profile composition: wh
 
 ## 10. Byte routes (remote MCP process only)
 
-The routes are added through `create_remote_mcp_app(..., additional_routes=...)`. They are not mounted on the private HTTP gateway, and generic `/v1/{capability}` is never used for bytes. The public tunnel admits exactly `^/files/v1/uploads/[^/]+$` and `^/files/v1/downloads/[^/]+$`.
+The routes are added through `create_remote_mcp_app(..., additional_routes=...)`. They are not mounted on the private HTTP gateway, and generic `/v1/{capability}` is never used for bytes. The public tunnel admits exactly `^/files/v1/uploads/[^/]+$` and `^/files/v1/downloads/[^/]+$`, and -- only once the operator adds the rule for §17.6 -- `^/files/v1/browser-downloads/[^/]+$`.
 
 - **Auth.** `Authorization: Bearer gfwtk_…` is checked against the ticket digest before any body byte is read, and before the request takes a byte-route slot or waits on an upload's lock. Every request also re-checks that the ticket's client still holds an active grant for the capability that issued it (`files.upload.begin`, `files.download.begin`), so revocation takes effect immediately. Query strings are refused (400). Path ids must match the ticket.
 - **`HEAD /files/v1/uploads/{id}`** returns 204 with `Upload-Offset: <n>`, `Upload-Length` (if declared) and `Cache-Control: no-store`.
@@ -220,7 +226,7 @@ Each `files.*` call is audited once, by `authorize` (`src/my_pa/application/auth
 - Byte-route HEAD, PATCH chunks and GET requests are not audited. A completing PATCH runs `files.upload.finalize` through `invoke` and is audited as `files.upload.finalize`, exactly as the MCP tool is.
 - It never records file bodies, `write_text` text, preview text, tokens, paths or host paths; `AuditEvent` has no field that could hold them.
 
-The MCP interaction log omits the `text` argument of `files.write_text` and the `text` result of `files.preview`, in addition to its existing `*token*` redaction. The byte routes are outside the `/mcp` interaction log: it wraps `/mcp` only.
+The MCP interaction log omits the `text` argument of `files.write_text` and the `text` result of `files.preview`, in addition to its existing `*token*` redaction, and redacts every `download_url` value whole (a native handle's bearer URL, §17.2). A handle ingest is audited as the one `files.upload.begin` row; the URL, `file_id`, file name and MIME type are recorded nowhere. A `resources/read` of a download resource is, like a byte-route GET, not audited. The byte routes are outside the `/mcp` interaction log: it wraps `/mcp` only.
 
 Bounded by `test_the_audit_records_the_decision_and_nothing_about_the_file` and the audit assertions in `tests/integration/test_files_workspace_vertical_slice.py`.
 
@@ -262,6 +268,9 @@ Bounded by `test_the_audit_records_the_decision_and_nothing_about_the_file` and 
 - **T12:** any new process, service, queue or store technology.
 - **T13:** `write_text` bound set below 1 MiB to fit the transport request bound under worst-case escaping (120 KiB; §8).
 - **T14:** a richer files audit (workspace id, opaque ids, byte sizes, the handler's outcome) is deferred. The audit is the generic `authorize` row (§11).
+- **T15:** `files.fetch_url`, a server-side fetch of an arbitrary client-supplied URL, is not built (ADR-019 Amendment 1). Its fallback condition is unmet: the Abacus sandbox reaches the ticket routes over HTTP. Only a native handle's `download_url`, under §17.2's controls, is ever fetched.
+- **T16:** embedded base64 blobs in tool results are not used for files: at 5 MiB ChatGPT put the base64 into model context and delivered no file. Outbound bytes leave as a ticket route or a `resources/read` stream (§17.3).
+- **T17:** a handle ingest is one call bounded by the remote MCP call timeout (30 s) and the fetch deadline (default 25 s); there is no background or resumable handle fetch. A file that cannot be fetched inside the deadline is `file_handle_refused`; the client uses the ticket route where its sandbox can.
 
 ## 16. Operator residuals
 
@@ -271,3 +280,80 @@ Bounded by `test_the_audit_records_the_decision_and_nothing_about_the_file` and 
 - Production migration and the `files.*` grants per client (`file_workspace_read`, and `file_workspace_authoring` with write).
 - Proof of a scheduled Abacus run using the reference client.
 - Backup and retention policy for the subtree, including `.my-pa/versions` and `.my-pa/trash`.
+
+## 17. Native file handles and MCP resource delivery (ADR-019 Amendment 1)
+
+The seventeen names are unchanged. A client that sends no `source_file` and reads no resource is served exactly as §§1-16 describe, so there is still no code path that branches on client identity: the handle field and the resource link are on the one contract every client sees, and only a client that can use them does.
+
+### 17.1 Client compatibility (synthetic proof, 2026-11-15)
+
+| Capability | ChatGPT (`openai-mcp/1.0.0`) | Abacus (`mcp 0.1.0`) |
+|---|---|---|
+| Inbound native handle (`openai/fileParams`) | Yes: 1 KiB, 5 MiB, 50 MiB, two files in one call, SHA-256 exact | No: the attachment is only a sandbox path; no handle is passed |
+| Inbound through the ticket routes (sandbox HTTP) | No: the sandbox cannot resolve external hosts | Yes: 1 KiB and 5 MiB, SHA-256 exact |
+| Outbound MCP `resource_link` read through `resources/read` | Yes: 1 KiB, 5 MiB, 50 MiB delivered as files, SHA-256 exact | Not delivered as a file (the link block only) |
+| Outbound embedded base64 blob | 1 KiB attached; 5 MiB landed in model context with no file (unusable) | Model-mediated only |
+| Outbound https `resource_link` | Not delivered | Link visible only |
+| Outbound through the ticket routes (sandbox HTTP) | No (DNS) | Yes: 5 MiB SHA-256 exact |
+| Scheduled / unattended runs | No user attachment exists, so no inbound handle; list, search, read, `write_text` and organize work on files already in the workspace | Same |
+
+Remaining unknowns: sizes beyond 50 MiB either way, the exact link lifetime (between 1 and 5 minutes), the publicly reported ~10% missing-file-param rate (0 of 5 observed), and Abacus tool lists cached until refreshed.
+
+### 17.2 Inbound: `files.upload.begin` with `source_file`
+
+- **Shape.** `source_file` is an object with exactly the properties `download_url` (string, required), `file_id` (string, required), `file_name` (string, optional) and `mime_type` (string, optional); any other key is `invalid_request` on `source_file`. `download_url` is at most 8,192 characters, `file_id` at most 256, `file_name` and `mime_type` at most 1,024. The canonical schema carries it under `payload`; the remote MCP schema publishes it as a top-level argument and declares `_meta["openai/fileParams"] = ["source_file"]` on the tool, and the remote boundary moves a top-level `source_file` under `payload` before `normalize` (one given in both places is `invalid_request`). `ttl_seconds` with `source_file` is `invalid_request` on `ttl_seconds` (no ticket outlives the call).
+- **Untrusted.** `file_name` and `mime_type` are never used: the workspace path is the call's `path`, and there is no MIME handling (§8). `file_id` is not recorded. The handle is never authority: the write runs under the authenticated client's grants like any `files.upload.begin` (the write grant, and remote writes enabled).
+- **Flow.** (1) The target is checked exactly as for a ticket (`exists` without `expected_version`, `version_conflict`, `not_found`, `unsupported_entry`) before any fetch. (2) The URL is fetched (below) and streamed into a fresh staging file under `.my-pa/staging/`; the store re-checks the disk reserve per chunk (`quota`) and the cap (`too_large`), and any failure discards the staging. (3) Then, under the workspace lock and the idempotency receipt of §5, an upload row is recorded and closed at once (its token is never issued), the staged length and SHA-256 are verified against the fetched values and any declared `size`/`sha256` (`digest_mismatch`), and the bytes are published by the same finalize rules: create, or replace at `expected_version` with the preimage preserved. The answer is `upload_id`, `entry`, `preimage_version_id`, `size` and `sha256`; nothing carries the URL. The intent digest binds `path`, `expected_version`, `size`, `sha256` and the handle's `file_id` digest, never the URL.
+- **Fetch controls (proof finding F1, F2).** https only; no userinfo; port 443; the host must be a DNS name (not an IP literal) ending in an allowed suffix (`MY_PA_FILES_HANDLE_HOST_SUFFIXES`, with a label before it); the name is resolved once and every address must be public (not loopback, private, link-local, shared, reserved, multicast or unspecified, including IPv4-mapped, 6to4 and NAT64 forms); the connection is pinned to the first address, with TLS verified against the host name; `GET` with no credential, cookie or encoding; any status but 200 (a redirect included) is refused; a `Content-Encoding` other than identity is refused; a `Content-Length` over `MY_PA_FILES_MAX_UPLOAD_BYTES` is `too_large` before a body byte is read and one over the free space less the reserve is `quota`; the body is read in pieces of at most 1 MiB under a per-read idle bound and the whole-fetch deadline, and is `too_large` the moment it passes the cap; a body shorter or longer than its `Content-Length` is refused. At most 2 handle fetches run per process; another is `unavailable`. Every other failure is the one `file_handle_refused`.
+- **The URL is a bearer credential (F1).** It is never logged, audited, persisted, put in an exception or returned. Its refusals carry only the field name and a reason token and are raised without a cause; the interaction log redacts `download_url`.
+- **Operator diagnostic.** Every refused handle fetch writes exactly one server-log line (logger `my_pa.files.handle_fetch`, level WARNING): `files handle refused cause=<cause> host=<host>`. `cause` is an internal closed token (`host_not_allowed`, `not_https_or_fragment`, `ip_literal`, `port`, `url_shape`, `url_characters`, `url_type_or_length`, `url_unparsable`, `no_host`, `host_shape`, `host_length`, `host_labels`, `resolve_failed`, `non_public_address`, `deadline`, `deadline_or_closed`, `http_status_<n>`, `content_encoding`, `transfer_encoding`, `length_framing`, `connect_tls_or_http_error`, `read_error`, `short_body`, `long_body`, `declared_too_large`, `stream_too_large`); `host` is the URL's lowercased ASCII hostname (at most 100 characters) or `-`. Nothing else is logged: no scheme, userinfo, port, path, query, `file_id` or URL. The line is on the server log only -- never in the tool result (still the one `file_handle_refused`), the audit, a row or the interaction log. It is how an operator learns which host to add to `MY_PA_FILES_HANDLE_HOST_SUFFIXES`; the re-proof's refusal was `cause=host_not_allowed host=sdmntprcentralus.oaiusercontent.com`, which is why `.oaiusercontent.com` is now in the default. A suffix matches only at a label boundary: `.oaiusercontent.com` admits `x.oaiusercontent.com` and refuses `oaiusercontent.com`, `evil-oaiusercontent.com` and `oaiusercontent.com.evil.net`.
+- **Missing handle.** A call without `source_file` is an ordinary ticket begin. A `source_file` without `download_url` or `file_id`, or of the wrong shape, is `invalid_request` on `source_file`, and nothing is staged.
+
+### 17.3 Outbound: `files.download.begin` and `resources/read`
+
+- **Result.** `files.download.begin` also answers `name` (the final component of the path the ticket serves) and `resource_uri`, `mcp-files://downloads/<download_id>`. On the remote MCP surface a successful call's result carries, after the envelope text block, a `resource_link` content block `{uri: resource_uri, name, mimeType: "application/octet-stream", size}`. The ticket token and route are unchanged, so a sandbox-HTTP client (Abacus) downloads as before.
+- **Read.** The remote MCP server advertises resources: `resources/list` is empty and `resources/templates/list` names `mcp-files://downloads/{download_id}`. `resources/read` of a download URI is an authenticated `/mcp` request and needs no ticket token: the ticket must be a download ticket of this workspace owned by the request's Principal and issued to the same authenticated OAuth client, usable now (not expired), and the client's standing is re-checked exactly as the byte route's (remote access on, client enabled, an active grant for `files.download.begin` under `file_workspace_read`). The file is opened at the ticket's bound version (`external_change_detected` otherwise). A refusal is a JSON-RPC error whose message is the section 7 reason token (`ticket_invalid` covers unknown, expired and another client's ticket alike) and names no path.
+- **Streaming.** The answer is one `BlobResourceContents` whose base64 is streamed from the open file in 768 KiB pieces, with an exact `Content-Length`, never buffered whole. The stream runs after the `/mcp` call slot and its timeout are released, under its own per-process cap (4, as the byte routes), the byte route's idle bound (30 s per send), deadline (600 s) and re-check (ticket and grants every 5 s, version before every piece). A failure after the headers left cuts the stream short of `Content-Length`; the client sees an incomplete response and reads again.
+- **Not audited**, like a byte-route GET (§11).
+
+
+### 17.4 Top-level primary file tools for compact-façade clients
+
+A client served the compact façade (`my_pa.describe` / `my_pa.read` / `my_pa.write`) is **also** offered four primary file names as top-level MCP tools, under their canonical names verbatim: `files.upload.begin`, `files.download.begin`, `files.list` and `files.search` (operator ruling 2026-11-15; `FILES_COMPACT_TOP_LEVEL_NAMES` in `domain/identity/chatllm_capability_policy.py`). A native file param is filled only at the top level of the tool a client calls, which a façade wrapper cannot offer, so `files.upload.begin` carries its remote schema (top-level `source_file`) and `_meta["openai/fileParams"] = ["source_file"]` there.
+
+- **An additional route, not a new capability.** No name is added. A top-level call takes the canonical path -- `compose_remote_arguments` (the server-stamped fresh idempotency key, the `source_file` lift), `normalize`, one `invoke` -- under the same grants, policy, audit and handler as the façade route. All 17 names stay reachable through `my_pa.describe/read/write` exactly as before, and the façade schemas are unchanged.
+- **Listed only when callable.** A name is listed exactly when it is in the request's eligible canonical set: the plane composed (`FILES_WORKSPACE`), the client's grant for it, and remote writes enabled for `files.upload.begin`. A compact call to any other canonical name, or to one outside that set, is refused `unsupported` before `invoke`.
+- **Outbound.** `files.download.begin` answers its `resource_link` whether called top-level or through `my_pa.read`.
+- **Quoted capability names (operator decision 2026-11-15).** When the façade's `capability` argument is not a known capability but becomes exactly one after stripping ASCII whitespace and one surrounding pair of `"`, `'`, `` ` ``, `“ ”` or `‘ ’`, the call is still not executed and still refused `unsupported` -- but with the closed safe detail `capability_name_has_quotes`, and only when that canonical name is one this request is eligible for through *this* façade tool (granted, composed, and of the tool's kind: read through `my_pa.read`, write through `my_pa.write`). Otherwise the answer is the unchanged bare `unsupported`, so no ungranted or uncomposed name is confirmed. The canonical name is not echoed: `allowed_values` is reserved to `invalid_request`, and `safe_details` holds only closed tokens. Evidence: an Abacus scheduled run sent `"files.write_text"` (with the quotes) five times against a bare `unsupported`. The rule applies to every capability, not only `files.*`.
+- **Unverified against real ChatGPT.** The synthetic proof exercised a top-level tool whose file field was *required*; these four exact descriptors (an optional `source_file` on `files.upload.begin`) need a re-proof against ChatGPT before they are relied on, which the operator must authorize.
+
+### 17.5 Agent-usable ticket transfers (sandbox-HTTP clients: Abacus)
+
+Abacus has no native file handle (an attachment is only a path in its sandbox, and it refuses the file-object param), but its sandbox makes outbound HTTP calls: the proof moved 5 MiB byte-exact both ways through one-time routes, the agent handling the URL and token itself. Its parity with ChatGPT is therefore the **same capability surface** -- the same 17 names, and the same four top-level tools of §17.4 when it is served the compact façade -- plus a ticket answer an agent can act on with no manual step. There is still no `files.fetch_url` (T15) and no base64 path (T16).
+
+- **`source_file` is optional and omitted by default.** Its description says it is only for hosts that supply file objects; a client that cannot supply one omits it (or sends `null`) and gets the ticket answer. The `openai/fileParams` declaration does not make it required.
+- **`transfer`.** A ticket answer of `files.upload.begin` (without `source_file`) and of `files.download.begin` carries an additive object `transfer` with:
+  - `method` -- `PATCH` (upload) or `GET` (download);
+  - `url` -- the `route` joined to `https://<MY_PA_REMOTE_MCP_PUBLIC_HOST>` when that setting is set, else the relative `route`;
+  - `auth_header_name` -- `Authorization`, whose value is `Bearer ` followed by the answer's `upload_token` / `download_token`;
+  - `headers` -- the request headers besides authorization: for an upload `Upload-Offset` and `Upload-Complete` with `<sha256>` and `<length>` placeholders;
+  - `usage` -- a short, deterministic text: a ready `curl` command for a single-request transfer that reads the token from the environment variable `MY_PA_FILES_TICKET` (the reference client's), the rule for resuming (upload: `HEAD` for `Upload-Offset`, then `PATCH` pieces of at most `chunk_max_bytes` with the last carrying `Upload-Complete`; download: `Range: bytes=<n>-`), and the follow-up `files.stat` with `include_sha256` to verify.
+- **No secret in `transfer`.** It never contains a token: the token stays only in `upload_token` / `download_token`, shown once (§1.4). `transfer` is kept in an idempotency receipt like any non-token field.
+- **The recipe is the route's real semantics** (§10): a completing `PATCH` (`Upload-Offset: 0`, `Upload-Complete: sha256=<hex>, length=<n>`, the whole body, at most `chunk_max_bytes`) finalizes through `files.upload.finalize` and so needs that grant; a download is `GET` with an optional single `Range`.
+- **Unverified against the real deployed routes for Abacus** until a re-proof the operator authorizes; whether an Abacus *scheduled* task has a sandbox VM at all is unknown (§17.1, T11).
+
+### 17.6 Browser download links (ChatGPT-class outbound; operator-authorized exception)
+
+**Why.** At the 2026-11-15 re-proof the real ChatGPT runtime (`openai-mcp (Codex)`, protocol 2026-07-28) issued no `resources/read` for a returned `resource_link` (0 in 4 tests), while a human clicking an https link shown in the chat downloaded the file. The ticket route (§10) needs an `Authorization` header and refuses a query string, so it is not clickable. The operator authorized (2026-11-15) one bounded exception to the "no bearer in a URL" posture of §1.4 and §10: a single-use browser link.
+
+- **Off by default; per client.** Only an OAuth client listed in `MY_PA_FILES_BROWSER_DOWNLOAD_CLIENT_IDS` gets one, and only when `MY_PA_REMOTE_MCP_PUBLIC_HOST` is set (with no public host the feature composes off and the process logs one operator warning at start). A local or unlisted caller's answer is unchanged.
+- **Result.** `files.download.begin` then also answers `browser_download`: `{url, expires_at, single_use: true, instructions}`, where `instructions` is the static text "Show this link to the user as a clickable link. Do not fetch it yourself." `url` is `https://<MY_PA_REMOTE_MCP_PUBLIC_HOST>/files/v1/browser-downloads/<download_id>.<token>`. `resource_uri`, the `resource_link` and `transfer` are unchanged.
+- **Token.** `gfwbd_` followed by 64 lowercase hex (32 CSPRNG bytes), distinct from the `gfwtk_` ticket token; only its SHA-256 digest is stored. It is a second download ticket row (its own `fwdnl_` id) in `knowledge.file_workspace_transfers` -- no migration -- bound to the Principal, the OAuth client (client reference), the workspace, the path or preserved version, and the version token observed at begin; TTL `MY_PA_FILES_BROWSER_DOWNLOAD_TTL_SECONDS` (default 300 s, at most 900 s). The URL segment carries the row id beside the token so the row is found by primary key and the digest compared in constant time (as for tickets), never by a digest lookup.
+- **Single use.** A GET that sends the whole body settles the row (`expired`); a HEAD never does, and neither does an interrupted or failed GET. One GET per link at a time per process; across processes two GETs started together may both complete (documented, not claimed closed).
+- **Route.** `GET|HEAD /files/v1/browser-downloads/{download_id}.{token}`, remote MCP process only, sharing the byte routes' slot cap and pre-slot authentication cap. **Every refusal is one undistinguished `404` with an empty body**: an unknown, malformed, expired or consumed link, a query string, any other method, the feature off, the client no longer allowlisted, disabled or revoked, the `files.download.begin` grant gone, the file's version changed, the entry gone, or no free slot. The same checks are repeated every 5 s while streaming, and the version before every piece; a change after the headers left stops the stream short.
+- **Response.** `200` (no `Range`), `Content-Type: application/octet-stream` always, `Content-Disposition: attachment; filename="<ascii>"; filename*=UTF-8''<percent-encoded>` (the final path component with path separators, control characters, quotes, `;` and `%` removed from both forms, non-ASCII replaced by `_` in the ASCII form, `download` if nothing is left), `Content-Length` exact, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `Content-Security-Policy: sandbox`. The body streams and is never buffered whole. HEAD answers the same headers with no body.
+- **The token never leaks.** It is not logged (production uvicorn runs `access_log=False`; the route logs nothing but the completion line), not in the interaction log (it redacts every `gfwbd_` token and every `url` key), not in an audit row, receipt (`files.download.begin` is a read and keeps none) or error.
+- **Audit.** Like the byte routes, a browser GET is not audited (§11); a completed one writes one operator server-log line (logger `my_pa.files.browser_download`, INFO): `files browser download completed client=<oauth client id> size=<n>` -- no path, no token. The route attaches its own stderr handler to that logger (which then does not propagate), since the process configures no logging and the root stays at WARNING.
+- **Tunnel.** The public tunnel needs one more path rule, `^/files/v1/browser-downloads/[^/]+$`, on the MCP hostname (operator-gated; `ops/nas/remote/cloudflared-config.example.yml`, `ops/runbooks/remote-mcp-cloudflare.md`).
+- **Unverified** against real ChatGPT and the deployed tunnel until an operator-authorized re-proof.
+

@@ -195,8 +195,18 @@ def violations(
     cloudflare_network = f"{PROJECT}_cloudflare-egress"
     app_networks = set(app.get("NetworkSettings", {}).get("Networks", {}))
     edge_networks = set(edge.get("NetworkSettings", {}).get("Networks", {}))
-    if app_networks != {data_network, origin_network}:
+    # Files-workspace contract section 17.2: the optional handle-egress overlay adds exactly one
+    # more network to the app (never the edge); it must be non-internal so handle fetches can leave.
+    handle_network = f"{PROJECT}_handle-egress"
+    base_networks = {data_network, origin_network}
+    if app_networks not in (base_networks, base_networks | {handle_network}):
         errors.append("app_network_identity")
+    if handle_network in app_networks:
+        handle_state = networks.get(handle_network)
+        if handle_state is None:
+            errors.append("missing_network_identity")
+        elif handle_state.get("Internal") is not False:
+            errors.append(f"network_internalness:{handle_network}")
     if edge_networks != {origin_network, cloudflare_network}:
         errors.append("edge_network_identity")
     expected_internal = {
@@ -264,7 +274,7 @@ def main() -> int:
     parser.add_argument("--data-network", required=True)
     parser.add_argument("--postgres-resources", required=True)
     args = parser.parse_args()
-    network_names = (
+    network_names: tuple[str, ...] = (
         args.data_network,
         f"{PROJECT}_mcp-origin",
         f"{PROJECT}_cloudflare-egress",
@@ -275,8 +285,12 @@ def main() -> int:
         print("remote live gate refused: postgres_resources_unreadable")
         return 1
     postgres_id = str(resources.get("postgres_container_id", ""))
+    app_state = _inspect(args.app_container)
+    handle_network = f"{PROJECT}_handle-egress"
+    if handle_network in app_state.get("NetworkSettings", {}).get("Networks", {}):
+        network_names = (*network_names, handle_network)
     errors = violations(
-        _inspect(args.app_container),
+        app_state,
         _inspect(args.edge_container),
         app_image=args.app_image,
         edge_image=args.edge_image,

@@ -1,6 +1,6 @@
 # Files workspace contract (`files.*`)
 
-- **Status:** Frozen by WP1 under [ADR-019](../decisions/ADR-019-nas-mcp-file-workspace.md) (Accepted by operator directive 2026-11-13). Later work packages implement this text; a change to a name, rule or limit here is a contract change made in this file first. PR1 (WP1–3) and PR2 (WP4–5) are merged on `main`; PR3 (WP6–7, `feat/files-workspace-pr3`) delivers the byte routes, the reference client and the closure recorded in §10, §11 and T14. Deployment stays operator-gated (§16).
+- **Status:** Frozen by WP1 under [ADR-019](../decisions/ADR-019-nas-mcp-file-workspace.md) (Accepted by operator directive 2026-11-13). Later work packages implement this text; a change to a name, rule or limit here is a contract change made in this file first. PR1 (WP1–3) and PR2 (WP4–5) are merged on `main`; PR3 (WP6–7, `feat/files-workspace-pr3`) delivers the byte routes, the reference client and the closure recorded in §10, §11 and T14. ADR-019 Amendment 1 (2026-11-15) adds native file handles and MCP resource delivery (§17, `feat/files-native-handles`); it changes §6, §7, §9, §11 and §15 here first. Deployment stays operator-gated (§16).
 - **Base:** `main@57d5b1399d59d7afe9fe08063d9bb842c9062dd2`, branch `feat/files-workspace`.
 - **Not authorized here:** deployment, NAS mounts or ACLs, tunnel changes, grants, production migration.
 
@@ -106,10 +106,10 @@ Every call takes `workspace_id`. Writes also take `idempotency_key`. Optional ar
 | `files.search` | `path` (subtree), `query` (1–255 chars, case-insensitive name substring), `page_size?` (≤ 200) | `entries[]`, `truncated` (walk cap or page reached); no continuation |
 | `files.preview` | `path`, `offset?`, `max_bytes?` (≤ 262144), `expected_version?` | `text`, `next_offset` (null at EOF), `version`; non-UTF-8 content gives `binary: true` and no text; the cut never splits a character, so a window may exceed `max_bytes` only to return a single character wider than the limit (≤ 4 bytes) |
 | `files.history` | `path?`, `after?`, `page_size?` (≤ 200) | product-recorded preimage versions and trash items for the path (or the workspace), newest first; external edits have no history |
-| `files.download.begin` | `path` + `expected_version?`, or `version_id`; `include_sha256?`; `ttl_seconds?` | `download_id`, `download_token`, `route`, `size`, `version`, `sha256?`, `expires_at` |
+| `files.download.begin` | `path` + `expected_version?`, or `version_id`; `include_sha256?`; `ttl_seconds?` | `download_id`, `download_token`, `route`, `resource_uri`, `name`, `size`, `version`, `sha256?`, `expires_at` (§17.3) |
 | `files.mkdir` | `path`, `parents?` (default false) | entry |
 | `files.copy` | `path`, `to_path`, `expected_version?` | entry at `to_path` |
-| `files.upload.begin` | `path`, `expected_version?` (required to replace), `size?`, `sha256?`, `ttl_seconds?` | `upload_id`, `upload_token`, `route`, `offset` (0), `chunk_max_bytes`, `expires_at` |
+| `files.upload.begin` | `path`, `expected_version?` (required to replace), `size?`, `sha256?`, `ttl_seconds?`, `source_file?` (§17.2) | `upload_id`, `upload_token`, `route`, `offset` (0), `chunk_max_bytes`, `expires_at`; with `source_file`: `upload_id`, `entry`, `preimage_version_id?`, `size`, `sha256` |
 | `files.upload.abort` | `upload_id` | `aborted: true` |
 | `files.rename` | `path`, `new_name` (one component), `expected_version?` | entry |
 | `files.move` | `path`, `to_path`, `expected_version?` | entry |
@@ -139,6 +139,8 @@ Files refusals use the existing public `ErrorCode`s. The specific reason is a ne
 | `digest_mismatch` | `conflict` | 409 | finalize length or SHA-256 differs from the staged bytes or declared values |
 | `offset_mismatch` | `conflict` | 409 | `Upload-Offset` is not the current staged offset (response carries the current `Upload-Offset`) |
 | `ticket_invalid` | `denied` | 401 | token unknown, malformed, expired, used, aborted, or bound to another route |
+| `file_handle_unsupported` | `unsupported` | — | a `source_file` was given and this process composes no handle fetcher (§17.2) |
+| `file_handle_refused` | `invalid_request` | — | the `source_file` URL was refused or could not be fetched: scheme, host, address, redirect, status, TLS, network or deadline (§17.2) |
 
 The set is minimal. Expired and invalid tickets share one token because the client's remedy is the same (begin a new ticket), and distinguishing them would only give a probing oracle. Grant revocation reuses the existing `denied` path (HTTP 403). Idempotency misuse reuses `conflict` on `idempotency_key`. A Range the file cannot satisfy is HTTP 416 with no reason token.
 
@@ -168,6 +170,8 @@ Zero-byte files are valid everywhere. There is no MIME-type or extension allowli
 | `MY_PA_FILES_WORKSPACE_ID` | The alias, default `mcp`; a lower-case token. |
 | `MY_PA_FILES_MAX_UPLOAD_BYTES` | Default 10737418240. |
 | `MY_PA_FILES_DISK_RESERVE_BYTES` | Default 21474836480. |
+| `MY_PA_FILES_HANDLE_HOST_SUFFIXES` | Comma-separated host suffixes a native handle's `download_url` may name, each with a leading `.`; default `.blob.core.windows.net`. Empty composes no handle fetcher (`file_handle_unsupported`). §17.2. |
+| `MY_PA_FILES_HANDLE_FETCH_DEADLINE_SECONDS` | The whole-fetch deadline of one handle; default 25, at most 60. §17.2. |
 
 At composition the store refuses to start unless the root exists, is a directory, and is not a symlink. It also refuses unless the root equals, contains and lies inside none of the configured source, managed-document or report-content roots. The production mount is that one NAS subtree, never `/volume1`, `/volume1/homes` or a whole home; `ops/nas/remote/live-gate.py` requires the remote MCP container's workspace bind source to be exactly `/volume1/homes/bfetting/MCP` (`WORKSPACE_SOURCE`, pinned to the overlay's `source:`).
 
@@ -220,7 +224,7 @@ Each `files.*` call is audited once, by `authorize` (`src/my_pa/application/auth
 - Byte-route HEAD, PATCH chunks and GET requests are not audited. A completing PATCH runs `files.upload.finalize` through `invoke` and is audited as `files.upload.finalize`, exactly as the MCP tool is.
 - It never records file bodies, `write_text` text, preview text, tokens, paths or host paths; `AuditEvent` has no field that could hold them.
 
-The MCP interaction log omits the `text` argument of `files.write_text` and the `text` result of `files.preview`, in addition to its existing `*token*` redaction. The byte routes are outside the `/mcp` interaction log: it wraps `/mcp` only.
+The MCP interaction log omits the `text` argument of `files.write_text` and the `text` result of `files.preview`, in addition to its existing `*token*` redaction, and redacts every `download_url` value whole (a native handle's bearer URL, §17.2). A handle ingest is audited as the one `files.upload.begin` row; the URL, `file_id`, file name and MIME type are recorded nowhere. A `resources/read` of a download resource is, like a byte-route GET, not audited. The byte routes are outside the `/mcp` interaction log: it wraps `/mcp` only.
 
 Bounded by `test_the_audit_records_the_decision_and_nothing_about_the_file` and the audit assertions in `tests/integration/test_files_workspace_vertical_slice.py`.
 
@@ -262,6 +266,9 @@ Bounded by `test_the_audit_records_the_decision_and_nothing_about_the_file` and 
 - **T12:** any new process, service, queue or store technology.
 - **T13:** `write_text` bound set below 1 MiB to fit the transport request bound under worst-case escaping (120 KiB; §8).
 - **T14:** a richer files audit (workspace id, opaque ids, byte sizes, the handler's outcome) is deferred. The audit is the generic `authorize` row (§11).
+- **T15:** `files.fetch_url`, a server-side fetch of an arbitrary client-supplied URL, is not built (ADR-019 Amendment 1). Its fallback condition is unmet: the Abacus sandbox reaches the ticket routes over HTTP. Only a native handle's `download_url`, under §17.2's controls, is ever fetched.
+- **T16:** embedded base64 blobs in tool results are not used for files: at 5 MiB ChatGPT put the base64 into model context and delivered no file. Outbound bytes leave as a ticket route or a `resources/read` stream (§17.3).
+- **T17:** a handle ingest is one call bounded by the remote MCP call timeout (30 s) and the fetch deadline (default 25 s); there is no background or resumable handle fetch. A file that cannot be fetched inside the deadline is `file_handle_refused`; the client uses the ticket route where its sandbox can.
 
 ## 16. Operator residuals
 
@@ -271,3 +278,38 @@ Bounded by `test_the_audit_records_the_decision_and_nothing_about_the_file` and 
 - Production migration and the `files.*` grants per client (`file_workspace_read`, and `file_workspace_authoring` with write).
 - Proof of a scheduled Abacus run using the reference client.
 - Backup and retention policy for the subtree, including `.my-pa/versions` and `.my-pa/trash`.
+
+## 17. Native file handles and MCP resource delivery (ADR-019 Amendment 1)
+
+The seventeen names are unchanged. A client that sends no `source_file` and reads no resource is served exactly as §§1-16 describe, so there is still no code path that branches on client identity: the handle field and the resource link are on the one contract every client sees, and only a client that can use them does.
+
+### 17.1 Client compatibility (synthetic proof, 2026-11-15)
+
+| Capability | ChatGPT (`openai-mcp/1.0.0`) | Abacus (`mcp 0.1.0`) |
+|---|---|---|
+| Inbound native handle (`openai/fileParams`) | Yes: 1 KiB, 5 MiB, 50 MiB, two files in one call, SHA-256 exact | No: the attachment is only a sandbox path; no handle is passed |
+| Inbound through the ticket routes (sandbox HTTP) | No: the sandbox cannot resolve external hosts | Yes: 1 KiB and 5 MiB, SHA-256 exact |
+| Outbound MCP `resource_link` read through `resources/read` | Yes: 1 KiB, 5 MiB, 50 MiB delivered as files, SHA-256 exact | Not delivered as a file (the link block only) |
+| Outbound embedded base64 blob | 1 KiB attached; 5 MiB landed in model context with no file (unusable) | Model-mediated only |
+| Outbound https `resource_link` | Not delivered | Link visible only |
+| Outbound through the ticket routes (sandbox HTTP) | No (DNS) | Yes: 5 MiB SHA-256 exact |
+| Scheduled / unattended runs | No user attachment exists, so no inbound handle; list, search, read, `write_text` and organize work on files already in the workspace | Same |
+
+Remaining unknowns: sizes beyond 50 MiB either way, the exact link lifetime (between 1 and 5 minutes), the publicly reported ~10% missing-file-param rate (0 of 5 observed), and Abacus tool lists cached until refreshed.
+
+### 17.2 Inbound: `files.upload.begin` with `source_file`
+
+- **Shape.** `source_file` is an object with exactly the properties `download_url` (string, required), `file_id` (string, required), `file_name` (string, optional) and `mime_type` (string, optional); any other key is `invalid_request` on `source_file`. `download_url` is at most 8,192 characters, `file_id` at most 256, `file_name` and `mime_type` at most 1,024. The canonical schema carries it under `payload`; the remote MCP schema publishes it as a top-level argument and declares `_meta["openai/fileParams"] = ["source_file"]` on the tool, and the remote boundary moves a top-level `source_file` under `payload` before `normalize` (one given in both places is `invalid_request`). `ttl_seconds` with `source_file` is `invalid_request` on `ttl_seconds` (no ticket outlives the call).
+- **Untrusted.** `file_name` and `mime_type` are never used: the workspace path is the call's `path`, and there is no MIME handling (§8). `file_id` is not recorded. The handle is never authority: the write runs under the authenticated client's grants like any `files.upload.begin` (the write grant, and remote writes enabled).
+- **Flow.** (1) The target is checked exactly as for a ticket (`exists` without `expected_version`, `version_conflict`, `not_found`, `unsupported_entry`) before any fetch. (2) The URL is fetched (below) and streamed into a fresh staging file under `.my-pa/staging/`; the store re-checks the disk reserve per chunk (`quota`) and the cap (`too_large`), and any failure discards the staging. (3) Then, under the workspace lock and the idempotency receipt of §5, an upload row is recorded and closed at once (its token is never issued), the staged length and SHA-256 are verified against the fetched values and any declared `size`/`sha256` (`digest_mismatch`), and the bytes are published by the same finalize rules: create, or replace at `expected_version` with the preimage preserved. The answer is `upload_id`, `entry`, `preimage_version_id`, `size` and `sha256`; nothing carries the URL. The intent digest binds `path`, `expected_version`, `size`, `sha256` and the handle's `file_id` digest, never the URL.
+- **Fetch controls (proof finding F1, F2).** https only; no userinfo; port 443; the host must be a DNS name (not an IP literal) ending in an allowed suffix (`MY_PA_FILES_HANDLE_HOST_SUFFIXES`, with a label before it); the name is resolved once and every address must be public (not loopback, private, link-local, shared, reserved, multicast or unspecified, including IPv4-mapped, 6to4 and NAT64 forms); the connection is pinned to the first address, with TLS verified against the host name; `GET` with no credential, cookie or encoding; any status but 200 (a redirect included) is refused; a `Content-Encoding` other than identity is refused; a `Content-Length` over `MY_PA_FILES_MAX_UPLOAD_BYTES` is `too_large` before a body byte is read and one over the free space less the reserve is `quota`; the body is read in pieces of at most 1 MiB under a per-read idle bound and the whole-fetch deadline, and is `too_large` the moment it passes the cap; a body shorter or longer than its `Content-Length` is refused. At most 2 handle fetches run per process; another is `unavailable`. Every other failure is the one `file_handle_refused`.
+- **The URL is a bearer credential (F1).** It is never logged, audited, persisted, put in an exception or returned. The fetcher module does no logging; its refusals carry only the field name and a reason token and are raised without a cause; the interaction log redacts `download_url`.
+- **Missing handle.** A call without `source_file` is an ordinary ticket begin. A `source_file` without `download_url` or `file_id`, or of the wrong shape, is `invalid_request` on `source_file`, and nothing is staged.
+
+### 17.3 Outbound: `files.download.begin` and `resources/read`
+
+- **Result.** `files.download.begin` also answers `name` (the final component of the path the ticket serves) and `resource_uri`, `mcp-files://downloads/<download_id>`. On the remote MCP surface a successful call's result carries, after the envelope text block, a `resource_link` content block `{uri: resource_uri, name, mimeType: "application/octet-stream", size}`. The ticket token and route are unchanged, so a sandbox-HTTP client (Abacus) downloads as before.
+- **Read.** The remote MCP server advertises resources: `resources/list` is empty and `resources/templates/list` names `mcp-files://downloads/{download_id}`. `resources/read` of a download URI is an authenticated `/mcp` request and needs no ticket token: the ticket must be a download ticket of this workspace owned by the request's Principal and issued to the same authenticated OAuth client, usable now (not expired), and the client's standing is re-checked exactly as the byte route's (remote access on, client enabled, an active grant for `files.download.begin` under `file_workspace_read`). The file is opened at the ticket's bound version (`external_change_detected` otherwise). A refusal is a JSON-RPC error whose message is the section 7 reason token (`ticket_invalid` covers unknown, expired and another client's ticket alike) and names no path.
+- **Streaming.** The answer is one `BlobResourceContents` whose base64 is streamed from the open file in 768 KiB pieces, with an exact `Content-Length`, never buffered whole. The stream runs after the `/mcp` call slot and its timeout are released, under its own per-process cap (4, as the byte routes), the byte route's idle bound (30 s per send), deadline (600 s) and re-check (ticket and grants every 5 s, version before every piece). A failure after the headers left cuts the stream short of `Content-Length`; the client sees an incomplete response and reads again.
+- **Not audited**, like a byte-route GET (§11).
+

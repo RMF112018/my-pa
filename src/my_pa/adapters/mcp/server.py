@@ -109,6 +109,7 @@ from mcp.types import PaginatedRequestParams as ListToolsParams
 from my_pa import __version__
 from my_pa.adapters.mcp.chatllm_gateway import (
     DESCRIBE_TOOL,
+    FACADE_TOOL_NAMES,
     compact_tools,
     prepare_compact_call,
     render_describe,
@@ -369,7 +370,13 @@ def _answer(
     assertion would ever see.
     """
     request_arguments = arguments
-    if canonical_targets is not None:
+    if canonical_targets is not None and name not in FACADE_TOOL_NAMES:
+        # Files-workspace contract section 17.4: a compact client's top-level
+        # canonical tool. Eligible only inside the request's canonical set; it
+        # then takes the canonical path below, exactly as a non-compact call.
+        if name not in canonical_targets:
+            return _problem(UnsupportedError()).to_canonical_json(), True, None
+    elif canonical_targets is not None:
         try:
             name, request_arguments = prepare_compact_call(
                 name, arguments, allowed_canonical=canonical_targets
@@ -550,8 +557,20 @@ def create_mcp_server(
         if not enabled or access is None:
             return ListToolsResult(tools=[])
         selected_service = access.service if access.service is not None else service
+        canonical_tools: tuple[Tool, ...] = ()
         if access.compact_publication:
             tools = compact_tools(access.allowed_tools or frozenset())
+            # Section 17.4: the eligible canonical names published beside the
+            # façade (the access already intersected them with its grants).
+            top_level = (access.allowed_tools or frozenset()) - FACADE_TOOL_NAMES
+            canonical_tools = tuple(
+                tool
+                for tool in published_tools(
+                    selected_service,
+                    authenticated_client_present=access.authenticated_client_id is not None,
+                )
+                if tool.name in top_level
+            )
         else:
             tools = published_tools(
                 selected_service,
@@ -563,7 +582,7 @@ def create_mcp_server(
             if access.compact_publication:
                 tools = tuple(
                     _remote_facade_tool(tool, oauth_scopes=oauth_scopes) for tool in tools
-                )
+                ) + tuple(_remote_tool(tool, oauth_scopes=oauth_scopes) for tool in canonical_tools)
             else:
                 tools = tuple(_remote_tool(tool, oauth_scopes=oauth_scopes) for tool in tools)
         return ListToolsResult(tools=list(tools))

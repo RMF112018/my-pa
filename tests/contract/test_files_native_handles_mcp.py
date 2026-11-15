@@ -508,3 +508,72 @@ async def test_a_stream_holds_no_mcp_call_slot(scene: Scene) -> None:
     assert lister.status == 200 and lister.finished
     assert reader.finished and reader.decoded == stream.size
     assert stream.closed == 1
+
+
+# ---- the compact client's four top-level file tools (section 17.4) -------------------------
+
+
+def test_exactly_four_primary_file_names_are_offered_top_level() -> None:
+    from my_pa.domain.identity.chatllm_capability_policy import COMPACT_TOP_LEVEL_TOOL_NAMES
+
+    assert {
+        "files.upload.begin",
+        "files.download.begin",
+        "files.list",
+        "files.search",
+    } == COMPACT_TOP_LEVEL_TOOL_NAMES
+    assert {tool.name for tool in TOOLS} >= COMPACT_TOP_LEVEL_TOOL_NAMES
+
+
+def test_a_compact_call_to_a_canonical_name_outside_its_set_never_reaches_invoke(
+    scene: Scene,
+) -> None:
+    from my_pa.adapters.mcp.server import _answer
+    from my_pa.domain.capture.submission import CaptureTransport
+
+    service = build_service(scene.world, scene.providers)
+    text, failed, extra = _answer(
+        service,
+        scene.principal,
+        Capability.FILES_MKDIR.value,
+        {"payload": {"workspace_id": "mcp", "path": "x"}},
+        CaptureTransport.REMOTE_CLIENT,
+        None,
+        canonical_targets=frozenset({Capability.FILES_LIST.value}),
+        authenticated_client_id="synthetic-client",
+    )
+    assert failed is True and extra is None
+    assert json.loads(text)["code"] == "unsupported"
+
+
+@pytest.mark.anyio
+async def test_without_the_files_plane_a_compact_client_lists_only_facade_tools(
+    scene: Scene,
+) -> None:
+    service = build_service(scene.world, scene.providers)
+    app = create_remote_mcp_app(
+        service,
+        resolve_access=lambda authorization: (
+            RemoteAccessContext(
+                scene.principal, compact_publication=True, authenticated_client_id="c"
+            )
+            if authorization == "Bearer synthetic"
+            else None
+        ),
+        allowed_hosts=("testserver",),
+        remote_enabled=True,
+        writes_enabled=True,
+        resource="http://testserver",
+        authorization_servers=("https://issuer.example.invalid",),
+        scopes=frozenset({"my-pa.read"}),
+    )
+
+    async def body(session: ClientSession) -> Any:  # noqa: ANN401
+        return await session.list_tools()
+
+    listed = await _session_run(app, body)
+    names = {tool.name for tool in listed.tools}
+    assert names <= {"my_pa.describe", "my_pa.read", "my_pa.write", "my_pa.operator"}
+    write = next(tool for tool in listed.tools if tool.name == "my_pa.write")
+    assert "source_file" not in write.input_schema["properties"]
+    assert write.meta == {"securitySchemes": [{"type": "oauth2", "scopes": ["my-pa.read"]}]}

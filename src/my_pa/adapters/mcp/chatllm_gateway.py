@@ -22,6 +22,7 @@ from my_pa.domain.identity.operation import Capability, is_destructive_capabilit
 
 __all__ = [
     "DESCRIBE_TOOL",
+    "FACADE_TOOL_NAMES",
     "OPERATOR_TOOL",
     "PROFILE_VERSION",
     "READ_TOOL",
@@ -38,6 +39,9 @@ DESCRIBE_TOOL: Final = "my_pa.describe"
 READ_TOOL: Final = "my_pa.read"
 WRITE_TOOL: Final = "my_pa.write"
 OPERATOR_TOOL: Final = "my_pa.operator"
+#: The four façade tool names; any other name a compact client may call is a
+#: canonical top-level tool (files-workspace contract section 17.4).
+FACADE_TOOL_NAMES: Final = frozenset({DESCRIBE_TOOL, READ_TOOL, WRITE_TOOL, OPERATOR_TOOL})
 
 _KINDS: Final = frozenset({"read", "write", "operator"})
 _DEFAULT_LIMIT: Final = 25

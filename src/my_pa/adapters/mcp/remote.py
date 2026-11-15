@@ -40,6 +40,7 @@ from my_pa.application.service import ApplicationService
 from my_pa.contracts.mcp_database_witness import McpWitnessBinding
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.documents.managed import MAX_MANAGED_DOCUMENT_BYTES
+from my_pa.domain.identity.chatllm_capability_policy import COMPACT_TOP_LEVEL_TOOL_NAMES
 from my_pa.domain.identity.operation import Capability, is_operator_only, permitted_purposes
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
@@ -501,7 +502,9 @@ def create_remote_mcp_app(
             from my_pa.adapters.mcp.chatllm_gateway import facade_tool_names
 
             canonical = allowed
-            published = facade_tool_names(allowed)
+            # Files-workspace contract section 17.4: the eligible primary file
+            # names are also published top-level, under their canonical names.
+            published = facade_tool_names(allowed) | (allowed & COMPACT_TOP_LEVEL_TOOL_NAMES)
         return McpAccess(
             principal=principal,
             allowed_tools=published,

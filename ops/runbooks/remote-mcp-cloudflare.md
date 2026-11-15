@@ -925,4 +925,4 @@ P1-specific:
 - **Planner environment.** Run with the wrong environment the planner reports no lineage
   gap rather than a wrong one.
 - **Pool budget.** Program reporting adds a 5-connection pool to every composing process,
-  including the remote MCP container under its 768 MiB limit.
+  including the remote MCP container under its 896 MiB limit.

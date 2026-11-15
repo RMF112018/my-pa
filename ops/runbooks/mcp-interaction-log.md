@@ -386,9 +386,8 @@ After enabling the log on the NAS (and after each deployment of it):
    `resource_tracker` process: the worker is not started through
    `multiprocessing`.)
 4. Watch `docker stats` during a large response and confirm memory stays well
-   under the container's `mem_limit` (`MY_PA_REMOTE_MEMORY`: 768m on the live
-   deployment until the operator applies the template's 896m at report content
-   store enablement) and latency is acceptable. The worker adds
+   under the container's `mem_limit` (`MY_PA_REMOTE_MEMORY`: 896m, the template value and the live
+   value since the Reports deployment of 2026-11-10) and latency is acceptable. The worker adds
    about 20 MiB idle, up to about 84 MiB for a 16 MiB text row, and never more
    than its 256 MiB cap: a row that would need more (a large list of records,
    many tiny objects) shows up as one `capture_error` and no row, while the

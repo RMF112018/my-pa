@@ -145,9 +145,9 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
                 "CpuRealtimeRuntime": 0,
                 "PidsLimit": None,
                 "Ulimits": None,
-                "Memory": (768 if image.startswith("app") else 256) * 1024 * 1024,
+                "Memory": (896 if image.startswith("app") else 256) * 1024 * 1024,
                 "MemoryReservation": 0,
-                "MemorySwap": (1536 if image.startswith("app") else 512) * 1024 * 1024,
+                "MemorySwap": (1792 if image.startswith("app") else 512) * 1024 * 1024,
                 "MemorySwappiness": None,
                 "OomKillDisable": False,
                 "BlkioWeight": 0,
@@ -344,7 +344,7 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
             "NetworkSettings": {"Networks": {"my-pa-nas-contract_data-plane": {}}},
         },
     )
-    app["HostConfig"]["Memory"] = 768 * 1024 * 1024
+    app["HostConfig"]["Memory"] = 896 * 1024 * 1024
     assert "noncanonical_data_network" in gate.violations(
         app,
         edge,
@@ -463,9 +463,9 @@ def _live_gate_shape(gate: ModuleType) -> tuple[dict, dict, dict[str, object]]:
                 "CpuRealtimeRuntime": 0,
                 "PidsLimit": None,
                 "Ulimits": None,
-                "Memory": (768 if app else 256) * 1024 * 1024,
+                "Memory": (896 if app else 256) * 1024 * 1024,
                 "MemoryReservation": 0,
-                "MemorySwap": (1536 if app else 512) * 1024 * 1024,
+                "MemorySwap": (1792 if app else 512) * 1024 * 1024,
                 "MemorySwappiness": None,
                 "OomKillDisable": False,
                 "BlkioWeight": 0,

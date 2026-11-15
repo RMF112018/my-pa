@@ -101,7 +101,7 @@ def violations(
         expected_cpuset = "0" if name == "app" else "1"
         if host.get("CpusetCpus") != expected_cpuset:
             errors.append(f"{name}_cpuset")
-        expected_memory = (768 if name == "app" else 256) * 1024 * 1024
+        expected_memory = (896 if name == "app" else 256) * 1024 * 1024
         unadmitted_controls = {
             "CpuCount": 0,
             "CpuPercent": 0,

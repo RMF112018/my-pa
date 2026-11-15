@@ -209,6 +209,9 @@ def _is_public_answer(answer: object) -> bool:
     return isinstance(answer, str) and is_public_address(answer)
 
 
+_DEFAULT_POLICY = HandleFetchPolicy()
+
+
 def _system_resolver(host: str, port: int) -> Sequence[str]:
     infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     return [str(info[4][0]) for info in infos]
@@ -303,7 +306,7 @@ class SafeHandleFetcher(FileHandleFetcher):
 
     def __init__(
         self,
-        policy: HandleFetchPolicy = HandleFetchPolicy(),  # noqa: B008 - frozen value
+        policy: HandleFetchPolicy = _DEFAULT_POLICY,
         *,
         resolver: Resolver = _system_resolver,
         connector: Connector = _pinned_https,

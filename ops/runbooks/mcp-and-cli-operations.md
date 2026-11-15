@@ -487,6 +487,8 @@ about a minute, or not an allowed host): attach the file again.
 that cannot be fetched within the 25 s deadline is refused; there is no
 `files.fetch_url` and no base64 path for files.
 
+A façade call whose `capability` is wrapped in quotes or backticks (`"files.write_text"`) is refused `unsupported` with the safe detail `capability_name_has_quotes` when the unquoted name is one the caller may use through that tool: send the bare name (contract §17.4).
+
 Prompt guidance for an Abacus connector: "To save a file from your sandbox to
 the workspace, call `files.upload.begin` with the destination `path` (never
 `source_file`), then run the `transfer.usage` command in your sandbox with

@@ -834,7 +834,7 @@ def test_no_link_the_store_makes_lands_outside_the_root(
 
 @pytest.mark.parametrize(
     "path",
-    ["..", "../outside", "a/../b", "/etc/passwd", "/", "a//b", "a/", "./a", "a\\b", "a\x00b"],
+    ["..", "../outside", "a/../b", "/etc/passwd", "/", "a//b", "a//", "./a", "a\\b", "a\x00b"],
 )
 def test_traversal_and_absolute_paths_are_refused_before_any_io(
     layout: tuple[Path, Path], tmp_path: Path, path: str

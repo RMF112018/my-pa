@@ -468,6 +468,25 @@ operations in [`files-workspace.md`](files-workspace.md)):
    completing request lost its answer and the ticket is now closed (401): check
    `files.stat` before beginning again.
 
+**Clients with native file handles (ChatGPT; ADR-019 Amendment 1, contract
+§17).** Which path a client uses is fixed by what it can do, not by its name:
+
+| Client | Upload | Download |
+|---|---|---|
+| ChatGPT (also when served the compact façade: `files.upload.begin`, `files.download.begin`, `files.list` and `files.search` are top-level tools beside `my_pa.*`, contract §17.4; real-ChatGPT behaviour of these descriptors awaits a re-proof) | Attach the file and call `files.upload.begin` with `path`; the client fills the top-level `source_file` (declared by `_meta["openai/fileParams"]`). The server fetches it and stores it in that one call: no ticket, no route. | Call `files.download.begin`; the result carries a `resource_link` the client reads with `resources/read` and hands to the user as a file. |
+| Abacus (sandbox HTTP) | The ticket flow above (`upload_token` + `route`), from its sandbox. | The ticket flow above. |
+| CLI / browser | The ticket flow above, or the reference client. | The ticket flow above. |
+
+Prompt guidance for a ChatGPT connector: "To save an attached file to the
+workspace, call `files.upload.begin` with the destination `path` and the file
+attached; to give the user a workspace file, call `files.download.begin` and
+return the file it links." A replace still needs `expected_version`. A
+refusal `file_handle_refused` means the link could not be used (expired after
+about a minute, or not an allowed host): attach the file again.
+`file_handle_unsupported` means this server composes no handle fetcher. A file
+that cannot be fetched within the 25 s deadline is refused; there is no
+`files.fetch_url` and no base64 path for files.
+
 ## Meeting records (WP-MTG-01 through WP-MTG-06)
 
 Meeting records are product-owned application data: a Meeting is written only

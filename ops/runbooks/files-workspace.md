@@ -163,6 +163,21 @@ re-checks the issuing grant, so revocation is immediate.
    Then `files.stat`, `files.trash` and `files.restore` on it, compare the bytes,
    and delete the ticket files. Expect `.my-pa/` to appear in the folder.
 
+4. **Native file handles (contract §17), ChatGPT only.** With the ChatGPT
+   connector granted `files.upload.begin` and `files.download.begin`, and
+   remote writes on: refresh the connector's tool list, attach a small
+   synthetic file and ask it to save it to `_commissioning/handle.bin`; compare
+   `files.stat` with `include_sha256` against the local SHA-256. Then ask for
+   `_commissioning/handle.bin` back and compare the delivered file's SHA-256.
+   Nothing in the remote MCP log may show the attachment's link: no log line
+   names a `download_url` (the server logs none, and the interaction log
+   redacts the key). Settings: `MY_PA_FILES_HANDLE_HOST_SUFFIXES` (default
+   `.blob.core.windows.net`; empty refuses every handle
+   `file_handle_unsupported`) and `MY_PA_FILES_HANDLE_FETCH_DEADLINE_SECONDS`
+   (default 25, at most 60). The remote MCP container needs outbound HTTPS to
+   the allowed hosts; no tunnel rule changes (handle fetches are outbound and
+   resource reads ride `/mcp`).
+
 **Client exit status 5 ("outcome unknown").** A completing PATCH whose response
 was lost may still have committed the finalize; the ticket is then closed and
 answers 401. The client reports this distinctly from a refusal (3). Check with
@@ -200,6 +215,15 @@ upload; do not assume failure.
 - An Abacus scheduled-run proof using the reference client is unverified (T11).
 - Limits: 10 GiB per upload, 20 GiB free-space reserve, 32 MiB per PATCH, 4
   concurrent byte-route requests per process, ticket TTL 1 h (max 24 h).
+- Native handles (contract §17): ChatGPT uploads by `source_file` and
+  downloads by `resource_link` + `resources/read`; Abacus keeps the ticket
+  routes from its sandbox. Verified only with the synthetic proof (to 50 MiB);
+  larger files, the exact link lifetime (between 1 and 5 minutes) and the
+  publicly reported missing-file-param flake are unverified. A handle ingest
+  must finish inside the 25 s fetch deadline (under the 30 s remote call
+  timeout); a slower file is `file_handle_refused`. The allowed host suffix is
+  a platform-drift risk: if OpenAI moves its file host, handles fail closed
+  until the setting is changed. No `files.fetch_url` exists (trim T15).
 - Audit is the generic `authorize` row per call (principal, capability,
   purpose, allowed/denied, policy version, denial reason). It has no workspace
   id, opaque ids, sizes or handler outcome, and byte-route chunks are not

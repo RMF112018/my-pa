@@ -29,6 +29,9 @@ import hashlib
 import http.client
 import json
 import logging
+import os
+import re
+import subprocess
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -121,7 +124,11 @@ class _Slice:
         )
         store = FilesystemFileWorkspaceStore(harness.root, disk_reserve_bytes=0)
         files = FileWorkspaceApplication(
-            store, workspace_id=WORKSPACE, max_upload_bytes=8 << 20, handle_fetcher=fetcher
+            store,
+            workspace_id=WORKSPACE,
+            max_upload_bytes=8 << 20,
+            handle_fetcher=fetcher,
+            public_origin=f"http://127.0.0.1:{harness.client.port}",
         )
         self.service = ApplicationService(
             unit_of_work=unit_of_work, limits=LIMITS, file_workspace=files
@@ -486,3 +493,101 @@ async def test_the_top_level_tools_follow_the_clients_grants_and_the_write_switc
     assert granted - _FACADE == {"files.list", "files.download.begin"}
     read_only = await _session(world.app(compact=True, writes=False), names)
     assert read_only - _FACADE == _PRIMARY - {"files.upload.begin"}
+
+
+def _recipe(usage: str, **values: str) -> str:
+    """The one `curl` command a ticket's `usage` text carries, placeholders filled."""
+    match = re.search(r"(curl .*?) -- with ", usage)
+    assert match is not None, usage
+    command = match.group(1)
+    for name, value in values.items():
+        command = command.replace(f"<{name}>", value)
+    assert "<" not in command, command
+    return command
+
+
+def _run(command: str, token: str) -> None:
+    subprocess.run(  # noqa: S603 - the server's own static recipe, loopback only
+        ["/bin/sh", "-c", command],
+        check=True,
+        capture_output=True,
+        timeout=60,
+        env={**os.environ, "MY_PA_FILES_TICKET": token},
+    )
+
+
+@pytest.mark.anyio
+async def test_an_abacus_shaped_client_omits_the_handle_and_runs_the_ticket_recipe(
+    world: _Slice, tmp_path: Path
+) -> None:
+    """Section 17.5: compact façade, no handle, the static curl recipe, byte-exact both ways."""
+    body = bytes((index * 31 + 7) % 256 for index in range(700 * 1024))
+    local = tmp_path / "abacus-in.bin"
+    local.write_bytes(body)
+    app = world.app(compact=True)
+
+    async def begin(session: ClientSession) -> Any:  # noqa: ANN401
+        listed = await session.list_tools()
+        upload = next(tool for tool in listed.tools if tool.name == "files.upload.begin")
+        assert {tool.name for tool in listed.tools} - _FACADE == _PRIMARY
+        assert "source_file" not in upload.input_schema["required"]
+        assert (
+            "only for hosts that supply file objects"
+            in (upload.input_schema["properties"]["source_file"]["description"])
+        )
+        return await session.call_tool(
+            "files.upload.begin",
+            {"payload": {"workspace_id": WORKSPACE, "path": "from-abacus.bin"}},
+        )
+
+    ticket = _envelope(await _session(app, begin))
+    transfer = ticket["transfer"]
+    token = ticket["upload_token"]
+    assert token not in json.dumps(transfer)
+    assert transfer["method"] == "PATCH" and transfer["auth_header_name"] == "Authorization"
+    assert transfer["url"] == f"http://127.0.0.1:{world.h.client.port}{ticket['route']}"
+    _run(
+        _recipe(
+            transfer["usage"],
+            sha256=hashlib.sha256(body).hexdigest(),
+            length=str(len(body)),
+            file=str(local),
+        ),
+        token,
+    )
+    assert (world.h.root / "from-abacus.bin").read_bytes() == body
+
+    async def back(session: ClientSession) -> Any:  # noqa: ANN401
+        stat = await session.call_tool(
+            "my_pa.read",
+            {
+                "capability": "files.stat",
+                "arguments": {
+                    "payload": {
+                        "workspace_id": WORKSPACE,
+                        "path": "from-abacus.bin",
+                        "include_sha256": True,
+                    }
+                },
+            },
+        )
+        begun = await session.call_tool(
+            "files.download.begin",
+            {
+                "payload": {
+                    "workspace_id": WORKSPACE,
+                    "path": "from-abacus.bin",
+                    "include_sha256": True,
+                }
+            },
+        )
+        return stat, begun
+
+    stat, begun = await _session(world.app(compact=True), back)
+    assert _envelope(stat)["sha256"] == hashlib.sha256(body).hexdigest()
+    download = _envelope(begun)
+    assert download["download_token"] not in json.dumps(download["transfer"])
+    out = tmp_path / "abacus-out.bin"
+    _run(_recipe(download["transfer"]["usage"], file=str(out)), download["download_token"])
+    assert out.read_bytes() == body
+    assert hashlib.sha256(out.read_bytes()).hexdigest() == download["sha256"]

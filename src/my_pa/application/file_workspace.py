@@ -107,7 +107,10 @@ from my_pa.domain.files.paths import parse_path
 from my_pa.domain.files.transfer import (
     UploadCompletion,
     UploadDeclaration,
+    download_transfer,
     mint_ticket_token,
+    transfer_url,
+    upload_transfer,
     verify_staged,
     write_intent_digest,
 )
@@ -233,11 +236,14 @@ class FileWorkspaceApplication:
         workspace_id: str,
         max_upload_bytes: int,
         handle_fetcher: FileHandleFetcher | None = None,
+        public_origin: str | None = None,
     ) -> None:
         self._store = store
         self._workspace_id: Final = workspace_id
         self._max_upload_bytes: Final = max_upload_bytes
         self._handle_fetcher: Final = handle_fetcher
+        #: Section 17.5: the origin a ticket's `transfer.url` is joined to.
+        self._public_origin: Final = public_origin
         self._handlers: Final[Mapping[Capability, Callable[..., dict[str, Any]]]] = {
             Capability.FILES_WORKSPACES_LIST: self._workspaces_list,
             Capability.FILES_LIST: self._list,
@@ -501,6 +507,9 @@ class FileWorkspaceApplication:
             "download_id": download_id,
             "download_token": token,
             "route": _DOWNLOAD_ROUTE + download_id,
+            "transfer": download_transfer(
+                transfer_url(_DOWNLOAD_ROUTE + download_id, self._public_origin)
+            ),
             "resource_uri": DOWNLOAD_RESOURCE_PREFIX + download_id,
             "name": parse_path(path).name,
             "size": size,
@@ -755,6 +764,10 @@ class FileWorkspaceApplication:
                 "upload_id": upload_id,
                 "upload_token": token,
                 "route": _UPLOAD_ROUTE + upload_id,
+                "transfer": upload_transfer(
+                    transfer_url(_UPLOAD_ROUTE + upload_id, self._public_origin),
+                    MAX_UPLOAD_CHUNK_BYTES,
+                ),
                 "offset": 0,
                 "chunk_max_bytes": MAX_UPLOAD_CHUNK_BYTES,
                 "expires_at": format_rfc3339(ticket.expires_at),

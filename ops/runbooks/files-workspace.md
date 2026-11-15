@@ -178,6 +178,13 @@ re-checks the issuing grant, so revocation is immediate.
    the allowed hosts; no tunnel rule changes (handle fetches are outbound and
    resource reads ride `/mcp`).
 
+5. **Abacus ticket recipe (contract §17.5).** With the Abacus connector
+   granted the files names (and `files.upload.finalize`), refresh its tool
+   list and ask it to upload a small synthetic file from its sandbox to
+   `_commissioning/abacus.bin` and to download it back, using the answer's
+   `transfer.usage`; compare SHA-256 both ways. `transfer.url` is absolute only
+   when `MY_PA_REMOTE_MCP_PUBLIC_HOST` is set.
+
 **Client exit status 5 ("outcome unknown").** A completing PATCH whose response
 was lost may still have committed the finalize; the ticket is then closed and
 answers 401. The client reports this distinctly from a refusal (3). Check with

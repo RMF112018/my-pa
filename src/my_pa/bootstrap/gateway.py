@@ -721,6 +721,13 @@ def _file_workspace_application(
         workspace_id=settings.files_workspace_id,
         max_upload_bytes=settings.files_max_upload_bytes,
         handle_fetcher=files_handle_fetcher(settings),
+        # Contract section 17.5: tickets name their absolute byte-route URL
+        # when the remote MCP public host is configured.
+        public_origin=(
+            f"https://{settings.remote_mcp_public_host.strip()}"
+            if settings.remote_mcp_public_host.strip()
+            else None
+        ),
     )
 
 

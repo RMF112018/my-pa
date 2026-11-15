@@ -526,3 +526,79 @@ def test_the_interaction_log_redacts_every_download_url() -> None:
     assert count == 3
     arguments = redacted["params"]["arguments"]  # type: ignore[index]
     assert arguments["source_file"]["file_id"] == "file-synthetic-a.bin"
+
+
+# ---- agent-usable ticket transfers (section 17.5) ------------------------------------------
+
+
+def _tokens_in(value: object) -> list[str]:
+    import re
+
+    return re.findall(r"gfwtk_[0-9a-f]{64}", json.dumps(value))
+
+
+def test_a_ticket_answer_carries_a_transfer_recipe_and_no_token_in_it(
+    world: _HandleWorld,
+) -> None:
+    answer = world.run(BeginFileUpload(workspace_id=WORKSPACE, path="a.bin", idempotency_key="k"))
+    transfer = answer["transfer"]
+    assert set(transfer) == {"method", "url", "auth_header_name", "headers", "usage"}
+    assert transfer["method"] == "PATCH" and transfer["url"] == answer["route"]
+    assert transfer["auth_header_name"] == "Authorization"
+    assert transfer["headers"]["Upload-Offset"] == "0"
+    assert transfer["headers"]["Upload-Complete"] == "sha256=<sha256>, length=<length>"
+    assert _tokens_in(transfer) == [] and answer["upload_token"] not in json.dumps(transfer)
+    usage = transfer["usage"]
+    for needed in (
+        'curl -sS -f -X PATCH "' + answer["route"] + '"',
+        '"Authorization: Bearer $MY_PA_FILES_TICKET"',
+        '"Upload-Offset: 0"',
+        '"Upload-Complete: sha256=<sha256>, length=<length>"',
+        "--data-binary @<file>",
+        str(answer["chunk_max_bytes"]),
+        "HEAD",
+        "files.stat",
+    ):
+        assert needed in usage, needed
+    # The receipt keeps the recipe and never the token.
+    (receipt,) = world.rows.receipts.values()
+    assert receipt.result["transfer"] == transfer and _tokens_in(receipt.result) == []
+
+
+def test_a_download_ticket_carries_a_get_recipe_with_range_resume(
+    world: _HandleWorld,
+) -> None:
+    from my_pa.application.commands import BeginFileDownload
+
+    (world.root / "d.bin").write_bytes(b"synthetic download")
+    answer = world.run(BeginFileDownload(workspace_id=WORKSPACE, path="d.bin"))
+    transfer = answer["transfer"]
+    assert transfer["method"] == "GET" and transfer["url"] == answer["route"]
+    assert _tokens_in(transfer) == [] and answer["download_token"] not in json.dumps(transfer)
+    assert 'curl -sS -f "' + answer["route"] + '"' in transfer["usage"]
+    assert "Range: bytes=<n>-" in transfer["usage"]
+
+
+def test_the_recipe_is_deterministic_and_joins_the_public_origin() -> None:
+    from my_pa.domain.files.transfer import download_transfer, transfer_url, upload_transfer
+
+    route = "/files/v1/uploads/fwupl_x"
+    assert transfer_url(route, None) == route
+    assert (
+        transfer_url(route, "https://mcp.example.invalid/") == "https://mcp.example.invalid" + route
+    )
+    assert upload_transfer(route, 7) == upload_transfer(route, 7)
+    assert download_transfer(route) == download_transfer(route)
+
+
+def test_the_handle_field_is_optional_and_says_it_is_only_for_file_object_hosts() -> None:
+    from my_pa.adapters.mcp.server import _remote_tool
+    from my_pa.adapters.mcp.tools import TOOLS
+
+    tool = next(tool for tool in TOOLS if tool.name == "files.upload.begin")
+    remote = _remote_tool(tool, oauth_scopes=frozenset())
+    schema = remote.input_schema
+    assert "source_file" not in schema["required"]
+    description = schema["properties"]["source_file"]["description"]
+    assert description.startswith("Optional; only for hosts that supply file objects")
+    assert "Omit it (the default)" in description

@@ -474,7 +474,7 @@ operations in [`files-workspace.md`](files-workspace.md)):
 | Client | Upload | Download |
 |---|---|---|
 | ChatGPT (also when served the compact façade: `files.upload.begin`, `files.download.begin`, `files.list` and `files.search` are top-level tools beside `my_pa.*`, contract §17.4; real-ChatGPT behaviour of these descriptors awaits a re-proof) | Attach the file and call `files.upload.begin` with `path`; the client fills the top-level `source_file` (declared by `_meta["openai/fileParams"]`). The server fetches it and stores it in that one call: no ticket, no route. | Call `files.download.begin`; the result carries a `resource_link` the client reads with `resources/read` and hands to the user as a file. |
-| Abacus (sandbox HTTP) | The ticket flow above (`upload_token` + `route`), from its sandbox. | The ticket flow above. |
+| Abacus (sandbox HTTP; no native handle) | Call `files.upload.begin` without `source_file` (top-level when served the compact façade, contract §17.4/§17.5). The answer's `transfer` names the method, URL and headers and its `usage` is a ready `curl` command reading the token from `MY_PA_FILES_TICKET` (set it to `upload_token`); the agent runs it in its sandbox, then checks `files.stat` with `include_sha256`. | Call `files.download.begin`; run `transfer.usage` with `MY_PA_FILES_TICKET` set to `download_token` (resume with `Range`). The `resource_link` is not delivered as a file in Abacus. |
 | CLI / browser | The ticket flow above, or the reference client. | The ticket flow above. |
 
 Prompt guidance for a ChatGPT connector: "To save an attached file to the
@@ -486,6 +486,14 @@ about a minute, or not an allowed host): attach the file again.
 `file_handle_unsupported` means this server composes no handle fetcher. A file
 that cannot be fetched within the 25 s deadline is refused; there is no
 `files.fetch_url` and no base64 path for files.
+
+Prompt guidance for an Abacus connector: "To save a file from your sandbox to
+the workspace, call `files.upload.begin` with the destination `path` (never
+`source_file`), then run the `transfer.usage` command in your sandbox with
+`MY_PA_FILES_TICKET` set to `upload_token`; to fetch a workspace file, call
+`files.download.begin` and run its `transfer.usage` with `download_token`."
+Abacus against the deployed routes is unverified until an operator-authorized
+re-proof, and whether an Abacus scheduled task has a sandbox VM is unknown.
 
 ## Meeting records (WP-MTG-01 through WP-MTG-06)
 

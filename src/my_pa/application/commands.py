@@ -18453,9 +18453,10 @@ class BeginFileUpload:
             "source_file": {
                 "type": "object",
                 "description": (
-                    "A file the user attached, as the client's native file handle. "
-                    "When given, the server fetches it and stores it at path in this "
-                    "one call (no ticket, no route); omit it to get an upload ticket."
+                    "Optional; only for hosts that supply file objects for an attached "
+                    "file. When given, the server fetches it and stores it at path in "
+                    "this one call (no ticket). Omit it (the default) to get an upload "
+                    "ticket with a ready transfer recipe."
                 ),
                 "properties": {
                     "download_url": {"type": "string"},

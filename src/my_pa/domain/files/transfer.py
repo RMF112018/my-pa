@@ -52,6 +52,7 @@ from my_pa.domain.reports.content import canonical_json
 __all__ = [
     "DOWNLOAD_ID_PREFIX",
     "RECEIPT_ID_PREFIX",
+    "TICKET_TOKEN_ENV",
     "TICKET_TOKEN_PATTERN",
     "TICKET_TOKEN_PREFIX",
     "TRASH_ITEM_ID_PREFIX",
@@ -62,6 +63,7 @@ __all__ = [
     "UploadDeclaration",
     "advance_upload_offset",
     "check_upload_offset",
+    "download_transfer",
     "mint_ticket_token",
     "parse_file_id",
     "parse_range",
@@ -69,6 +71,8 @@ __all__ = [
     "parse_upload_offset",
     "ticket_token_digest",
     "ticket_token_from_authorization",
+    "transfer_url",
+    "upload_transfer",
     "validate_sha256",
     "validate_ttl",
     "verify_staged",
@@ -397,3 +401,64 @@ def write_intent_digest(capability: str, arguments: Mapping[str, object]) -> str
     except (TypeError, ValueError):
         raise FilesArgumentError("arguments", "type") from None
     return hashlib.sha256(document).hexdigest()
+
+
+# --- agent-usable ticket transfers (contract section 17.5) ---------------------------
+
+#: The environment variable the recipe reads a ticket token from: the reference
+#: client's (`scripts/my_pa_files.py`), so the token never appears in the text.
+TICKET_TOKEN_ENV: Final = "MY_PA_FILES_TICKET"  # noqa: S105 - a variable name
+
+
+def transfer_url(route: str, public_origin: str | None) -> str:
+    """The ticket's route joined to the public origin, or the relative route."""
+    return route if not public_origin else public_origin.rstrip("/") + route
+
+
+def upload_transfer(url: str, chunk_max_bytes: int) -> dict[str, object]:
+    """How an agent completes an upload ticket over HTTP. Static text; no token."""
+    usage = (
+        f"Upload the file in one request (when it is at most {chunk_max_bytes} bytes): "
+        f'curl -sS -f -X PATCH "{url}" '
+        f'-H "Authorization: Bearer ${TICKET_TOKEN_ENV}" '
+        '-H "Upload-Offset: 0" '
+        '-H "Upload-Complete: sha256=<sha256>, length=<length>" '
+        '-H "Content-Type: application/octet-stream" '
+        "--data-binary @<file> "
+        f"-- with {TICKET_TOKEN_ENV} set to upload_token, <sha256> the file's lowercase "
+        "SHA-256 hex and <length> its byte count; a 200 answer is the finalized entry. "
+        f"A larger file: PATCH pieces of at most {chunk_max_bytes} bytes, each with "
+        "Upload-Offset set to the bytes already sent, the last also with Upload-Complete; "
+        "to resume, HEAD the url (same Authorization) and continue from its Upload-Offset. "
+        "Then verify with files.stat (include_sha256: true) on the same path."
+    )
+    return {
+        "method": "PATCH",
+        "url": url,
+        "auth_header_name": "Authorization",
+        "headers": {
+            "Upload-Offset": "0",
+            "Upload-Complete": "sha256=<sha256>, length=<length>",
+            "Content-Type": "application/octet-stream",
+        },
+        "usage": usage,
+    }
+
+
+def download_transfer(url: str) -> dict[str, object]:
+    """How an agent fetches a download ticket over HTTP. Static text; no token."""
+    usage = (
+        f'Download: curl -sS -f "{url}" '
+        f'-H "Authorization: Bearer ${TICKET_TOKEN_ENV}" -o <file> '
+        f"-- with {TICKET_TOKEN_ENV} set to download_token. To resume a cut transfer "
+        'add -H "Range: bytes=<n>-" (n = bytes already received) and append. '
+        "Verify the file's SHA-256 against sha256 (begin with include_sha256: true), "
+        "or with files.stat (include_sha256: true)."
+    )
+    return {
+        "method": "GET",
+        "url": url,
+        "auth_header_name": "Authorization",
+        "headers": {},
+        "usage": usage,
+    }

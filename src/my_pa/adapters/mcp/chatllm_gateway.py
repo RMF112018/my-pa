@@ -192,6 +192,45 @@ def _as_object(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return value
 
 
+#: Files-workspace contract section 17.4: the one surrounding pair a model may
+#: wrap a capability name in, and the ASCII whitespace around it.
+_QUOTE_PAIRS: Final = frozenset(
+    {('"', '"'), ("'", "'"), ("`", "`"), ("\u201c", "\u201d"), ("\u2018", "\u2019")}
+)
+_ASCII_SPACE: Final = " \t\n\r\f\v"
+
+
+def _unquoted(name: str) -> str | None:
+    """`name` without surrounding ASCII whitespace and one quote pair, if that changes it."""
+    stripped = name.strip(_ASCII_SPACE)
+    if len(stripped) >= 2 and (stripped[0], stripped[-1]) in _QUOTE_PAIRS:
+        stripped = stripped[1:-1].strip(_ASCII_SPACE)
+    return stripped if stripped and stripped != name else None
+
+
+def _unsupported_name(
+    name: str,
+    allowed_canonical: frozenset[str],
+    kind: Literal["read", "write", "operator"] | None,
+) -> UnsupportedError:
+    """The refusal for a name outside the eligible set: a hint only for a quoted eligible one.
+
+    Never executes anything. The hint (`capability_name_has_quotes`) is given
+    only when the unquoted name is eligible here and of `kind` (any kind for
+    describe); otherwise the refusal is the unchanged bare `unsupported`, so
+    no ungranted or uncomposed name is confirmed.
+    """
+    candidate = _unquoted(name)
+    if candidate is not None and candidate in allowed_canonical:
+        try:
+            capability = Capability(candidate)
+        except ValueError:
+            return UnsupportedError()
+        if kind is None or facade_kind(capability) == kind:
+            return UnsupportedError(SafeDetail.CAPABILITY_NAME_HAS_QUOTES)
+    return UnsupportedError()
+
+
 def _parse_wrapper(document: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
     extra = set(document) - {"capability", "arguments"}
     if extra:
@@ -226,13 +265,15 @@ def prepare_compact_call(
     if tool_name not in {READ_TOOL, WRITE_TOOL, OPERATOR_TOOL}:
         raise UnsupportedError()
     target_name, nested = _parse_wrapper(document)
+    expected: Literal["read", "write", "operator"] = (
+        "read" if tool_name == READ_TOOL else "write" if tool_name == WRITE_TOOL else "operator"
+    )
     if target_name not in allowed_canonical:
-        raise UnsupportedError()
+        raise _unsupported_name(target_name, allowed_canonical, expected)
     try:
         capability = Capability(target_name)
     except ValueError:
         raise UnsupportedError() from None
-    expected = {READ_TOOL: "read", WRITE_TOOL: "write", OPERATOR_TOOL: "operator"}[tool_name]
     if facade_kind(capability) != expected:
         raise InvalidRequestError()
     return target_name, nested
@@ -286,7 +327,7 @@ def render_describe(
 
     if exact is not None:
         if exact not in allowed_canonical:
-            raise UnsupportedError()
+            raise _unsupported_name(exact, allowed_canonical, None)
         item = _catalog_item(exact)
         tool = _CANONICAL_TOOLS.get(exact)
         schema = None if tool is None else remote_tool_schema(tool.input_schema)

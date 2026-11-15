@@ -577,3 +577,114 @@ async def test_without_the_files_plane_a_compact_client_lists_only_facade_tools(
     write = next(tool for tool in listed.tools if tool.name == "my_pa.write")
     assert "source_file" not in write.input_schema["properties"]
     assert write.meta == {"securitySchemes": [{"type": "oauth2", "scopes": ["my-pa.read"]}]}
+
+
+# ---- the quoted-capability hint (section 17.4) ---------------------------------------------
+
+from my_pa.adapters.mcp.chatllm_gateway import (  # noqa: E402
+    DESCRIBE_TOOL,
+    READ_TOOL,
+    WRITE_TOOL,
+    prepare_compact_call,
+    render_describe,
+)
+from my_pa.application.errors import SafeDetail, UnsupportedError  # noqa: E402
+
+_ELIGIBLE: Final = frozenset({"files.write_text", "files.stat"})
+_ARGS: Final = {"payload": {"workspace_id": "mcp", "path": "a.txt", "text": "x"}}
+
+
+@pytest.mark.parametrize(
+    "quoted",
+    [
+        '"files.write_text"',
+        "'files.write_text'",
+        "`files.write_text`",
+        "\u201cfiles.write_text\u201d",
+        "\u2018files.write_text\u2019",
+        '  "files.write_text"  ',
+        " files.write_text\t",
+        '" files.write_text "',
+    ],
+)
+def test_a_quoted_eligible_name_is_refused_with_the_closed_hint(quoted: str) -> None:
+    with pytest.raises(UnsupportedError) as caught:
+        prepare_compact_call(
+            WRITE_TOOL, {"capability": quoted, "arguments": _ARGS}, allowed_canonical=_ELIGIBLE
+        )
+    assert caught.value.safe_details == (SafeDetail.CAPABILITY_NAME_HAS_QUOTES,)
+
+
+@pytest.mark.parametrize(
+    ("tool", "name", "allowed"),
+    [
+        (READ_TOOL, '"files.write_text"', _ELIGIBLE),  # a write name through my_pa.read
+        (WRITE_TOOL, '"files.stat"', _ELIGIBLE),  # a read name through my_pa.write
+        (WRITE_TOOL, '"files.write_text"', frozenset({"files.stat"})),  # not eligible
+        (WRITE_TOOL, '"files.nope"', _ELIGIBLE),  # unknown
+        (WRITE_TOOL, '""files.write_text""', _ELIGIBLE),  # two pairs: one only
+        (WRITE_TOOL, "\"files.write_text'", _ELIGIBLE),  # mismatched pair
+        (WRITE_TOOL, "files_write_text", _ELIGIBLE),  # no fuzzy matching
+        (WRITE_TOOL, "FILES.WRITE_TEXT", _ELIGIBLE),
+        (WRITE_TOOL, '""', _ELIGIBLE),
+    ],
+)
+def test_no_hint_unless_the_unquoted_name_is_eligible_through_this_tool(
+    tool: str, name: str, allowed: frozenset[str]
+) -> None:
+    with pytest.raises(UnsupportedError) as caught:
+        prepare_compact_call(
+            tool, {"capability": name, "arguments": _ARGS}, allowed_canonical=allowed
+        )
+    assert caught.value.safe_details == ()
+
+
+def test_describe_hints_a_quoted_eligible_name_only() -> None:
+    with pytest.raises(UnsupportedError) as hinted:
+        render_describe({"capability": "`files.stat`"}, allowed_canonical=_ELIGIBLE)
+    assert hinted.value.safe_details == (SafeDetail.CAPABILITY_NAME_HAS_QUOTES,)
+    with pytest.raises(UnsupportedError) as bare:
+        render_describe({"capability": "`files.mkdir`"}, allowed_canonical=_ELIGIBLE)
+    assert bare.value.safe_details == ()
+    assert DESCRIBE_TOOL == "my_pa.describe"
+
+
+def test_a_quoted_call_is_never_executed_and_answers_one_problem(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from my_pa.adapters.mcp.server import _answer
+    from my_pa.domain.capture.submission import CaptureTransport
+
+    service = build_service(scene.world, scene.providers)
+
+    def never(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("invoke reached")
+
+    monkeypatch.setattr(service, "invoke", never)
+    hinted_text, failed, extra = _answer(
+        service,
+        scene.principal,
+        WRITE_TOOL,
+        {"capability": '"files.write_text"', "arguments": _ARGS},
+        CaptureTransport.REMOTE_CLIENT,
+        None,
+        canonical_targets=_ELIGIBLE,
+        authenticated_client_id="synthetic-client",
+    )
+    bare_text, _failed, _extra = _answer(
+        service,
+        scene.principal,
+        WRITE_TOOL,
+        {"capability": '"files.mkdir"', "arguments": _ARGS},
+        CaptureTransport.REMOTE_CLIENT,
+        None,
+        canonical_targets=_ELIGIBLE,
+        authenticated_client_id="synthetic-client",
+    )
+    assert failed is True and extra is None
+    hinted, bare = json.loads(hinted_text), json.loads(bare_text)
+    assert hinted["code"] == bare["code"] == "unsupported"
+    assert hinted["safe_details"] == ["capability_name_has_quotes"]
+    assert "safe_details" not in bare or bare["safe_details"] == []
+    assert "files.write_text" not in hinted_text
+    assert "allowed_values" not in hinted

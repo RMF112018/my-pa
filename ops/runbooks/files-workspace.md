@@ -90,12 +90,16 @@ deploy recipe's arguments; it must pass with the workspace mount present.
 
 ## 4. Cloudflare Tunnel
 
-The byte routes are public only through two exact path rules, already in
-`ops/nas/remote/cloudflared-config.example.yml` (11 hostname rules before the
+The byte routes are public only through exact path rules in
+`ops/nas/remote/cloudflared-config.example.yml` (12 hostname rules before the
 404 catch-all; `validate.py` pins the list):
 
 - `^/files/v1/uploads/[^/]+$`
 - `^/files/v1/downloads/[^/]+$`
+- `^/files/v1/browser-downloads/[^/]+$` (contract §17.6, browser download
+  links; added 2026-11-15 and operator-gated: the live tunnel has only the
+  first two until the operator re-renders and restarts `cloudflared`; until
+  then a browser link answers the catch-all 404)
 
 Keep a copy of the current rendered config, render the new one to a fresh path
 (the renderer refuses to overwrite), move it into place, and restart only
@@ -191,6 +195,19 @@ re-checks the issuing grant, so revocation is immediate.
    `_commissioning/abacus.bin` and to download it back, using the answer's
    `transfer.usage`; compare SHA-256 both ways. `transfer.url` is absolute only
    when `MY_PA_REMOTE_MCP_PUBLIC_HOST` is set.
+
+6. **Browser download links (contract §17.6), ChatGPT.** Off by default. Set
+   `MY_PA_FILES_BROWSER_DOWNLOAD_CLIENT_IDS` to the ChatGPT connector's OAuth
+   client id (comma-separated for several) and optionally
+   `MY_PA_FILES_BROWSER_DOWNLOAD_TTL_SECONDS` (default 300, 60..900);
+   `MY_PA_REMOTE_MCP_PUBLIC_HOST` must be set, or the feature stays off and the
+   process logs a warning. After the tunnel rule above is live, ask ChatGPT
+   for `_commissioning/probe.bin`, click the link it shows, compare the
+   SHA-256, and click it again: the second click must be a plain 404. Each
+   completed download writes `files browser download completed
+   client=<id> size=<n>` (logger `my_pa.files.browser_download`) to the
+   remote MCP log; the link itself is never logged. Rollback: empty the
+   setting and recreate the service.
 
 **Client exit status 5 ("outcome unknown").** A completing PATCH whose response
 was lost may still have committed the finalize; the ticket is then closed and

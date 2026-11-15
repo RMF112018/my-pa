@@ -180,7 +180,13 @@ re-checks the issuing grant, so revocation is immediate.
    `file_handle_unsupported`) and `MY_PA_FILES_HANDLE_FETCH_DEADLINE_SECONDS`
    (default 25, at most 60). The remote MCP container needs outbound HTTPS to
    the allowed hosts; no tunnel rule changes (handle fetches are outbound and
-   resource reads ride `/mcp`).
+   resource reads ride `/mcp`). Both of the app's networks are `internal`, so
+   add the overlay `ops/nas/remote/compose.files-handle-egress.remote.example.yml`
+   (one extra non-internal network `my-pa-remote-mcp_handle-egress`, app only,
+   no published port) to the remote compose invocation; `live-gate.py` accepts
+   exactly that network and refuses it on the edge or when internal. Without
+   it every handle fetch is `file_handle_refused` with `cause=resolve_failed`.
+   Remove the overlay and recreate to cut the route.
    If ChatGPT gets `file_handle_refused`, read the remote MCP container's log
    for the one line `files handle refused cause=<cause> host=<host>` (logger
    `my_pa.files.handle_fetch`, WARNING). `cause=host_not_allowed` names the

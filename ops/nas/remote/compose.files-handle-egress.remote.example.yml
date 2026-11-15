@@ -1,0 +1,15 @@
+# Files-workspace contract section 17.2 (native file handles): outbound HTTPS for the remote MCP
+# process ONLY, so it can fetch a ChatGPT file handle from an allowlisted host
+# (MY_PA_FILES_HANDLE_HOST_SUFFIXES). Without this overlay both of the app's networks are internal and
+# every handle fetch is refused (`file_handle_refused`, operator log cause `resolve_failed`).
+# Used WITH ops/nas/remote/compose.yml and the live overlays, project my-pa-remote-mcp. Not a secret.
+# The extra network carries no published port and no peer; live-gate.py accepts it only as
+# `my-pa-remote-mcp_handle-egress` with Internal=false and refuses it on the cloudflared edge.
+# The fetcher itself enforces https, the host allowlist, public-address-only resolution, a pinned
+# connection and byte and time caps; this overlay only provides the route out. Runbook:
+# ops/runbooks/files-workspace.md. Remove the overlay (and recreate) to cut the route.
+services:
+  my-pa-mcp-remote:
+    networks: [data-plane, mcp-origin, handle-egress]
+networks:
+  handle-egress: {}

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import secrets
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -11,14 +13,29 @@ from typing import Final, Literal
 from mcp.server.context import ServerRequestContext
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.shared.exceptions import MCPError
+from mcp.types import (
+    BlobResourceContents,
+    ListResourcesResult,
+    ListResourceTemplatesResult,
+    PaginatedRequestParams,
+    ReadResourceRequestParams,
+    ReadResourceResult,
+    ResourceTemplate,
+)
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import BaseRoute, Route
-from starlette.types import Receive, Scope, Send
+from starlette.types import Message, Receive, Scope, Send
 
 from my_pa.adapters.mcp.server import McpAccess, create_mcp_server, published_tools
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES
+from my_pa.adapters.remote_resources import (
+    RemoteResourceRefused,
+    RemoteResourceSource,
+    RemoteResourceStream,
+)
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.mcp_database_witness import McpWitnessBinding
 from my_pa.domain.capture.submission import CaptureTransport
@@ -169,6 +186,98 @@ class RemoteAccessContext:
 RemoteAccessResolver = Callable[[str | None], RemoteAccessContext | None]
 
 
+#: Where a `resources/read` handler leaves its opened stream for `_McpEndpoint`.
+_PENDING_RESOURCE: Final = "remote_mcp_resource"
+#: JSON-RPC "resource not found" (MCP); every refusal answers it with a token.
+_RESOURCE_REFUSED_CODE: Final = -32002
+#: The longest one streamed body send may wait on a reader that stopped reading.
+RESOURCE_SEND_IDLE_SECONDS: Final = 30.0
+
+
+@dataclass
+class _PendingResource:
+    marker: str
+    opened: RemoteResourceStream
+
+
+class _DeferredResponse:
+    """Hold a response that carries a resource marker until it can be streamed.
+
+    A `resources/read` answer is built by the SDK, with every header, origin
+    and protocol check it makes, around a random placeholder blob. Only when
+    the handler registered a pending resource for this request is the
+    response held; any other response passes straight through. After the SDK
+    returns -- and after the `/mcp` slot and call timeout are released -- the
+    placeholder is replaced by the streamed base64, with an exact
+    `Content-Length`, so the file is never buffered whole.
+    """
+
+    def __init__(self, send: Send, state: dict[str, object], max_held_bytes: int) -> None:
+        self._send = send
+        self._state = state
+        self._max_held = max_held_bytes
+        self.start: Message | None = None
+        self.body = bytearray()
+        self.complete = False
+
+    async def __call__(self, message: Message) -> None:
+        kind = message.get("type")
+        if kind == "http.response.start" and self._state.get(_PENDING_RESOURCE) is not None:
+            self.start = message
+            return
+        if kind == "http.response.body" and self.start is not None and not self.complete:
+            self.body.extend(message.get("body", b""))
+            if len(self.body) > self._max_held:
+                raise RuntimeError("held response past its bound")
+            self.complete = not message.get("more_body", False)
+            return
+        await self._send(message)
+
+    async def release(self, send_idle_seconds: float) -> None:
+        """Send the held response, streaming the pending resource into its placeholder."""
+        pending = self._state.pop(_PENDING_RESOURCE, None)
+        if not isinstance(pending, _PendingResource):
+            return
+        try:
+            if self.start is None or not self.complete:
+                return
+            marker = pending.marker.encode("ascii")
+            body = bytes(self.body)
+            if body.count(marker) != 1:
+                await self._send(self.start)
+                await self._send({"type": "http.response.body", "body": body})
+                return
+            prefix, suffix = body.split(marker)
+            encoded_length = 4 * ((pending.opened.size + 2) // 3)
+            headers = [
+                (name, value)
+                for name, value in self.start.get("headers", [])
+                if name.lower() != b"content-length"
+            ]
+            headers.append(
+                (b"content-length", str(len(prefix) + encoded_length + len(suffix)).encode())
+            )
+            send = self._send
+
+            async def bounded(chunk: bytes) -> None:
+                async with asyncio.timeout(send_idle_seconds):
+                    await send({"type": "http.response.body", "body": chunk, "more_body": True})
+
+            async def write(piece: bytes) -> None:
+                await bounded(base64.b64encode(piece))
+
+            await self._send({**self.start, "headers": headers})
+            await bounded(prefix)
+            await pending.opened.stream(write)
+            await self._send({"type": "http.response.body", "body": suffix})
+        except Exception:
+            # The headers may have left: the stream stops short of its
+            # Content-Length and the server closes the connection.
+            return
+        finally:
+            await pending.opened.aclose()
+
+
 def _metadata_url(resource: str) -> str:
     suffix = "/mcp" if resource.endswith("/mcp") else ""
     origin = resource.removesuffix(suffix).rstrip("/")
@@ -187,7 +296,9 @@ class _McpEndpoint:
         auth_slots: asyncio.Semaphore,
         timeout_seconds: float,
         required_scopes: frozenset[str],
+        resource_send_idle_seconds: float = RESOURCE_SEND_IDLE_SECONDS,
     ) -> None:
+        self.resource_send_idle_seconds = resource_send_idle_seconds
         self.manager = manager
         self.resolver = resolver
         self.resource = resource
@@ -247,9 +358,20 @@ class _McpEndpoint:
                 )
                 await response(scope, receive, send)
                 return
-            async with asyncio.timeout(self.timeout_seconds), self.slots:
-                scope.setdefault("state", {})["remote_mcp_access"] = resolved
-                await self.manager.handle_request(scope, receive, send)
+            state = scope.setdefault("state", {})
+            deferred = _DeferredResponse(send, state, MAX_REQUEST_BYTES)
+            try:
+                async with asyncio.timeout(self.timeout_seconds), self.slots:
+                    state["remote_mcp_access"] = resolved
+                    await self.manager.handle_request(scope, receive, deferred)
+            except BaseException:
+                pending = state.pop(_PENDING_RESOURCE, None)
+                if isinstance(pending, _PendingResource):
+                    await pending.opened.aclose()
+                raise
+            # Outside the call slot and its timeout: a resource stream keeps
+            # its own bounds (files-workspace contract section 17.3).
+            await deferred.release(self.resource_send_idle_seconds)
         except TimeoutError:
             response = JSONResponse({"error": "temporarily_unavailable"}, status_code=503)
             await response(scope, receive, send)
@@ -334,6 +456,7 @@ def create_remote_mcp_app(
     authorization_servers: tuple[str, ...] = (),
     scopes: frozenset[str] = frozenset(),
     additional_routes: Sequence[BaseRoute] = (),
+    resources: RemoteResourceSource | None = None,
 ) -> Starlette:
     """Compose `/mcp` without moving identity or policy into the transport.
 
@@ -391,6 +514,61 @@ def create_remote_mcp_app(
             database_witness=resolved.database_witness,
         )
 
+    def resolved_access(context: ServerRequestContext[object]) -> RemoteAccessContext | None:
+        request = context.request
+        resolved = (
+            None if request is None else request.scope.get("state", {}).get("remote_mcp_access")
+        )
+        if not isinstance(resolved, RemoteAccessContext) or (
+            require_bound_service and resolved.service is None
+        ):
+            return None
+        return resolved
+
+    async def list_resources(
+        _context: ServerRequestContext[object], _params: PaginatedRequestParams | None
+    ) -> ListResourcesResult:
+        # Resources are reachable only through a tool result's link.
+        return ListResourcesResult(resources=[])
+
+    async def list_resource_templates(
+        context: ServerRequestContext[object], _params: PaginatedRequestParams | None
+    ) -> ListResourceTemplatesResult:
+        if resources is None or not serving or resolved_access(context) is None:
+            return ListResourceTemplatesResult(resource_templates=[])
+        return ListResourceTemplatesResult(
+            resource_templates=[
+                ResourceTemplate(
+                    name=template.name,
+                    uri_template=template.uri_template,
+                    description=template.description,
+                    mime_type=template.mime_type,
+                )
+                for template in resources.templates()
+            ]
+        )
+
+    async def read_resource(
+        context: ServerRequestContext[object], params: ReadResourceRequestParams
+    ) -> ReadResourceResult:
+        resolved = resolved_access(context)
+        request = context.request
+        if resources is None or not serving or resolved is None or request is None:
+            raise MCPError(code=_RESOURCE_REFUSED_CODE, message="unsupported")
+        state = request.scope.setdefault("state", {})
+        if state.get(_PENDING_RESOURCE) is not None:
+            raise MCPError(code=_RESOURCE_REFUSED_CODE, message="unsupported")
+        uri = str(params.uri)
+        try:
+            opened = await resources.open(uri, resolved)
+        except RemoteResourceRefused as refusal:
+            raise MCPError(code=_RESOURCE_REFUSED_CODE, message=refusal.reason) from None
+        marker = secrets.token_hex(32)
+        state[_PENDING_RESOURCE] = _PendingResource(marker, opened)
+        return ReadResourceResult(
+            contents=[BlobResourceContents(uri=uri, mime_type=opened.mime_type, blob=marker)]
+        )
+
     server = create_mcp_server(
         service,
         enabled=serving,
@@ -399,6 +577,9 @@ def create_remote_mcp_app(
         max_concurrent_calls=max_concurrent_calls,
         call_timeout_seconds=call_timeout_seconds,
         max_result_bytes=MAX_REMOTE_RESULT_BYTES,
+        on_list_resources=None if resources is None else list_resources,
+        on_list_resource_templates=None if resources is None else list_resource_templates,
+        on_read_resource=None if resources is None else read_resource,
     )
     manager = StreamableHTTPSessionManager(
         app=server,

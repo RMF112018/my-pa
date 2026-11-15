@@ -68,8 +68,8 @@ A ticket token is `gfwtk_` followed by 64 lowercase hex characters (32 CSPRNG by
 
 A path is validated as a whole, then split on `/` and validated per component. Every refusal is `invalid_path`.
 
-1. It must be relative. A leading `/` is refused, and so is a trailing `/`. It is a `str` encoded as UTF-8 and must be well-formed (no lone surrogates).
-2. No component may be empty. That covers `//`, a leading or trailing `/`, and an empty path where an entry is required. No component may be `.` or `..`.
+1. It must be relative. A leading `/` is refused. **Exactly one trailing `/` after a non-empty path is accepted and dropped** (operator decision 2026-11-15, after real ChatGPT sent `reproof/` to `files.list`): `reproof/` is `reproof`, for a directory or a file alike (no `ENOTDIR` emulation). The dropped form is the canonical path everywhere -- in the command, every result, receipt and intent digest -- so `x` and `x/` replay identically. `/` alone, `//`, `a//`, `a/./`, `a/../` and a reserved name with a trailing `/` (`.my-pa/`) are refused as before. It is a `str` encoded as UTF-8 and must be well-formed (no lone surrogates).
+2. No component may be empty (after rule 1's single trailing-`/` trim). That covers `//`, a leading `/`, a doubled trailing `//`, and an empty path where an entry is required. No component may be `.` or `..`.
 3. NUL is refused. So are the other C0 controls U+0001–U+001F and U+007F. **The backslash `\` is refused**, because SMB clients treat it as a separator, so a name containing it would mean different files to different writers.
 4. Each component is at most 255 bytes in UTF-8. The whole path is at most 4096 bytes.
 5. **Reserved names** are refused as any component, at any depth, compared with ASCII case folding: `.my-pa` (the control directory), `@eaDir`, `#recycle`, `#snapshot`. Folding defends against case-insensitive SMB views of a case-sensitive volume. Listing and search silently omit entries with these names. `.DS_Store` and other dotfiles are ordinary entries.

@@ -812,6 +812,12 @@ class SafeDetail(StrEnum):
     DIGEST_MISMATCH = "digest_mismatch"
     OFFSET_MISMATCH = "offset_mismatch"
     TICKET_INVALID = "ticket_invalid"
+    #: Files workspace native file handles (contract section 17):
+    #: `file_handle_unsupported` `unsupported`, `file_handle_refused`
+    #: `invalid_request`, and the `source_file` field they accompany.
+    FILE_HANDLE_UNSUPPORTED = "file_handle_unsupported"
+    FILE_HANDLE_REFUSED = "file_handle_refused"
+    SOURCE_FILE = "source_file"
     #: Files workspace (contract section 6): the plane's own request fields.
     #: `PATH`, `TO_PATH` and `NEW_NAME` accompany `INVALID_PATH`; the paging,
     #: `EXPECTED_VERSION`, `VERSION_ID`, `QUERY`, `OFFSET`, `MAX_BYTES`,

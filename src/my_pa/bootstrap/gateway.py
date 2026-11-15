@@ -207,6 +207,7 @@ from my_pa.bootstrap.apple_machine_control import SqlAppleMachineControl
 from my_pa.bootstrap.goodnotes_rollout import allowed_activation_steps
 from my_pa.bootstrap.settings import AuthMode, Settings
 from my_pa.contracts.ports import (
+    FileHandleFetcher,
     FileWorkspaceStore,
     ManagedByteStore,
     ProgramReadUnitOfWork,
@@ -234,6 +235,7 @@ from my_pa.domain.identity.webauthn_relying_party import (
 from my_pa.domain.policy.decision import POLICY_VERSION
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.file_workspace.handle_fetch import HandleFetchPolicy, SafeHandleFetcher
 from my_pa.infrastructure.file_workspace.store import FilesystemFileWorkspaceStore
 from my_pa.infrastructure.jobs.reenrichment import (
     claim_reenrichment_work,
@@ -718,6 +720,27 @@ def _file_workspace_application(
         store,
         workspace_id=settings.files_workspace_id,
         max_upload_bytes=settings.files_max_upload_bytes,
+        handle_fetcher=files_handle_fetcher(settings),
+    )
+
+
+def files_handle_fetcher(settings: Settings) -> FileHandleFetcher | None:
+    """The native file handle fetcher (contract section 17.2), or `None` when no host is allowed.
+
+    `None` fails closed: a `source_file` is refused `file_handle_unsupported`.
+    """
+    suffixes = tuple(
+        suffix.strip()
+        for suffix in settings.files_handle_host_suffixes.split(",")
+        if suffix.strip()
+    )
+    if not suffixes:
+        return None
+    return SafeHandleFetcher(
+        HandleFetchPolicy(
+            allowed_host_suffixes=suffixes,
+            deadline_seconds=float(settings.files_handle_fetch_deadline_seconds),
+        )
     )
 
 

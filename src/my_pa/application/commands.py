@@ -18163,6 +18163,36 @@ def _files_byte_count(value: object, detail: SafeDetail) -> None:
         raise InvalidRequestError(detail)
 
 
+#: Contract section 17.2: a native file handle's keys and each value's bound.
+#: Only `download_url` and `file_id` are required -- the shape the client
+#: platform's file-param scan demands -- and `file_name`/`mime_type` are
+#: accepted and never used (proof finding F3).
+_FILES_SOURCE_FILE_BOUNDS: Final[Mapping[str, int]] = MappingProxyType(
+    {"download_url": 8192, "file_id": 256, "file_name": 1024, "mime_type": 1024}
+)
+_FILES_SOURCE_FILE_REQUIRED: Final = frozenset({"download_url", "file_id"})
+
+
+def _files_source_file(value: object) -> None:
+    """A section 17.2 handle object, or `invalid_request` on `source_file`.
+
+    Checks the shape only; whether the URL may be fetched is the fetcher's.
+    Never echoes a value: the URL is a bearer credential.
+    """
+    if value is None:
+        return
+    if type(value) is not dict or not value.keys() >= _FILES_SOURCE_FILE_REQUIRED:
+        raise InvalidRequestError(SafeDetail.SOURCE_FILE)
+    for key, item in value.items():
+        bound = _FILES_SOURCE_FILE_BOUNDS.get(key) if type(key) is str else None
+        if bound is None:
+            raise InvalidRequestError(SafeDetail.SOURCE_FILE)
+        if item is None and key not in _FILES_SOURCE_FILE_REQUIRED:
+            continue
+        if type(item) is not str or not 1 <= len(item) <= bound:
+            raise InvalidRequestError(SafeDetail.SOURCE_FILE)
+
+
 def parse_files_history_cursor(value: str | None) -> tuple[str | None, str | None]:
     """A `files.history` cursor: the last version and the last trash item it returned.
 
@@ -18416,7 +18446,26 @@ class BeginFileUpload:
     capability: ClassVar[Capability] = Capability.FILES_UPLOAD_BEGIN
 
     mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
-        {"ttl_seconds": {"description": f"Ticket lifetime. {_FILES_ROUTE_NOTE}"}}
+        {
+            "ttl_seconds": {"description": f"Ticket lifetime. {_FILES_ROUTE_NOTE}"},
+            # Contract section 17.2. All four properties declared and only two
+            # required: the shape a client's native file param is filled into.
+            "source_file": {
+                "type": "object",
+                "description": (
+                    "A file the user attached, as the client's native file handle. "
+                    "When given, the server fetches it and stores it at path in this "
+                    "one call (no ticket, no route); omit it to get an upload ticket."
+                ),
+                "properties": {
+                    "download_url": {"type": "string"},
+                    "file_id": {"type": "string"},
+                    "file_name": {"type": "string"},
+                    "mime_type": {"type": "string"},
+                },
+                "required": ["download_url", "file_id"],
+            },
+        }
     )
 
     workspace_id: str
@@ -18426,6 +18475,8 @@ class BeginFileUpload:
     size: int | None = None
     sha256: str | None = None
     ttl_seconds: int | None = None
+    #: Section 17.2's handle. Kept out of `repr`: its URL is a bearer credential.
+    source_file: dict[str, object] | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
@@ -18437,6 +18488,9 @@ class BeginFileUpload:
         if self.sha256 is not None:
             _files_sha256(self.sha256)
         _files_ttl(self.ttl_seconds)
+        _files_source_file(self.source_file)
+        if self.source_file is not None and self.ttl_seconds is not None:
+            raise InvalidRequestError(SafeDetail.TTL_SECONDS)
 
 
 @dataclass(frozen=True, slots=True)

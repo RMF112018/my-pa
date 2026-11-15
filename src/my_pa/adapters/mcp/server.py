@@ -83,7 +83,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -96,7 +96,11 @@ from mcp.types import (
     CallToolResult,
     ContentBlock,
     ImageContent,
+    ListResourcesResult,
+    ListResourceTemplatesResult,
     ListToolsResult,
+    ReadResourceResult,
+    ResourceLink,
     TextContent,
     Tool,
 )
@@ -111,7 +115,11 @@ from my_pa.adapters.mcp.chatllm_gateway import (
 )
 from my_pa.adapters.mcp.tools import TOOLS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
-from my_pa.adapters.remote_request import compose_remote_arguments, remote_tool_schema
+from my_pa.adapters.remote_request import (
+    compose_remote_arguments,
+    remote_file_params,
+    remote_tool_schema,
+)
 from my_pa.application.errors import (
     ApplicationError,
     InternalError,
@@ -267,6 +275,46 @@ def _image_from_mapping(
     return ImageContent(type="image", data=content_base64, mime_type="image/png")
 
 
+#: Files-workspace contract section 17.3: the scheme of a workspace resource
+#: a remote client reads through `resources/read`.
+_WORKSPACE_RESOURCE_SCHEME = "mcp-files://"
+
+
+def _resource_link_from_result(result: object) -> ResourceLink | None:
+    """Project a download-ticket result as one `resource_link` block, or nothing.
+
+    Shape-matched like the raster projection: a result naming a workspace
+    resource URI, a file name and a byte size. The link is descriptive; the
+    read is authorized again, as the ticket's own client, by `resources/read`.
+    """
+    if not isinstance(result, dict):
+        return None
+    try:
+        return _resource_link_from_mapping(**result)
+    except TypeError:
+        return None
+
+
+def _resource_link_from_mapping(
+    *,
+    resource_uri: object = None,
+    name: object = None,
+    size: object = None,
+    **_ignored: object,
+) -> ResourceLink | None:
+    if not (isinstance(resource_uri, str) and resource_uri.startswith(_WORKSPACE_RESOURCE_SCHEME)):
+        return None
+    if not _non_empty_str(name) or not isinstance(size, int) or isinstance(size, bool):
+        return None
+    return ResourceLink(
+        type="resource_link",
+        uri=resource_uri,
+        name=str(name),
+        mime_type="application/octet-stream",
+        size=size,
+    )
+
+
 def _result_bytes(blocks: Sequence[ContentBlock]) -> int:
     """Every content block, in the units the result-size ceiling counts."""
     total = 0
@@ -302,8 +350,12 @@ def _answer(
     authenticated_client_id: str | None = None,
     database_witness: McpWitnessBinding | None = None,
     response_metadata: dict[str, Any] | None = None,
-) -> tuple[str, bool, ImageContent | None]:
-    """One tool call, executed synchronously: text, failure flag, optional image.
+) -> tuple[str, bool, ImageContent | ResourceLink | None]:
+    """One tool call, executed synchronously: text, failure flag, optional extra block.
+
+    The extra block is the pinned-raster image, or -- on the remote transport
+    only -- a download ticket's `resource_link` (files-workspace contract
+    section 17.3).
 
     Runs in a worker thread. Nothing awaits inside it and nothing it calls is
     async, which is the property that keeps the boundary one function wide.
@@ -382,6 +434,10 @@ def _answer(
         current_mcp_database_witness.reset(token)
     if envelope.error is not None:
         return envelope.to_canonical_json(), True, None
+    if transport is CaptureTransport.REMOTE_CLIENT:
+        link = _resource_link_from_result(envelope.result)
+        if link is not None:
+            return envelope.to_canonical_json(), False, link
     projected = _image_from_result(envelope.result)
     if isinstance(projected, ImageContent):
         return envelope.to_canonical_json(), False, projected
@@ -426,6 +482,12 @@ def _remote_tool(tool: Tool, *, oauth_scopes: frozenset[str]) -> Tool:
     # only, while bearer, scope, grant, and capability enforcement remain at
     # the origin and application boundaries.
     meta["securitySchemes"] = [{"type": "oauth2", "scopes": sorted(oauth_scopes)}]
+    # Files-workspace contract section 17.2: the top-level fields a client may
+    # fill with a user's attached file. Descriptive too: the handle is fetched
+    # and checked behind `invoke`, under the caller's own grants.
+    file_params = remote_file_params(schema)
+    if file_params:
+        meta["openai/fileParams"] = file_params
     return tool.model_copy(update={"inputSchema": schema, "input_schema": schema, "meta": meta})
 
 
@@ -440,6 +502,9 @@ def create_mcp_server(
     call_timeout_seconds: float | None = None,
     max_result_bytes: int | None = None,
     clock: Callable[[], datetime] = utc_now,
+    on_list_resources: Callable[..., Awaitable[ListResourcesResult]] | None = None,
+    on_list_resource_templates: Callable[..., Awaitable[ListResourceTemplatesResult]] | None = None,
+    on_read_resource: Callable[..., Awaitable[ReadResourceResult]] | None = None,
 ) -> Server[object]:
     """The MCP server serving `service` as the one local `principal`.
 
@@ -623,11 +688,17 @@ def create_mcp_server(
             _meta=(response_metadata or None) if not failed else None,
         )
 
+    # The remote composition's workspace resources (files-workspace contract
+    # section 17.3) pass straight through: authorization is the resource
+    # source's, from the authenticated request, never here.
     return Server(
         SERVER_NAME,
         version=__version__,
         on_list_tools=_list_tools,
         on_call_tool=_call_tool,
+        on_list_resources=on_list_resources,
+        on_list_resource_templates=on_list_resource_templates,
+        on_read_resource=on_read_resource,
     )
 
 

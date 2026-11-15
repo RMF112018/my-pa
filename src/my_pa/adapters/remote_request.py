@@ -40,11 +40,13 @@ from my_pa.domain.source.registry import issue_identifier
 __all__ = [
     "CANONICAL_REMOTE_PURPOSES",
     "KNOWLEDGE_SERVER_OWNED_FIELDS",
+    "REMOTE_FILE_PARAM_FIELDS",
     "REMOTE_OWNED_PAYLOAD_FIELDS",
     "SERVER_OWNED_REMOTE_FIELDS",
     "compose_remote_arguments",
     "is_remote_idempotent",
     "is_server_replay_capability",
+    "remote_file_params",
     "remote_tool_schema",
     "resolve_remote_purpose",
 ]
@@ -104,6 +106,15 @@ SERVER_OWNED_REMOTE_FIELDS: Final[frozenset[str]] = frozenset(
 #: concern: a model inventing `idempotency_key` is the same class of defect as
 #: inventing `request_id`.
 REMOTE_OWNED_PAYLOAD_FIELDS: Final[frozenset[str]] = frozenset({"idempotency_key"})
+
+#: Payload fields the remote surface publishes at the top level of a tool's input
+#: schema, and moves back under `payload` before `normalize` (files-workspace
+#: contract section 17.2). A native file param is filled by the client only at
+#: the top level it is declared at (`_meta["openai/fileParams"]`, which names
+#: top-level fields), so the canonical command field `source_file` is lifted
+#: there on this surface alone. A field, not a capability: any published payload
+#: property of that name is lifted, and `remote_file_params` reports which.
+REMOTE_FILE_PARAM_FIELDS: Final[frozenset[str]] = frozenset({"source_file"})
 
 # Fields the scheduled GoodNotes client receives only as opaque server results.
 # Refusing them specifically on the control-plane commands preserves the
@@ -598,6 +609,17 @@ def compose_remote_arguments(
     """
     if SERVER_OWNED_REMOTE_FIELDS.intersection(arguments):
         raise InvalidRequestError()
+    lifted = REMOTE_FILE_PARAM_FIELDS.intersection(arguments)
+    if lifted:
+        # Section 17.2: a top-level file param goes back under `payload`. One
+        # stated in both places is refused rather than resolved.
+        nested = arguments.get("payload", {})
+        if not isinstance(nested, Mapping) or lifted.intersection(nested):
+            raise InvalidRequestError()
+        arguments = {
+            **{name: value for name, value in arguments.items() if name not in lifted},
+            "payload": {**nested, **{name: arguments[name] for name in sorted(lifted)}},
+        }
     try:
         capability = Capability(capability_name)
     except ValueError:
@@ -681,6 +703,12 @@ def remote_tool_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
             for name in payload_view.get("required", [])
             if name not in REMOTE_OWNED_PAYLOAD_FIELDS
         ]
+        for name in sorted(REMOTE_FILE_PARAM_FIELDS.intersection(payload_properties)):
+            # Section 17.2: published at the top level, never required there.
+            properties[name] = payload_properties.pop(name)
+            payload_view["required"] = [
+                field for field in payload_view["required"] if field != name
+            ]
         properties["payload"] = payload_view
         view["properties"] = properties
     definitions = view.get("$defs")
@@ -693,3 +721,14 @@ def remote_tool_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
     else:
         view.pop("$defs", None)
     return view
+
+
+def remote_file_params(schema: Mapping[str, Any]) -> list[str]:
+    """The top-level native file params of a published remote schema (section 17.2).
+
+    What the tool declares as `_meta["openai/fileParams"]`: exactly the lifted
+    fields `remote_tool_schema` placed at the top level, so the declaration
+    cannot name a field the schema does not publish.
+    """
+    properties = schema.get("properties", {})
+    return sorted(name for name in REMOTE_FILE_PARAM_FIELDS if name in properties)

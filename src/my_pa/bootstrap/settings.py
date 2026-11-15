@@ -413,6 +413,16 @@ class Settings(StrictModel):
     #: `statvfs` free-space reserve (default 20 GiB). Not secrets.
     files_max_upload_bytes: int = Field(default=10737418240, ge=1)
     files_disk_reserve_bytes: int = Field(default=21474836480, ge=0)
+    #: Contract section 17.2: the host suffixes a native file handle's
+    #: `download_url` may name, comma-separated, each with a leading `.`
+    #: (`MY_PA_FILES_HANDLE_HOST_SUFFIXES`). Empty composes no handle fetcher,
+    #: so a handle is refused `file_handle_unsupported`. Not a secret.
+    files_handle_host_suffixes: str = Field(
+        default=".blob.core.windows.net",
+        pattern=r"^\s*(?:\.[a-z0-9-]+(?:\.[a-z0-9-]+)+\s*(?:,\s*\.[a-z0-9-]+(?:\.[a-z0-9-]+)+\s*)*)?$",
+    )
+    #: Contract section 17.2: one handle fetch's whole deadline, 1..60 s.
+    files_handle_fetch_deadline_seconds: int = Field(default=25, ge=1, le=60)
     #: The Frontier MCP surface's kill switch (WP-28).
     #:
     #: **The switch is off by default and the surface serves**, which is the

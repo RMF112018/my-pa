@@ -273,6 +273,9 @@ REDACTED_KEYS: Final = frozenset(
         "privatekeypem",
         "authheader",
         "authorizationheader",
+        # Files-workspace contract section 17.2: a native file handle's
+        # `download_url` is a bearer link (a SAS signature in its query).
+        "downloadurl",
     }
 )
 #: Normalised suffixes that make any key credential-bearing: `auth_token`,

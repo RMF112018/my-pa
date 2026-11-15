@@ -90,7 +90,7 @@ HANDLE_FETCH_DEADLINE_MAX_SECONDS: Final = 60
 #: Section 17: the host suffixes a handle's `download_url` may name by default
 #: (`MY_PA_FILES_HANDLE_HOST_SUFFIXES`); the proof observed ChatGPT's file links
 #: on Azure blob storage only.
-HANDLE_HOST_SUFFIXES_DEFAULT: Final = (".blob.core.windows.net",)
+HANDLE_HOST_SUFFIXES_DEFAULT: Final = (".blob.core.windows.net", ".oaiusercontent.com")
 
 #: Section 3 rule 4.
 MAX_COMPONENT_BYTES: Final = 255

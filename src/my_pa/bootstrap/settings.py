@@ -418,7 +418,7 @@ class Settings(StrictModel):
     #: (`MY_PA_FILES_HANDLE_HOST_SUFFIXES`). Empty composes no handle fetcher,
     #: so a handle is refused `file_handle_unsupported`. Not a secret.
     files_handle_host_suffixes: str = Field(
-        default=".blob.core.windows.net",
+        default=".blob.core.windows.net,.oaiusercontent.com",
         pattern=r"^\s*(?:\.[a-z0-9-]+(?:\.[a-z0-9-]+)+\s*(?:,\s*\.[a-z0-9-]+(?:\.[a-z0-9-]+)+\s*)*)?$",
     )
     #: Contract section 17.2: one handle fetch's whole deadline, 1..60 s.

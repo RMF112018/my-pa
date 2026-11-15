@@ -611,9 +611,9 @@ def test_the_handle_field_is_optional_and_says_it_is_only_for_file_object_hosts(
     ("url", "cause", "host"),
     [
         (
-            "https://files.oaiusercontent.com/file-x?se=2026&sp=r&sig=" + SECRET,
+            "https://files.cdn-synthetic.invalid/file-x?se=2026&sp=r&sig=" + SECRET,
             "host_not_allowed",
-            "files.oaiusercontent.com",
+            "files.cdn-synthetic.invalid",
         ),
         ("http://" + HOST + "/c/a.bin?sig=" + SECRET, "not_https_or_fragment", HOST),
         ("https://" + HOST + "/c/gone.bin?sig=" + SECRET, "http_status_403", HOST),

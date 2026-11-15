@@ -524,6 +524,9 @@ def test_non_public_addresses_are_refused(address: str) -> None:
         "https://evilblob.core.windows.net/x",
         "https://blob.core.windows.net/x",
         "https://.blob.core.windows.net/x",
+        "https://evil-oaiusercontent.com/x",
+        "https://oaiusercontent.com.evil.net/x",
+        "https://oaiusercontent.com/x",
         f"https://user:pw@{HOST}/x",
         f"https://user@{HOST}/x",
         f"https://{HOST}:8443/x",
@@ -610,7 +613,10 @@ def test_policy_rejects_bad_values(kwargs: dict[str, Any]) -> None:
 def test_policy_accepts_the_bounds() -> None:
     assert HandleFetchPolicy(deadline_seconds=60).deadline_seconds == 60
     assert HandleFetchPolicy(deadline_seconds=0.5).deadline_seconds == 0.5
-    assert HandleFetchPolicy().allowed_host_suffixes == (".blob.core.windows.net",)
+    assert HandleFetchPolicy().allowed_host_suffixes == (
+        ".blob.core.windows.net",
+        ".oaiusercontent.com",
+    )
     assert HandleFetchPolicy().deadline_seconds == 25
 
 
@@ -861,3 +867,15 @@ def test_diagnostic_host_is_the_bare_lowercased_hostname_or_a_dash() -> None:
         "https://h\u00e9llo.example/x",
     ):
         assert diagnostic_host(bad) == "-", bad
+
+
+def test_the_default_admits_a_chatgpt_oaiusercontent_host(rig: _Rig) -> None:
+    """2026-11-15 re-proof: real ChatGPT handed out `*.oaiusercontent.com` links."""
+    from my_pa.infrastructure.file_workspace.handle_fetch import _target
+
+    policy = HandleFetchPolicy()
+    for host in ("x.oaiusercontent.com", "sdmntprcentralus.oaiusercontent.com"):
+        assert _target(f"https://{host}/f?sig=s", policy) == (host, "/f?sig=s")
+    for host in ("evil-oaiusercontent.com", "oaiusercontent.com.evil.net", "oaiusercontent.com"):
+        assert _target(f"https://{host}/f", policy) == "host_not_allowed", host
+    del rig

@@ -172,7 +172,7 @@ re-checks the issuing grant, so revocation is immediate.
    Nothing in the remote MCP log may show the attachment's link: no log line
    names a `download_url` (the server logs none, and the interaction log
    redacts the key). Settings: `MY_PA_FILES_HANDLE_HOST_SUFFIXES` (default
-   `.blob.core.windows.net`; empty refuses every handle
+   `.blob.core.windows.net,.oaiusercontent.com`; empty refuses every handle
    `file_handle_unsupported`) and `MY_PA_FILES_HANDLE_FETCH_DEADLINE_SECONDS`
    (default 25, at most 60). The remote MCP container needs outbound HTTPS to
    the allowed hosts; no tunnel rule changes (handle fetches are outbound and

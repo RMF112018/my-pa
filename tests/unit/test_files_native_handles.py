@@ -602,3 +602,42 @@ def test_the_handle_field_is_optional_and_says_it_is_only_for_file_object_hosts(
     description = schema["properties"]["source_file"]["description"]
     assert description.startswith("Optional; only for hosts that supply file objects")
     assert "Omit it (the default)" in description
+
+
+# ---- the operator diagnostic (re-proof, 2026-11-15) ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "cause", "host"),
+    [
+        (
+            "https://files.oaiusercontent.com/file-x?se=2026&sp=r&sig=" + SECRET,
+            "host_not_allowed",
+            "files.oaiusercontent.com",
+        ),
+        ("http://" + HOST + "/c/a.bin?sig=" + SECRET, "not_https_or_fragment", HOST),
+        ("https://" + HOST + "/c/gone.bin?sig=" + SECRET, "http_status_403", HOST),
+    ],
+)
+def test_a_refusal_logs_one_warning_with_cause_and_host_only(
+    world: _HandleWorld,
+    caplog: pytest.LogCaptureFixture,
+    url: str,
+    cause: str,
+    host: str,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    error = _refusal(
+        world, InvalidRequestError, "a.bin", {"download_url": url, "file_id": "fid-diag"}
+    )
+    # The client still sees the one undistinguished token.
+    assert error.safe_details == (SafeDetail.FILE_HANDLE_REFUSED,)
+    assert host not in repr(error) and cause not in repr(error)
+    records = [r for r in caplog.records if r.name == "my_pa.files.handle_fetch"]
+    assert [(r.levelname, r.getMessage()) for r in records] == [
+        ("WARNING", f"files handle refused cause={cause} host={host}")
+    ]
+    for leaked in (SECRET, "sig=", "/c/", "file-x", "fid-diag", url):
+        assert leaked not in caplog.text, leaked
+    # Nothing of the diagnostic reaches a row or receipt.
+    assert world.rows.receipts == {} and world.rows.transfers == {}

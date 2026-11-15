@@ -177,6 +177,13 @@ re-checks the issuing grant, so revocation is immediate.
    (default 25, at most 60). The remote MCP container needs outbound HTTPS to
    the allowed hosts; no tunnel rule changes (handle fetches are outbound and
    resource reads ride `/mcp`).
+   If ChatGPT gets `file_handle_refused`, read the remote MCP container's log
+   for the one line `files handle refused cause=<cause> host=<host>` (logger
+   `my_pa.files.handle_fetch`, WARNING). `cause=host_not_allowed` names the
+   host the platform now uses: add a suffix covering it (leading `.`, e.g.
+   `.oaiusercontent.com`) to `MY_PA_FILES_HANDLE_HOST_SUFFIXES`, comma-separated
+   with the existing value, and recreate the service. The line never contains
+   the URL or its query; still treat the log as operator-only.
 
 5. **Abacus ticket recipe (contract §17.5).** With the Abacus connector
    granted the files names (and `files.upload.finalize`), refresh its tool

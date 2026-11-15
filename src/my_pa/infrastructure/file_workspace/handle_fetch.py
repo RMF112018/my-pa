@@ -6,8 +6,9 @@ SAS URL. The server fetches it. Two properties drive every decision here:
 
 **The URL is a bearer credential.** Whoever holds it can read the file until it
 expires, so no part of it may reach a log, an exception message, a `repr` or a
-return value. This module therefore imports no `logging` and never prints; it
-does not keep the URL on `self`; every refusal is a `FilesRefusal` naming only
+return value. This module never prints and does not keep the URL on `self`. Its
+one log line is the operator diagnostic below, which carries the host only;
+every refusal is a `FilesRefusal` naming only
 `source_file` and a closed section 7 token; and every refusal is raised *outside*
 the `except` block that observed the failure, so neither `__cause__` nor
 `__context__` carries a library exception whose message may quote the URL
@@ -70,6 +71,7 @@ from __future__ import annotations
 
 import http.client
 import ipaddress
+import logging
 import math
 import re
 import socket
@@ -125,12 +127,52 @@ _REFUSED_V6: Final = tuple(
 )
 
 
-def _refused() -> FilesRefusal:
+#: Contract section 17.2: the operator-only diagnostic. One WARNING per refused
+#: fetch, `files handle refused cause=<token> host=<hostname>`, on the server's
+#: log only: never in the tool result, the audit, a row or the interaction log.
+#: `cause` is an internal closed token (the client still sees the one
+#: `file_handle_refused`), `host` the URL's lowercased ASCII hostname (at most
+#: 100 characters) or `-`: never the scheme, userinfo, port, path, query or the
+#: URL. It is how an operator learns which host to allow.
+LOGGER: Final = logging.getLogger("my_pa.files.handle_fetch")
+_MAX_LOGGED_HOST: Final = 100
+_HOST_SHAPE: Final = re.compile(r"\A[a-z0-9.-]{1,100}\Z")
+
+
+#: The cause of the refusal this thread raised last, read once by `open` for
+#: the diagnostic. Kept beside the refusal rather than on it, so the exception a
+#: caller sees is the plain section 7 `FilesRefusal`, unchanged.
+_CAUSE: Final = threading.local()
+
+
+def _refused(cause: str = "unspecified") -> FilesRefusal:
+    vars(_CAUSE)["cause"] = cause
     return FilesRefusal(_FIELD, FilesReason.FILE_HANDLE_REFUSED)
 
 
-def _too_large() -> FilesRefusal:
+def _too_large(cause: str = "too_large") -> FilesRefusal:
+    vars(_CAUSE)["cause"] = cause
     return FilesRefusal(_FIELD, FilesReason.TOO_LARGE)
+
+
+def diagnostic_host(url: object) -> str:
+    """The URL's hostname for the operator diagnostic, or `-`. Never anything else."""
+    if not isinstance(url, str):
+        return "-"
+    try:
+        host = urllib.parse.urlsplit(url).hostname
+    except ValueError:
+        return "-"
+    if not host:
+        return "-"
+    host = host.lower()
+    if len(host) > _MAX_LOGGED_HOST or not _HOST_SHAPE.fullmatch(host):
+        return "-"
+    return host
+
+
+def _log_refusal(cause: str, host: str) -> None:
+    LOGGER.warning("files handle refused cause=%s host=%s", cause, host)
 
 
 def _is_number(value: object) -> bool:
@@ -243,44 +285,44 @@ def _pinned_https(
     return _PinnedHTTPSConnection(host, pinned_ip, port, timeout)
 
 
-def _target(url: str, policy: HandleFetchPolicy) -> tuple[str, str] | None:
-    """`(host, request_target)` for an acceptable URL, else `None`. Never raises."""
+def _target(url: str, policy: HandleFetchPolicy) -> tuple[str, str] | str:
+    """`(host, request_target)` for an acceptable URL, else its refusal cause. Never raises."""
     raw: object = url
     if not isinstance(raw, str) or len(raw) > policy.max_url_length:
-        return None
+        return "url_type_or_length"
     if not url.isascii() or any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
-        return None
+        return "url_characters"
     if not url.startswith("https://") or "#" in url:
-        return None
+        return "not_https_or_fragment"
     try:
         parts = urllib.parse.urlsplit(url)
         port = parts.port
     except ValueError:
-        return None
+        return "url_unparsable"
     if parts.scheme != "https" or parts.fragment or "@" in parts.netloc:
-        return None
+        return "url_shape"
     if port not in (None, _PORT):
-        return None
+        return "port"
     host = parts.hostname
     if not host:
-        return None
+        return "no_host"
     if parts.netloc.lower() not in (host, f"{host}:{_PORT}"):
-        return None  # brackets (IPv6 literal), an empty port, anything odd
+        return "host_shape"  # brackets (IPv6 literal), an empty port, anything odd
     if len(host) > _MAX_HOST_LENGTH:
-        return None
+        return "host_length"
     try:
         ipaddress.ip_address(host)
     except ValueError:
         pass
     else:
-        return None
+        return "ip_literal"
     labels = host.split(".")
     if not all(_LABEL.fullmatch(label) for label in labels) or labels[-1].isdigit():
-        return None
+        return "host_labels"
     if not any(
         host.endswith(suffix) and len(host) > len(suffix) for suffix in policy.allowed_host_suffixes
     ):
-        return None
+        return "host_not_allowed"
     target = parts.path or "/"
     if parts.query:
         target = f"{target}?{parts.query}"
@@ -334,9 +376,17 @@ class SafeHandleFetcher(FileHandleFetcher):
             raise ValueError("max_bytes must be a non-negative int")
         if not self._slots.acquire(blocking=False):
             raise FileWorkspaceUnavailableError()
+        host = diagnostic_host(url)
+        vars(_CAUSE).pop("cause", None)
         try:
             with self._fetch(url, max_bytes) as body:
                 yield body
+        except FilesRefusal as refusal:
+            cause = vars(_CAUSE).pop("cause", None)
+            if cause is not None:  # this fetcher's own refusal, not the caller's
+                _log_refusal(str(cause), host)
+            del refusal
+            raise
         finally:
             self._slots.release()
 
@@ -350,8 +400,8 @@ class SafeHandleFetcher(FileHandleFetcher):
 
         validated = _target(url, policy)
         del url  # nothing below may reach the URL itself
-        if validated is None:
-            raise _refused()
+        if isinstance(validated, str):
+            raise _refused(validated)
         host, target = validated
         pinned = self._resolve(host)
 
@@ -363,7 +413,7 @@ class SafeHandleFetcher(FileHandleFetcher):
         try:
             budget = remaining()
             if budget <= 0:
-                raise _refused()
+                raise _refused("deadline")
             conn = self._connector(host, pinned, _PORT, min(policy.connect_timeout_seconds, budget))
             watchdog = _arm_watchdog(conn, budget, expired)
             conn.connect()
@@ -374,17 +424,19 @@ class SafeHandleFetcher(FileHandleFetcher):
             conn.putheader("Accept-Encoding", "identity")
             conn.endheaders()
             response = conn.getresponse()
-            if expired.is_set() or remaining() <= 0 or response.status != 200:
-                raise _refused()
+            if expired.is_set() or remaining() <= 0:
+                raise _refused("deadline")
+            if response.status != 200:
+                raise _refused(f"http_status_{int(response.status)}")
             encoding = response.getheader("Content-Encoding")
             if encoding is not None and encoding.strip().lower() != "identity":
-                raise _refused()
+                raise _refused("content_encoding")
             transfer = response.msg.get_all("Transfer-Encoding") or []
             if transfer and [value.strip().lower() for value in transfer] != ["chunked"]:
-                raise _refused()
+                raise _refused("transfer_encoding")
             declared = _declared_length(response)
             if transfer and declared is not None:
-                raise _refused()
+                raise _refused("length_framing")
         except FilesRefusal:
             failed = True
             if conn is not None:
@@ -399,13 +451,13 @@ class SafeHandleFetcher(FileHandleFetcher):
                 _close(conn)
             if watchdog is not None:
                 watchdog.cancel()
-            raise _refused() from None
+            raise _refused("connect_tls_or_http_error") from None
         assert conn is not None  # noqa: S101 - narrowed by the try above
         assert watchdog is not None  # noqa: S101
         if declared is not None and declared > max_bytes:
             _close(conn)
             watchdog.cancel()
-            raise _too_large()
+            raise _too_large("declared_too_large")
 
         chunks = _stream(
             conn,
@@ -438,9 +490,9 @@ class SafeHandleFetcher(FileHandleFetcher):
         except Exception:
             failed = True
         if failed or not addresses:
-            raise _refused() from None
+            raise _refused("resolve_failed") from None
         if not all(_is_public_answer(a) for a in addresses):
-            raise _refused()
+            raise _refused("non_public_address")
         return addresses[0]
 
 
@@ -473,7 +525,7 @@ def _arm_watchdog(
 
 def _set_timeout(conn: http.client.HTTPConnection, read_timeout: float, budget: float) -> None:
     if budget <= 0:
-        raise _refused()
+        raise _refused("deadline")
     sock = conn.sock
     if sock is not None:
         sock.settimeout(min(read_timeout, budget))
@@ -499,7 +551,7 @@ def _stream(
     total = 0
     while True:
         if state.closed or expired.is_set():
-            raise _refused()
+            raise _refused("deadline_or_closed")
         failed = False
         chunk = b""
         try:
@@ -508,16 +560,16 @@ def _stream(
         except Exception:
             failed = True
         if failed:
-            raise _refused() from None
+            raise _refused("read_error") from None
         if not chunk:
             if expired.is_set() or state.closed:
-                raise _refused()
+                raise _refused("deadline_or_closed")
             if declared is not None and total != declared:
-                raise _refused()
+                raise _refused("short_body")
             return
         total += len(chunk)
         if total > max_bytes:
-            raise _too_large()
+            raise _too_large("stream_too_large")
         if declared is not None and total > declared:
-            raise _refused()
+            raise _refused("long_body")
         yield chunk

@@ -792,17 +792,41 @@ def test_tls_failure_through_the_default_connector_is_refused(
 # --------------------------------------------------------------------------- module hygiene
 
 
-def test_module_imports_no_logging_and_never_prints() -> None:
+_LOG_METHODS = frozenset(
+    {"warn", "warning", "error", "info", "debug", "exception", "log", "critical"}
+)
+
+
+def test_module_logs_only_the_one_host_and_cause_diagnostic_and_never_prints() -> None:
+    """Contract section 17.2 (re-proof, 2026-11-15): exactly one log call, its format fixed.
+
+    The module used to log nothing. The operator diagnostic is admitted as one
+    named logger and one `warning` whose format interpolates only the cause
+    token and the sanitized host -- never the URL, which is out of scope there.
+    """
     tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+    log_calls: list[ast.Call] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            assert all(alias.name.split(".")[0] != "logging" for alias in node.names)
         if isinstance(node, ast.ImportFrom):
             assert (node.module or "").split(".")[0] != "logging"
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             assert node.func.id not in {"print", "breakpoint"}
-        if isinstance(node, ast.Attribute):
-            assert node.attr not in {"getLogger", "warn", "warning", "exception"}
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in _LOG_METHODS
+        ):
+            log_calls.append(node)
+    (call,) = log_calls
+    assert isinstance(call.args[0], ast.Constant)
+    assert call.args[0].value == "files handle refused cause=%s host=%s"
+    assert [arg.id for arg in call.args[1:] if isinstance(arg, ast.Name)] == ["cause", "host"]
+    getters = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr == "getLogger"
+    ]
+    assert len(getters) == 1
 
 
 def test_the_url_is_not_kept_on_the_fetcher(rig: _Rig) -> None:
@@ -813,3 +837,27 @@ def test_the_url_is_not_kept_on_the_fetcher(rig: _Rig) -> None:
         )
         list(body.chunks)
     assert SECRET not in state
+
+
+# --------------------------------------------------------------------------- operator diagnostic
+
+
+def test_diagnostic_host_is_the_bare_lowercased_hostname_or_a_dash() -> None:
+    from my_pa.infrastructure.file_workspace.handle_fetch import diagnostic_host
+
+    assert diagnostic_host("https://User:pw@Acct.Blob.Core.Windows.NET:443/c/f?sig=X#y") == (
+        "acct.blob.core.windows.net"
+    )
+    assert diagnostic_host("https://files.oaiusercontent.com/x?se=1&sig=SECRET") == (
+        "files.oaiusercontent.com"
+    )
+    for bad in (
+        7,
+        None,
+        "",
+        "not a url",
+        "https://[::1",
+        "https://" + "a" * 101 + ".com/x",
+        "https://h\u00e9llo.example/x",
+    ):
+        assert diagnostic_host(bad) == "-", bad

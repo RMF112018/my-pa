@@ -106,10 +106,10 @@ Every call takes `workspace_id`. Writes also take `idempotency_key`. Optional ar
 | `files.search` | `path` (subtree), `query` (1–255 chars, case-insensitive name substring), `page_size?` (≤ 200) | `entries[]`, `truncated` (walk cap or page reached); no continuation |
 | `files.preview` | `path`, `offset?`, `max_bytes?` (≤ 262144), `expected_version?` | `text`, `next_offset` (null at EOF), `version`; non-UTF-8 content gives `binary: true` and no text; the cut never splits a character, so a window may exceed `max_bytes` only to return a single character wider than the limit (≤ 4 bytes) |
 | `files.history` | `path?`, `after?`, `page_size?` (≤ 200) | product-recorded preimage versions and trash items for the path (or the workspace), newest first; external edits have no history |
-| `files.download.begin` | `path` + `expected_version?`, or `version_id`; `include_sha256?`; `ttl_seconds?` | `download_id`, `download_token`, `route`, `resource_uri`, `name`, `size`, `version`, `sha256?`, `expires_at` (§17.3) |
+| `files.download.begin` | `path` + `expected_version?`, or `version_id`; `include_sha256?`; `ttl_seconds?` | `download_id`, `download_token`, `route`, `transfer` (§17.5), `resource_uri`, `name`, `size`, `version`, `sha256?`, `expires_at` (§17.3) |
 | `files.mkdir` | `path`, `parents?` (default false) | entry |
 | `files.copy` | `path`, `to_path`, `expected_version?` | entry at `to_path` |
-| `files.upload.begin` | `path`, `expected_version?` (required to replace), `size?`, `sha256?`, `ttl_seconds?`, `source_file?` (§17.2) | `upload_id`, `upload_token`, `route`, `offset` (0), `chunk_max_bytes`, `expires_at`; with `source_file`: `upload_id`, `entry`, `preimage_version_id?`, `size`, `sha256` |
+| `files.upload.begin` | `path`, `expected_version?` (required to replace), `size?`, `sha256?`, `ttl_seconds?`, `source_file?` (§17.2) | `upload_id`, `upload_token`, `route`, `transfer` (§17.5), `offset` (0), `chunk_max_bytes`, `expires_at`; with `source_file`: `upload_id`, `entry`, `preimage_version_id?`, `size`, `sha256` |
 | `files.upload.abort` | `upload_id` | `aborted: true` |
 | `files.rename` | `path`, `new_name` (one component), `expected_version?` | entry |
 | `files.move` | `path`, `to_path`, `expected_version?` | entry |
@@ -322,3 +322,19 @@ A client served the compact façade (`my_pa.describe` / `my_pa.read` / `my_pa.wr
 - **Listed only when callable.** A name is listed exactly when it is in the request's eligible canonical set: the plane composed (`FILES_WORKSPACE`), the client's grant for it, and remote writes enabled for `files.upload.begin`. A compact call to any other canonical name, or to one outside that set, is refused `unsupported` before `invoke`.
 - **Outbound.** `files.download.begin` answers its `resource_link` whether called top-level or through `my_pa.read`.
 - **Unverified against real ChatGPT.** The synthetic proof exercised a top-level tool whose file field was *required*; these four exact descriptors (an optional `source_file` on `files.upload.begin`) need a re-proof against ChatGPT before they are relied on, which the operator must authorize.
+
+### 17.5 Agent-usable ticket transfers (sandbox-HTTP clients: Abacus)
+
+Abacus has no native file handle (an attachment is only a path in its sandbox, and it refuses the file-object param), but its sandbox makes outbound HTTP calls: the proof moved 5 MiB byte-exact both ways through one-time routes, the agent handling the URL and token itself. Its parity with ChatGPT is therefore the **same capability surface** -- the same 17 names, and the same four top-level tools of §17.4 when it is served the compact façade -- plus a ticket answer an agent can act on with no manual step. There is still no `files.fetch_url` (T15) and no base64 path (T16).
+
+- **`source_file` is optional and omitted by default.** Its description says it is only for hosts that supply file objects; a client that cannot supply one omits it (or sends `null`) and gets the ticket answer. The `openai/fileParams` declaration does not make it required.
+- **`transfer`.** A ticket answer of `files.upload.begin` (without `source_file`) and of `files.download.begin` carries an additive object `transfer` with:
+  - `method` -- `PATCH` (upload) or `GET` (download);
+  - `url` -- the `route` joined to `https://<MY_PA_REMOTE_MCP_PUBLIC_HOST>` when that setting is set, else the relative `route`;
+  - `auth_header_name` -- `Authorization`, whose value is `Bearer ` followed by the answer's `upload_token` / `download_token`;
+  - `headers` -- the request headers besides authorization: for an upload `Upload-Offset` and `Upload-Complete` with `<sha256>` and `<length>` placeholders;
+  - `usage` -- a short, deterministic text: a ready `curl` command for a single-request transfer that reads the token from the environment variable `MY_PA_FILES_TICKET` (the reference client's), the rule for resuming (upload: `HEAD` for `Upload-Offset`, then `PATCH` pieces of at most `chunk_max_bytes` with the last carrying `Upload-Complete`; download: `Range: bytes=<n>-`), and the follow-up `files.stat` with `include_sha256` to verify.
+- **No secret in `transfer`.** It never contains a token: the token stays only in `upload_token` / `download_token`, shown once (§1.4). `transfer` is kept in an idempotency receipt like any non-token field.
+- **The recipe is the route's real semantics** (§10): a completing `PATCH` (`Upload-Offset: 0`, `Upload-Complete: sha256=<hex>, length=<n>`, the whole body, at most `chunk_max_bytes`) finalizes through `files.upload.finalize` and so needs that grant; a download is `GET` with an optional single `Range`.
+- **Unverified against the real deployed routes for Abacus** until a re-proof the operator authorizes; whether an Abacus *scheduled* task has a sandbox VM at all is unknown (§17.1, T11).
+

@@ -1007,9 +1007,15 @@ class FileWorkspaceApplication:
         is never needed again even if this transaction rolls back.
         """
         expired = call.rows.expire_due(principal_id=call.owner, now=call.at, limit=_REAP_LIMIT)
-        call.staging.reap_uploads(
-            record.transfer_id for record in expired if record.kind is FileTransferKind.UPLOAD
-        )
+        # Each ticket's staging is in its own workspace's staging store
+        # (contract section 18.2); the caller's due tickets span workspaces.
+        for space in self._spaces.values():
+            space.staging_store.reap_uploads(
+                record.transfer_id
+                for record in expired
+                if record.kind is FileTransferKind.UPLOAD
+                and record.workspace_id == space.workspace_id
+            )
 
     def _check_upload_target(self, call: _Call, path: str, expected_version: str | None) -> None:
         """Section 5: a create needs an absent target in a directory, a replace its version."""

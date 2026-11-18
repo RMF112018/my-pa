@@ -814,3 +814,15 @@ def test_the_byte_routes_refuse_a_ticket_of_a_client_no_longer_listed(world: _Wo
     assert admitted.ticket is ticket
     with pytest.raises(DeniedError):
         gate(frozenset({OTHER_CLIENT}))._standing_checked(FileTransferKind.DOWNLOAD, ticket, NOW)
+
+
+def test_an_expired_ticket_is_reaped_from_its_own_workspaces_staging(world: _Work) -> None:
+    begun = world.run(
+        BeginFileUpload(workspace_id="work", path="stale.bin", idempotency_key=_key("st1"))
+    )
+    staged = world.state_root / ".my-pa" / "staging" / begun["upload_id"]
+    assert staged.exists()
+    world.at = NOW + timedelta(hours=2)
+    # A begin in the other workspace reaps the caller's due tickets everywhere.
+    world.run(BeginFileUpload(workspace_id="mcp", path="new.bin", idempotency_key=_key("st2")))
+    assert not staged.exists()

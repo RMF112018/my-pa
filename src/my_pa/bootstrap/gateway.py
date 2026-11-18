@@ -776,6 +776,7 @@ def files_workspaces(settings: Settings, work_engine: Engine) -> tuple[ComposedF
                 staging=staging,
                 pending=pending,
                 max_pending_bytes=config.max_pending_bytes,
+                allowed_clients=config.clients,
             )
         )
     return tuple(composed)

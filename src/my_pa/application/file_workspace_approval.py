@@ -170,7 +170,7 @@ class FileApprovalOperator:
                 return pending_item(decided, now=now)
             if not hmac.compare_digest(binding.encode(), pending_binding(change).encode()):
                 raise ApprovalRefused("binding_mismatch")
-            if not self._standing_allows(change, now):
+            if not self._standing_allows(space, change, now):
                 decided = decide_change(
                     space,
                     change,
@@ -226,7 +226,9 @@ class FileApprovalOperator:
             raise ApprovalRefused("not_pending")
         return change
 
-    def _standing_allows(self, change: FilePendingChange, now: datetime) -> bool:
+    def _standing_allows(
+        self, space: ComposedFileWorkspace, change: FilePendingChange, now: datetime
+    ) -> bool:
         """The requesting client may still make this write (contract section 18.5)."""
         if not change.client_ref.startswith(_REMOTE_CLIENT_REF):
             # A local caller is the operator's own Principal; it has no grant row.
@@ -239,6 +241,7 @@ class FileApprovalOperator:
             standing is not None
             and standing.principal_id == change.owner_principal_id
             and standing.write_allowed
+            and (space.allowed_clients is None or standing.oauth_client_id in space.allowed_clients)
             and (
                 (capability, Purpose.FILE_WORKSPACE_AUTHORING) in standing.capability_purposes
                 or (capability, None) in standing.capability_purposes

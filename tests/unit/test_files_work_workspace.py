@@ -84,6 +84,7 @@ class _Standing(RemoteClientStandingReader):
     def __init__(self) -> None:
         self.revoked = False
         self.writes = True
+        self.extra: set[tuple[Capability, Purpose | None]] = set()
 
     def standing(self, client_ref: str, *, now: Any) -> RemoteClientStanding | None:  # noqa: ANN401
         del now
@@ -98,7 +99,8 @@ class _Standing(RemoteClientStandingReader):
                 (capability, Purpose.FILE_WORKSPACE_AUTHORING)
                 for capability in Capability
                 if capability.value.startswith("files.") and is_write_capability(capability)
-            ),
+            )
+            | self.extra,
             write_allowed=self.writes,
         )
 
@@ -703,3 +705,112 @@ def test_the_direct_workspace_is_unchanged(world: _Work) -> None:
     )
     assert "approval_required" not in answer
     assert (world.mcp_root / "d.txt").read_text() == "direct"
+
+
+# ---- `clients=` (section 18.1): the workspace's readers ---------------------------------
+
+
+def test_the_clients_option_parses_as_a_set_and_refuses_blanks() -> None:
+    settings = load_settings(
+        {
+            **_DB,
+            "MY_PA_FILES_WORKSPACES": (
+                "work=/srv/w/work;mode=approval;state=/srv/s/work;clients=chatgpt-1|abacus-2"
+            ),
+        }
+    )
+    (work,) = settings.files_workspace_configs()
+    assert work.clients == frozenset({"chatgpt-1", "abacus-2"})
+    for bad in ("clients=", "clients=a||b", "clients=a b"):
+        with pytest.raises(SettingsError):
+            load_settings({**_DB, "MY_PA_FILES_WORKSPACES": f"w=/x;{bad}"})
+
+
+def _listed_workspaces(world: _Work, client: str) -> list[str]:
+    return [
+        item["workspace_id"]
+        for item in world.run(ListFileWorkspaces(), client=client)["workspaces"]
+    ]
+
+
+def test_an_unlisted_client_cannot_see_the_workspace_at_all(tmp_path: Path) -> None:
+    world = _Work(tmp_path)
+    work = world.spaces[1]
+    restricted = ComposedFileWorkspace(
+        workspace_id=work.workspace_id,
+        store=work.store,
+        write_mode=work.write_mode,
+        max_upload_bytes=work.max_upload_bytes,
+        staging=work.staging,
+        pending=work.pending,
+        max_pending_bytes=work.max_pending_bytes,
+        allowed_clients=frozenset({CLIENT}),
+    )
+    world.spaces = (world.spaces[0], restricted)
+    world.files = FileWorkspaceApplication(workspaces=world.spaces)
+    (world.work_root / "brief.pdf").write_bytes(b"synthetic")
+    assert _listed_workspaces(world, CLIENT) == ["mcp", "work"]
+    assert _listed_workspaces(world, OTHER_CLIENT) == ["mcp"]
+    for command in (
+        ListFiles(workspace_id="work", path=""),
+        StatFile(workspace_id="work", path="brief.pdf"),
+        MakeFileDirectory(workspace_id="work", path="X", idempotency_key=_key("unl")),
+    ):
+        with pytest.raises(NotFoundError) as caught:
+            world.run(command, client=OTHER_CLIENT)
+        assert caught.value.safe_details == (SafeDetail.NOT_FOUND,)
+    # The listed client reads, and a local (operator) caller is never restricted.
+    assert world.run(StatFile(workspace_id="work", path="brief.pdf"))["name"] == "brief.pdf"
+    assert world.run(StatFile(workspace_id="work", path="brief.pdf"), client=None)["size"] == 9
+
+
+def test_the_byte_routes_refuse_a_ticket_of_a_client_no_longer_listed(world: _Work) -> None:
+    from my_pa.application.errors import DeniedError
+    from my_pa.application.file_transfer import FileTransferGate
+    from my_pa.contracts.ports import FileTransferKind, FileTransferRecord, FileTransferState
+
+    work = world.spaces[1]
+
+    def gate(allowed: frozenset[str] | None) -> FileTransferGate:
+        space = ComposedFileWorkspace(
+            workspace_id="work",
+            store=work.store,
+            write_mode=WriteMode.APPROVAL,
+            staging=work.staging,
+            pending=work.pending,
+            allowed_clients=allowed,
+        )
+        return FileTransferGate(
+            service=None,  # type: ignore[arg-type]
+            unit_of_work=None,  # type: ignore[arg-type]
+            standing=world.standing,
+            remote_writes_enabled=True,
+            workspaces=(space,),
+        )
+
+    ticket = FileTransferRecord(
+        transfer_id="fwdnl_" + "1" * 32,
+        owner_principal_id=PRINCIPAL,
+        client_ref=client_ref_of(derive_creator(CreatorKind.REMOTE_CLIENT, CLIENT)),
+        kind=FileTransferKind.DOWNLOAD,
+        workspace_id="work",
+        path="a.txt",
+        expected_version="fv1_" + "0" * 64,
+        preserved_version_id=None,
+        declared_size=1,
+        declared_sha256=None,
+        received_bytes=0,
+        state=FileTransferState.OPEN,
+        created_at=NOW,
+        expires_at=NOW + timedelta(hours=1),
+        finalized_at=None,
+        token_digest="0" * 64,
+    )
+    # Download tickets need the read grant; the scripted standing holds writes only,
+    # so grant it here too.
+    world.standing.extra = {(Capability.FILES_DOWNLOAD_BEGIN, Purpose.FILE_WORKSPACE_READ)}
+    assert gate(None)._standing_checked(FileTransferKind.DOWNLOAD, ticket, NOW).ticket is ticket
+    admitted = gate(frozenset({CLIENT}))._standing_checked(FileTransferKind.DOWNLOAD, ticket, NOW)
+    assert admitted.ticket is ticket
+    with pytest.raises(DeniedError):
+        gate(frozenset({OTHER_CLIENT}))._standing_checked(FileTransferKind.DOWNLOAD, ticket, NOW)

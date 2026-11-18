@@ -283,11 +283,19 @@ class FileTransferGate:
                 kind is FileTransferKind.UPLOAD
                 and not (standing.write_allowed and self._remote_writes_enabled)
             )
+            or not self._client_admitted(ticket, standing)
         ):
             raise DeniedError()
         return FileTransferAccess(ticket=ticket, standing=standing)
 
     # ---- uploads ------------------------------------------------------------------
+
+    def _client_admitted(self, ticket: FileTransferRecord, standing: RemoteClientStanding) -> bool:
+        """Contract section 18.1 `clients=`, re-read per request like the grants."""
+        space = self._spaces.get(ticket.workspace_id)
+        return space is not None and (
+            space.allowed_clients is None or standing.oauth_client_id in space.allowed_clients
+        )
 
     def _space(self, access: FileTransferAccess) -> ComposedFileWorkspace:
         space = self._spaces.get(access.ticket.workspace_id)

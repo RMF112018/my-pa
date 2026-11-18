@@ -306,11 +306,19 @@ class ComposedFileWorkspace:
     staging: FileWorkspaceStore | None = None
     pending: FilePendingChangeStore | None = None
     max_pending_bytes: int = DEFAULT_MAX_PENDING_BYTES
+    #: Section 18.1 `clients=`: `None` admits every client its grants admit.
+    allowed_clients: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
         approval = self.write_mode is WriteMode.APPROVAL
         if approval != (self.staging is not None and self.pending is not None):
             raise ValueError("an approval workspace, and only one, has staging and pending stores")
+
+    def admits(self, authorization: Authorization) -> bool:
+        """Whether this caller may see the workspace at all (section 18.1 `clients=`)."""
+        if self.allowed_clients is None or authorization.transport is CaptureTransport.LOCAL:
+            return True
+        return authorization.authenticated_client_id in self.allowed_clients
 
     @property
     def staging_store(self) -> FileWorkspaceStore:
@@ -449,7 +457,8 @@ class FileWorkspaceApplication:
             require_read_grant(authorization.capability_grants, capability)
         workspace_id = getattr(command, "workspace_id", self._default.workspace_id)
         space = self._spaces.get(workspace_id)
-        if space is None:
+        if space is None or not space.admits(authorization):
+            # An unlisted client is told the same as for an unknown alias.
             raise NotFoundError(SafeDetail.NOT_FOUND)
         writes = is_write_capability(capability)
         if writes and space.write_mode is WriteMode.READ_ONLY:
@@ -533,6 +542,7 @@ class FileWorkspaceApplication:
                     },
                 }
                 for space in self._spaces.values()
+                if space.admits(call.authorization)
             ]
         }
 

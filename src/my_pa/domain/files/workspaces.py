@@ -30,7 +30,7 @@ DEFAULT_MAX_PENDING_BYTES: Final = 1 << 30
 #: Section 2: the alias pattern the persistence rows enforce.
 _ALIAS: Final = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _OPTIONS: Final = frozenset(
-    {"mode", "state", "max_upload_bytes", "disk_reserve_bytes", "max_pending_bytes"}
+    {"mode", "state", "max_upload_bytes", "disk_reserve_bytes", "max_pending_bytes", "clients"}
 )
 
 
@@ -62,6 +62,10 @@ class WorkspaceConfig:
     disk_reserve_bytes: int
     state_root: str | None = None
     max_pending_bytes: int = DEFAULT_MAX_PENDING_BYTES
+    #: Section 18.1 `clients=`: the OAuth client ids a remote caller must be to
+    #: see this workspace at all; `None` (the option absent) admits every client
+    #: its grants admit. A local caller is never restricted.
+    clients: frozenset[str] | None = None
 
 
 def _absolute(text: str, what: str) -> str:
@@ -84,6 +88,13 @@ def _positive(text: str, name: str, *, minimum: int) -> int:
     if value < minimum:
         raise WorkspaceConfigError(f"workspace option {name} is below its minimum")
     return value
+
+
+def _clients(text: str) -> frozenset[str]:
+    clients = [client.strip() for client in text.split("|")]
+    if any(not client or any(c.isspace() for c in client) for client in clients):
+        raise WorkspaceConfigError("workspace option clients must be |-separated client ids")
+    return frozenset(clients)
 
 
 def parse_workspaces(
@@ -138,6 +149,7 @@ def parse_workspaces(
                     minimum=0,
                 ),
                 state_root=None if state is None else _absolute(state, "state directory"),
+                clients=None if "clients" not in options else _clients(options["clients"]),
                 max_pending_bytes=_positive(
                     options.get("max_pending_bytes", str(DEFAULT_MAX_PENDING_BYTES)),
                     "max_pending_bytes",

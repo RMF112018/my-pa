@@ -364,7 +364,7 @@ Abacus has no native file handle (an attachment is only a path in its sandbox, a
 
 ## 18. Several workspaces and approved-only writes (ADR-019 Amendment 2)
 
-The seventeen names are unchanged; no capability, purpose, table, migration or public route is added. A `direct` workspace (`mcp`) is served exactly as §§1-17 describe. The rules below add to them for a workspace whose `write_mode` is `approval` (`work`) or `read_only`.
+No `files.*` name changes, and no capability, purpose, table, migration or public route is added. A `direct` workspace (`mcp`) is served exactly as §§1-17 describe. The rules below add to them for a workspace whose `write_mode` is `approval` (`work`) or `read_only`.
 
 ### 18.1 Configuration
 

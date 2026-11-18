@@ -1721,6 +1721,16 @@ class _Call:
         "workspace_id",
     )
 
+    rows: FileWorkspaceRepository
+    authorization: Authorization
+    space: ComposedFileWorkspace
+    store: FileWorkspaceStore
+    staging: FileWorkspaceStore
+    workspace_id: str
+    owner: str
+    client_ref: str
+    at: datetime
+
     def __init__(
         self,
         rows: FileWorkspaceRepository,

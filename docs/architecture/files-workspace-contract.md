@@ -1,6 +1,6 @@
 # Files workspace contract (`files.*`)
 
-- **Status:** Frozen by WP1 under [ADR-019](../decisions/ADR-019-nas-mcp-file-workspace.md) (Accepted by operator directive 2026-11-13). Later work packages implement this text; a change to a name, rule or limit here is a contract change made in this file first. PR1 (WP1–3) and PR2 (WP4–5) are merged on `main`; PR3 (WP6–7, `feat/files-workspace-pr3`) delivers the byte routes, the reference client and the closure recorded in §10, §11 and T14. ADR-019 Amendment 1 (2026-11-15) adds native file handles and MCP resource delivery (§17, `feat/files-native-handles`); it changes §6, §7, §9, §11 and §15 here first. Deployment stays operator-gated (§16).
+- **Status:** Frozen by WP1 under [ADR-019](../decisions/ADR-019-nas-mcp-file-workspace.md) (Accepted by operator directive 2026-11-13). Later work packages implement this text; a change to a name, rule or limit here is a contract change made in this file first. PR1 (WP1–3) and PR2 (WP4–5) are merged on `main`; PR3 (WP6–7, `feat/files-workspace-pr3`) delivers the byte routes, the reference client and the closure recorded in §10, §11 and T14. ADR-019 Amendment 1 (2026-11-15) adds native file handles and MCP resource delivery (§17, `feat/files-native-handles`); it changes §6, §7, §9, §11 and §15 here first. ADR-019 Amendment 2 (2026-11-18) adds a second workspace, `work`, whose writes apply only after a per-operation operator approval (§18, `feat/files-work-workspace`); it changes §2, §6, §7, §9 and §15 here first. Deployment stays operator-gated (§16).
 - **Base:** `main@57d5b1399d59d7afe9fe08063d9bb842c9062dd2`, branch `feat/files-workspace`.
 - **Not authorized here:** deployment, NAS mounts or ACLs, tunnel changes, grants, production migration.
 
@@ -58,7 +58,7 @@ A ticket token is `gfwtk_` followed by 64 lowercase hex characters (32 CSPRNG by
 
 ## 2. Addressing
 
-- **Workspace:** `workspace_id` is a logical alias. The only one is `MY_PA_FILES_WORKSPACE_ID`, default `mcp`. An unknown alias is `not_found`.
+- **Workspace:** `workspace_id` is a logical alias of one configured workspace (§18.1): the aliases of `MY_PA_FILES_WORKSPACES`, or, with that unset, the one `MY_PA_FILES_WORKSPACE_ID` (default `mcp`). An unknown alias is `not_found`. Every capability, ticket, version, trash item and receipt is bound to its workspace; an id of one workspace named with another alias is `not_found`.
 - **Entry:** an entry is addressed by `workspace_id` plus a relative POSIX `path`. The root is the empty path `""`, accepted only where a directory is expected (`list`, `search`, `mkdir` parent resolution).
 - **Version:** each file or directory observation carries an opaque `version` token (§4).
 - **Opaque ids:** only uploads, downloads, preimage versions, trash items and receipts get opaque ids. Files have no persistent id registry (trim T9).
@@ -100,12 +100,12 @@ Every call takes `workspace_id`. Writes also take `idempotency_key`. Optional ar
 
 | Capability | Arguments | Result |
 |---|---|---|
-| `files.workspaces.list` | (none) | `workspaces: [{workspace_id, writable, limits}]`; `writable` reflects the caller's grants only (any `files.*` write grant, or no grant restriction), not the remote writes-disabled switch |
+| `files.workspaces.list` | (none) | `workspaces: [{workspace_id, writable, write_mode, limits}]`, in configuration order; `write_mode` is `direct`, `approval` or `read_only` (§18); `writable` is false for a `read_only` workspace and otherwise reflects the caller's grants only (any `files.*` write grant, or no grant restriction), not the remote writes-disabled switch; `limits` are that workspace's |
 | `files.list` | `path`, `after?`, `page_size?` (≤ 200, default 200) | `entries[]` sorted by name bytes, `next_after` (last name, or null) |
 | `files.stat` | `path`, `include_sha256?` | entry, `sha256?` |
 | `files.search` | `path` (subtree), `query` (1–255 chars, case-insensitive name substring), `page_size?` (≤ 200) | `entries[]`, `truncated` (walk cap or page reached); no continuation |
 | `files.preview` | `path`, `offset?`, `max_bytes?` (≤ 262144), `expected_version?` | `text`, `next_offset` (null at EOF), `version`; non-UTF-8 content gives `binary: true` and no text; the cut never splits a character, so a window may exceed `max_bytes` only to return a single character wider than the limit (≤ 4 bytes) |
-| `files.history` | `path?`, `after?`, `page_size?` (≤ 200) | product-recorded preimage versions and trash items for the path (or the workspace), newest first; external edits have no history |
+| `files.history` | `path?`, `after?`, `page_size?` (≤ 200), `pending_change_id?` (§18.4) | product-recorded preimage versions and trash items for the path (or the workspace), newest first; external edits have no history. With `pending_change_id` (exclusive of the others): that one pending change of the caller, as the single item |
 | `files.download.begin` | `path` + `expected_version?`, or `version_id`; `include_sha256?`; `ttl_seconds?` | `download_id`, `download_token`, `route`, `transfer` (§17.5), `browser_download?` (§17.6), `resource_uri`, `name`, `size`, `version`, `sha256?`, `expires_at` (§17.3) |
 | `files.mkdir` | `path`, `parents?` (default false) | entry |
 | `files.copy` | `path`, `to_path`, `expected_version?` | entry at `to_path` |
@@ -141,6 +141,7 @@ Files refusals use the existing public `ErrorCode`s. The specific reason is a ne
 | `ticket_invalid` | `denied` | 401 | token unknown, malformed, expired, used, aborted, or bound to another route |
 | `file_handle_unsupported` | `unsupported` | — | a `source_file` was given and this process composes no handle fetcher (§17.2) |
 | `file_handle_refused` | `invalid_request` | — | the `source_file` URL was refused or could not be fetched: scheme, host, address, redirect, status, TLS, network or deadline (§17.2) |
+| `workspace_read_only` | `unsupported` | 403 | a write named a `read_only` workspace (§18) |
 
 The set is minimal. Expired and invalid tickets share one token because the client's remedy is the same (begin a new ticket), and distinguishing them would only give a probing oracle. Grant revocation reuses the existing `denied` path (HTTP 403). Idempotency misuse reuses `conflict` on `idempotency_key`. A Range the file cannot satisfy is HTTP 416 with no reason token.
 
@@ -174,6 +175,9 @@ Zero-byte files are valid everywhere. There is no MIME-type or extension allowli
 | `MY_PA_FILES_BROWSER_DOWNLOAD_CLIENT_IDS` | Comma-separated OAuth client ids that get a browser download link (§17.6). **Empty (the default) turns the feature off.** |
 | `MY_PA_FILES_BROWSER_DOWNLOAD_TTL_SECONDS` | A browser link's lifetime; default 300, 60..900. §17.6. |
 | `MY_PA_FILES_HANDLE_FETCH_DEADLINE_SECONDS` | The whole-fetch deadline of one handle; default 25, at most 60. §17.2. |
+| `MY_PA_FILES_WORKSPACES` | The explicit workspace list (§18.1). Unset (the default) composes the one workspace of `MY_PA_FILES_WORKSPACE_ROOT`/`_ID` in `direct` mode, exactly as before; set, `MY_PA_FILES_WORKSPACE_ROOT` must be empty. |
+| `MY_PA_FILES_APPROVAL_TTL_SECONDS` | A pending change's lifetime; default 900, 60..86400 (§18.3). |
+| `MY_PA_FILES_APPLY_ROOTS` | `alias=path` pairs read **only** by the operator apply command (§18.5); never set on the gateway or remote MCP process. |
 
 At composition the store refuses to start unless the root exists, is a directory, and is not a symlink. It also refuses unless the root equals, contains and lies inside none of the configured source, managed-document or report-content roots. The production mount is that one NAS subtree, never `/volume1`, `/volume1/homes` or a whole home; `ops/nas/remote/live-gate.py` requires the remote MCP container's workspace bind source to be exactly `/volume1/homes/bfetting/MCP` (`WORKSPACE_SOURCE`, pinned to the overlay's `source:`).
 
@@ -261,7 +265,7 @@ Bounded by `test_the_audit_records_the_decision_and_nothing_about_the_file` and 
 - **T5:** content search and any index. `files.search` is a bounded name walk.
 - **T6:** a separate garbage-collection task. Expired staging is reaped in-process on `upload.begin`.
 - **T7 (amended):** inline Base64 bytes over MCP. Inline content is limited to `files.write_text` (UTF-8, ≤ 120 KiB; see T13).
-- **T8:** multiple roots. `files.workspaces.list` returns the single configured workspace.
+- **T8 (amended by §18):** multiple roots are configured only by the operator (`MY_PA_FILES_WORKSPACES`); a client never chooses or creates a root.
 - **T9:** persistent per-file ids. Files are addressed by alias, path and version token.
 - **T10:** any sole-writer or atomicity claim against external writers (FW-D04).
 - **T11:** proof of the Abacus scheduled-task bridge. Only the routes and the reference client ship.
@@ -280,6 +284,7 @@ Bounded by `test_the_audit_records_the_decision_and_nothing_about_the_file` and 
 - Production migration and the `files.*` grants per client (`file_workspace_read`, and `file_workspace_authoring` with write).
 - Proof of a scheduled Abacus run using the reference client.
 - Backup and retention policy for the subtree, including `.my-pa/versions` and `.my-pa/trash`.
+- For `work` (§18): the read-only bind, the state directory, the apply container's read-write bind, the ACL for the apply UID, the `work` grants, and every approval.
 
 ## 17. Native file handles and MCP resource delivery (ADR-019 Amendment 1)
 
@@ -357,3 +362,69 @@ Abacus has no native file handle (an attachment is only a path in its sandbox, a
 - **Tunnel.** The public tunnel needs one more path rule, `^/files/v1/browser-downloads/[^/]+$`, on the MCP hostname (operator-gated; `ops/nas/remote/cloudflared-config.example.yml`, `ops/runbooks/remote-mcp-cloudflare.md`).
 - **Unverified** against real ChatGPT and the deployed tunnel until an operator-authorized re-proof.
 
+## 18. Several workspaces and approved-only writes (ADR-019 Amendment 2)
+
+The seventeen names are unchanged; no capability, purpose, table, migration or public route is added. A `direct` workspace (`mcp`) is served exactly as §§1-17 describe. The rules below add to them for a workspace whose `write_mode` is `approval` (`work`) or `read_only`.
+
+### 18.1 Configuration
+
+`MY_PA_FILES_WORKSPACES` is a comma-separated list of at most 8 workspaces, each `alias=root` followed by `;key=value` options:
+
+| Option | Meaning |
+|---|---|
+| `mode` | `direct` (default), `approval` or `read_only` |
+| `state` | `approval` only, and required there: the absolute path of the workspace's product state directory (§18.2) |
+| `max_upload_bytes` | this workspace's upload cap; default `MY_PA_FILES_MAX_UPLOAD_BYTES` |
+| `disk_reserve_bytes` | this workspace's free-space reserve; default `MY_PA_FILES_DISK_RESERVE_BYTES` |
+| `max_pending_bytes` | `approval` only: the most staged bytes its live pending changes may hold together; default 1 GiB |
+
+Example (production shape): `mcp=/srv/my-pa/workspaces/mcp,work=/srv/my-pa/workspaces/work;mode=approval;state=/srv/my-pa/workspace-state/work;max_upload_bytes=2147483648`.
+
+Aliases are lower-case tokens (§2) and unique. Every root and state directory is absolute; no two of them may be the same tree, contain or lie inside each other, nor a source, managed-document or report-content root (§9). A malformed list, an unknown option, `state` on a non-`approval` workspace or a missing `state` on an `approval` one refuses the settings, and so the process, at start. With the list set, `MY_PA_FILES_WORKSPACE_ROOT` must be empty (one source of truth); `MY_PA_FILES_WORKSPACE_ID` is then unused.
+
+**Read-only mount (fail closed).** An `approval` or `read_only` root must be mounted read-only by the kernel (`statvfs` `ST_RDONLY`, the overlay's `:ro` bind). The store refuses to compose otherwise -- an unmounted bind is an ordinary writable directory -- and re-checks the mount flag and the root's identity on every call (`unavailable`), so an unmount or remount while running serves nothing.
+
+### 18.2 Write modes and state
+
+| `write_mode` | Reads | Writes | Upload staging | Preimages and trash |
+|---|---|---|---|---|
+| `direct` | the root | applied by the request (§5) | `<root>/.my-pa/staging` | `<root>/.my-pa/{versions,trash}` |
+| `approval` | the read-only root | recorded as a pending change; applied only by an operator approval (§18.5) | `<state>/.my-pa/staging` | `<root>/.my-pa/{versions,trash}`, written by the apply path only |
+| `read_only` | the read-only root | refused `workspace_read_only` | none | none |
+
+- **State directory.** `<state>/.my-pa/staging/<fwupl id>` holds ticket and staged content bytes (0600), `<state>/.my-pa/pending/<fwpnd id>.json` each pending change record (0600, written by temporary file and `rename`), and `<state>/.my-pa/pending/decisions.jsonl` the append-only decision journal. The directory is product-only: no `files.*` argument addresses it, and it is never inside a workspace root.
+- **Why preimages and trash stay in the root.** A trash or a replace must remain a `rename` on one mount (§5, ADR decision 5): a trashed `work` tree may be large, and a copy-then-delete would be a hard delete with extra steps. So the apply path, through its read-write mount of the same folder, keeps them in `<root>/.my-pa/`, which the read-only view hides from list and search and refuses as a path component (§3 rule 5); a preserved version is downloadable by `version_id` through the read-only view.
+- **`upload.begin` and `upload.abort`** on an `approval` workspace are applied directly: they touch only the state directory (a ticket and its staging), never the workspace. `files.upload.begin` on a `read_only` workspace is `workspace_read_only`.
+- **Read-only refusal order.** A write on a `read_only` workspace is refused after the grant re-check and the alias, before the receipt: nothing is recorded.
+
+### 18.3 Pending changes
+
+A write on an `approval` workspace runs under the per-workspace lock and the idempotency receipt of §5 as usual. In place of the mutation it:
+
+1. checks the request exactly as the apply will (path rules; for an existing source its kind and, when given, `expected_version` -- `version_conflict`; for a create the absent target -- `exists` -- and a directory parent; for a replace `expected_version` of the current file; for `restore` an unrestored trash item of this workspace and the caller; for content the §5 length and SHA-256 checks -- `digest_mismatch`);
+2. binds the **preimage version**: the version token it observed for every existing entry the operation names (the source of `copy`/`move`/`rename`/`trash`, the replaced file of `write_text`/`upload.finalize`), whether or not the client sent `expected_version`; a create binds "absent";
+3. for content, keeps the staged bytes in the state directory (`write_text`'s text is staged there; an upload's ticket is settled `finalized`, so its token closes; a native handle is fetched there) -- refused `quota` when the workspace's live pending changes would then hold more than `max_pending_bytes`, or when 256 changes are already pending;
+4. writes the pending change record: `pending_change_id` (`fwpnd_…`, a new `IdKind`), `workspace_id`, the Principal, the client reference, `operation` (the capability name), the normalized arguments (paths, `to_path`, `parents`, `trash_item_id`), the bound versions, `size` and `sha256` (content only), the staged object, `created_at`, `expires_at` (`MY_PA_FILES_APPROVAL_TTL_SECONDS`, default 900 s) and `status: pending`;
+5. answers, as a **successful** result: `{approval_required: true, pending_change_id, status: "pending", operation, expires_at}`. A replay of the key answers the same (§5).
+
+The record never holds a token, a handle URL or a text (only the text's staged bytes, by SHA-256). Statuses: `pending` → `applying` → `applied` or `failed`; `pending` → `denied`; `pending` → `expired` once `expires_at` passes (decided lazily: on the next status read, the next pending change of the workspace, or the operator's list). A change leaves `pending` exactly once. Its staged bytes are discarded when it leaves `pending`/`applying`; the record is kept.
+
+### 18.4 Status (client)
+
+`files.history` with `pending_change_id` answers `{items: [{item: "pending", pending_change_id, operation, status, path, to_path, size, sha256, created_at, expires_at, decided_at, entry?, reason?}], next_after: null}`, where `entry` is the applied result's entry (or `trash_item_id`/`preimage_version_id` where the operation answers them) and `reason` a §7 token for `failed`. It is a read (`file_workspace_read`). Only the Principal and client that created the change can read it; any other caller, an unknown id, an id of another workspace, or a `direct` workspace is the one `not_found`. `pending_change_id` cannot be combined with `path`, `after` or `page_size` (`invalid_request` on `pending_change_id`).
+
+### 18.5 Operator approval and apply
+
+- **Channel.** `apps/cli/remote_mcp.py` `files-pending --workspace <alias>` lists live changes (id, client, operation, paths, size, sha256, expiry and the **binding** digest: SHA-256 of the record's canonical JSON); `files-approve --workspace <alias> --pending-change-id <id> --binding <digest>` applies one; `files-deny --workspace <alias> --pending-change-id <id>` denies one. They are operator commands, run with the operator's database credentials; no OAuth client grant, no `files.*` name and no HTTP route can approve.
+- **Apply runs only where the workspace is mounted read-write.** `MY_PA_FILES_APPLY_ROOTS` (`alias=path`) names the apply mount, a second bind of the same folder present only in the one-shot apply container. `files-approve` refuses unless that path exists, is writable, and is the same directory (device and inode) as the configured read-only root, which the apply container also mounts. The apply store has the same containment, reserved-name and symlink rules as every store.
+- **Checks at apply, all under the workspace lock, in order:** the change exists in that workspace and is `pending` (else refused, nothing changes: single use, so a replayed approval is refused); not expired (marked `expired`); the binding digest equals the record's (a record altered after review is refused); the requesting client's standing, re-read now -- for a remote client: enabled, remote access on, writes allowed for it and remote writes enabled, and an active grant for the change's operation under `file_workspace_authoring` -- else `failed` with `denied`. Then the record moves to `applying` and the operation runs through the apply store with every bound version as `expected_version` (a create through the no-overwrite rule), so any change since the request is `version_conflict`, `exists` or `external_change_detected`, recorded as `failed` with that reason. Content is first copied from the state directory into the apply mount's staging and verified against the bound length and SHA-256 (`digest_mismatch`) before it is published by rename. Version and trash rows are written for the requesting Principal exactly as a `direct` write writes them. The record ends `applied` (with its result) or `failed` (with a §7 reason token); a crash leaves it `applying`, which is never applied again.
+- **Deletion** is always `files.trash` into `<root>/.my-pa/trash/`; nothing is ever hard-deleted.
+- **Recorded.** Every approval, denial and apply outcome appends one line to the decision journal (`at`, `pending_change_id`, `operation`, `decision`, `status`, `reason`; no path, name or content) and writes one server-log line (logger `my_pa.files.approval`). The client's original call is audited by its `authorize` row (§11); the operator's decision is not an `audit_events` row (trim T14).
+
+### 18.6 Security properties
+
+- A client cannot cause a byte to be written in an `approval` or `read_only` root: the serving processes mount it read-only, and only the operator command in the apply container writes it.
+- An approval binds the exact operation, paths, content SHA-256 and preimage versions (through the binding digest and the bound versions); one for a different change, path or hash is refused, as is a second use, an expired change and a client whose grant was revoked meanwhile.
+- A pending change id is only ever answered to the client that created it; status reads by others are `not_found`, the same as an unknown id. No pending change carries a credential.
+- Errors and records name no host path; paths are workspace-relative.
+- The `work` root may hold large trees and Synology metadata: list, search and history stay bounded by §8 (page 200, walk 20,000 entries, depth 32); nothing indexes or scans eagerly.

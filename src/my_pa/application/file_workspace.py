@@ -8,8 +8,12 @@ writes the audit event: capability, purpose and outcome). Here:
   Authorization's; the client reference is the server-derived writer
   (`"<creator kind>:<creator id>"`, the `reports.transfer` binding). No
   argument names either.
-- **One workspace.** `workspace_id` must equal the configured alias
-  (`MY_PA_FILES_WORKSPACE_ID`); any other is `not_found` (trim T8).
+- **Workspaces.** `workspace_id` must name a composed workspace the caller is
+  admitted to (section 18.1: `MY_PA_FILES_WORKSPACES`, or the single
+  `MY_PA_FILES_WORKSPACE_ID`); any other is `not_found`. A `read_only`
+  workspace refuses every write `workspace_read_only`; an `approval`
+  workspace turns every write into a pending change (`PendingWrites`,
+  section 18.3) that only the operator applies (`file_workspace_approval`).
 - **Writes** take the per-workspace advisory lock first
   (`FileWorkspaceRepository.lock_workspace`, `pg_advisory_xact_lock` keyed from
   the alias), so the product's own mutations of one workspace serialize until

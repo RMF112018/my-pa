@@ -46,13 +46,14 @@ Refusals are the domain's `FilesRefusal` (a section 7 token), `FilesArgumentErro
 from __future__ import annotations
 
 import hmac
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Final
 
 from my_pa.application.commands import FinalizeFileUpload
 from my_pa.application.errors import DeniedError
+from my_pa.application.file_workspace import ComposedFileWorkspace
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import (
     FileTransferKind,
@@ -78,7 +79,7 @@ from my_pa.domain.files.transfer import (
     ticket_token_digest,
     ticket_token_from_authorization,
 )
-from my_pa.domain.files.vocabulary import MAX_UPLOAD_CHUNK_BYTES, FilesReason
+from my_pa.domain.files.vocabulary import MAX_UPLOAD_BYTES, MAX_UPLOAD_CHUNK_BYTES, FilesReason
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
@@ -144,21 +145,33 @@ class FileTransferGate:
         self,
         *,
         service: ApplicationService,
-        store: FileWorkspaceStore,
         unit_of_work: Callable[[], UnitOfWork],
         standing: RemoteClientStandingReader,
-        workspace_id: str,
-        max_upload_bytes: int,
         remote_writes_enabled: bool,
+        store: FileWorkspaceStore | None = None,
+        workspace_id: str = "mcp",
+        max_upload_bytes: int = MAX_UPLOAD_BYTES,
+        workspaces: Sequence[ComposedFileWorkspace] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         browser_client_ids: frozenset[str] = frozenset(),
     ) -> None:
         self._service = service
-        self._store = store
+        if workspaces is None:
+            if store is None:
+                raise ValueError("a store or the composed workspaces are required")
+            workspaces = (
+                ComposedFileWorkspace(
+                    workspace_id=workspace_id, store=store, max_upload_bytes=max_upload_bytes
+                ),
+            )
+        elif store is not None:
+            raise ValueError("name either one store or the composed workspaces")
+        #: Contract section 18: each ticket is served by its own workspace.
+        self._spaces: Final[Mapping[str, ComposedFileWorkspace]] = {
+            space.workspace_id: space for space in workspaces
+        }
         self._unit_of_work = unit_of_work
         self._standing = standing
-        self._workspace_id: Final = workspace_id
-        self._max_upload_bytes: Final = max_upload_bytes
         self._remote_writes_enabled: Final = remote_writes_enabled
         self._clock = clock
         #: Section 17.6: empty is the browser route off.
@@ -188,7 +201,7 @@ class FileTransferGate:
         if (
             ticket is None
             or ticket.transfer_id != transfer_id
-            or ticket.workspace_id != self._workspace_id
+            or ticket.workspace_id not in self._spaces
             or not ticket.client_ref.startswith(_REMOTE_CLIENT_REF)
         ):
             raise _ticket_invalid()
@@ -211,7 +224,7 @@ class FileTransferGate:
             ticket is None
             or ticket.transfer_id != transfer_id
             or ticket.kind is not FileTransferKind.DOWNLOAD
-            or ticket.workspace_id != self._workspace_id
+            or ticket.workspace_id not in self._spaces
             or not ticket.usable_at(now)
             or not hmac.compare_digest(ticket.client_ref.encode(), client_ref.encode())
         ):
@@ -232,7 +245,7 @@ class FileTransferGate:
         if (
             ticket is None
             or ticket.transfer_id != download_id
-            or ticket.workspace_id != self._workspace_id
+            or ticket.workspace_id not in self._spaces
             or not ticket.client_ref.startswith(_REMOTE_CLIENT_REF)
         ):
             raise _ticket_invalid()
@@ -276,9 +289,15 @@ class FileTransferGate:
 
     # ---- uploads ------------------------------------------------------------------
 
+    def _space(self, access: FileTransferAccess) -> ComposedFileWorkspace:
+        space = self._spaces.get(access.ticket.workspace_id)
+        if space is None:  # pragma: no cover - authentication admitted only these
+            raise _ticket_invalid()
+        return space
+
     def upload_offset(self, access: FileTransferAccess) -> int:
         """The staged byte count: the upload's current `Upload-Offset`."""
-        return self._store.upload_offset(access.ticket.transfer_id)
+        return self._space(access).staging_store.upload_offset(access.ticket.transfer_id)
 
     def upload_ceiling(self, access: FileTransferAccess, offset: int) -> int:
         """The most bytes the upload may hold after one PATCH starting at `offset`.
@@ -286,7 +305,7 @@ class FileTransferGate:
         The 32 MiB per-request cap, the ticket's declared size and
         `MY_PA_FILES_MAX_UPLOAD_BYTES`, whichever is least.
         """
-        ceiling = min(offset + MAX_UPLOAD_CHUNK_BYTES, self._max_upload_bytes)
+        ceiling = min(offset + MAX_UPLOAD_CHUNK_BYTES, self._space(access).max_upload_bytes)
         declared = access.ticket.declared_size
         if declared is not None:
             ceiling = min(ceiling, declared)
@@ -311,7 +330,9 @@ class FileTransferGate:
             or current + content_length > self.upload_ceiling(access, current)
         ):
             raise FilesRefusal("body", FilesReason.TOO_LARGE)
-        self._store.ensure_free_space(0 if content_length is None else content_length)
+        self._space(access).staging_store.ensure_free_space(
+            0 if content_length is None else content_length
+        )
         return current
 
     def append(self, access: FileTransferAccess, offset: int, chunks: Iterable[bytes]) -> int:
@@ -324,7 +345,7 @@ class FileTransferGate:
         work; a row that cannot move there is `offset_mismatch`.
         """
         upload_id = access.ticket.transfer_id
-        position = self._store.append_upload(
+        position = self._space(access).staging_store.append_upload(
             upload_id, offset, chunks, limit=self.upload_ceiling(access, offset)
         )
         owner = access.ticket.owner_principal_id
@@ -364,7 +385,7 @@ class FileTransferGate:
             raise DeniedError()
         upload_id = access.ticket.transfer_id
         command = FinalizeFileUpload(
-            workspace_id=self._workspace_id,
+            workspace_id=access.ticket.workspace_id,
             upload_id=upload_id,
             length=completion.length,
             sha256=completion.sha256,
@@ -399,9 +420,9 @@ class FileTransferGate:
         if expected is None:  # pragma: no cover - a download ticket always binds one
             raise _ticket_invalid()
         if ticket.preserved_version_id is not None:
-            reader = self._store.open_preserved_version(ticket.preserved_version_id)
+            reader = self._space(access).store.open_preserved_version(ticket.preserved_version_id)
         else:
-            reader = self._store.open_download(ticket.path, expected_version=expected)
+            reader = self._space(access).store.open_download(ticket.path, expected_version=expected)
         if reader.version != expected:
             reader.close()
             raise FilesRefusal("version", FilesReason.EXTERNAL_CHANGE_DETECTED)

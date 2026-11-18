@@ -58,6 +58,7 @@ __all__ = [
     "BROWSER_DOWNLOAD_TTL_MIN_SECONDS",
     "BROWSER_TOKEN_PREFIX",
     "DOWNLOAD_ID_PREFIX",
+    "PENDING_CHANGE_ID_PREFIX",
     "RECEIPT_ID_PREFIX",
     "TICKET_TOKEN_ENV",
     "TICKET_TOKEN_PATTERN",
@@ -103,6 +104,8 @@ DOWNLOAD_ID_PREFIX: Final = IdKind.FILE_DOWNLOAD.value
 VERSION_ID_PREFIX: Final = IdKind.FILE_VERSION.value
 TRASH_ITEM_ID_PREFIX: Final = IdKind.FILE_TRASH_ITEM.value
 RECEIPT_ID_PREFIX: Final = IdKind.FILE_RECEIPT.value
+#: Section 18.3 (ADR-019 Amendment 2): a pending change of an `approval` workspace.
+PENDING_CHANGE_ID_PREFIX: Final = IdKind.FILE_PENDING_CHANGE.value
 _ID_PREFIXES: Final = frozenset(
     {
         UPLOAD_ID_PREFIX,
@@ -110,6 +113,7 @@ _ID_PREFIXES: Final = frozenset(
         VERSION_ID_PREFIX,
         TRASH_ITEM_ID_PREFIX,
         RECEIPT_ID_PREFIX,
+        PENDING_CHANGE_ID_PREFIX,
     }
 )
 _ID_SUFFIX: Final = re.compile(r"\A[A-Za-z0-9]{8,64}\Z")

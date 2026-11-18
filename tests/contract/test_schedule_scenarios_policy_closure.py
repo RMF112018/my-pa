@@ -205,7 +205,9 @@ def test_the_six_plane_cursor_orders_and_the_37_details_exist() -> None:
     # ADR-019 Amendment 1 (contract section 17): 2 handle tokens and the
     # `source_file` field detail, 417 -> 420.
     # Contract section 17.4's quoted-capability hint, 420 -> 421.
-    assert len(SafeDetail) == 421
+    # ADR-019 Amendment 2 (contract section 18): `workspace_read_only` and the
+    # `pending_change_id` field detail, 421 -> 423.
+    assert len(SafeDetail) == 423
     for error in ChangeOpError:
         assert SafeDetail(f"change_set_{error.value}").name == f"CHANGE_SET_{error.name}"
 

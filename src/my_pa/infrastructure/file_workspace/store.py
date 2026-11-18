@@ -118,7 +118,7 @@ import hashlib
 import os
 import secrets
 import shutil
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 from stat import S_ISDIR, S_ISREG
@@ -258,6 +258,11 @@ def _publishable(descriptor: int, mode: int) -> None:
     """Give a staged file its published mode; best effort (a NAS ACL may refuse `chmod`)."""
     with suppress(OSError):
         os.fchmod(descriptor, mode)
+
+
+def _mounted_read_only(descriptor: int) -> bool:
+    """Whether the kernel reports the descriptor's mount read-only (`ST_RDONLY`)."""
+    return bool(os.fstatvfs(descriptor).f_flag & os.ST_RDONLY)
 
 
 def _unavailable() -> FileWorkspaceUnavailableError:
@@ -521,7 +526,10 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         source_roots: Iterable[Path] = (),
         managed_roots: Iterable[Path] = (),
         report_roots: Iterable[Path] = (),
+        other_roots: Iterable[Path] = (),
         disk_reserve_bytes: int = DISK_RESERVE_BYTES,
+        require_read_only_mount: bool = False,
+        read_only_probe: Callable[[int], bool] | None = None,
     ) -> None:
         if not _platform_supported():  # pragma: no cover - every supported platform has it
             raise FileWorkspaceRootError(
@@ -555,12 +563,29 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             raise FileWorkspaceRootError(
                 "the configured file workspace root is not an existing directory"
             )
-        for other in (*source_roots, *managed_roots, *report_roots):
+        for other in (*source_roots, *managed_roots, *report_roots, *other_roots):
             if _overlaps(resolved, _comparable(Path(other))):
                 raise FileWorkspaceRootError(
                     "the file workspace root is the same tree as a source, managed "
-                    "document or report content root, or lies inside one, or contains one"
+                    "document, report content or other workspace root, or lies inside "
+                    "one, or contains one"
                 )
+        #: Contract section 18.1: an `approval` or `read_only` root must be a
+        #: read-only mount, at composition and on every call (fail closed: an
+        #: unmounted bind is an ordinary writable directory).
+        self._require_read_only: Final = require_read_only_mount
+        self._read_only_probe: Final = (
+            _mounted_read_only if read_only_probe is None else read_only_probe
+        )
+        if require_read_only_mount:
+            probe = os.open(resolved, _DIRECTORY_FLAGS)
+            try:
+                if not self._read_only_probe(probe):
+                    raise FileWorkspaceRootError(
+                        "the file workspace root must be mounted read-only for its write mode"
+                    )
+            finally:
+                _close(probe)
         self._root: Final = resolved
         self._identity: Final = (status.st_dev, status.st_ino)
         self._reserve: Final = _bounded_int(disk_reserve_bytes, "disk_reserve_bytes", 0)
@@ -582,7 +607,14 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         status = os.fstat(descriptor)
         if (status.st_dev, status.st_ino) != self._identity:
             raise _unavailable()
+        if self._require_read_only and not self._read_only_probe(descriptor):
+            raise _unavailable()
         return descriptor
+
+    @property
+    def root_identity(self) -> tuple[int, int]:
+        """The root's (device, inode) at composition (section 18.5's same-directory check)."""
+        return self._identity
 
     @staticmethod
     def _lstat(directory: int, name: str) -> os.stat_result | None:
@@ -1654,6 +1686,11 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             if not S_ISREG(status.st_mode):
                 raise _refuse("version_id", FilesReason.UNSUPPORTED_ENTRY)
             return self._hand_over(versions, name, status, "version_id")
+
+    def open_staged_upload(self, upload_id: str) -> FileWorkspaceReader:
+        with ExitStack() as stack, _translated():
+            staging, name, status = self._staged(stack, upload_id)
+            return self._hand_over(staging, name, status, "upload_id")
 
     def _hand_over(
         self, directory: int, name: str, status: os.stat_result, field: str

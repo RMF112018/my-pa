@@ -20,7 +20,9 @@ from my_pa.application.chatllm_data_profile import (
     plan_chatllm_grant_actions,
     profile_diff_as_json,
 )
+from my_pa.application.file_workspace_approval import ApprovalRefused
 from my_pa.application.service import _HANDLERS
+from my_pa.bootstrap.gateway import files_approval_operator
 from my_pa.bootstrap.knowledge_discovery_profiles import (
     DISCOVERY_PROFILES,
     KNOWLEDGE_CLIENT_PROFILES,
@@ -408,6 +410,32 @@ def _run_knowledge_profile_command(
     return 0
 
 
+def _run_files_approval_command(args: argparse.Namespace, settings: Settings) -> int:
+    """`files-pending`, `files-approve`, `files-deny` (contract section 18.5).
+
+    Prints JSON. Exit 0 when the change was listed, applied or denied; 1 when
+    an approval ended `failed` or `expired`; 2 when it was refused and nothing
+    changed (an unknown or decided change, a binding mismatch, no apply root).
+    """
+    operator, engine = files_approval_operator(settings)
+    try:
+        if args.command == "files-pending":
+            listed = operator.list_pending(args.workspace)
+            print(json.dumps({"pending": listed}, indent=2, sort_keys=True))
+            return 0
+        if args.command == "files-deny":
+            decided = operator.deny(args.workspace, args.pending_change_id)
+        else:
+            decided = operator.approve(args.workspace, args.pending_change_id, args.binding)
+        print(json.dumps(decided, indent=2, sort_keys=True))
+        return 0 if decided["status"] in {"applied", "denied"} else 1
+    except ApprovalRefused as refused:
+        print(json.dumps({"refused": refused.reason}, sort_keys=True), file=sys.stderr)
+        return 2
+    finally:
+        engine.dispose()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Administer remote MCP authority")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -464,7 +492,20 @@ def main(argv: list[str] | None = None) -> int:
         )
         if name == "knowledge-profile-apply":
             knowledge_profile.add_argument("--apply", action="store_true")
+    # ADR-019 Amendment 2 (files-workspace contract section 18.5): the operator's
+    # approval channel for an `approval` workspace's pending changes.
+    files_pending = sub.add_parser("files-pending")
+    files_pending.add_argument("--workspace", required=True)
+    files_approve = sub.add_parser("files-approve")
+    files_approve.add_argument("--workspace", required=True)
+    files_approve.add_argument("--pending-change-id", required=True)
+    files_approve.add_argument("--binding", required=True)
+    files_deny = sub.add_parser("files-deny")
+    files_deny.add_argument("--workspace", required=True)
+    files_deny.add_argument("--pending-change-id", required=True)
     args = parser.parse_args(argv)
+    if args.command in {"files-pending", "files-approve", "files-deny"}:
+        return _run_files_approval_command(args, load_settings())
     if args.command == "grant":
         refusal = raw_grant_refusal(args.capability, args.purpose)
         if refusal is not None:

@@ -18349,13 +18349,16 @@ class GetFileHistory:
 
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
-        if self.pending_change_id is not None and (
-            parse_file_id(self.pending_change_id, PENDING_CHANGE_ID_PREFIX) is None
-            or self.path is not None
-            or self.after is not None
-            or self.page_size is not None
-        ):
-            raise InvalidRequestError(SafeDetail.PENDING_CHANGE_ID)
+        if self.pending_change_id is not None:
+            if not isinstance(self.pending_change_id, str):
+                raise InvalidRequestError(SafeDetail.PENDING_CHANGE_ID)
+            if (
+                parse_file_id(self.pending_change_id, PENDING_CHANGE_ID_PREFIX) is None
+                or self.path is not None
+                or self.after is not None
+                or self.page_size is not None
+            ):
+                raise InvalidRequestError(SafeDetail.PENDING_CHANGE_ID)
         if self.path is not None:
             object.__setattr__(self, "path", _files_path(self.path, SafeDetail.PATH))
         if self.after is not None and not isinstance(self.after, str):

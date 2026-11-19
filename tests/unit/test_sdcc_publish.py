@@ -395,9 +395,7 @@ def test_git_capture_exact_commit_and_reconstructable_patch(tmp_path: Path) -> N
         capture_git(out, data, root)
 
 
-def _synthetic_many(
-    monkeypatch: pytest.MonkeyPatch, folder: Path, count: int
-) -> list[Artifact]:
+def _synthetic_many(monkeypatch: pytest.MonkeyPatch, folder: Path, count: int) -> list[Artifact]:
     """An in-memory 10k-entry inventory; just one tiny file touches local disk."""
     local = folder / "fixture.bin"
     local.write_bytes(b"ok")
@@ -433,9 +431,7 @@ def test_manifest_real_text_limit_falls_back_to_verified_binary(
     assert all(item["version"] for item in manifest["artifacts"])
     assert all(item["sha256"] == sha(b"ok") for item in manifest["artifacts"])
     assert any("\u03b1" in item["relative_path"] for item in manifest["artifacts"])
-    assert (outcome["manifest_path"] in store.uploaded_paths) == (
-        len(manifest_bytes) > TEXT_LIMIT
-    )
+    assert (outcome["manifest_path"] in store.uploaded_paths) == (len(manifest_bytes) > TEXT_LIMIT)
     assert payload(store, outcome["recovery_path"])["publication_status"] == "NOT_READY"
     assert payload(store, outcome["recovery_locator_path"])["status"] == "NOT_READY"
     registry = payload(store, outcome["registry_path"])
@@ -505,9 +501,7 @@ def test_metadata_failure_cannot_claim_ready_and_retry_recovers(
     "drop_suffix",
     ["/SESSION_RECOVERY.json", "/SESSION_PUBLICATION_RECEIPT.json"],
 )
-def test_lost_inline_metadata_ack_uses_digest_readback(
-    tmp_path: Path, drop_suffix: str
-) -> None:
+def test_lost_inline_metadata_ack_uses_digest_readback(tmp_path: Path, drop_suffix: str) -> None:
     (tmp_path / "one.md").write_text("ok\n")
     data = spec()
     data["artifact_statuses"] = {}
@@ -548,9 +542,12 @@ def test_recovery_binding_refuses_changed_source_on_replay(tmp_path: Path) -> No
     store.fail_text_relative = None
     with pytest.raises(PublicationError, match="metadata_publication_conflict"):
         run(store, tmp_path, data)
-    assert payload(store, f"{publisher._session_path(data)}/SESSION_RECOVERY.json")[
-        "publication_status"
-    ] == "NOT_READY"
+    assert (
+        payload(store, f"{publisher._session_path(data)}/SESSION_RECOVERY.json")[
+            "publication_status"
+        ]
+        == "NOT_READY"
+    )
 
 
 def test_missing_declared_artifact_refused_before_remote_publication(tmp_path: Path) -> None:

@@ -436,9 +436,7 @@ async def _write_metadata(api: FilesAPI, path: str, text: str) -> dict[str, Any]
         )
 
 
-def _inventory_sha256(
-    artifacts: list[Artifact], exclusions: list[dict[str, Any]]
-) -> str:
+def _inventory_sha256(artifacts: list[Artifact], exclusions: list[dict[str, Any]]) -> str:
     """Bind a NOT_READY recovery record without disclosing withheld hashes."""
     digest = hashlib.sha256()
     for item in artifacts:
@@ -637,6 +635,7 @@ async def publish(api: FilesAPI, source: Path, spec: Mapping[str, Any]) -> dict[
             f"{manifest_stat['version']}; {status}; next: {spec.get('next_action', '')}"
         ),
     }
+
 
 class RemoteFilesAPI:
     """MCP facade adapter; uses existing my_pa.read/write and byte routes."""

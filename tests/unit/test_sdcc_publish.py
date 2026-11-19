@@ -13,7 +13,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from scripts.sdcc_publish import (
     PublicationError,
     RemoteFilesAPI,
@@ -33,8 +32,11 @@ class SyntheticFilesWorkspace:
     """Simulates MY-PA create-only, stat/digest, binary and directory capabilities."""
 
     def __init__(self) -> None:
-        self.entries: dict[str, bytes | None] = {"SDCR": None, "SDCR/20-Programs": None,
-                                                "SDCR/40-Publication": None}
+        self.entries: dict[str, bytes | None] = {
+            "SDCR": None,
+            "SDCR/20-Programs": None,
+            "SDCR/40-Publication": None,
+        }
         self.versions: dict[str, int] = dict.fromkeys(self.entries, 1)
         self.writes: dict[str, int] = {}
         self.fail_upload_relative: str | None = None
@@ -43,9 +45,12 @@ class SyntheticFilesWorkspace:
         if name not in self.entries:
             raise PublicationError("not_found")
         blob = self.entries[name]
-        result = {"kind": "directory" if blob is None else "file", "path": name,
-                  "version": "fv1_test_" + str(self.versions[name]),
-                  "size": None if blob is None else len(blob)}
+        result = {
+            "kind": "directory" if blob is None else "file",
+            "path": name,
+            "version": "fv1_test_" + str(self.versions[name]),
+            "size": None if blob is None else len(blob),
+        }
         if blob is not None:
             result["sha256"] = sha(blob)
         return result
@@ -90,13 +95,24 @@ class SyntheticFilesWorkspace:
 
 
 def spec(session_id: str = "SESSION-20261119-365-001") -> dict:
-    return {"session_id": session_id, "session_date": "2026-11-19",
-            "work_item_id": "365", "program": "shared-platform",
-            "workstream": "cross-client-publication", "source_client": "synthetic-agent",
-            "publisher_client": "synthetic-publisher", "execution_lane": "C",
-            "next_action": "review synthetic results", "github": {"repo": "RMF112018/my-pa",
-            "base_sha": "a" * 40, "head_sha": "b" * 40, "tree_sha": "c" * 40},
-            "artifact_statuses": {"failed/evidence.log": "FAILED_EVIDENCE"}}
+    return {
+        "session_id": session_id,
+        "session_date": "2026-11-19",
+        "work_item_id": "365",
+        "program": "shared-platform",
+        "workstream": "cross-client-publication",
+        "source_client": "synthetic-agent",
+        "publisher_client": "synthetic-publisher",
+        "execution_lane": "C",
+        "next_action": "review synthetic results",
+        "github": {
+            "repo": "RMF112018/my-pa",
+            "base_sha": "a" * 40,
+            "head_sha": "b" * 40,
+            "tree_sha": "c" * 40,
+        },
+        "artifact_statuses": {"failed/evidence.log": "FAILED_EVIDENCE"},
+    }
 
 
 def payload(workspace: SyntheticFilesWorkspace, path: str) -> dict:
@@ -121,10 +137,14 @@ def test_end_to_end_text_binary_failed_evidence_and_handoff(tmp_path: Path) -> N
     assert outcome["verified"] == outcome["total"] == 3
     manifest = payload(client, outcome["manifest_path"])
     assert manifest["canonical_authority_activated"] is False
-    assert manifest["transient_exclusions"] == [{"category": "tool_cache", "count": 1,
-                                                  "rule": "TRANSIENT_EXCLUSION_POLICY_v3"}]
+    assert manifest["transient_exclusions"] == [
+        {"category": "tool_cache", "count": 1, "rule": "TRANSIENT_EXCLUSION_POLICY_v3"}
+    ]
     assert {x["relative_path"] for x in manifest["artifacts"]} == {
-        "report.md", "failed/evidence.log", "package.zip"}
+        "report.md",
+        "failed/evidence.log",
+        "package.zip",
+    }
     assert [
         x["status"] for x in manifest["artifacts"] if x["relative_path"].startswith("failed/")
     ] == ["FAILED_EVIDENCE"]
@@ -316,12 +336,18 @@ def test_git_capture_exact_commit_and_reconstructable_patch(tmp_path: Path) -> N
     out = tmp_path / "output"
     root.mkdir()
     out.mkdir()
+
     def git(*args: str) -> str:
         executable = shutil.which("git")
         assert executable is not None
-        return subprocess.run(  # noqa: S603 - deterministic synthetic Git setup
-            [executable, *args], cwd=root, check=True, capture_output=True
-        ).stdout.decode().strip()
+        return (
+            subprocess.run(  # noqa: S603 - deterministic synthetic Git setup
+                [executable, *args], cwd=root, check=True, capture_output=True
+            )
+            .stdout.decode()
+            .strip()
+        )
+
     git("init", "-q")
     git("config", "user.email", "synthetic@example.test")
     git("config", "user.name", "Synthetic Test")
@@ -347,24 +373,3 @@ def test_git_capture_exact_commit_and_reconstructable_patch(tmp_path: Path) -> N
     (root / "untracked.txt").write_text("dirty")
     with pytest.raises(PublicationError, match="dirty_repository_refused"):
         capture_git(out, data, root)
-
-
-def test_publisher_formatter_preview() -> None:
-    """Temporary CI diagnostic; remove once formatter differences are resolved."""
-    executable = shutil.which("ruff")
-    if executable is None:
-        pytest.skip("Ruff not installed in isolated local test harness")
-    result = subprocess.run(  # noqa: S603 - fixed test command, no shell
-        [
-            executable,
-            "format",
-            "--diff",
-            "scripts/sdcc_publish.py",
-            "tests/unit/test_sdcc_publish.py",
-        ],
-        cwd=Path(__file__).resolve().parents[2],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stdout

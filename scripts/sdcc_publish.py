@@ -120,6 +120,7 @@ def _hash_file(path: Path) -> tuple[int, str]:
 
 def _contains_obvious_secret(path: Path) -> bool:
     """Conservative fast scanner. NOT a complete DLP or binary-content audit."""
+
     def scan(handle: BinaryIO) -> bool:
         prefix = b""
         while block := handle.read(CHUNK_SIZE):
@@ -187,14 +188,18 @@ def capture_git(source: Path, spec: Mapping[str, Any], repository: Path) -> None
         raise PublicationError("dirty_repository_refused")
     diff = command("diff", "--binary", "--no-ext-diff", base, head)
     changed = command("diff", "--name-status", "--no-ext-diff", base, head)
-    report = _json({"repository": git["repo"], "base_sha": base,
-                    "head_sha": head, "tree_sha": tree}).encode("utf-8")
+    report = _json(
+        {"repository": git["repo"], "base_sha": base, "head_sha": head, "tree_sha": tree}
+    ).encode("utf-8")
     target = source / "_git"
     if target.is_symlink() or (target.exists() and not target.is_dir()):
         raise PublicationError("git_snapshot_existing_conflict")
     target.mkdir(exist_ok=True)
-    for name, data in (("changes.patch", diff), ("changed-paths.txt", changed),
-                       ("IDENTITY.json", report)):
+    for name, data in (
+        ("changes.patch", diff),
+        ("changed-paths.txt", changed),
+        ("IDENTITY.json", report),
+    ):
         output = target / name
         if output.exists():
             if output.is_symlink() or output.read_bytes() != data:
@@ -212,7 +217,12 @@ def _spec(spec_path: Path) -> dict[str, Any]:
     if not isinstance(obj, dict):
         raise PublicationError("invalid_session_spec")
     for key in (
-        "session_id", "work_item_id", "program", "workstream", "source_client", "publisher_client"
+        "session_id",
+        "work_item_id",
+        "program",
+        "workstream",
+        "source_client",
+        "publisher_client",
     ):
         _id(obj.get(key))
     try:
@@ -268,15 +278,25 @@ def inventory(
         size, sha = _hash_file(path)
         # Keys, local environment and token stores are not transferable artifacts.
         private_name = path.name.lower().startswith(".env") or path.suffix.lower() in (
-            ".pem", ".key", ".p12", ".pfx"
+            ".pem",
+            ".key",
+            ".p12",
+            ".pfx",
         )
         try:
             secret = private_name or _contains_obvious_secret(path)
         except PublicationError:
             secret = True
-        found.append(Artifact(name, path, size, None if secret else sha,
-                              "PROTECTED_WITHHELD" if secret else statuses.get(name, "FINAL"),
-                              "suspected_secret_or_unscannable_archive" if secret else None))
+        found.append(
+            Artifact(
+                name,
+                path,
+                size,
+                None if secret else sha,
+                "PROTECTED_WITHHELD" if secret else statuses.get(name, "FINAL"),
+                "suspected_secret_or_unscannable_archive" if secret else None,
+            )
+        )
         if len(found) > MAX_FILES:
             raise PublicationError("too_many_artifacts")
     if not found:
@@ -284,8 +304,10 @@ def inventory(
     unknown = set(statuses) - {a.relative for a in found}
     if unknown:
         raise PublicationError("status_names_missing_artifact")
-    return found, [{"category": k, "count": v, "rule": "TRANSIENT_EXCLUSION_POLICY_v3"}
-                   for k, v in sorted(exclusions.items())]
+    return found, [
+        {"category": k, "count": v, "rule": "TRANSIENT_EXCLUSION_POLICY_v3"}
+        for k, v in sorted(exclusions.items())
+    ]
 
 
 async def _call(
@@ -302,8 +324,9 @@ async def _call(
 
 async def _stat(api: FilesAPI, path: str) -> dict[str, Any] | None:
     try:
-        result = await api.call("files.stat", {"workspace_id": WORKSPACE_ID,
-                                               "path": path, "include_sha256": True})
+        result = await api.call(
+            "files.stat", {"workspace_id": WORKSPACE_ID, "path": path, "include_sha256": True}
+        )
     except Exception as exc:
         if getattr(exc, "code", None) == "not_found":
             return None
@@ -371,8 +394,18 @@ async def _upload_one(api: FilesAPI, item: Artifact, target: str) -> dict[str, A
 
 
 def _session_path(spec: Mapping[str, Any]) -> str:
-    return "/".join((SESSION_ROOT, _id(spec["program"]), "workstreams", _id(spec["workstream"]),
-                     "work-items", _id(spec["work_item_id"]), "sessions", _id(spec["session_id"])))
+    return "/".join(
+        (
+            SESSION_ROOT,
+            _id(spec["program"]),
+            "workstreams",
+            _id(spec["workstream"]),
+            "work-items",
+            _id(spec["work_item_id"]),
+            "sessions",
+            _id(spec["session_id"]),
+        )
+    )
 
 
 async def publish(api: FilesAPI, source: Path, spec: Mapping[str, Any]) -> dict[str, Any]:
@@ -386,12 +419,16 @@ async def publish(api: FilesAPI, source: Path, spec: Mapping[str, Any]) -> dict[
     for item in artifacts:
         remote = f"{session_root}/artifacts/{item.relative}"
         entry: dict[str, Any] = {
-            "artifact_id": f"{spec['session_id']}:{item.relative}", "relative_path": item.relative,
-            "status": item.status, "size_bytes": item.size,
+            "artifact_id": f"{spec['session_id']}:{item.relative}",
+            "relative_path": item.relative,
+            "status": item.status,
+            "size_bytes": item.size,
             "representation": mimetypes.guess_type(item.relative)[0] or "application/octet-stream",
             "hash_scope": "stored_raw_bytes",
-            "sha256": item.sha256, "path": remote if item.sha256 else None,
-            "version": None, "origin_ref": None,
+            "sha256": item.sha256,
+            "path": remote if item.sha256 else None,
+            "version": None,
+            "origin_ref": None,
         }
         if item.reason:
             incomplete = True
@@ -409,42 +446,66 @@ async def publish(api: FilesAPI, source: Path, spec: Mapping[str, Any]) -> dict[
         entries.append(entry)
     status = "PUBLICATION_INCOMPLETE" if incomplete else "READY_FOR_HANDOFF"
     manifest: dict[str, Any] = {
-        "schema_version": SCHEMA, "session_id": spec["session_id"],
-        "work_item_id": spec["work_item_id"], "execution_lane": spec.get("execution_lane", "R"),
-        "source_client": spec["source_client"], "publisher_client": spec["publisher_client"],
+        "schema_version": SCHEMA,
+        "session_id": spec["session_id"],
+        "work_item_id": spec["work_item_id"],
+        "execution_lane": spec.get("execution_lane", "R"),
+        "source_client": spec["source_client"],
+        "publisher_client": spec["publisher_client"],
         "publication_epoch": None,
         "my_pa": {"workspace_id": WORKSPACE_ID, "session_path": session_root},
-        "github": spec.get("github", {}), "artifacts": entries,
+        "github": spec.get("github", {}),
+        "artifacts": entries,
         "transient_exclusions": exclusions,
         "outstanding_findings": spec.get("outstanding_findings", []),
-        "publication_status": status, "next_action": spec.get("next_action", ""),
+        "publication_status": status,
+        "next_action": spec.get("next_action", ""),
         "canonical_authority_activated": False,
     }
     manifest_path = f"{session_root}/SESSION_MANIFEST.json"
     manifest_stat = await _write_text(api, manifest_path, _json(manifest))
-    registry_path = (f"{REGISTRY_ROOT}/{spec['session_date'][:4]}/{spec['session_date'][5:7]}/"
-                     f"{spec['session_id']}.json")
-    registry = {"work_item_id": spec["work_item_id"], "session_id": spec["session_id"],
-                "manifest_path": manifest_path, "manifest_version": manifest_stat["version"],
-                "manifest_sha256": manifest_stat["sha256"], "status": status}
+    registry_path = (
+        f"{REGISTRY_ROOT}/{spec['session_date'][:4]}/{spec['session_date'][5:7]}/"
+        f"{spec['session_id']}.json"
+    )
+    registry = {
+        "work_item_id": spec["work_item_id"],
+        "session_id": spec["session_id"],
+        "manifest_path": manifest_path,
+        "manifest_version": manifest_stat["version"],
+        "manifest_sha256": manifest_stat["sha256"],
+        "status": status,
+    }
     await _mkdir(api, registry_path.rsplit("/", 1)[0])
     await _write_text(api, registry_path, _json(registry))
     receipt_path = f"{session_root}/SESSION_PUBLICATION_RECEIPT.json"
-    receipt = {"schema_version": RECEIPT_SCHEMA, "session_id": spec["session_id"],
-               "manifest_path": manifest_path, "manifest_version": manifest_stat["version"],
-               "manifest_sha256": manifest_stat["sha256"], "registry_path": registry_path,
-               "observed_artifact_count": len(entries), "verified_count": sum(
-                   e.get("version") is not None for e in entries),
-               "disposition": status, "cutover": "NOT_ACTIVE"}
+    receipt = {
+        "schema_version": RECEIPT_SCHEMA,
+        "session_id": spec["session_id"],
+        "manifest_path": manifest_path,
+        "manifest_version": manifest_stat["version"],
+        "manifest_sha256": manifest_stat["sha256"],
+        "registry_path": registry_path,
+        "observed_artifact_count": len(entries),
+        "verified_count": sum(e.get("version") is not None for e in entries),
+        "disposition": status,
+        "cutover": "NOT_ACTIVE",
+    }
     receipt_stat = await _write_text(api, receipt_path, _json(receipt))
-    return {"status": status, "manifest_path": manifest_path,
-            "manifest_version": manifest_stat["version"], "receipt_path": receipt_path,
-            "receipt_version": receipt_stat["version"], "registry_path": registry_path,
-            "verified": receipt["verified_count"], "total": len(entries),
-            "handoff": (
-                f"Work {spec['work_item_id']}; MY-PA mcp:{manifest_path}@"
-                f"{manifest_stat['version']}; {status}; next: {spec.get('next_action', '')}"
-            )}
+    return {
+        "status": status,
+        "manifest_path": manifest_path,
+        "manifest_version": manifest_stat["version"],
+        "receipt_path": receipt_path,
+        "receipt_version": receipt_stat["version"],
+        "registry_path": registry_path,
+        "verified": receipt["verified_count"],
+        "total": len(entries),
+        "handoff": (
+            f"Work {spec['work_item_id']}; MY-PA mcp:{manifest_path}@"
+            f"{manifest_stat['version']}; {status}; next: {spec.get('next_action', '')}"
+        ),
+    }
 
 
 class RemoteFilesAPI:
@@ -497,14 +558,17 @@ class RemoteFilesAPI:
                 raise PublicationError(code) from None
             if re.search(r"(?:\bnot_found\b|\bversion_conflict\b)", str(exc)):
                 raise PublicationError(
-                "not_found" if "not_found" in str(exc) else "conflict"
-            ) from None
+                    "not_found" if "not_found" in str(exc) else "conflict"
+                ) from None
             raise PublicationError("my_pa_transport_error") from None
         raise PublicationError("my_pa_invalid_response")
 
     async def upload(self, local: Path, destination: str, sha256: str, size: int) -> dict[str, Any]:
-        ticket = await self.call("files.upload.begin", {"workspace_id": WORKSPACE_ID,
-            "path": destination, "size": size, "sha256": sha256}, write=True)
+        ticket = await self.call(
+            "files.upload.begin",
+            {"workspace_id": WORKSPACE_ID, "path": destination, "size": size, "sha256": sha256},
+            write=True,
+        )
         route, token = ticket.get("route"), ticket.get("upload_token")
         if not isinstance(route, str) or not isinstance(token, str):
             raise PublicationError("my_pa_missing_transfer_ticket")

@@ -15,10 +15,10 @@ from types import SimpleNamespace
 import pytest
 from scripts import sdcc_publish as publisher
 from scripts.sdcc_publish import (
+    TEXT_LIMIT,
     Artifact,
     PublicationError,
     RemoteFilesAPI,
-    TEXT_LIMIT,
     _relative_path,
     _spec,
     capture_git,
@@ -403,7 +403,7 @@ def _synthetic_many(
     local.write_bytes(b"ok")
     items = [
         Artifact(
-            f"long/α-{i:05d}-{'x' * 80}.txt",
+            f"long/\u03b1-{i:05d}-{'x' * 80}.txt",
             local,
             2,
             sha(b"ok"),
@@ -432,7 +432,7 @@ def test_manifest_real_text_limit_falls_back_to_verified_binary(
     assert publisher._json(manifest).encode("utf-8") == manifest_bytes
     assert all(item["version"] for item in manifest["artifacts"])
     assert all(item["sha256"] == sha(b"ok") for item in manifest["artifacts"])
-    assert any("α" in item["relative_path"] for item in manifest["artifacts"])
+    assert any("\u03b1" in item["relative_path"] for item in manifest["artifacts"])
     assert (outcome["manifest_path"] in store.uploaded_paths) == (
         len(manifest_bytes) > TEXT_LIMIT
     )

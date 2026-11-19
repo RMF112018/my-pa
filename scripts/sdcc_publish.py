@@ -164,13 +164,13 @@ def capture_git(source: Path, spec: Mapping[str, Any], repository: Path) -> None
             raise PublicationError("git_snapshot_failed")
         try:
             # All arguments are controlled; shell=False. S603 is a false positive.
-            result = subprocess.run(
+            result = subprocess.run(  # noqa: S603 - controlled Git argv, no shell
                 [executable, *args],
                 cwd=repository,
                 capture_output=True,
                 check=True,
                 timeout=30,
-            )  # noqa: S603
+            )
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             raise PublicationError("git_snapshot_failed") from None
         return result.stdout.strip() if args[0] == "rev-parse" else result.stdout

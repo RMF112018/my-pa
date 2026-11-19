@@ -6,15 +6,19 @@ No network, provider accounts, credentials, production file mounts, or source wr
 import asyncio
 import hashlib
 import json
+import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+
 from scripts.sdcc_publish import (
     PublicationError,
     RemoteFilesAPI,
+    capture_git,
     _relative_path,
     _spec,
     inventory,
@@ -309,16 +313,15 @@ def test_multi_megabyte_binary_exact_digest(tmp_path: Path) -> None:
 
 
 def test_git_capture_exact_commit_and_reconstructable_patch(tmp_path: Path) -> None:
-    import subprocess
-    from scripts.sdcc_publish import capture_git
-
     root = tmp_path / "repo"
     out = tmp_path / "output"
     root.mkdir()
     out.mkdir()
     def git(*args: str) -> str:
-        return subprocess.run(  # noqa: S603,S607 - deterministic synthetic Git setup
-            ["git", *args], cwd=root, check=True, capture_output=True
+        executable = shutil.which("git")
+        assert executable is not None
+        return subprocess.run(  # noqa: S603 - deterministic synthetic Git setup
+            [executable, *args], cwd=root, check=True, capture_output=True
         ).stdout.decode().strip()
     git("init", "-q")
     git("config", "user.email", "synthetic@example.test")

@@ -14,13 +14,12 @@ from types import SimpleNamespace
 
 import pytest
 
-
 from scripts.sdcc_publish import (
     PublicationError,
     RemoteFilesAPI,
-    capture_git,
     _relative_path,
     _spec,
+    capture_git,
     inventory,
     publish,
 )
@@ -348,3 +347,24 @@ def test_git_capture_exact_commit_and_reconstructable_patch(tmp_path: Path) -> N
     (root / "untracked.txt").write_text("dirty")
     with pytest.raises(PublicationError, match="dirty_repository_refused"):
         capture_git(out, data, root)
+
+
+def test_publisher_formatter_preview() -> None:
+    """Temporary CI diagnostic; remove once formatter differences are resolved."""
+    executable = shutil.which("ruff")
+    if executable is None:
+        pytest.skip("Ruff not installed in isolated local test harness")
+    result = subprocess.run(  # noqa: S603 - fixed test command, no shell
+        [
+            executable,
+            "format",
+            "--diff",
+            "scripts/sdcc_publish.py",
+            "tests/unit/test_sdcc_publish.py",
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout

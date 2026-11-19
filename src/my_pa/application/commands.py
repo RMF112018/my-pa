@@ -18350,8 +18350,7 @@ class GetFileHistory:
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
         if self.pending_change_id is not None and (
-            not isinstance(self.pending_change_id, str)
-            or parse_file_id(self.pending_change_id, PENDING_CHANGE_ID_PREFIX) is None
+            parse_file_id(self.pending_change_id, PENDING_CHANGE_ID_PREFIX) is None
             or self.path is not None
             or self.after is not None
             or self.page_size is not None

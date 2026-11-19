@@ -18,20 +18,22 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import mimetypes
-from datetime import date
 import hashlib
 import json
+import mimetypes
 import os
 import re
+import shutil
 import subprocess
 import sys
 import zipfile
 from collections import Counter
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path, PurePosixPath
-from typing import Any, Protocol
+from typing import Any, BinaryIO, Protocol
 from urllib.parse import urlsplit
 
 WORKSPACE_ID = "mcp"
@@ -64,9 +66,13 @@ class PublicationError(Exception):
 
 
 class FilesAPI(Protocol):
-    async def call(self, capability: str, payload: Mapping[str, object], *, write: bool = False) -> dict[str, Any]: ...
+    async def call(
+        self, capability: str, payload: Mapping[str, object], *, write: bool = False
+    ) -> dict[str, Any]: ...
 
-    async def upload(self, local: Path, destination: str, sha256: str, size: int) -> dict[str, Any]: ...
+    async def upload(
+        self, local: Path, destination: str, sha256: str, size: int
+    ) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True)
@@ -114,7 +120,7 @@ def _hash_file(path: Path) -> tuple[int, str]:
 
 def _contains_obvious_secret(path: Path) -> bool:
     """Conservative fast scanner. NOT a complete DLP or binary-content audit."""
-    def scan(handle: Any) -> bool:
+    def scan(handle: BinaryIO) -> bool:
         prefix = b""
         while block := handle.read(CHUNK_SIZE):
             content = prefix + block
@@ -153,9 +159,18 @@ def capture_git(source: Path, spec: Mapping[str, Any], repository: Path) -> None
         raise PublicationError("github_identity_required")
 
     def command(*args: str) -> bytes:
+        executable = shutil.which("git")
+        if executable is None:
+            raise PublicationError("git_snapshot_failed")
         try:
-            result = subprocess.run(["git", *args], cwd=repository, capture_output=True,
-                                    check=True, timeout=30)
+            # All arguments are controlled; shell=False. S603 is a false positive.
+            result = subprocess.run(
+                [executable, *args],
+                cwd=repository,
+                capture_output=True,
+                check=True,
+                timeout=30,
+            )  # noqa: S603
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             raise PublicationError("git_snapshot_failed") from None
         return result.stdout.strip() if args[0] == "rev-parse" else result.stdout
@@ -196,7 +211,9 @@ def _spec(spec_path: Path) -> dict[str, Any]:
         raise PublicationError("invalid_session_spec") from None
     if not isinstance(obj, dict):
         raise PublicationError("invalid_session_spec")
-    for key in ("session_id", "work_item_id", "program", "workstream", "source_client", "publisher_client"):
+    for key in (
+        "session_id", "work_item_id", "program", "workstream", "source_client", "publisher_client"
+    ):
         _id(obj.get(key))
     try:
         if not isinstance(obj.get("session_date"), str) or len(obj["session_date"]) != 10:
@@ -218,12 +235,18 @@ def _spec(spec_path: Path) -> dict[str, Any]:
         raise PublicationError("invalid_github_identity")
     if git.get("repo"):
         for field in ("base_sha", "head_sha", "tree_sha"):
-            if not isinstance(git.get(field), str) or len(git[field]) != 40 or not re.fullmatch(r"[0-9a-f]{40}", git[field]):
+            if (
+                not isinstance(git.get(field), str)
+                or len(git[field]) != 40
+                or not re.fullmatch(r"[0-9a-f]{40}", git[field])
+            ):
                 raise PublicationError("invalid_github_identity")
     return obj
 
 
-def inventory(source: Path, statuses: Mapping[str, str]) -> tuple[list[Artifact], list[dict[str, Any]]]:
+def inventory(
+    source: Path, statuses: Mapping[str, str]
+) -> tuple[list[Artifact], list[dict[str, Any]]]:
     if not source.is_dir() or source.is_symlink():
         raise PublicationError("invalid_source_directory")
     found: list[Artifact] = []
@@ -244,7 +267,9 @@ def inventory(source: Path, statuses: Mapping[str, str]) -> tuple[list[Artifact]
             raise PublicationError("reserved_artifact_name")
         size, sha = _hash_file(path)
         # Keys, local environment and token stores are not transferable artifacts.
-        private_name = path.name.lower().startswith(".env") or path.suffix.lower() in (".pem", ".key", ".p12", ".pfx")
+        private_name = path.name.lower().startswith(".env") or path.suffix.lower() in (
+            ".pem", ".key", ".p12", ".pfx"
+        )
         try:
             secret = private_name or _contains_obvious_secret(path)
         except PublicationError:
@@ -263,7 +288,9 @@ def inventory(source: Path, statuses: Mapping[str, str]) -> tuple[list[Artifact]
                    for k, v in sorted(exclusions.items())]
 
 
-async def _call(api: FilesAPI, name: str, args: dict[str, object], *, write: bool = False) -> dict[str, Any]:
+async def _call(
+    api: FilesAPI, name: str, args: dict[str, object], *, write: bool = False
+) -> dict[str, Any]:
     try:
         result = await api.call(name, {"workspace_id": WORKSPACE_ID, **args}, write=write)
     except Exception:
@@ -306,12 +333,16 @@ async def _write_text(api: FilesAPI, path: str, text: str) -> dict[str, Any]:
     expected = _sha_bytes(encoded)
     previous = await _stat(api, path)
     if previous is None:
-        try:
+        # A lost response is acceptable only if the subsequent readback agrees.
+        with suppress(PublicationError):
             await _call(api, "files.write_text", {"path": path, "text": text}, write=True)
-        except PublicationError:
-            pass  # A retry can succeed only if an identical file was created.
     current = await _stat(api, path)
-    if current is None or current.get("kind") != "file" or current.get("sha256") != expected or current.get("size") != len(encoded):
+    if (
+        current is None
+        or current.get("kind") != "file"
+        or current.get("sha256") != expected
+        or current.get("size") != len(encoded)
+    ):
         raise PublicationError("metadata_publication_conflict")
     return current
 
@@ -321,12 +352,16 @@ async def _upload_one(api: FilesAPI, item: Artifact, target: str) -> dict[str, A
         raise PublicationError("withheld_artifact_not_uploadable")
     current = await _stat(api, target)
     if current is None:
-        try:
+        # A lost response can still indicate success; verify actual stored bytes.
+        with suppress(Exception):
             await api.upload(item.local, target, item.sha256, item.size)
-        except Exception:
-            pass  # Lost finalize response: check actual bytes before determining failure.
     stored = await _stat(api, target)
-    if stored is None or stored.get("kind") != "file" or stored.get("size") != item.size or stored.get("sha256") != item.sha256:
+    if (
+        stored is None
+        or stored.get("kind") != "file"
+        or stored.get("size") != item.size
+        or stored.get("sha256") != item.sha256
+    ):
         raise PublicationError("artifact_missing_or_mismatched")
     # Prevent successful publication of a local file changed during transfer.
     size, digest = _hash_file(item.local)
@@ -377,9 +412,11 @@ async def publish(api: FilesAPI, source: Path, spec: Mapping[str, Any]) -> dict[
         "schema_version": SCHEMA, "session_id": spec["session_id"],
         "work_item_id": spec["work_item_id"], "execution_lane": spec.get("execution_lane", "R"),
         "source_client": spec["source_client"], "publisher_client": spec["publisher_client"],
-        "publication_epoch": None, "my_pa": {"workspace_id": WORKSPACE_ID, "session_path": session_root},
+        "publication_epoch": None,
+        "my_pa": {"workspace_id": WORKSPACE_ID, "session_path": session_root},
         "github": spec.get("github", {}), "artifacts": entries,
-        "transient_exclusions": exclusions, "outstanding_findings": spec.get("outstanding_findings", []),
+        "transient_exclusions": exclusions,
+        "outstanding_findings": spec.get("outstanding_findings", []),
         "publication_status": status, "next_action": spec.get("next_action", ""),
         "canonical_authority_activated": False,
     }
@@ -404,24 +441,38 @@ async def publish(api: FilesAPI, source: Path, spec: Mapping[str, Any]) -> dict[
             "manifest_version": manifest_stat["version"], "receipt_path": receipt_path,
             "receipt_version": receipt_stat["version"], "registry_path": registry_path,
             "verified": receipt["verified_count"], "total": len(entries),
-            "handoff": (f"Work {spec['work_item_id']}; MY-PA mcp:{manifest_path}@{manifest_stat['version']}; "
-                        f"{status}; next: {spec.get('next_action', '')}")}
+            "handoff": (
+                f"Work {spec['work_item_id']}; MY-PA mcp:{manifest_path}@"
+                f"{manifest_stat['version']}; {status}; next: {spec.get('next_action', '')}"
+            )}
 
 
 class RemoteFilesAPI:
     """MCP facade adapter; uses existing my_pa.read/write and byte routes."""
 
-    def __init__(self, mcp_client: Any, endpoint: str) -> None:
+    def __init__(self, mcp_client: object, endpoint: str) -> None:
         self.client = mcp_client
         parsed = urlsplit(endpoint)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("/mcp", "/mcp/"):
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in ("/mcp", "/mcp/")
+        ):
             raise PublicationError("invalid_endpoint")
         self.origin = f"{parsed.scheme}://{parsed.netloc}"
 
-    async def call(self, capability: str, payload: Mapping[str, object], *, write: bool = False) -> dict[str, Any]:
+    async def call(
+        self, capability: str, payload: Mapping[str, object], *, write: bool = False
+    ) -> dict[str, Any]:
         name = "my_pa.write" if write else "my_pa.read"
         try:
-            result = await self.client.call_tool(name, {"capability": capability, "arguments": {"payload": dict(payload)}})
+            result = await self.client.call_tool(
+                name, {"capability": capability, "arguments": {"payload": dict(payload)}}
+            )
             data = result.structured_content
             if not isinstance(data, dict):
                 texts = [getattr(x, "text", None) for x in result.content]
@@ -445,7 +496,9 @@ class RemoteFilesAPI:
             if code in ("not_found", "conflict", "denied", "unavailable", "unsupported"):
                 raise PublicationError(code) from None
             if re.search(r"(?:\bnot_found\b|\bversion_conflict\b)", str(exc)):
-                raise PublicationError("not_found" if "not_found" in str(exc) else "conflict") from None
+                raise PublicationError(
+                "not_found" if "not_found" in str(exc) else "conflict"
+            ) from None
             raise PublicationError("my_pa_transport_error") from None
         raise PublicationError("my_pa_invalid_response")
 
@@ -456,11 +509,13 @@ class RemoteFilesAPI:
         if not isinstance(route, str) or not isinstance(token, str):
             raise PublicationError("my_pa_missing_transfer_ticket")
         try:
-            from scripts.my_pa_files import Target, UPLOADS_PREFIX, upload
+            from scripts.my_pa_files import UPLOADS_PREFIX, Target, upload
         except ImportError:
-            from my_pa_files import Target, UPLOADS_PREFIX, upload  # type: ignore[no-redef]
+            from my_pa_files import UPLOADS_PREFIX, Target, upload  # type: ignore[no-redef]
         try:
-            result = await asyncio.to_thread(upload, local, Target(self.origin, route, UPLOADS_PREFIX, 60.0), token)
+            result = await asyncio.to_thread(
+                upload, local, Target(self.origin, route, UPLOADS_PREFIX, 60.0), token
+            )
         except Exception:
             raise PublicationError("my_pa_binary_transfer_failed") from None
         if not isinstance(result, dict):
@@ -477,7 +532,14 @@ async def _main(args: argparse.Namespace) -> int:
     if not token:
         raise PublicationError("missing_authenticated_client_token")
     parsed = urlsplit(endpoint)
-    if parsed.scheme != "https" or parsed.path not in ("/mcp", "/mcp/") or parsed.username or parsed.password or parsed.query or parsed.fragment:
+    if (
+        parsed.scheme != "https"
+        or parsed.path not in ("/mcp", "/mcp/")
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
         raise PublicationError("invalid_endpoint")
     try:
         import httpx2
@@ -486,10 +548,14 @@ async def _main(args: argparse.Namespace) -> int:
     except ImportError:
         raise PublicationError("missing_mcp_sdk") from None
     try:
-        async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"},
-                                      timeout=httpx2.Timeout(30.0, read=300.0)) as http:
-            async with Client(streamable_http_client(endpoint, http_client=http), mode="legacy") as client:
-                result = await publish(RemoteFilesAPI(client, endpoint), args.source_dir, spec)
+        async with (
+            httpx2.AsyncClient(
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=httpx2.Timeout(30.0, read=300.0),
+            ) as http,
+            Client(streamable_http_client(endpoint, http_client=http), mode="legacy") as client,
+        ):
+            result = await publish(RemoteFilesAPI(client, endpoint), args.source_dir, spec)
     except PublicationError:
         raise
     except Exception:
@@ -499,16 +565,30 @@ async def _main(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Publish complete SDCR session artifacts into MY-PA.")
-    parser.add_argument("--endpoint", required=True, help="Authorized HTTPS remote MCP /mcp endpoint")
-    parser.add_argument("--source-dir", required=True, type=Path, help="Directory containing all session outputs")
-    parser.add_argument("--spec", required=True, type=Path, help="Nonsecret session identity/status JSON")
-    parser.add_argument("--repo-dir", type=Path, help="Read-only Git diff capture from this repository")
+    parser = argparse.ArgumentParser(
+        description="Publish complete SDCR session artifacts into MY-PA."
+    )
+    parser.add_argument(
+        "--endpoint", required=True, help="Authorized HTTPS remote MCP /mcp endpoint"
+    )
+    parser.add_argument(
+        "--source-dir", required=True, type=Path, help="Directory containing all session outputs"
+    )
+    parser.add_argument(
+        "--spec", required=True, type=Path, help="Nonsecret session identity/status JSON"
+    )
+    parser.add_argument(
+        "--repo-dir", type=Path, help="Read-only Git diff capture from this repository"
+    )
     args = parser.parse_args(argv)
     try:
         return asyncio.run(_main(args))
     except PublicationError as exc:
-        print(_json({"status": "PUBLICATION_INCOMPLETE", "error_code": exc.code}), end="", file=sys.stderr)
+        print(
+            _json({"status": "PUBLICATION_INCOMPLETE", "error_code": exc.code}),
+            end="",
+            file=sys.stderr,
+        )
         return 2
 
 

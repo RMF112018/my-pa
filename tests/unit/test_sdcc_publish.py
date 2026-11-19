@@ -32,7 +32,7 @@ class SyntheticFilesWorkspace:
     def __init__(self) -> None:
         self.entries: dict[str, bytes | None] = {"SDCR": None, "SDCR/20-Programs": None,
                                                 "SDCR/40-Publication": None}
-        self.versions: dict[str, int] = {k: 1 for k in self.entries}
+        self.versions: dict[str, int] = dict.fromkeys(self.entries, 1)
         self.writes: dict[str, int] = {}
         self.fail_upload_relative: str | None = None
 
@@ -86,7 +86,7 @@ class SyntheticFilesWorkspace:
         return self._entry(destination)
 
 
-def spec(session_id="SESSION-20261119-365-001") -> dict:
+def spec(session_id: str = "SESSION-20261119-365-001") -> dict:
     return {"session_id": session_id, "session_date": "2026-11-19",
             "work_item_id": "365", "program": "shared-platform",
             "workstream": "cross-client-publication", "source_client": "synthetic-agent",
@@ -100,7 +100,7 @@ def payload(workspace: SyntheticFilesWorkspace, path: str) -> dict:
     return json.loads(workspace.entries[path].decode("utf-8"))
 
 
-def run(pub, folder, data):
+def run(pub: SyntheticFilesWorkspace, folder: Path, data: dict) -> dict:
     return asyncio.run(publish(pub, folder, data))
 
 
@@ -122,7 +122,9 @@ def test_end_to_end_text_binary_failed_evidence_and_handoff(tmp_path: Path) -> N
                                                   "rule": "TRANSIENT_EXCLUSION_POLICY_v3"}]
     assert {x["relative_path"] for x in manifest["artifacts"]} == {
         "report.md", "failed/evidence.log", "package.zip"}
-    assert [x["status"] for x in manifest["artifacts"] if x["relative_path"].startswith("failed/")] == ["FAILED_EVIDENCE"]
+    assert [
+        x["status"] for x in manifest["artifacts"] if x["relative_path"].startswith("failed/")
+    ] == ["FAILED_EVIDENCE"]
     for entry in manifest["artifacts"]:
         local_bytes = (tmp_path / entry["relative_path"]).read_bytes()
         assert client.entries[entry["path"]] == local_bytes  # independent receiver read
@@ -164,7 +166,9 @@ def test_conflict_never_overwrites_canonical_bytes(tmp_path: Path) -> None:
     assert store.entries[original_path] == old_bytes
 
 
-def test_partial_upload_failure_keeps_successful_evidence_and_reports_incomplete(tmp_path: Path) -> None:
+def test_partial_upload_failure_keeps_successful_evidence_and_reports_incomplete(
+    tmp_path: Path,
+) -> None:
     (tmp_path / "a.md").write_bytes(b"ok\n")
     (tmp_path / "b.pdf").write_bytes(b"%PDF-synthetic\n")
     data = spec()
@@ -175,7 +179,7 @@ def test_partial_upload_failure_keeps_successful_evidence_and_reports_incomplete
     assert result["status"] == "PUBLICATION_INCOMPLETE"
     assert result["verified"] == 1 and result["total"] == 2
     manifest = payload(store, result["manifest_path"])
-    failed = [a for a in manifest["artifacts"] if a["relative_path"] == "b.pdf"][0]
+    failed = next(a for a in manifest["artifacts"] if a["relative_path"] == "b.pdf")
     assert failed["version"] is None and failed["reason"] == "artifact_missing_or_mismatched"
     assert payload(store, result["receipt_path"])["disposition"] == "PUBLICATION_INCOMPLETE"
 
@@ -190,7 +194,7 @@ def test_secret_withheld_not_uploaded_or_reported_in_plaintext(tmp_path: Path) -
     result = run(store, tmp_path, data)
     assert result["status"] == "PUBLICATION_INCOMPLETE"
     m = payload(store, result["manifest_path"])
-    withheld = [a for a in m["artifacts"] if a["relative_path"] == "secret.pem"][0]
+    withheld = next(a for a in m["artifacts"] if a["relative_path"] == "secret.pem")
     assert withheld["status"] == "PROTECTED_WITHHELD"
     assert withheld["path"] is None and withheld["sha256"] is None
     assert secret not in b"".join(x for x in store.entries.values() if isinstance(x, bytes))
@@ -249,17 +253,19 @@ def test_two_clients_publish_separate_sessions_in_same_registry(tmp_path: Path) 
 
 
 class McpStub:
-    def __init__(self, response):
+    def __init__(self, response: SimpleNamespace | None) -> None:
         self.response = response
-        self.last = None
+        self.last: tuple[str, dict] | None = None
 
-    async def call_tool(self, name, args):
+    async def call_tool(self, name: str, args: dict) -> SimpleNamespace | None:
         self.last = name, args
         return self.response
 
 
-def test_facade_structured_and_text_response_without_credentials():
-    response = SimpleNamespace(is_error=False, structured_content={"result": {"kind": "directory"}}, content=[])
+def test_facade_structured_and_text_response_without_credentials() -> None:
+    response = SimpleNamespace(
+        is_error=False, structured_content={"result": {"kind": "directory"}}, content=[]
+    )
     stub = McpStub(response)
     api = RemoteFilesAPI(stub, "https://synthetic.example/mcp")
     res = asyncio.run(api.call("files.stat", {"workspace_id": "mcp", "path": "SDCR"}))
@@ -267,22 +273,29 @@ def test_facade_structured_and_text_response_without_credentials():
     assert stub.last[0] == "my_pa.read"
     response.structured_content = None
     response.content = [SimpleNamespace(text=json.dumps({"result": {"version": "fv1_testing"}}))]
-    assert asyncio.run(api.call("files.stat", {"workspace_id": "mcp", "path": "x"}))["version"] == "fv1_testing"
+    assert (
+        asyncio.run(api.call("files.stat", {"workspace_id": "mcp", "path": "x"}))["version"]
+        == "fv1_testing"
+    )
     response.is_error = True
     response.content = [SimpleNamespace(text=json.dumps({"error": {"code": "not_found"}}))]
     with pytest.raises(PublicationError, match="not_found"):
         asyncio.run(api.call("files.stat", {"workspace_id": "mcp", "path": "x"}))
 
 
-def test_endpoint_refuses_insecure_and_credential_urls():
+def test_endpoint_refuses_insecure_and_credential_urls() -> None:
     stub = McpStub(None)
-    for url in ("http://example.test/mcp", "https://user:pass@example.test/mcp",
-                "https://example.test/mcp?token=bad", "https://example.test/other"):
+    for url in (
+        "http://example.test/mcp",
+        "https://user:pass@example.test/mcp",
+        "https://example.test/mcp?token=bad",
+        "https://example.test/other",
+    ):
         with pytest.raises(PublicationError, match="invalid_endpoint"):
             RemoteFilesAPI(stub, url)
 
 
-def test_multi_megabyte_binary_exact_digest(tmp_path: Path):
+def test_multi_megabyte_binary_exact_digest(tmp_path: Path) -> None:
     large = b"X" * (2 * 1024 * 1024 + 11) + b"\0END"
     (tmp_path / "archive.bin").write_bytes(large)
     data = spec()
@@ -295,7 +308,7 @@ def test_multi_megabyte_binary_exact_digest(tmp_path: Path):
     assert entry["sha256"] == sha(large)
 
 
-def test_git_capture_exact_commit_and_reconstructable_patch(tmp_path: Path):
+def test_git_capture_exact_commit_and_reconstructable_patch(tmp_path: Path) -> None:
     import subprocess
     from scripts.sdcc_publish import capture_git
 
@@ -303,8 +316,10 @@ def test_git_capture_exact_commit_and_reconstructable_patch(tmp_path: Path):
     out = tmp_path / "output"
     root.mkdir()
     out.mkdir()
-    def git(*args):
-        return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True).stdout.decode().strip()
+    def git(*args: str) -> str:
+        return subprocess.run(  # noqa: S603,S607 - deterministic synthetic Git setup
+            ["git", *args], cwd=root, check=True, capture_output=True
+        ).stdout.decode().strip()
     git("init", "-q")
     git("config", "user.email", "synthetic@example.test")
     git("config", "user.name", "Synthetic Test")

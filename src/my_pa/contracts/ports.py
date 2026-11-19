@@ -13451,6 +13451,15 @@ class FileWorkspaceStore(ABC):
     def open_preserved_version(self, version_id: str) -> FileWorkspaceReader:
         """Open a preimage kept under the control directory's `versions`."""
 
+    @property
+    def root_identity(self) -> tuple[int, int]:
+        """The root's (device, inode) at composition (contract section 18.5)."""
+        raise NotImplementedError
+
+    def open_staged_upload(self, upload_id: str) -> FileWorkspaceReader:
+        """Open an upload's staged bytes for reading (contract section 18.5's apply copy)."""
+        raise NotImplementedError
+
     @abstractmethod
     def ensure_free_space(self, required_bytes: int) -> None:
         """Refuse `quota` unless `required_bytes` would leave the disk reserve free."""
@@ -13774,6 +13783,75 @@ class FileWorkspaceRepository(ABC):
         `conflict`). A `result` holding a key named `text` or ending in
         `_token`, at any depth, is refused.
         """
+
+
+# --- files pending changes (contract section 18, ADR-019 Amendment 2) -----------------
+
+
+class FilePendingStatus(StrEnum):
+    """Section 18.3: a pending change leaves `pending` exactly once."""
+
+    PENDING = "pending"
+    APPLYING = "applying"
+    APPLIED = "applied"
+    FAILED = "failed"
+    DENIED = "denied"
+    EXPIRED = "expired"
+
+
+@dataclass(frozen=True, slots=True)
+class FilePendingChange:
+    """One write of an `approval` workspace awaiting the operator (section 18.3).
+
+    `arguments` holds the operation's normalized, workspace-relative arguments
+    and its bound preimage versions; `staged_upload_id` names content staged in
+    the workspace's state directory. It never holds a token, a handle URL or a
+    text. The fields above `status` are immutable and make the binding digest.
+    """
+
+    pending_change_id: str
+    workspace_id: str
+    owner_principal_id: str
+    client_ref: str
+    operation: str
+    arguments: Mapping[str, Any]
+    size: int | None
+    sha256: str | None
+    staged_upload_id: str | None
+    created_at: datetime
+    expires_at: datetime
+    status: FilePendingStatus = FilePendingStatus.PENDING
+    decided_at: datetime | None = None
+    result: Mapping[str, Any] | None = None
+    reason: str | None = None
+
+
+class FilePendingChangeStore(ABC):
+    """The pending change records of one `approval` workspace's state directory.
+
+    Transitions are the caller's, under the per-workspace advisory lock.
+    Records are written whole (temporary file, then rename) and never deleted.
+    """
+
+    @abstractmethod
+    def create(self, change: FilePendingChange) -> None:
+        """Write a new record; an existing id is a fault."""
+
+    @abstractmethod
+    def get(self, pending_change_id: str) -> FilePendingChange | None:
+        """The record, or `None` for an unknown or malformed id."""
+
+    @abstractmethod
+    def replace(self, change: FilePendingChange) -> None:
+        """Rewrite an existing record (a status transition)."""
+
+    @abstractmethod
+    def list_changes(self, *, limit: int) -> list[FilePendingChange]:
+        """At most `limit` records, newest first."""
+
+    @abstractmethod
+    def record_decision(self, entry: Mapping[str, object]) -> None:
+        """Append one line to the decision journal (no path, name or content)."""
 
 
 # --- files byte-route grant re-check (contract section 10, WP6a) ----------------------

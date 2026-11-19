@@ -97,7 +97,8 @@ def test_the_eight_prefixes_are_s61s_patterns() -> None:
     # 164 at S6-2; Reports Modernization WP01 appended seven `gr*` kinds after,
     # and WP05b three more (hold, retention, preservation); the files workspace
     # WP5 five more (`fwupl`, `fwdnl`, `fwver`, `fwtrs`, `fwrcp`).
-    assert len(IdKind) == 179
+    # ADR-019 Amendment 2: one more (`fwpnd`, a pending change).
+    assert len(IdKind) == 180
     new = [
         IdKind.SCHEDULE_SCENARIO,
         IdKind.SCHEDULE_SCENARIO_VERSION,

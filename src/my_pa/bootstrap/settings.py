@@ -67,6 +67,13 @@ from my_pa.contracts.oauth import valid_operator_secret
 from my_pa.contracts.v1.base import StrictModel
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.domain.extraction.text import MAX_EXTRACTED_CHARACTERS
+from my_pa.domain.files.workspaces import (
+    WorkspaceConfig,
+    WorkspaceConfigError,
+    WriteMode,
+    parse_apply_roots,
+    parse_workspaces,
+)
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
 from my_pa.domain.identity.webauthn_relying_party import (
     WebAuthnRelyingParty,
@@ -428,6 +435,18 @@ class Settings(StrictModel):
     files_browser_download_ttl_seconds: int = Field(default=300, ge=60, le=900)
     #: Contract section 17.2: one handle fetch's whole deadline, 1..60 s.
     files_handle_fetch_deadline_seconds: int = Field(default=25, ge=1, le=60)
+    #: Contract section 18.1 (ADR-019 Amendment 2): the explicit workspace list,
+    #: env `MY_PA_FILES_WORKSPACES` (`alias=root;mode=...;state=...`, comma
+    #: separated). Empty (the default) composes the one `direct` workspace of
+    #: `MY_PA_FILES_WORKSPACE_ROOT`/`_ID`; set, that root must be empty. Parsed
+    #: by `domain.files.workspaces.parse_workspaces`; paths are validated where
+    #: the stores are built. Not a secret.
+    files_workspaces: str = ""
+    #: Contract section 18.3: a pending change's lifetime, 60..86400 s.
+    files_approval_ttl_seconds: int = Field(default=900, ge=60, le=86400)
+    #: Contract section 18.5: `alias=path` apply mounts, read only by the
+    #: operator apply command; never set on a serving process.
+    files_apply_roots: str = ""
     #: The Frontier MCP surface's kill switch (WP-28).
     #:
     #: **The switch is off by default and the surface serves**, which is the
@@ -820,12 +839,61 @@ class Settings(StrictModel):
         `managed_documents_are_composed`, callers needing only the boolean must
         not read the path: it reaches only the store constructor.
         """
-        return bool(self.files_workspace_root.strip())
+        return bool(self.files_workspace_root.strip() or self.files_workspaces.strip())
+
+    def files_workspace_configs(self) -> tuple[WorkspaceConfig, ...]:
+        """The configured workspaces (contract section 18.1), empty when the plane is absent.
+
+        `MY_PA_FILES_WORKSPACES` when set; otherwise the single `direct`
+        workspace of `MY_PA_FILES_WORKSPACE_ROOT`/`_ID` with the global limits
+        (backward compatible). Validated once by the model validator.
+        """
+        if self.files_workspaces.strip():
+            return parse_workspaces(
+                self.files_workspaces,
+                default_max_upload_bytes=self.files_max_upload_bytes,
+                default_disk_reserve_bytes=self.files_disk_reserve_bytes,
+            )
+        root = self.files_workspace_root.strip()
+        if not root:
+            return ()
+        return (
+            WorkspaceConfig(
+                workspace_id=self.files_workspace_id,
+                root=root,
+                write_mode=WriteMode.DIRECT,
+                max_upload_bytes=self.files_max_upload_bytes,
+                disk_reserve_bytes=self.files_disk_reserve_bytes,
+            ),
+        )
+
+    def files_apply_root_map(self) -> dict[str, str]:
+        """Contract section 18.5: alias to apply mount, for the operator apply command only."""
+        return parse_apply_roots(self.files_apply_roots)
 
     #: The single parse of `database_url`, produced by validation and handed on
     #: unchanged. Private because it is not configuration an operator supplies
     #: and must not become a second place a URL can enter from.
     _parsed_database_url: URL = PrivateAttr()
+
+    def _check_files_workspaces(self) -> None:
+        """Contract section 18.1: one source of truth, a well-formed list, known apply aliases."""
+        if self.files_workspaces.strip() and self.files_workspace_root.strip():
+            raise SettingsError(
+                "MY_PA_FILES_WORKSPACES and MY_PA_FILES_WORKSPACE_ROOT are mutually exclusive"
+            )
+        try:
+            configs = self.files_workspace_configs()
+            apply_roots = self.files_apply_root_map()
+        except WorkspaceConfigError as error:
+            raise SettingsError(
+                f"MY_PA_FILES_WORKSPACES or MY_PA_FILES_APPLY_ROOTS: {error}"
+            ) from None
+        approval = {
+            config.workspace_id for config in configs if config.write_mode is WriteMode.APPROVAL
+        }
+        if not set(apply_roots) <= approval:
+            raise SettingsError("MY_PA_FILES_APPLY_ROOTS names only approval workspaces")
 
     @model_validator(mode="after")
     def _check(self) -> Settings:
@@ -877,6 +945,7 @@ class Settings(StrictModel):
             )
         self._check_knowledge_bindings()
         self._check_auth_mode()
+        self._check_files_workspaces()
         if self.remote_mcp_enabled and not all(
             (
                 self.oauth_audience.strip(),

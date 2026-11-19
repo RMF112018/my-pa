@@ -142,7 +142,12 @@ from my_pa.domain.documents.managed import (
 )
 from my_pa.domain.files.errors import FilesDomainError
 from my_pa.domain.files.paths import parse_path, validate_name
-from my_pa.domain.files.transfer import parse_file_id, validate_sha256, validate_ttl
+from my_pa.domain.files.transfer import (
+    PENDING_CHANGE_ID_PREFIX,
+    parse_file_id,
+    validate_sha256,
+    validate_ttl,
+)
 from my_pa.domain.files.versions import parse_version_token
 from my_pa.domain.files.vocabulary import (
     MAX_PREVIEW_BYTES,
@@ -18339,9 +18344,21 @@ class GetFileHistory:
     path: str | None = None
     after: str | None = None
     page_size: int | None = None
+    #: Contract section 18.4: read one pending change of the caller instead.
+    pending_change_id: str | None = None
 
     def __post_init__(self) -> None:
         _files_workspace(self.workspace_id)
+        if self.pending_change_id is not None:
+            if not isinstance(self.pending_change_id, str):
+                raise InvalidRequestError(SafeDetail.PENDING_CHANGE_ID)
+            if (
+                parse_file_id(self.pending_change_id, PENDING_CHANGE_ID_PREFIX) is None
+                or self.path is not None
+                or self.after is not None
+                or self.page_size is not None
+            ):
+                raise InvalidRequestError(SafeDetail.PENDING_CHANGE_ID)
         if self.path is not None:
             object.__setattr__(self, "path", _files_path(self.path, SafeDetail.PATH))
         if self.after is not None and not isinstance(self.after, str):

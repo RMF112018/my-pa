@@ -750,6 +750,11 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # `identity.remote_clients`. It is read once, to refuse a ticket whose owner
     # is no longer the Principal that client is bound to.
     "application/file_transfer.py": (("standing", "principal_id"),),
+    # ADR-019 Amendment 2 (files-workspace contract section 18.5): the operator's
+    # apply re-reads the requesting client's standing the same way, server-resolved
+    # from `identity.remote_clients`, to refuse a pending change whose owner is no
+    # longer the Principal that client is bound to.
+    "application/file_workspace_approval.py": (("standing", "principal_id"),),
     "application/goodnotes.py": (
         ("page", "principal_id"),
         ("page", "principal_id"),

@@ -597,6 +597,9 @@ class IdKind(StrEnum):
     FILE_VERSION = "fwver"
     FILE_TRASH_ITEM = "fwtrs"
     FILE_RECEIPT = "fwrcp"
+    #: ADR-019 Amendment 2 (contract section 18.3): a pending change of an
+    #: `approval` workspace, applied only after an operator approval.
+    FILE_PENDING_CHANGE = "fwpnd"
 
 
 class InvalidIdentifierError(ValueError):

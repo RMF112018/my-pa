@@ -818,6 +818,11 @@ class SafeDetail(StrEnum):
     FILE_HANDLE_UNSUPPORTED = "file_handle_unsupported"
     FILE_HANDLE_REFUSED = "file_handle_refused"
     SOURCE_FILE = "source_file"
+    #: ADR-019 Amendment 2 (contract section 18): a write to a `read_only`
+    #: workspace (`unsupported`), and the `files.history` field that reads a
+    #: pending change.
+    WORKSPACE_READ_ONLY = "workspace_read_only"
+    PENDING_CHANGE_ID = "pending_change_id"
     #: Compact façade (files-workspace contract section 17.4): an `unsupported`
     #: whose `capability` was an eligible name wrapped in quotes or backticks.
     CAPABILITY_NAME_HAS_QUOTES = "capability_name_has_quotes"

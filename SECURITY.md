@@ -12,14 +12,19 @@ Include the affected commit or version, reproduction steps using synthetic data,
 
 ## Data and credential rules
 
-- Never commit tokens, passwords, private keys, connection strings, personal data, source-document contents, or unredacted evidence.
-- Use least-privilege credentials supplied at runtime. Secret examples must be inert placeholders.
-- Source providers are read-only by default. Managed writes belong only in designated managed storage.
-- Email, calendar, contacts, NAS content, relationship records, and derived personal intelligence are sensitive. Tests must use small synthetic fixtures.
-- Logs exclude sensitive payloads and credentials by default. Redact before retaining evidence.
-- Cloud or external-model disclosure requires an explicit data-eligibility decision; local availability is not consent to transmit.
-- Generated content must preserve provenance and must not overwrite authoritative evidence silently.
-- Database access, source mutation, destructive actions, credential changes, deployment, and production activation require separate explicit operator authorization.
+Security handling uses three automatic classes rather than per-task security approvals:
+
+- **S0 STANDARD:** ordinary source code, synthetic test fixtures, redacted diagnostics and nonsecret documents. Normal GitHub/CI workflow.
+- **S1 PRIVATE:** proprietary project material, ordinary personal information and private source content. Handling within an already authorized authenticated boundary is allowed without a separate approval for each task. Public GitHub, public build logs and unapproved external recipients are not authorized destinations for S1 payloads.
+- **S2 CRITICAL:** live passwords, tokens, private keys, grant changes, confirmed critical exploit/exfiltration risks, unauthorized private-data disclosure and irreversible canonical-data loss. Contain the affected action and obtain exact authority for operations outside an existing approval boundary.
+
+Never commit or print live secrets or unredacted private content to public GitHub/CI. Use nonsecret placeholders, scoped runtime identities, redaction and least-privilege defaults. A manifest may record `PROTECTED_WITHHELD` with a safe reference; it must not archive the secret itself. Preserve provenance for derived material.
+
+Use synthetic data and isolated test databases by default; ordinary authentication or persistence code tests are not exceptional security events. Live personal accounts, protected source repositories, production database access, credential mutation, source writes and destructive operations require an already valid operator authorization or narrowly defined standing policy. Never infer consent for cloud processing from local visibility.
+
+Confirmed critical exposures receive targeted private escalation; routine low/medium-severity findings may be corrected in scope or carried as tracked follow-ups when not blocked by an applicable mandatory test or acceptance criterion. Do not suppress findings or weaken mandatory checks merely to release faster.
+
+A reversible release within a separately approved standing release envelope can use its documented automation; absent that envelope, existing operator production gates remain. The repository policy change itself does not activate production.
 
 ## Operator NAS access
 

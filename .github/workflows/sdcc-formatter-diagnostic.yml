@@ -1,0 +1,25 @@
+name: SDCR isolated formatter diagnostic
+on:
+  push:
+    branches:
+      - diag/sdcc-publisher-format-20261119
+
+permissions:
+  contents: read
+
+jobs:
+  format-diff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch exact public commit and show Ruff formatting diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --quiet --no-checkout https://github.com/RMF112018/my-pa.git "$RUNNER_TEMP/repo"
+          git -C "$RUNNER_TEMP/repo" fetch --quiet origin "$GITHUB_SHA"
+          git -C "$RUNNER_TEMP/repo" checkout --quiet --detach "$GITHUB_SHA"
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --quiet ruff==0.17.5
+          cd "$RUNNER_TEMP/repo"
+          "$RUNNER_TEMP/venv/bin/python" -m ruff format --diff scripts/sdcc_publish.py tests/unit/test_sdcc_publish.py || true

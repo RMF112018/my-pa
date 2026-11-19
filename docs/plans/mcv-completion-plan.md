@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Five hundred and twenty Python modules under `src/my_pa` and nine hundred and eighty-four test modules —
+Five hundred and twenty Python modules under `src/my_pa` and nine hundred and eighty-five test modules —
 
-**Current-tree remeasurement (Files work workspace, ADR-019 Amendment 2, branch `feat/files-work-workspace`, 2026-11-18):** the two commands below count 520 source modules and 984 test modules: the native-handles 517/982 below plus the three source modules `src/my_pa/domain/files/workspaces.py`, `src/my_pa/infrastructure/file_workspace/pending.py` and `src/my_pa/application/file_workspace_approval.py` and the two test modules `tests/unit/test_files_work_workspace.py` and `tests/database/test_files_work_approval.py`. Previously five hundred and seventeen and nine hundred and eighty-two.
+**Current-tree remeasurement (Issue #365 corrected publisher branch, 2026-11-19):** the two commands below count 520 source modules and 985 test modules (the 984-module Files workspace baseline below plus `tests/unit/test_sdcc_publish.py`).
+
+**Historical remeasurement (Files work workspace, ADR-019 Amendment 2, branch `feat/files-work-workspace`, 2026-11-18):** the two commands below counted 520 source modules and 984 test modules: the native-handles 517/982 below plus the three source modules `src/my_pa/domain/files/workspaces.py`, `src/my_pa/infrastructure/file_workspace/pending.py` and `src/my_pa/application/file_workspace_approval.py` and the two test modules `tests/unit/test_files_work_workspace.py` and `tests/database/test_files_work_approval.py`. Previously five hundred and seventeen and nine hundred and eighty-two.
 
 **Historical remeasurement (Files native handles, ADR-019 Amendment 1, branch `feat/files-native-handles`, 2026-11-15):** the two commands below counted 517 source modules and 982 test modules: the PR3 FIX2 514/977 below plus the three source modules `src/my_pa/infrastructure/file_workspace/handle_fetch.py`, `src/my_pa/adapters/http/files_resources.py` and `src/my_pa/adapters/remote_resources.py` and the five test modules `tests/unit/test_files_handle_fetch.py`, `tests/unit/test_files_native_handles.py`, `tests/unit/test_files_download_resources.py`, `tests/contract/test_files_native_handles_mcp.py` and `tests/integration/test_files_native_handles_slice.py`. Previously five hundred and fourteen and nine hundred and seventy-seven.
 

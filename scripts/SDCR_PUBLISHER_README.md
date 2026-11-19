@@ -75,15 +75,38 @@ injection mechanism. Grant setup and remote deployment are outside Issue #365.
   and no overwrite.
 - The server computes stored bytes' SHA-256 via `files.stat` after upload.
   Source bytes are hashed again after transfer to detect a local race.
-- The publisher writes `SESSION_MANIFEST.json`, then an immutable locator event
-  `mcp:SDCR/40-Publication/sessions/YYYY/MM/<session-id>.json`, then
-  `SESSION_PUBLICATION_RECEIPT.json`. The receipt is written only when manifest
-  and registry data are verifiable. There is no multi-file transaction.
+- Before any artifact bytes transfer, the publisher writes and SHA/verifies an
+  immutable `SESSION_RECOVERY.json` with `NOT_READY`, plus the dated discoverable
+  pointer `mcp:SDCR/40-Publication/sessions/YYYY/MM/<session-id>.recovery.json`.
+  This immutable recovery pair binds the spec and exact inventoried file set; it
+  survives manifest, registry or receipt errors and allows safe same-ID replay
+  when the source, metadata and stored bytes are unchanged. A best-effort first
+  `SESSION_PUBLICATION_FAILURE.json` records the initial failure; it never
+  supersedes a later verified terminal receipt. Neither recovery nor failure
+  records declare readiness.
+- The publisher writes `SESSION_MANIFEST.json` via `files.write_text` only when
+  the exact UTF-8 bytes fit 122,880 bytes; otherwise it uses the existing
+  resumable, ticketed binary upload with size, SHA-256 and version readback.
+  The declared 10,000-file bound is not reduced. Temporary metadata staging is
+  outside the user output directory and is removed after transfer.
+- The final immutable registry locator
+  `mcp:SDCR/40-Publication/sessions/YYYY/MM/<session-id>.json` binds the
+  verified manifest SHA/version but says `AWAITING_TERMINAL_RECEIPT`.
+  `SESSION_PUBLICATION_RECEIPT.json` then binds the manifest, registry and
+  recovery pointer hashes and versions. Only a verified terminal receipt
+  may declare `READY_FOR_HANDOFF`. There is no multi-file transaction.
 - A complete run reports `READY_FOR_HANDOFF` and a compact locator string. A
   withheld or failed artifact reports `PUBLICATION_INCOMPLETE` and exit 2.
   Incomplete manifests/receipts never authorize handoff. After a **terminal**
   incomplete receipt, issue a **new session ID** for corrected artifacts; do not
   rewrite the old evidence.
+- Before using this with real content, the source owner/client must separately
+  establish MY-PA disclosure eligibility and the completeness of the supplied
+  output directory. `READY_FOR_HANDOFF` verifies the inventoried and published
+  set; it is not proof that the caller discovered every session-generated file.
+  Missing explicitly status-mapped files are refused before transfer. Never
+  point `--source-dir` at a repository, source system or managed-data root;
+  `--repo-dir` Git capture writes `_git/` only under the session output folder.
 - Source material scanned as suspected live secret, private key or uninspectable
   ZIP is **not** uploaded. Manifest contains `PROTECTED_WITHHELD` and no raw
   content or hash. Plain S1 inputs go to authenticated MY-PA, never public GitHub.

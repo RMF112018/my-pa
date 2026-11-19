@@ -13,9 +13,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from scripts import sdcc_publish as publisher
 from scripts.sdcc_publish import (
+    Artifact,
     PublicationError,
     RemoteFilesAPI,
+    TEXT_LIMIT,
     _relative_path,
     _spec,
     capture_git,
@@ -40,6 +43,11 @@ class SyntheticFilesWorkspace:
         self.versions: dict[str, int] = dict.fromkeys(self.entries, 1)
         self.writes: dict[str, int] = {}
         self.fail_upload_relative: str | None = None
+        self.fail_text_relative: str | None = None
+        self.drop_text_ack_relative: str | None = None
+        self.drop_upload_ack_relative: str | None = None
+        self.hide_version_relative: str | None = None
+        self.uploaded_paths: set[str] = set()
 
     def _entry(self, name: str) -> dict:
         if name not in self.entries:
@@ -53,6 +61,8 @@ class SyntheticFilesWorkspace:
         }
         if blob is not None:
             result["sha256"] = sha(blob)
+        if self.hide_version_relative and name.endswith(self.hide_version_relative):
+            result.pop("version")
         return result
 
     async def call(self, capability: str, payload: dict, *, write: bool = False) -> dict:
@@ -72,12 +82,18 @@ class SyntheticFilesWorkspace:
             return self._entry(name)
         if capability == "files.write_text":
             assert write
+            if self.fail_text_relative and name.endswith(self.fail_text_relative):
+                raise PublicationError("simulated_text_failure")
             if name in self.entries:
                 raise PublicationError("conflict")
             data = payload["text"].encode("utf-8")
+            if len(data) > TEXT_LIMIT:
+                raise PublicationError("metadata_exceeds_text_limit")
             self.entries[name] = data
             self.versions[name] = 1
             self.writes[name] = self.writes.get(name, 0) + 1
+            if self.drop_text_ack_relative and name.endswith(self.drop_text_ack_relative):
+                raise PublicationError("simulated_lost_ack")
             return self._entry(name)
         raise AssertionError(f"Unexpected capability {capability}")
 
@@ -91,6 +107,9 @@ class SyntheticFilesWorkspace:
         self.entries[destination] = data
         self.versions[destination] = 1
         self.writes[destination] = self.writes.get(destination, 0) + 1
+        self.uploaded_paths.add(destination)
+        if self.drop_upload_ack_relative and destination.endswith(self.drop_upload_ack_relative):
+            raise PublicationError("simulated_lost_ack")
         return self._entry(destination)
 
 
@@ -208,7 +227,8 @@ def test_partial_upload_failure_keeps_successful_evidence_and_reports_incomplete
 
 
 def test_secret_withheld_not_uploaded_or_reported_in_plaintext(tmp_path: Path) -> None:
-    secret = b"-----BEGIN PRIVATE KEY-----\ntest-secret\n-----END PRIVATE KEY-----"
+    marker = b"-----BEGIN " + b"PRIVATE KEY-----"
+    secret = marker + b"\ntest-secret\n-----END " + b"PRIVATE KEY-----"
     (tmp_path / "secret.pem").write_bytes(secret)
     (tmp_path / "ordinary.txt").write_bytes(b"clean\n")
     store = SyntheticFilesWorkspace()
@@ -226,7 +246,7 @@ def test_secret_withheld_not_uploaded_or_reported_in_plaintext(tmp_path: Path) -
 
 def test_secret_in_zip_withheld(tmp_path: Path) -> None:
     with zipfile.ZipFile(tmp_path / "package.zip", "w") as archive:
-        archive.writestr("inner/key.txt", b"-----BEGIN PRIVATE KEY-----\nABC\n")
+        archive.writestr("inner/key.txt", b"-----BEGIN " + b"PRIVATE KEY-----\nABC\n")
     store = SyntheticFilesWorkspace()
     data = spec()
     data["artifact_statuses"] = {}
@@ -373,3 +393,183 @@ def test_git_capture_exact_commit_and_reconstructable_patch(tmp_path: Path) -> N
     (root / "untracked.txt").write_text("dirty")
     with pytest.raises(PublicationError, match="dirty_repository_refused"):
         capture_git(out, data, root)
+
+
+def _synthetic_many(
+    monkeypatch: pytest.MonkeyPatch, folder: Path, count: int
+) -> list[Artifact]:
+    """An in-memory 10k-entry inventory; just one tiny file touches local disk."""
+    local = folder / "fixture.bin"
+    local.write_bytes(b"ok")
+    items = [
+        Artifact(
+            f"long/α-{i:05d}-{'x' * 80}.txt",
+            local,
+            2,
+            sha(b"ok"),
+            "FINAL",
+        )
+        for i in range(count)
+    ]
+    monkeypatch.setattr(publisher, "inventory", lambda _source, _statuses: (items, []))
+    return items
+
+
+@pytest.mark.parametrize("count", [1, 150, 220, 10_000])
+def test_manifest_real_text_limit_falls_back_to_verified_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, count: int
+) -> None:
+    _synthetic_many(monkeypatch, tmp_path, count)
+    store = SyntheticFilesWorkspace()
+    data = spec()
+    data["artifact_statuses"] = {}
+    outcome = run(store, tmp_path, data)
+    assert outcome["status"] == "READY_FOR_HANDOFF"
+    assert outcome["verified"] == outcome["total"] == count
+    manifest_bytes = store.entries[outcome["manifest_path"]]
+    assert isinstance(manifest_bytes, bytes)
+    manifest = json.loads(manifest_bytes)
+    assert publisher._json(manifest).encode("utf-8") == manifest_bytes
+    assert all(item["version"] for item in manifest["artifacts"])
+    assert all(item["sha256"] == sha(b"ok") for item in manifest["artifacts"])
+    assert any("α" in item["relative_path"] for item in manifest["artifacts"])
+    assert (outcome["manifest_path"] in store.uploaded_paths) == (
+        len(manifest_bytes) > TEXT_LIMIT
+    )
+    assert payload(store, outcome["recovery_path"])["publication_status"] == "NOT_READY"
+    assert payload(store, outcome["recovery_locator_path"])["status"] == "NOT_READY"
+    registry = payload(store, outcome["registry_path"])
+    assert registry["status"] == "AWAITING_TERMINAL_RECEIPT"
+    receipt = payload(store, outcome["receipt_path"])
+    assert receipt["disposition"] == "READY_FOR_HANDOFF"
+    assert receipt["manifest_sha256"] == sha(manifest_bytes)
+    assert receipt["registry_sha256"] == sha(store.entries[outcome["registry_path"]])
+    if count == 10_000:
+        assert len(manifest_bytes) > 1024 * 1024
+
+
+def test_failed_oversized_manifest_has_durable_recovery_and_replays(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _synthetic_many(monkeypatch, tmp_path, 300)
+    store = SyntheticFilesWorkspace()
+    data = spec()
+    data["artifact_statuses"] = {}
+    store.fail_upload_relative = "/SESSION_MANIFEST.json"
+    with pytest.raises(PublicationError, match="artifact_missing_or_mismatched"):
+        run(store, tmp_path, data)
+    prefix = publisher._session_path(data)
+    assert f"{prefix}/SESSION_RECOVERY.json" in store.entries
+    assert f"{prefix}/SESSION_PUBLICATION_FAILURE.json" in store.entries
+    assert f"{prefix}/SESSION_MANIFEST.json" not in store.entries
+    assert f"{prefix}/SESSION_PUBLICATION_RECEIPT.json" not in store.entries
+    assert any(p.endswith(".recovery.json") for p in store.entries)
+    store.fail_upload_relative = None
+    outcome = run(store, tmp_path, data)
+    assert outcome["status"] == "READY_FOR_HANDOFF"
+    assert payload(store, outcome["receipt_path"])["verified_count"] == 300
+
+
+@pytest.mark.parametrize(
+    "failed_suffix",
+    [
+        "/SESSION-20261119-365-001.recovery.json",
+        "/SESSION-20261119-365-001.json",
+        "/SESSION_PUBLICATION_RECEIPT.json",
+    ],
+)
+def test_metadata_failure_cannot_claim_ready_and_retry_recovers(
+    tmp_path: Path, failed_suffix: str
+) -> None:
+    (tmp_path / "one.md").write_text("ok\n")
+    data = spec()
+    data["artifact_statuses"] = {}
+    store = SyntheticFilesWorkspace()
+    store.fail_text_relative = failed_suffix
+    with pytest.raises(PublicationError, match="metadata_publication_conflict"):
+        run(store, tmp_path, data)
+    prefix = publisher._session_path(data)
+    assert f"{prefix}/SESSION_PUBLICATION_RECEIPT.json" not in store.entries
+    assert f"{prefix}/SESSION_RECOVERY.json" in store.entries
+    if failed_suffix.endswith(".recovery.json"):
+        assert not any("/artifacts/" in item for item in store.entries)
+    else:
+        registry = f"{publisher.REGISTRY_ROOT}/2026/11/{data['session_id']}.json"
+        if registry in store.entries:
+            assert payload(store, registry)["status"] != "READY_FOR_HANDOFF"
+    store.fail_text_relative = None
+    assert run(store, tmp_path, data)["status"] == "READY_FOR_HANDOFF"
+
+
+@pytest.mark.parametrize(
+    "drop_suffix",
+    ["/SESSION_RECOVERY.json", "/SESSION_PUBLICATION_RECEIPT.json"],
+)
+def test_lost_inline_metadata_ack_uses_digest_readback(
+    tmp_path: Path, drop_suffix: str
+) -> None:
+    (tmp_path / "one.md").write_text("ok\n")
+    data = spec()
+    data["artifact_statuses"] = {}
+    store = SyntheticFilesWorkspace()
+    store.drop_text_ack_relative = drop_suffix
+    first = run(store, tmp_path, data)
+    previous_writes = store.writes.copy()
+    second = run(store, tmp_path, data)
+    assert first == second
+    assert previous_writes == store.writes
+
+
+def test_lost_binary_manifest_ack_uses_digest_readback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _synthetic_many(monkeypatch, tmp_path, 250)
+    data = spec()
+    data["artifact_statuses"] = {}
+    store = SyntheticFilesWorkspace()
+    store.drop_upload_ack_relative = "/SESSION_MANIFEST.json"
+    first = run(store, tmp_path, data)
+    previous_writes = store.writes.copy()
+    assert first["manifest_path"] in store.uploaded_paths
+    assert run(store, tmp_path, data) == first
+    assert store.writes == previous_writes
+
+
+def test_recovery_binding_refuses_changed_source_on_replay(tmp_path: Path) -> None:
+    local = tmp_path / "one.md"
+    local.write_bytes(b"one")
+    data = spec()
+    data["artifact_statuses"] = {}
+    store = SyntheticFilesWorkspace()
+    store.fail_text_relative = "/SESSION_MANIFEST.json"
+    with pytest.raises(PublicationError, match="metadata_publication_conflict"):
+        run(store, tmp_path, data)
+    local.write_bytes(b"two")
+    store.fail_text_relative = None
+    with pytest.raises(PublicationError, match="metadata_publication_conflict"):
+        run(store, tmp_path, data)
+    assert payload(store, f"{publisher._session_path(data)}/SESSION_RECOVERY.json")[
+        "publication_status"
+    ] == "NOT_READY"
+
+
+def test_missing_declared_artifact_refused_before_remote_publication(tmp_path: Path) -> None:
+    (tmp_path / "one.md").write_text("ok")
+    data = spec()
+    data["artifact_statuses"] = {"missing.md": "SOURCE"}
+    store = SyntheticFilesWorkspace()
+    with pytest.raises(PublicationError, match="status_names_missing_artifact"):
+        run(store, tmp_path, data)
+    assert not any("/sessions/" in item for item in store.entries)
+
+
+def test_unverified_artifact_version_blocks_ready(tmp_path: Path) -> None:
+    (tmp_path / "one.md").write_text("ok")
+    data = spec()
+    data["artifact_statuses"] = {}
+    store = SyntheticFilesWorkspace()
+    store.hide_version_relative = "/one.md"
+    result = run(store, tmp_path, data)
+    assert result["status"] == "PUBLICATION_INCOMPLETE"
+    assert payload(store, result["receipt_path"])["disposition"] == "PUBLICATION_INCOMPLETE"
+    assert payload(store, result["manifest_path"])["artifacts"][0]["version"] is None

@@ -26,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 from collections import Counter
 from collections.abc import Mapping
@@ -41,6 +42,7 @@ SESSION_ROOT = "SDCR/20-Programs"
 REGISTRY_ROOT = "SDCR/40-Publication/sessions"
 SCHEMA = "sdcr.session.v2"
 RECEIPT_SCHEMA = "sdcr.session.receipt.v1"
+RECOVERY_SCHEMA = "sdcr.session.recovery.v1"
 MAX_FILES = 10_000
 TEXT_LIMIT = 122_880
 CHUNK_SIZE = 1024 * 1024
@@ -273,7 +275,12 @@ def inventory(
         if not path.is_file():
             raise PublicationError("nonregular_file_refused")
         name = _relative_path(rel.as_posix())
-        if name in ("SESSION_MANIFEST.json", "SESSION_PUBLICATION_RECEIPT.json"):
+        if name in (
+            "SESSION_MANIFEST.json",
+            "SESSION_PUBLICATION_RECEIPT.json",
+            "SESSION_RECOVERY.json",
+            "SESSION_PUBLICATION_FAILURE.json",
+        ):
             raise PublicationError("reserved_artifact_name")
         size, sha = _hash_file(path)
         # Keys, local environment and token stores are not transferable artifacts.
@@ -365,6 +372,8 @@ async def _write_text(api: FilesAPI, path: str, text: str) -> dict[str, Any]:
         or current.get("kind") != "file"
         or current.get("sha256") != expected
         or current.get("size") != len(encoded)
+        or not isinstance(current.get("version"), str)
+        or not current["version"]
     ):
         raise PublicationError("metadata_publication_conflict")
     return current
@@ -384,6 +393,8 @@ async def _upload_one(api: FilesAPI, item: Artifact, target: str) -> dict[str, A
         or stored.get("kind") != "file"
         or stored.get("size") != item.size
         or stored.get("sha256") != item.sha256
+        or not isinstance(stored.get("version"), str)
+        or not stored["version"]
     ):
         raise PublicationError("artifact_missing_or_mismatched")
     # Prevent successful publication of a local file changed during transfer.
@@ -408,90 +419,207 @@ def _session_path(spec: Mapping[str, Any]) -> str:
     )
 
 
+async def _write_metadata(api: FilesAPI, path: str, text: str) -> dict[str, Any]:
+    """Use inline UTF-8 only within the real MCP limit; ticket larger metadata."""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= TEXT_LIMIT:
+        return await _write_text(api, path, text)
+    # Never stage these bytes inside the supplied output tree: inventory must
+    # remain stable, including on an interrupted or replayed publication.
+    with tempfile.TemporaryDirectory(prefix="sdcr-metadata-") as temporary:
+        local = Path(temporary) / "manifest.json"
+        local.write_bytes(encoded)
+        return await _upload_one(
+            api,
+            Artifact("SESSION_MANIFEST.json", local, len(encoded), _sha_bytes(encoded), "SOURCE"),
+            path,
+        )
+
+
+def _inventory_sha256(
+    artifacts: list[Artifact], exclusions: list[dict[str, Any]]
+) -> str:
+    """Bind a NOT_READY recovery record without disclosing withheld hashes."""
+    digest = hashlib.sha256()
+    for item in artifacts:
+        digest.update(
+            _json(
+                {
+                    "relative_path": item.relative,
+                    "size_bytes": item.size,
+                    "sha256": item.sha256,
+                    "status": item.status,
+                    "reason": item.reason,
+                }
+            ).encode("utf-8")
+        )
+    digest.update(_json({"transient_exclusions": exclusions}).encode("utf-8"))
+    return digest.hexdigest()
+
+
+async def _begin_recovery(
+    api: FilesAPI,
+    spec: Mapping[str, Any],
+    artifacts: list[Artifact],
+    exclusions: list[dict[str, Any]],
+    session_root: str,
+) -> tuple[str, str, dict[str, Any]]:
+    """Publish a verifiable, immutable recovery locator before any artifact transfer.
+
+    The dated locator is separate from the final manifest index: both are
+    create-only and a locator never claims successful handoff.
+    """
+    recovery_path = f"{session_root}/SESSION_RECOVERY.json"
+    receipt_path = f"{session_root}/SESSION_PUBLICATION_RECEIPT.json"
+    recovery = {
+        "schema_version": RECOVERY_SCHEMA,
+        "session_id": spec["session_id"],
+        "work_item_id": spec["work_item_id"],
+        "session_date": spec["session_date"],
+        "publication_status": "NOT_READY",
+        "artifact_count": len(artifacts),
+        "inventory_sha256": _inventory_sha256(artifacts, exclusions),
+        "spec_sha256": _sha_bytes(_json(dict(spec)).encode("utf-8")),
+        "manifest_path": f"{session_root}/SESSION_MANIFEST.json",
+        "terminal_receipt_path": receipt_path,
+    }
+    recovery_stat = await _write_text(api, recovery_path, _json(recovery))
+    locator_path = (
+        f"{REGISTRY_ROOT}/{spec['session_date'][:4]}/{spec['session_date'][5:7]}/"
+        f"{spec['session_id']}.recovery.json"
+    )
+    await _mkdir(api, locator_path.rsplit("/", 1)[0])
+    locator = {
+        "schema_version": "sdcr.session.recovery.locator.v1",
+        "session_id": spec["session_id"],
+        "work_item_id": spec["work_item_id"],
+        "status": "NOT_READY",
+        "recovery_path": recovery_path,
+        "recovery_version": recovery_stat["version"],
+        "recovery_sha256": recovery_stat["sha256"],
+    }
+    locator_stat = await _write_text(api, locator_path, _json(locator))
+    return recovery_path, locator_path, locator_stat
+
+
 async def publish(api: FilesAPI, source: Path, spec: Mapping[str, Any]) -> dict[str, Any]:
-    """Publish all discoverable artifacts. Never claim READY on partial failure."""
+    """Publish discoverable artifacts; only the verified terminal receipt can be READY."""
     statuses = spec.get("artifact_statuses", {})
     artifacts, exclusions = inventory(source, statuses)
     session_root = _session_path(spec)
     await _mkdir(api, session_root)
+    # Neither an artifact byte nor a partial manifest is published until both
+    # recovery record and dated discovery pointer are confirmed by SHA and version.
+    recovery_path, locator_path, locator_stat = await _begin_recovery(
+        api, spec, artifacts, exclusions, session_root
+    )
+    manifest_path = f"{session_root}/SESSION_MANIFEST.json"
+    receipt_path = f"{session_root}/SESSION_PUBLICATION_RECEIPT.json"
     entries: list[dict[str, Any]] = []
     incomplete = False
-    for item in artifacts:
-        remote = f"{session_root}/artifacts/{item.relative}"
-        entry: dict[str, Any] = {
-            "artifact_id": f"{spec['session_id']}:{item.relative}",
-            "relative_path": item.relative,
-            "status": item.status,
-            "size_bytes": item.size,
-            "representation": mimetypes.guess_type(item.relative)[0] or "application/octet-stream",
-            "hash_scope": "stored_raw_bytes",
-            "sha256": item.sha256,
-            "path": remote if item.sha256 else None,
-            "version": None,
-            "origin_ref": None,
-        }
-        if item.reason:
-            incomplete = True
-            entry["reason"] = item.reason
-        else:
-            parent = remote.rsplit("/", 1)[0]
-            try:
-                await _mkdir(api, parent)
-                stored = await _upload_one(api, item, remote)
-                entry["version"] = stored["version"]
-            except PublicationError as exc:
+    try:
+        for item in artifacts:
+            remote = f"{session_root}/artifacts/{item.relative}"
+            representation = mimetypes.guess_type(item.relative)[0] or "application/octet-stream"
+            entry: dict[str, Any] = {
+                "artifact_id": f"{spec['session_id']}:{item.relative}",
+                "relative_path": item.relative,
+                "status": item.status,
+                "size_bytes": item.size,
+                "representation": representation,
+                "hash_scope": "stored_raw_bytes",
+                "sha256": item.sha256,
+                "path": remote if item.sha256 else None,
+                "version": None,
+                "origin_ref": None,
+            }
+            if item.reason:
                 incomplete = True
-                entry["status"] = "FAILED_EVIDENCE"
-                entry["reason"] = exc.code
-        entries.append(entry)
-    status = "PUBLICATION_INCOMPLETE" if incomplete else "READY_FOR_HANDOFF"
-    manifest: dict[str, Any] = {
-        "schema_version": SCHEMA,
-        "session_id": spec["session_id"],
-        "work_item_id": spec["work_item_id"],
-        "execution_lane": spec.get("execution_lane", "R"),
-        "source_client": spec["source_client"],
-        "publisher_client": spec["publisher_client"],
-        "publication_epoch": None,
-        "my_pa": {"workspace_id": WORKSPACE_ID, "session_path": session_root},
-        "github": spec.get("github", {}),
-        "artifacts": entries,
-        "transient_exclusions": exclusions,
-        "outstanding_findings": spec.get("outstanding_findings", []),
-        "publication_status": status,
-        "next_action": spec.get("next_action", ""),
-        "canonical_authority_activated": False,
-    }
-    manifest_path = f"{session_root}/SESSION_MANIFEST.json"
-    manifest_stat = await _write_text(api, manifest_path, _json(manifest))
-    registry_path = (
-        f"{REGISTRY_ROOT}/{spec['session_date'][:4]}/{spec['session_date'][5:7]}/"
-        f"{spec['session_id']}.json"
-    )
-    registry = {
-        "work_item_id": spec["work_item_id"],
-        "session_id": spec["session_id"],
-        "manifest_path": manifest_path,
-        "manifest_version": manifest_stat["version"],
-        "manifest_sha256": manifest_stat["sha256"],
-        "status": status,
-    }
-    await _mkdir(api, registry_path.rsplit("/", 1)[0])
-    await _write_text(api, registry_path, _json(registry))
-    receipt_path = f"{session_root}/SESSION_PUBLICATION_RECEIPT.json"
-    receipt = {
-        "schema_version": RECEIPT_SCHEMA,
-        "session_id": spec["session_id"],
-        "manifest_path": manifest_path,
-        "manifest_version": manifest_stat["version"],
-        "manifest_sha256": manifest_stat["sha256"],
-        "registry_path": registry_path,
-        "observed_artifact_count": len(entries),
-        "verified_count": sum(e.get("version") is not None for e in entries),
-        "disposition": status,
-        "cutover": "NOT_ACTIVE",
-    }
-    receipt_stat = await _write_text(api, receipt_path, _json(receipt))
+                entry["reason"] = item.reason
+            else:
+                parent = remote.rsplit("/", 1)[0]
+                try:
+                    await _mkdir(api, parent)
+                    stored = await _upload_one(api, item, remote)
+                    entry["version"] = stored["version"]
+                except PublicationError as exc:
+                    incomplete = True
+                    entry["status"] = "FAILED_EVIDENCE"
+                    entry["reason"] = exc.code
+            entries.append(entry)
+        status = "PUBLICATION_INCOMPLETE" if incomplete else "READY_FOR_HANDOFF"
+        manifest: dict[str, Any] = {
+            "schema_version": SCHEMA,
+            "session_id": spec["session_id"],
+            "work_item_id": spec["work_item_id"],
+            "execution_lane": spec.get("execution_lane", "R"),
+            "source_client": spec["source_client"],
+            "publisher_client": spec["publisher_client"],
+            "publication_epoch": None,
+            "my_pa": {"workspace_id": WORKSPACE_ID, "session_path": session_root},
+            "github": spec.get("github", {}),
+            "artifacts": entries,
+            "transient_exclusions": exclusions,
+            "outstanding_findings": spec.get("outstanding_findings", []),
+            "publication_status": status,
+            "next_action": spec.get("next_action", ""),
+            "canonical_authority_activated": False,
+        }
+        manifest_stat = await _write_metadata(api, manifest_path, _json(manifest))
+        registry_path = (
+            f"{REGISTRY_ROOT}/{spec['session_date'][:4]}/{spec['session_date'][5:7]}/"
+            f"{spec['session_id']}.json"
+        )
+        # The registry is only a verified locator. Until the terminal receipt
+        # exists, an observer must not infer READY from this earlier file.
+        registry = {
+            "work_item_id": spec["work_item_id"],
+            "session_id": spec["session_id"],
+            "manifest_path": manifest_path,
+            "manifest_version": manifest_stat["version"],
+            "manifest_sha256": manifest_stat["sha256"],
+            "terminal_receipt_path": receipt_path,
+            "recovery_locator_path": locator_path,
+            "status": "AWAITING_TERMINAL_RECEIPT",
+        }
+        registry_stat = await _write_text(api, registry_path, _json(registry))
+        receipt = {
+            "schema_version": RECEIPT_SCHEMA,
+            "session_id": spec["session_id"],
+            "manifest_path": manifest_path,
+            "manifest_version": manifest_stat["version"],
+            "manifest_sha256": manifest_stat["sha256"],
+            "registry_path": registry_path,
+            "registry_version": registry_stat["version"],
+            "registry_sha256": registry_stat["sha256"],
+            "recovery_path": recovery_path,
+            "recovery_locator_path": locator_path,
+            "recovery_locator_version": locator_stat["version"],
+            "recovery_locator_sha256": locator_stat["sha256"],
+            "observed_artifact_count": len(entries),
+            "verified_count": sum(e.get("version") is not None for e in entries),
+            "disposition": status,
+            "cutover": "NOT_ACTIVE",
+        }
+        receipt_stat = await _write_text(api, receipt_path, _json(receipt))
+    except PublicationError as exc:
+        # Best effort: keep the first failure immutable. The durable NOT_READY
+        # recovery record and locator already exist even if this write fails.
+        with suppress(Exception):
+            await _write_text(
+                api,
+                f"{session_root}/SESSION_PUBLICATION_FAILURE.json",
+                _json(
+                    {
+                        "schema_version": "sdcr.session.failure.v1",
+                        "session_id": spec["session_id"],
+                        "status": "PUBLICATION_INCOMPLETE",
+                        "reason_code": exc.code,
+                        "recovery_locator_path": locator_path,
+                    }
+                ),
+            )
+        raise
     return {
         "status": status,
         "manifest_path": manifest_path,
@@ -499,6 +627,9 @@ async def publish(api: FilesAPI, source: Path, spec: Mapping[str, Any]) -> dict[
         "receipt_path": receipt_path,
         "receipt_version": receipt_stat["version"],
         "registry_path": registry_path,
+        "recovery_path": recovery_path,
+        "recovery_locator_path": locator_path,
+        "recovery_locator_version": locator_stat["version"],
         "verified": receipt["verified_count"],
         "total": len(entries),
         "handoff": (
@@ -506,7 +637,6 @@ async def publish(api: FilesAPI, source: Path, spec: Mapping[str, Any]) -> dict[
             f"{manifest_stat['version']}; {status}; next: {spec.get('next_action', '')}"
         ),
     }
-
 
 class RemoteFilesAPI:
     """MCP facade adapter; uses existing my_pa.read/write and byte routes."""

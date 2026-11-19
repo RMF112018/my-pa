@@ -112,6 +112,16 @@ CONTAINED_STORES: Final = frozenset(
 #: managed or source root. A module added here is a decision someone has to
 #: write down.
 REGISTERED_WRITERS: Final[dict[str, str]] = {
+    "scripts/sdcc_publish.py": (
+        "Issue #365 bounded client-only publisher: writes only three Git snapshot files "
+        "under the explicitly supplied session output directory (_git/changes.patch, "
+        "_git/changed-paths.txt, _git/IDENTITY.json), rejecting differing existing "
+        "bytes; and stages oversized JSON in a process-owned TemporaryDirectory "
+        "outside that output tree for ticketed MY-PA transfer. It is an invoked "
+        "CLI, not a product server writer; it neither opens a managed-document "
+        "or source-system root nor changes remote sources. The operator/client "
+        "must supply a generated output directory rather than any source root."
+    ),
     "src/my_pa/application/file_workspace_approval.py": (
         "ADR-019 Amendment 2 (files-workspace contract section 18.5): the operator's "
         "apply of an approved pending change. The detector matches its calls of the "

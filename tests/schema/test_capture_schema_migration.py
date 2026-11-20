@@ -1614,6 +1614,9 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             # each over its own function; name them so the equality stays one.
             "meeting_history_rows_are_append_only",
             "meeting_note_versions_are_append_only",
+            # ADR-020. The Meeting prep revision installs the same append-only
+            # guard over its own function.
+            "meeting_prep_versions_are_append_only",
             "meeting_series_history_rows_are_append_only",
             "meeting_write_requests_complete_once",
             # WP-RE-01. The Record Event revision installs the feed's append-only

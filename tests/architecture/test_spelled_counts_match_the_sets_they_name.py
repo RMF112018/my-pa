@@ -1230,6 +1230,14 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "quoted prior text: the stale figure two runbooks carried, reproduced in "
         "the finding that records its correction, not a claim in the author's voice",
     ),
+    (
+        "docs/decisions/ADR-020-meeting-prep-briefs.md",
+        "two names",
+        "because those two names are bound",
+        "the two note-history capabilities the sentence has just named "
+        "(`meetings.notes.versions`, `meetings.notes.read_version`), not the size "
+        "of `Capability`",
+    ),
 )
 
 

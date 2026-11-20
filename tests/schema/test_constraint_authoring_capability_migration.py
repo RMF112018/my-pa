@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "640aaacc78e8"
+CURRENT_HEAD: Final = "4d1069a7d84f"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -150,6 +150,8 @@ SCHEDULE_SCENARIOS_VOCABULARY_MIGRATION: Final = (
 )
 #: Files workspace WP4's additive head (`640aaacc78e8`), on the same precedent.
 FILES_WORKSPACE_MIGRATION: Final = MIGRATIONS / "20261113_640aaacc78e8_files_workspace.py"
+#: ADR-020's additive head (`4d1069a7d84f`, Meeting prep versions), on the same precedent.
+MEETING_PREP_MIGRATION: Final = MIGRATIONS / "20261120_4d1069a7d84f_meeting_prep_versions.py"
 #: The one sanctioned edit to a historical revision (operator ruling
 #: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
 #: work freezes `a_managed_document_is_identified_within_its_owner` out of
@@ -290,10 +292,10 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/unit/test_cli_auth.py",
     # Schedule Scenarios S6-3's revision B module names the head now on it.
     "tests/schema/test_schedule_scenarios_vocabulary_migration.py",
-    # Files workspace WP4's own revision module names the head as the revision it tests.
+    # Files workspace WP4's own revision module names the head as the one on it.
     "tests/schema/test_files_workspace_migration.py",
-    # Files workspace WP4's repository suite names the head its clone is at.
-    "tests/database/test_file_workspace_persistence.py",
+    # ADR-020's own revision module names the head as the revision it tests.
+    "tests/schema/test_meeting_prep_versions_migration.py",
     # The extraction suite's table registry names the files workspace revision.
     "tests/schema/test_extraction_schema_migration.py",
 )
@@ -373,7 +375,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "b77334135653"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "640aaacc78e8"
+    assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
     assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
     assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
     assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
@@ -406,7 +409,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 129
+    assert len(list(MIGRATIONS.glob("*.py"))) == 130
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -569,6 +572,7 @@ def test_no_historical_revision_was_edited() -> None:
         GENERAL_REPORT_PLANE_MIGRATION.relative_to(ROOT).as_posix(),
         SCHEDULE_SCENARIOS_VOCABULARY_MIGRATION.relative_to(ROOT).as_posix(),
         FILES_WORKSPACE_MIGRATION.relative_to(ROOT).as_posix(),
+        MEETING_PREP_MIGRATION.relative_to(ROOT).as_posix(),
         # Not an additive head: the one sanctioned historical edit (see
         # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).
         SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix(),

@@ -293,6 +293,8 @@ def test_contract_prefixes_are_stable() -> None:
         "fwtrs",
         "fwrcp",
         "fwpnd",
+        # ADR-020 C1: one immutable Meeting prep-brief version.
+        "mprep",
     }
 
 

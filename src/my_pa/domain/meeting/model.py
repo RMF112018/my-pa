@@ -58,6 +58,7 @@ __all__ = [
     "MAX_MEETING_LOCATION_CHARACTERS",
     "MAX_MEETING_NOTES_CHARACTERS",
     "MAX_MEETING_PAGE_SIZE",
+    "MAX_MEETING_PREP_CHARACTERS",
     "MAX_MEETING_QUERY_CHARACTERS",
     "MAX_MEETING_TITLE_CHARACTERS",
     "MAX_TIMEZONE_NAME_CHARACTERS",
@@ -105,6 +106,7 @@ __all__ = [
     "validate_meeting_description",
     "validate_meeting_location_text",
     "validate_meeting_notes_markdown",
+    "validate_meeting_prep_markdown",
     "validate_meeting_time_range",
     "validate_meeting_title",
     "validate_timezone_name",
@@ -223,6 +225,10 @@ MAX_MEETING_LOCATION_CHARACTERS: Final = 500
 MAX_MEETING_DESCRIPTION_CHARACTERS: Final = 100_000
 #: Notes: 1..100000 nonblank on input, and the *final* composed body too.
 MAX_MEETING_NOTES_CHARACTERS: Final = 100_000
+#: Prep brief (ADR-020 C3): 1..400000 nonblank, replace only. The operator's
+#: accepted "high cap"; the single source for the validator, the command and MCP
+#: `maxLength`, the contract views and the DB CHECK.
+MAX_MEETING_PREP_CHARACTERS: Final = 4 * MAX_MEETING_NOTES_CHARACTERS
 MAX_ATTENDEE_DISPLAY_NAME_CHARACTERS: Final = 200
 MAX_ATTENDEE_EMAIL_CHARACTERS: Final = 320
 MAX_TIMEZONE_NAME_CHARACTERS: Final = 64
@@ -273,6 +279,8 @@ class MeetingErrorField(StrEnum):
     DESCRIPTION = "description"
     RESPONSE_STATUS = "response_status"
     CLEAR_FIELDS = "clear_fields"
+    # ADR-020 C2 addition.
+    PREP = "prep"
     # Existing `SafeDetail` members, reused.
     TITLE = "title"
     STATUS = "status"
@@ -407,6 +415,15 @@ def validate_meeting_notes_markdown(value: object) -> str:
         raise _invalid(MeetingErrorField.NOTES)
     if not 1 <= len(value) <= MAX_MEETING_NOTES_CHARACTERS or _is_blank(value):
         raise _invalid(MeetingErrorField.NOTES)
+    return value
+
+
+def validate_meeting_prep_markdown(value: object) -> str:
+    """A prep brief body (ADR-020 C2): 1..400000 characters, nonblank, stored exactly."""
+    if not isinstance(value, str):
+        raise _invalid(MeetingErrorField.PREP)
+    if not 1 <= len(value) <= MAX_MEETING_PREP_CHARACTERS or _is_blank(value):
+        raise _invalid(MeetingErrorField.PREP)
     return value
 
 
@@ -694,6 +711,7 @@ class MeetingCreateRequest:
     attendees: tuple[NormalizedAttendee, ...] = ()
     attachment_document_ids: tuple[str, ...] = ()
     notes_markdown: str | None = None
+    prep_markdown: str | None = None
     series_selector: MeetingSeriesSelector = field(init=False)
 
     def __post_init__(self) -> None:
@@ -722,6 +740,7 @@ class MeetingCreateRequest:
         _optional_text(self.virtual_meeting_url, validate_virtual_meeting_url)
         _optional_text(self.description, validate_meeting_description)
         _optional_text(self.notes_markdown, validate_meeting_notes_markdown)
+        _optional_text(self.prep_markdown, validate_meeting_prep_markdown)
         _optional_identifier(self.project_id, IdKind.PROJECT, MeetingErrorField.PROJECT_ID)
         attendees = validate_attendee_set(self.attendees)
         documents = _sorted_unique_identifiers(
@@ -776,6 +795,7 @@ class MeetingUpdateRequest:
     attachment_remove_ids: tuple[str, ...] = ()
     notes_mode: MeetingNotesMode | None = None
     notes_markdown: str | None = None
+    prep_markdown: str | None = None
     meeting_series_id: str | None = None
     detach_series: bool = False
 
@@ -813,6 +833,7 @@ class MeetingUpdateRequest:
         _optional_text(self.location_text, validate_meeting_location_text)
         _optional_text(self.virtual_meeting_url, validate_virtual_meeting_url)
         _optional_text(self.description, validate_meeting_description)
+        _optional_text(self.prep_markdown, validate_meeting_prep_markdown)
         _optional_identifier(self.project_id, IdKind.PROJECT, MeetingErrorField.PROJECT_ID)
         clears = self._clear_fields()
         if self.project_id is not None and MeetingClearField.PROJECT_ID in clears:
@@ -889,6 +910,7 @@ class MeetingUpdateRequest:
             self.description,
             self.project_id,
             self.notes_mode,
+            self.prep_markdown,
             self.attendees_replace,
             self.meeting_series_id,
         )

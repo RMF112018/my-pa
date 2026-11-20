@@ -126,11 +126,14 @@ def _contract_section(heading: str) -> str:
 
 def test_the_revision_is_the_single_head_on_b77334135653() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    # ADR-020's `4d1069a7d84f` (Meeting prep versions) is additive on this
+    # revision, so this revision is the head's parent rather than the head.
+    assert script.get_heads() == ["4d1069a7d84f"]
+    assert script.get_revision("4d1069a7d84f").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "4c37731671fc"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 129
+    assert len(list(MIGRATIONS.glob("*.py"))) == 130
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -413,7 +416,7 @@ def test_empty_to_head_and_previous_to_head(disposable_database: str, engine: En
     _audit(
         engine, capability="capabilities.get", purpose="status_observation", suffix="fwvocab0003a"
     )
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     assert _version(engine) == REVISION
     assert _plane(engine) == _AT_HEAD
     at_head = _checks(engine)

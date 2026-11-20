@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Five hundred and twenty Python modules under `src/my_pa` and nine hundred and eighty-six test modules —
+Five hundred and twenty Python modules under `src/my_pa` and nine hundred and eighty-seven test modules —
 
-**Current-tree remeasurement (Meeting prep WP1, ADR-020, branch `feat/meeting-prep`, 2026-11-20):** the two commands below count 520 source modules and 986 test modules: the files work workspace 520/984 below plus the two test modules `tests/schema/test_meeting_prep_versions_migration.py` and `tests/database/test_meeting_prep_persistence.py`. Previously five hundred and twenty and nine hundred and eighty-four.
+**Current-tree remeasurement (Meeting prep WP2, ADR-020, branch `feat/meeting-prep`, 2026-11-20):** the two commands below count 520 source modules and 987 test modules: the Meeting prep WP1 520/986 below plus the one test module `tests/database/test_meeting_prep_application.py`. Previously five hundred and twenty and nine hundred and eighty-six.
+
+**Historical remeasurement (Meeting prep WP1, ADR-020, branch `feat/meeting-prep`, 2026-11-20):** the two commands below counted 520 source modules and 986 test modules: the files work workspace 520/984 below plus the two test modules `tests/schema/test_meeting_prep_versions_migration.py` and `tests/database/test_meeting_prep_persistence.py`. Previously five hundred and twenty and nine hundred and eighty-four.
 
 **Historical remeasurement (Files work workspace, ADR-019 Amendment 2, branch `feat/files-work-workspace`, 2026-11-18):** the two commands below counted 520 source modules and 984 test modules: the native-handles 517/982 below plus the three source modules `src/my_pa/domain/files/workspaces.py`, `src/my_pa/infrastructure/file_workspace/pending.py` and `src/my_pa/application/file_workspace_approval.py` and the two test modules `tests/unit/test_files_work_workspace.py` and `tests/database/test_files_work_approval.py`. Previously five hundred and seventeen and nine hundred and eighty-two.
 

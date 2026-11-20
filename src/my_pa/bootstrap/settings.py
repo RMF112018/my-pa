@@ -54,6 +54,7 @@ from collections.abc import Mapping
 from enum import StrEnum
 from typing import Final
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, PrivateAttr, ValidationError, model_validator
 from sqlalchemy.engine import URL, make_url
@@ -640,6 +641,15 @@ class Settings(StrictModel):
     #: changes no row. Enabling it anywhere but a test is an operator gate
     #: (contract section 15.17).
     schedule_scenarios_enabled: bool = False
+    #: Daily cycle scheduler switch (ADR-010 amendment of 2026-11-20), env
+    #: `MY_PA_CYCLE_SCHEDULER_ENABLED`. Default off. Off, `apps/worker.py`
+    #: refuses the `cycles` plane (exit 2, before an engine is built). It
+    #: withholds no capability and changes no row; `reports.begin_cycle` stays
+    #: served either way. Enabling it outside a test is an operator decision.
+    cycle_scheduler_enabled: bool = False
+    #: The scheduler's IANA zone, env `MY_PA_CYCLE_SCHEDULER_TIMEZONE`. The run
+    #: is due at local midnight in it. Validated by `zoneinfo` at load.
+    cycle_scheduler_timezone: str = "America/New_York"
     #: KLP-WP-04 (R6 section 3.4, KLP-AC-019). The exact OAuth client ids bound
     #: as Knowledge discovery clients. Compared exactly, never by prefix; empty --
     #: the default -- binds no client, so `knowledge.assertions.submit` and
@@ -898,6 +908,10 @@ class Settings(StrictModel):
     @model_validator(mode="after")
     def _check(self) -> Settings:
         self._parsed_database_url = _parse_database_url(self.database_url)
+        try:
+            ZoneInfo(self.cycle_scheduler_timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise SettingsError("MY_PA_CYCLE_SCHEDULER_TIMEZONE must be an IANA zone") from None
         for raw_clients in (self.mcp_database_ro_client_ids, self.mcp_database_rw_client_ids):
             if len(_split_allowlist(raw_clients)) != len(set(_split_allowlist(raw_clients))):
                 raise SettingsError("MCP database client mappings must not contain duplicates")

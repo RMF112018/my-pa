@@ -487,7 +487,7 @@ def test_full_synthetic_cycle_persists_forty_nine_executions(scene: Scene) -> No
 def test_morning_brief_cannot_mix_cycle_runs(scene: Scene) -> None:
     service = build_service(scene.world, scene.providers)
     cycle_a = begin(service, scene, "cycle-a-mix")
-    cycle_b = begin(service, scene, "cycle-b-mix")
+    cycle_b = begin(service, scene, "cycle-b-mix", date="2026-08-21")
     reporters_a = tuple(
         _focus_branch(service, scene, cycle_a, focus) for focus in EXPECTED_FOCUS_AREAS
     )
@@ -1592,7 +1592,7 @@ def test_ineligible_reporters_are_still_refused_whatever_the_brief_claims(
     cycle = begin(service, scene, "cycle-r1-refused")
     built = _brief_areas(service, scene, cycle, _areas("final", "stale", "superseded", "partial"))
     heads = built["heads"]
-    other_cycle = begin(service, scene, "cycle-r1-other")
+    other_cycle = begin(service, scene, "cycle-r1-other", date="2026-08-21")
     elsewhere = _focus_branch(service, scene, other_cycle, EXPECTED_FOCUS_AREAS[4])
     # The stale area's rerun synthesizer: eligible, of an uncited expected area,
     # so only the stage rule can refuse it.

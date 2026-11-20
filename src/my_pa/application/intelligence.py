@@ -12,6 +12,7 @@ import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
+from enum import StrEnum
 from typing import Final, Protocol
 from urllib.parse import urlsplit
 
@@ -25,6 +26,7 @@ from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.intelligence.catalog import (
     ALLOWED_PROVENANCE_URL_SCHEMES,
     ARTIFACT_KIND_FOR_STAGE,
+    CLOSED_CYCLE_STATES,
     CYCLE_MORNING_INTELLIGENCE,
     EXPECTED_FOCUS_AREAS,
     MAX_ARTIFACT_BODY_BYTES,
@@ -32,6 +34,7 @@ from my_pa.domain.intelligence.catalog import (
     MAX_MORNING_BRIEF_DEPENDENCY_COUNT,
     MAX_STRUCTURED_CONTENT_BYTES,
     MIN_SYNTHESIZER_DEPENDENCY_COUNT,
+    OPEN_CYCLE_STATES,
     REQUIRED_DEPENDENCY_COUNT,
     REQUIRED_MEMBERSHIP,
     STAGE_FOR_KIND,
@@ -55,6 +58,7 @@ from my_pa.domain.intelligence.errors import (
     DependencyRejection,
     IntelligenceConflictError,
     IntelligenceCoordinateError,
+    IntelligenceCycleClosedError,
     IntelligenceDependencyError,
     IntelligenceDigestMismatchError,
     IntelligenceIdempotencyConflictError,
@@ -103,12 +107,15 @@ from my_pa.domain.search.query import SearchQuery
 from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
+    "CycleClosure",
+    "CycleClosureOutcome",
     "InMemoryIntelligenceStore",
     "IntelligenceStore",
     "LineageReferenceRecompute",
     "ProgramReferenceRecompute",
     "ReportTypeRegistration",
     "begin_cycle",
+    "close_cycle",
     "commit_artifact",
     "in_memory_search_rank",
     "latest_artifact",
@@ -120,6 +127,7 @@ __all__ = [
     "require_registered_kind",
     "resolve_set",
     "search_artifacts",
+    "stale_open_cycles",
 ]
 
 
@@ -140,6 +148,35 @@ class IntelligenceStore(Protocol):
     ) -> IntelligenceCycleRun | None: ...
 
     def put_cycle(self, cycle: IntelligenceCycleRun) -> None: ...
+
+    def cycle_for_write(self, principal_id: str, cycle_run_id: str) -> IntelligenceCycleRun | None:
+        """The cycle, read under a share lock held to the end of the transaction.
+
+        A commit or run-state write reads its cycle this way, so a concurrent
+        close (which takes the exclusive lock) is ordered before or after it.
+        """
+
+    def cycle_for_close(self, principal_id: str, cycle_run_id: str) -> IntelligenceCycleRun | None:
+        """The cycle, read under an exclusive row lock held to the end of the transaction."""
+
+    def lock_cycle_date(self, principal_id: str, cycle_id: str, business_date: date) -> None:
+        """Serialize `reports.begin_cycle` for one (Principal, cycle, date) to transaction end."""
+
+    def open_cycle_for_date(
+        self, principal_id: str, cycle_id: str, business_date: date
+    ) -> IntelligenceCycleRun | None:
+        """The newest `open` or `running` cycle for the date, or `None`."""
+
+    def open_cycles_before(
+        self, principal_id: str, cycle_id: str, business_date: date
+    ) -> tuple[IntelligenceCycleRun, ...]:
+        """Every `open` or `running` cycle dated before `business_date`, oldest first."""
+
+    def cycle_has_artifact(self, principal_id: str, cycle_run_id: str) -> bool:
+        """Whether any artifact, in any state, was committed under the cycle."""
+
+    def replace_cycle(self, cycle: IntelligenceCycleRun, *, expected_version: int) -> bool:
+        """Write state, version and finished_at if the stored version still matches."""
 
     def get_run(self, principal_id: str, run_id: str) -> IntelligenceProducerRun | None: ...
 
@@ -347,6 +384,8 @@ def _translate(error: Exception) -> None:
         raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
     if isinstance(error, IntelligenceVersionConflictError):
         raise ConflictError(SafeDetail.EXPECTED_VERSION) from None
+    if isinstance(error, IntelligenceCycleClosedError):
+        raise ConflictError(SafeDetail.CYCLE_RUN_ID, SafeDetail.CYCLE_CLOSED) from None
     if isinstance(error, IntelligenceConflictError):
         raise ConflictError(SafeDetail.CYCLE_RUN_ID) from None
     raise error
@@ -552,10 +591,18 @@ def begin_cycle(
     automation_platform: str | None,
     external_orchestration_id: str | None,
 ) -> MutationAdmission:
-    """Create or replay one cycle execution identity."""
+    """Create or replay one cycle execution identity, or join the date's open one.
+
+    ADR-010 amendment of 2026-11-20: after the key replay and the external-root
+    check, an `open` or `running` cycle for the same Principal, cycle and
+    business date is returned (``created`` False, ``replayed`` True) instead of
+    a second one being created, and the new key's receipt is bound to it. The
+    lookup and the create run under a per-date advisory lock, so the daily
+    scheduler and a ChatLLM fallback converge on one cycle in either order.
+    """
     try:
         if cycle_id != CYCLE_MORNING_INTELLIGENCE:
-            raise IntelligenceCoordinateError("unknown cycle")
+            raise InvalidRequestError(SafeDetail.CYCLE_ID)
         fingerprint = fingerprint_payload(
             {
                 "kind": "cycle_begin",
@@ -579,9 +626,20 @@ def begin_cycle(
             )
             if bound is not None:
                 raise IntelligenceConflictError()
+        store.lock_cycle_date(principal_id, cycle_id, business_date)
+        when = _now(at)
+        joined = store.open_cycle_for_date(principal_id, cycle_id, business_date)
+        if joined is not None:
+            return _join_open_cycle(
+                store,
+                principal_id=principal_id,
+                cycle=joined,
+                idempotency_key=idempotency_key,
+                fingerprint=fingerprint,
+                at=when,
+            )
         cycle_run_id = issue_identifier(IdKind.INTELLIGENCE_CYCLE_RUN)
         receipt_id = issue_identifier(IdKind.INTELLIGENCE_RECEIPT)
-        when = _now(at)
         cycle = IntelligenceCycleRun(
             cycle_run_id=cycle_run_id,
             principal_id=principal_id,
@@ -618,6 +676,106 @@ def begin_cycle(
     except Exception as error:
         _translate(error)
         raise
+
+
+def _join_open_cycle(
+    store: IntelligenceStore,
+    *,
+    principal_id: str,
+    cycle: IntelligenceCycleRun,
+    idempotency_key: str,
+    fingerprint: str,
+    at: datetime,
+) -> MutationAdmission:
+    """Bind a new key's receipt to the date's open cycle and answer replay-style."""
+    receipt = IntelligenceCommitReceipt(
+        receipt_id=issue_identifier(IdKind.INTELLIGENCE_RECEIPT),
+        principal_id=principal_id,
+        idempotency_key=idempotency_key,
+        mutation_kind="cycle_begin",
+        fingerprint_sha256=fingerprint,
+        created_at=at,
+        cycle_run_id=cycle.cycle_run_id,
+    )
+    if store.put_receipt(receipt):
+        return MutationAdmission(receipt=receipt, created=False, replayed=True, cycle=cycle)
+    stored = store.get_receipt(principal_id, idempotency_key)
+    if stored is None:
+        raise IntelligenceConflictError()
+    if stored.fingerprint_sha256 != fingerprint:
+        raise IntelligenceIdempotencyConflictError()
+    stored_cycle = store.get_cycle(principal_id, stored.cycle_run_id)
+    if stored_cycle is None:
+        raise IntelligenceConflictError()
+    return MutationAdmission(receipt=stored, created=False, replayed=True, cycle=stored_cycle)
+
+
+class CycleClosureOutcome(StrEnum):
+    """What one close did. `already_closed` and `missing` wrote nothing."""
+
+    COMPLETE = "complete"
+    CANCELLED = "cancelled"
+    ALREADY_CLOSED = "already_closed"
+    MISSING = "missing"
+
+
+@dataclass(frozen=True, slots=True)
+class CycleClosure:
+    """The outcome of closing one cycle. Identifiers and a state, nothing else."""
+
+    cycle_run_id: str
+    outcome: CycleClosureOutcome
+
+
+def stale_open_cycles(
+    store: IntelligenceStore, *, principal_id: str, business_date: date
+) -> tuple[str, ...]:
+    """The `cycle_run_id` of every open or running cycle dated before `business_date`."""
+    return tuple(
+        cycle.cycle_run_id
+        for cycle in store.open_cycles_before(
+            principal_id, CYCLE_MORNING_INTELLIGENCE, business_date
+        )
+    )
+
+
+def close_cycle(
+    store: IntelligenceStore, *, principal_id: str, cycle_run_id: str, at: datetime
+) -> CycleClosure:
+    """Close one cycle: `complete` if anything was committed under it, else `cancelled`.
+
+    ADR-010 amendment of 2026-11-20. The cycle row is locked exclusively before
+    the artifacts are counted, so a commit holding the share lock lands first
+    and counts, and a later one sees the closed state and is refused. Closing a
+    cycle that is already closed writes nothing. The state change is a
+    compare-and-set on the version read under the lock.
+    """
+    cycle = store.cycle_for_close(principal_id, cycle_run_id)
+    if cycle is None:
+        return CycleClosure(cycle_run_id=cycle_run_id, outcome=CycleClosureOutcome.MISSING)
+    if cycle.state not in OPEN_CYCLE_STATES:
+        return CycleClosure(cycle_run_id=cycle_run_id, outcome=CycleClosureOutcome.ALREADY_CLOSED)
+    committed = store.cycle_has_artifact(principal_id, cycle_run_id)
+    state = CycleState.COMPLETE if committed else CycleState.CANCELLED
+    closed = replace(cycle, state=state, version=cycle.version + 1, finished_at=_now(at))
+    if not store.replace_cycle(closed, expected_version=cycle.version):
+        raise IntelligenceVersionConflictError()
+    return CycleClosure(
+        cycle_run_id=cycle_run_id,
+        outcome=CycleClosureOutcome.COMPLETE if committed else CycleClosureOutcome.CANCELLED,
+    )
+
+
+def _writable_cycle(
+    store: IntelligenceStore, principal_id: str, cycle_run_id: str
+) -> IntelligenceCycleRun:
+    """The cycle a new write names, share-locked, refused when absent or closed."""
+    cycle = store.cycle_for_write(principal_id, cycle_run_id)
+    if cycle is None:
+        raise IntelligenceCoordinateError()
+    if cycle.state in CLOSED_CYCLE_STATES:
+        raise IntelligenceCycleClosedError()
+    return cycle
 
 
 def _parse_provenance(
@@ -1201,9 +1359,7 @@ def commit_artifact(
             return MutationAdmission(
                 receipt=existing, created=False, replayed=True, artifact=artifact, run=run
             )
-        cycle = store.get_cycle(principal_id, cycle_run_id)
-        if cycle is None:
-            raise IntelligenceCoordinateError()
+        cycle = _writable_cycle(store, principal_id, cycle_run_id)
         dependencies, partial_input = _validate_dependencies(
             store,
             principal_id=principal_id,
@@ -1422,9 +1578,7 @@ def record_run_state(
                 else store.get_run(principal_id, existing.producer_run_id)
             )
             return MutationAdmission(receipt=existing, created=False, replayed=True, run=run)
-        cycle = store.get_cycle(principal_id, cycle_run_id)
-        if cycle is None:
-            raise IntelligenceCoordinateError()
+        cycle = _writable_cycle(store, principal_id, cycle_run_id)
         # `succeeded` asserts an artifact exists. Producers commit first (which
         # records its own succeeded run) and may then record `succeeded`; a
         # `succeeded` with nothing committed at this exact coordinate is refused.
@@ -1857,6 +2011,63 @@ class InMemoryIntelligenceStore:
 
     def put_cycle(self, cycle: IntelligenceCycleRun) -> None:
         self.cycles[(cycle.principal_id, cycle.cycle_run_id)] = cycle
+
+    def cycle_for_write(self, principal_id: str, cycle_run_id: str) -> IntelligenceCycleRun | None:
+        return self.get_cycle(principal_id, cycle_run_id)
+
+    def cycle_for_close(self, principal_id: str, cycle_run_id: str) -> IntelligenceCycleRun | None:
+        return self.get_cycle(principal_id, cycle_run_id)
+
+    def lock_cycle_date(self, principal_id: str, cycle_id: str, business_date: date) -> None:
+        """Nothing to lock: the FAST world is single-threaded per call."""
+
+    def _open_for(self, principal_id: str, cycle_id: str) -> list[IntelligenceCycleRun]:
+        return [
+            cycle
+            for cycle in self.cycles.values()
+            if cycle.principal_id == principal_id
+            and cycle.cycle_id == cycle_id
+            and cycle.state in OPEN_CYCLE_STATES
+        ]
+
+    def open_cycle_for_date(
+        self, principal_id: str, cycle_id: str, business_date: date
+    ) -> IntelligenceCycleRun | None:
+        dated = [
+            cycle
+            for cycle in self._open_for(principal_id, cycle_id)
+            if cycle.business_date == business_date
+        ]
+        if not dated:
+            return None
+        return max(dated, key=lambda cycle: (cycle.created_at, cycle.cycle_run_id))
+
+    def open_cycles_before(
+        self, principal_id: str, cycle_id: str, business_date: date
+    ) -> tuple[IntelligenceCycleRun, ...]:
+        return tuple(
+            sorted(
+                (
+                    cycle
+                    for cycle in self._open_for(principal_id, cycle_id)
+                    if cycle.business_date < business_date
+                ),
+                key=lambda cycle: (cycle.business_date, cycle.created_at, cycle.cycle_run_id),
+            )
+        )
+
+    def cycle_has_artifact(self, principal_id: str, cycle_run_id: str) -> bool:
+        return any(
+            artifact.principal_id == principal_id and artifact.cycle_run_id == cycle_run_id
+            for artifact in self.artifacts.values()
+        )
+
+    def replace_cycle(self, cycle: IntelligenceCycleRun, *, expected_version: int) -> bool:
+        stored = self.cycles.get((cycle.principal_id, cycle.cycle_run_id))
+        if stored is None or stored.version != expected_version:
+            return False
+        self.cycles[(cycle.principal_id, cycle.cycle_run_id)] = cycle
+        return True
 
     def get_run(self, principal_id: str, run_id: str) -> IntelligenceProducerRun | None:
         return self.runs.get((principal_id, run_id))

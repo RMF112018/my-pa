@@ -14,6 +14,7 @@ from sqlalchemy.engine import RowMapping
 from sqlalchemy.sql.elements import ColumnElement
 
 from my_pa.domain.intelligence.catalog import (
+    OPEN_CYCLE_STATES,
     ArtifactKind,
     ArtifactState,
     CycleState,
@@ -67,8 +68,10 @@ from my_pa.infrastructure.persistence.tables import (
 )
 
 __all__ = [
+    "CYCLE_DATE_LOCK_NAMESPACE",
     "REPORT_TYPE_REGISTRY_LOCK_NAMESPACE",
     "SqlIntelligenceStore",
+    "cycle_date_lock_key",
     "report_type_registry_lock_key",
 ]
 
@@ -83,6 +86,24 @@ def report_type_registry_lock_key(principal_id: str) -> int:
     server hash function and never collides with another lock domain by design.
     """
     encoded = f"{REPORT_TYPE_REGISTRY_LOCK_NAMESPACE}\x1f{principal_id}".encode()
+    return int.from_bytes(hashlib.sha256(encoded).digest()[:8], byteorder="big", signed=True)
+
+
+#: Domain separator of the per-(Principal, cycle, business date) begin lock
+#: (ADR-010 amendment of 2026-11-20).
+CYCLE_DATE_LOCK_NAMESPACE = "intelligence-cycle-begin-date"
+
+
+def cycle_date_lock_key(principal_id: str, cycle_id: str, business_date: date) -> int:
+    """A stable signed 64-bit advisory-lock key for one Principal's cycle date.
+
+    Built exactly as `report_type_registry_lock_key` is, under its own namespace,
+    so the two lock domains never collide by design.
+    """
+    encoded = (
+        f"{CYCLE_DATE_LOCK_NAMESPACE}\x1f{principal_id}\x1f{cycle_id}"
+        f"\x1f{business_date.isoformat()}"
+    ).encode()
     return int.from_bytes(hashlib.sha256(encoded).digest()[:8], byteorder="big", signed=True)
 
 
@@ -190,6 +211,98 @@ class SqlIntelligenceStore:
             self._context,
         )
         self._connection.execute(intelligence_cycle_runs.insert().values(**values))
+
+    def _locked_cycle(self, cycle_run_id: str, *, share: bool) -> IntelligenceCycleRun | None:
+        statement = principal_scoped(
+            select(intelligence_cycle_runs).where(
+                intelligence_cycle_runs.c.cycle_run_id == cycle_run_id
+            ),
+            intelligence_cycle_runs,
+            self._context,
+        ).with_for_update(read=share)
+        row = self._connection.execute(statement).mappings().first()
+        return None if row is None else self._cycle(row)
+
+    def cycle_for_write(self, principal_id: str, cycle_run_id: str) -> IntelligenceCycleRun | None:
+        """`FOR SHARE`: concurrent writes to one cycle proceed; a close waits for them."""
+        return self._locked_cycle(cycle_run_id, share=True)
+
+    def cycle_for_close(self, principal_id: str, cycle_run_id: str) -> IntelligenceCycleRun | None:
+        """`FOR UPDATE`: waits for in-flight writes and blocks new ones until commit."""
+        return self._locked_cycle(cycle_run_id, share=False)
+
+    def lock_cycle_date(self, principal_id: str, cycle_id: str, business_date: date) -> None:
+        """`pg_advisory_xact_lock` on the bound partition's (cycle, date) key."""
+        self._connection.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    cycle_date_lock_key(self._principal_id, cycle_id, business_date)
+                )
+            )
+        ).one()
+
+    def open_cycle_for_date(
+        self, principal_id: str, cycle_id: str, business_date: date
+    ) -> IntelligenceCycleRun | None:
+        statement = (
+            principal_scoped(
+                select(intelligence_cycle_runs).where(
+                    intelligence_cycle_runs.c.cycle_id == cycle_id,
+                    intelligence_cycle_runs.c.business_date == business_date,
+                    intelligence_cycle_runs.c.state.in_([s.value for s in OPEN_CYCLE_STATES]),
+                ),
+                intelligence_cycle_runs,
+                self._context,
+            )
+            .order_by(
+                desc(intelligence_cycle_runs.c.created_at),
+                desc(intelligence_cycle_runs.c.cycle_run_id),
+            )
+            .limit(1)
+        )
+        row = self._connection.execute(statement).mappings().first()
+        return None if row is None else self._cycle(row)
+
+    def open_cycles_before(
+        self, principal_id: str, cycle_id: str, business_date: date
+    ) -> tuple[IntelligenceCycleRun, ...]:
+        statement = principal_scoped(
+            select(intelligence_cycle_runs).where(
+                intelligence_cycle_runs.c.cycle_id == cycle_id,
+                intelligence_cycle_runs.c.business_date < business_date,
+                intelligence_cycle_runs.c.state.in_([s.value for s in OPEN_CYCLE_STATES]),
+            ),
+            intelligence_cycle_runs,
+            self._context,
+        ).order_by(
+            intelligence_cycle_runs.c.business_date,
+            intelligence_cycle_runs.c.created_at,
+            intelligence_cycle_runs.c.cycle_run_id,
+        )
+        rows = self._connection.execute(statement).mappings().all()
+        return tuple(self._cycle(row) for row in rows)
+
+    def cycle_has_artifact(self, principal_id: str, cycle_run_id: str) -> bool:
+        statement = principal_scoped(
+            select(intelligence_artifacts.c.artifact_id)
+            .where(intelligence_artifacts.c.cycle_run_id == cycle_run_id)
+            .limit(1),
+            intelligence_artifacts,
+            self._context,
+        )
+        return self._connection.execute(statement).first() is not None
+
+    def replace_cycle(self, cycle: IntelligenceCycleRun, *, expected_version: int) -> bool:
+        result = self._connection.execute(
+            update(intelligence_cycle_runs)
+            .where(
+                partition_criterion(intelligence_cycle_runs, self._context),
+                intelligence_cycle_runs.c.cycle_run_id == cycle.cycle_run_id,
+                intelligence_cycle_runs.c.version == expected_version,
+            )
+            .values(state=cycle.state.value, version=cycle.version, finished_at=cycle.finished_at)
+        )
+        return result.rowcount == 1
 
     def get_run(self, principal_id: str, run_id: str) -> IntelligenceProducerRun | None:
         statement = principal_scoped(

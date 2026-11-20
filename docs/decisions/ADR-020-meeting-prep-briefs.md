@@ -17,7 +17,7 @@ A Meeting (WP-MTG-01..04, revision `7d9a450dfd07`) already carries one versioned
 3. **Markdown stored inert, under a high named cap.** The body is stored exactly as sent, never rendered or trusted. The operator asked for no size limit; the accepted policy is a high bound, `MAX_MEETING_PREP_CHARACTERS = 4 * MAX_MEETING_NOTES_CHARACTERS` (400,000 code points), one named constant enforced in the domain validator, the command and MCP schema, and a database CHECK.
 4. **Searchable.** `meetings.search` matches the current prep version, exactly as it matches the current note version; a superseded prep version is never matched.
 5. **Readable through the existing read surface.** `meetings.read` returns the current prep head and, with one new optional parameter, any earlier prep version by number. No new capability name (section C6).
-6. **Additive and reversible schema.** One Alembic revision on `640aaacc78e8` creates the table and its indexes; its downgrade drops them. No existing row, column, constraint or vocabulary changes.
+6. **Additive and reversible schema.** One Alembic revision on `640aaacc78e8` creates the table, its indexes and (following the `meeting_note_versions` precedent) an append-only trigger and its function; its downgrade refuses while any prep row exists and otherwise drops exactly what the upgrade created. No existing row, column, constraint or vocabulary changes.
 
 ## Contract
 

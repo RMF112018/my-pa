@@ -46,7 +46,6 @@ def test_correct_typed_session_artifact_and_parents() -> None:
             "SDCR/20-Programs/shared-platform/workstreams/cross-client-publication/work-items/999",
             True,
         ),
-        ),
         (OWNED + "/sessions/S1/artifacts/nonsense", True),
         (OWNED + "/sessions/S1/artifacts/evidence/foo.log", False),
         (OWNED + "/sessions/S1/artifacts/evidence/ID__foo.log/extra", False),
@@ -174,7 +173,6 @@ def test_real_store_rejects_raw_mutation_bypass(tmp_path: Path) -> None:
     root.mkdir()
     store = FilesystemFileWorkspaceStore(root, disk_reserve_bytes=0, sdcr_placement_gate=gate())
     with pytest.raises(FilesRefusal):
-    with pytest.raises(FilesRefusal):
         store.mkdir("SDCR/misc", parents=True)
     with pytest.raises(FilesRefusal):
         store.write_text("SDCR/random.txt", "blocked")
@@ -188,8 +186,6 @@ def test_real_store_rejects_raw_mutation_bypass(tmp_path: Path) -> None:
     assert published.entry.path == file_path
     with pytest.raises(FilesRefusal):
         store.write_text(file_path, "override", expected_version=published.entry.version)
-    with pytest.raises(FilesRefusal):
-
     with pytest.raises(FilesRefusal):
         store.copy(file_path, directory + "/EVID-2__copy.log")
     with pytest.raises(FilesRefusal):

@@ -107,6 +107,7 @@ Running the local candidate on one machine. A procedure under `ops/runbooks/` is
 - [`fixtures/remote-capture/README.md`](../fixtures/remote-capture/README.md) — the synthetic, principal-free iOS Shortcut request contract for Remote Capture; it contains no credential or live endpoint.
 - [`evidence/README.md`](../evidence/README.md) — owning index for acceptance and completion evidence.
 - [`evidence/completion/README.md`](../evidence/completion/README.md) — the completion records themselves, with their Drive provenance.
+- [`docs/evidence/communications-corpus/README.md`](evidence/communications-corpus/README.md) — sanitized aggregate evidence (6 documents) for the communications corpus behind ADR-021; counts only, no message content.
 
 ## Migration
 

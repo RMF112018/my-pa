@@ -74,7 +74,9 @@ is not a defect.
 
 ## 3. What is implemented
 
-Five hundred and twenty-three Python modules under `src/my_pa` and nine hundred and eighty-nine test modules —
+Five hundred and twenty-five Python modules under `src/my_pa` and nine hundred and ninety test modules —
+
+**Issue #369 branch source-count reconciliation (2026-11-21, before merge):** The PR base `f7ec503fcc19069867782f2e674a740214e76744` has 523 source and 989 test modules. This bounded candidate adds `src/my_pa/domain/files/sdcc_placement.py` and `src/my_pa/infrastructure/file_workspace/sdcc_placement_config.py` plus `tests/unit/test_sdcr_placement_gate.py`, yielding 525 source and 990 test modules by exact file-set delta. The repository architecture count test must verify the corrected tree; this sentence is not a claim of independent CI acceptance.
 
 **Current-tree remeasurement (Meeting prep, ADR-020, branch `feat/meeting-prep`, merged over the daily cycle scheduler, 2026-11-21):** the two commands below count 523 source modules and 989 test modules: the daily cycle scheduler 523/986 below plus the three Meeting prep test modules `tests/schema/test_meeting_prep_versions_migration.py`, `tests/database/test_meeting_prep_persistence.py` and `tests/database/test_meeting_prep_application.py`. Previously five hundred and twenty-three and nine hundred and eighty-six.
 

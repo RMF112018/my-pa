@@ -114,8 +114,8 @@ from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import format_rfc3339
 from my_pa.domain.files.errors import FilesArgumentError, FilesRefusal
-from my_pa.domain.files.sdcc_placement import PlacementDenied, SDCRPlacementGate
 from my_pa.domain.files.paths import parse_path
+from my_pa.domain.files.sdcc_placement import PlacementDeniedError, SDCRPlacementGate
 from my_pa.domain.files.transfer import (
     BROWSER_DOWNLOAD_INSTRUCTIONS,
     UploadCompletion,
@@ -911,7 +911,7 @@ class FileWorkspaceApplication:
                     call.space.sdcr_placement_gate.admit_transition(
                         target, source=item.original_path
                     )
-                except PlacementDenied:
+                except PlacementDeniedError:
                     raise _refusal(FilesReason.INVALID_PATH) from None
             entry = call.store.restore(
                 command.trash_item_id, target, trashed_version=item.trashed_version
@@ -963,7 +963,7 @@ class FileWorkspaceApplication:
                 call.space.sdcr_placement_gate.admit_create(
                     command.path, is_directory=False, expected_version=command.expected_version
                 )
-            except PlacementDenied:
+            except PlacementDeniedError:
                 raise _refusal(FilesReason.INVALID_PATH) from None
         if command.source_file is not None:
             return self._ingest_handle(call, command, command.source_file)

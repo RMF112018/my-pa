@@ -399,6 +399,7 @@ def authorize_path(
 
 
 
+
 def authorize_mutation(
     policy: Mapping[str, Any],
     registrations: Mapping[str, Mapping[str, str]],
@@ -410,11 +411,7 @@ def authorize_mutation(
     source: str | None = None,
     privileged_migration: bool = False,
 ) -> str:
-    """Model one potential Files mutation; no write actually occurs.
-
-    Strict default is create-only. Move/rename/trash/restore need separately
-    authorized migration operation and still must obey path and owner grammar.
-    """
+    """Model one proposed Files mutation; this pure helper does no I/O."""
     listed = policy["bypass_prevention"]["mutations"]
     if capability not in listed:
         _deny("UNKNOWN_MUTATION_CAPABILITY")
@@ -425,31 +422,22 @@ def authorize_mutation(
         _deny("LIFECYCLE_CHANGE_REQUIRES_MIGRATION_AUTHORITY")
     if (
         capability in ("files.copy", "files.move", "files.rename", "files.restore")
-    ):
-        _deny("LIFECYCLE_CHANGE_REQUIRES_MIGRATION_AUTHORITY")
-    if (
-        capability in ("files.copy", "files.move", "files.rename", "files.restore")
         and source is None
-    ):
-        _deny("SOURCE_IDENTITY_REQUIRED")
     ):
         _deny("SOURCE_IDENTITY_REQUIRED")
     result = authorize_path(
         policy, registrations, path=target, is_directory=is_directory, role=role
     )
     if source is not None:
-        # Only work-item-local copy is acceptable, unless a specifically approved
-        # migration transaction handles a legacy reclassification separately.
-    if source is not None:
-        # Only work-item-local copy is acceptable, unless a specifically approved
-        # migration transaction handles a legacy reclassification separately.
-        authorize_path(policy, registrations, path=source, is_directory=is_directory, role=role)
+        authorize_path(
+            policy, registrations, path=source, is_directory=is_directory, role=role
+        )
 
-        def owned_item(path: str) -> str | None:
-            seq = _parts(path)
-        def owned_item(path: str) -> str | None:
-            seq = _parts(path)
-            return "/".join(seq[:7]) if len(seq) > 6 and seq[1] == "20-Programs" else None
+        def owned_item(item_path: str) -> str | None:
+            seq = _parts(item_path)
+            if len(seq) > 6 and seq[1] == "20-Programs":
+                return "/".join(seq[:7])
+            return None
 
         if owned_item(source) != owned_item(target) and not privileged_migration:
             _deny("CROSS_OWNER_COPY_REQUIRES_AUTHORITY")
@@ -466,7 +454,7 @@ def route_session_artifact(
     artifact_id: str,
     filename: str,
 ) -> str:
-    """Derive a destination; caller cannot supply a governing folder path."""
+    """Derive the destination from the trusted work-item owner."""
     owner = registrations.get(work_item_id)
     if owner is None:
         _deny("WORK_ITEM_NOT_REGISTERED")
@@ -486,7 +474,6 @@ def route_session_artifact(
     )
     authorize_path(policy, registrations, path=path, is_directory=False, role=category)
     return path
-    return path
 
 
 def can_complete(
@@ -498,19 +485,14 @@ def can_complete(
     registry_verified: bool,
     receipt_verified: bool,
 ) -> bool:
-    """No handoff on an incomplete, unclassified or unverified publication."""
+    """No handoff on missing, unclassified, withheld or unverifiable artifacts."""
     if not all((hashes_verified, manifest_verified, registry_verified, receipt_verified)):
-        return False
-    if set(recorded_artifacts) != expected_artifact_ids:
-        return False
-    return all(
         return False
     if set(recorded_artifacts) != expected_artifact_ids:
         return False
     return all(
         status
         not in {
-            "FAILED_EVIDENCE",
             "FAILED_EVIDENCE",
             "PROTECTED_WITHHELD",
             "UNCLASSIFIED",
@@ -519,6 +501,7 @@ def can_complete(
         }
         for status in recorded_artifacts.values()
     )
+
 
 
 # The existing public Files contract has no new error code for this extension.

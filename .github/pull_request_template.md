@@ -1,47 +1,22 @@
-## Objective
+## Objective and authorization
+<!-- One bounded objective; cite Issue or approved work scope. -->
+- Work item / Issue:
+- Accepted objective:
+- Exclusions:
 
-<!-- One accepted objective; link the issue when one exists. -->
+## Acceptance and change
+- [ ] Acceptance criteria addressed
+- Minimal change and deferred work:
 
-## Acceptance criteria
+## Evidence
+- Tests/checks run (include failures and skips):
+- Relevant head SHA / CI run:
+- Known limitations and follow-up Issues:
+- MY-PA session manifest (after qualified SDCR cutover; otherwise N/A):
 
-- [ ]
-
-## Scope
-
-**In scope**
-
--
-
-**Out of scope**
-
--
-
-## Minimal implementation
-
-<!-- Why is this the smallest correct change? What was intentionally deferred? -->
-
-## Validation
-
-| Tier / command | Result | Notes |
-|---|---|---|
-| FAST |  |  |
-| PR |  |  |
-| FULL / SPECIALIZED, if applicable |  |  |
-
-## Risk and boundaries
-
-- [ ] No unrelated refactor or hidden scope expansion.
-- [ ] No credentials, personal data, source mutation, database activation, deployment, or production action.
-- [ ] Architecture, privacy, dependency, migration, and operational impacts are stated below.
-
-Impact / limitations:
-
-## Exact identity
-
-- Base branch and SHA:
-- Head branch and SHA:
-- Review requested against head:
-
-## Operator-only actions
-
-<!-- Merge, settings, secrets, deployment, destructive operations, or none. -->
+## Risk and merge boundary
+<!-- S0/S1 normally need no manual security approval. Identify only real S2/critical risks and actual release restrictions. -->
+- S0/S1 routine handling or S2 critical exception:
+- Secrets/private payloads excluded from public PR and CI logs:
+- Mandatory check/review status:
+- Operator-only action needed (if any; otherwise none):

@@ -18,7 +18,7 @@ That slice was read-only until 2026-08-01, when the operator reprioritized the o
 
 This section previously ran the MCV "through August 2, 2026". That date has passed and no replacement is set, because choosing one is an operator decision rather than a drafting choice. Until it is set, the MCV runs until the operator declares it complete. The open decision is recorded in [`docs/plans/mcv-completion-plan.md`](docs/plans/mcv-completion-plan.md) section 14.
 
-Every change must state one objective, acceptance criteria, in-scope paths or behavior, and explicit out-of-scope items. A discovered feature goes to the backlog unless it is essential to the accepted objective. A scaffold directory is not implementation authority.
+Every change must state one objective, acceptance criteria, in-scope paths or behavior, and explicit out-of-scope items. A discovered feature goes to the backlog unless it is essential to the accepted objective. A scaffold directory is not implementation authority. Once a bounded objective is authorized, routine planning, edits, tests, GitHub coordination, and in-scope corrections proceed without repeat operator checkpoints. Neither a draft policy nor an agent's own plan creates authority.
 
 ## 2. Minimum correct implementation
 
@@ -77,19 +77,17 @@ Do not turn these boundaries into additional layers or interfaces before a concr
 
 ## 5. Security, privacy, and data handling
 
-The default is local-first, least-privilege, and fail-closed.
+Use automatic security handling rather than per-task security approval. These classes describe **handling**, not a requirement to manually label every file:
 
-- Never commit credentials, tokens, private keys, connection strings, personal data, or unredacted source evidence.
-- Use environment configuration for secrets. Provide only non-secret examples and safe defaults.
-- Logs must exclude message bodies, document contents, contact details, access tokens, and sensitive query text by default. Prefer stable identifiers, event types, and redacted metadata.
-- Tests use small synthetic fixtures. Live email, calendar, contacts, NAS content, or production credentials are prohibited.
-- External model or cloud processing requires an explicit eligibility decision for the data involved. Local data is not implicitly eligible for disclosure.
-- Source attribution and generated-content provenance are required wherever derived records may be mistaken for authoritative facts.
-- Security-relevant actions and denied destructive attempts should produce proportionate audit events without storing sensitive payloads.
-- Operational scripts must require explicit targets, fail closed, support dry-run where meaningful, and never infer destructive intent.
-- Deployment, production activation, credential mutation, destructive data operations, and risk acceptance remain operator-gated.
+- **S0 — standard:** ordinary code, nonsecret technical documents, synthetic fixtures, and redacted diagnostics. Normal repository and CI workflow; no security approval ceremony.
+- **S1 — private:** nonpublic project/business records, ordinary personal data, and proprietary source inputs. Authenticated handling is permitted **within an already authorized client, source, and storage boundary**; no repeat operator approval for each in-boundary read, revision, test, or publication. Never place S1 payloads in public GitHub, public CI logs, or unauthorized third-party services.
+- **S2 — critical:** live credentials, private keys, privilege grants, confirmed critically exploitable access/exfiltration defects, unauthorized external release of protected data, or irreversible loss of canonical/production data. Isolate the affected operation and obtain exact authority when its risk or access is not already covered. Never commit or archive raw secrets; retain a safe redacted reference and record the withheld artifact.
 
-Follow `SECURITY.md` for reporting and response handling.
+Retain ordinary automatic safeguards: no live secrets in the repository/logs, bounded authenticated access, least-privilege operational identities, redaction before public disclosure, version/provenance checks, focused security tests, and adherence to applicable legal/contractual duties. Suspected secret-bearing material is handled in isolation, not used to stop unrelated authorized development. Authentication or database **code changes with synthetic fixtures are not automatically S2**.
+
+Development tests use synthetic fixtures and isolated test stores by default. Access to live personal sources, production credentials or databases, credential/grant mutation, unauthorized external disclosure, destructive source actions, or production actions outside a separately approved release envelope is not authorized by ordinary code-work scope. Reversible routine deployment may use an operator-approved standing release envelope only when repository and runtime policy also allow it. This document itself grants no such envelope.
+
+Report confirmed critical vulnerabilities privately. Disclose failed mandatory checks and record noncritical security findings for bounded correction or tracked follow-up; do not misrepresent an unmitigated critical issue as a routine defect. Apply `SECURITY.md` when reporting vulnerabilities.
 
 ## 6. Dependencies, database changes, and operations
 
@@ -100,7 +98,7 @@ Follow `SECURITY.md` for reporting and response handling.
 - Migrations must be forward-safe, reviewable, and free of implicit destructive behavior. Never target an unknown or unverified existing physical database.
 - Configuration changes must document defaults, validation, secret status, and backward-compatibility impact.
 - Background jobs must be idempotent, observable, bounded, and safe to retry when implemented.
-- Release readiness requires passing the applicable test tier, documented known limitations, and an operator decision. A tag or release does not authorize deployment.
+- Release readiness requires passing the applicable test tier, documented known limitations, and either an exact operator release decision or a separately adopted standing release envelope covering the verified target. A tag or release alone does not authorize deployment.
 
 ## 7. Testing policy
 
@@ -159,134 +157,47 @@ A test enters the PR gate when it protects a critical contract or has repeatedly
 
 ## 8. Git and GitHub workflow
 
-A normal MCV change uses:
+For repository work, use **GitHub Issue/objective → bounded branch/commits → PR/review comments and CI → eligible merge → follow-up Issues**. GitHub is the engineering collaboration and code-evidence record; do not require separate external coordination packages for each routine code exchange.
 
-1. one bounded issue or objective;
-2. a short-lived branch from current `main`;
-3. a focused pull request using the repository template;
-4. proportionate automated checks;
-5. review against the exact head;
-6. squash merge and branch cleanup by the operator or the designated orchestration agent under section 8.1.
+A normal change uses a short-lived branch from the verified base, a focused PR, applicable automated checks, and review proportionate to risk and applicable branch rules. The reviewed identity must be explicit whenever independent review is required. Do not push directly to protected `main`, bypass mandatory checks, or infer permission for production activity from a merge.
 
-Do not push directly to protected `main`. Merge only under section 8.1 or explicit operator instruction. Later commits invalidate prior exact-head review.
+After the SDCR MY-PA publisher is qualified and the authority cutover is explicitly activated, session-generated deliverables and material evidence must also be archived through the approved automated publisher with a session manifest and concise locator handoff. Before then, GitHub remains the routine repository channel and existing Workspace publication instructions remain in force. Publication or bridge failure must be reported truthfully; do not ask the operator to carry ZIPs between agents.
 
-### 8.1 Standing orchestration authority
+### 8.1 Standing bounded delivery authority
 
-The operator grants the single designated orchestration agent standing authority to act as the operator's delivery representative for routine, bounded repository and GitHub lifecycle work. This delegation exists to keep the operator out of ordinary execution loops and remains effective for the current MCV campaign until the operator withdraws it or the objective moves outside the accepted MCV scope.
+The operator may approve a bounded objective or an explicit standing class of routine work. Inside that authorization, an authorized delivery agent may plan, edit code, run tests, create/maintain branches and PRs, respond to CI and review, and perform routine correction **without per-step operator permission**. Routine branch and worktree housekeeping is allowed when reversible and in scope. The approved authorization and actual repository/branch rules determine whether merge is permitted; a PR or plan cannot self-authorize it.
 
-Within an accepted objective, the designated orchestration agent may, without additional operator confirmation:
+- **R — routine:** targeted checks and branch rules govern. An additional independent-review context is not required solely because an AI wrote the code; follow whatever review rules GitHub actually enforces. Do not claim independent approval of one's own work.
+- **C — controlled:** focused checks and proportionate technical review for evidenced material access/data/migration impact. Independent review is required when repository rules, the accepted objective or material risk demands it, with findings bound to the reviewed head.
+- **H — exceptional:** only the affected genuinely critical action or risk is escalated under section 8.2; unrelated authorized work can continue.
 
-- create, switch, update, and remove bounded work branches and worktrees;
-- stage files, create commits, amend unreviewed commits, rebase or synchronize a feature branch, and resolve routine conflicts;
-- push feature branches and tags that do not publish a release or activate production;
-- create, edit, label, and close issues and pull requests; request reviews; respond to findings; and manage ordinary repository metadata;
-- instantiate, authorize, and direct specialized worker agents under section 8.3, including concurrent workers when the orchestration agent has established dependency independence and non-overlapping write ownership, and approve those workers' routine repository operations;
-- run local and CI validation against synthetic or explicitly eligible data and use verified isolated test databases;
-- decide routine technical, architectural, sequencing, corrective, and recovery matters within the accepted objective;
-- accept bounded, reversible implementation risk that does not meet the extreme-risk definition in section 8.2;
-- squash merge an eligible pull request and clean up its feature branch and worktree when every merge condition below is satisfied.
+Use **at most two focused corrective-review cycles by default**. Consolidate open findings after that; distinguish true blockers from safely deferrable issues and track the latter in GitHub. The iteration limit never permits bypassing a failed mandatory check, unmitigated critical vulnerability, or missing required authorization. If a change invalidates a required exact-head review, re-review the affected current head before merge.
 
-A delegated merge is permitted only when all of the following hold:
-
-- the exact head has passed an independent review by a context that did not author the change, that had authority to block, and that was not instructed toward an outcome;
-- that review is against the current head, since a later commit invalidates it and this permission with it;
-- the applicable test tier passes, and its result is stated rather than assumed;
-- the change carries no extreme-risk action reserved by section 8.2.
-
-The designated orchestration agent may approve routine lifecycle actions and worker requests on the operator's behalf, but may not treat its own implementation review as the required independent exact-head review. It may not widen this delegation or delegate final campaign accountability.
-
-The operator may withdraw the delegation at any time. A merge performed under it names the reviewing context and reviewed head, so the authority supporting the merge remains legible.
+No agent may widen authorization, accept material operator risk, overrule branch protection, or merge an objective that still fails applicable mandatory gates.
 
 ### 8.2 Extreme-risk actions reserved to the operator
 
-Only the operator may authorize:
+Only the operator can authorize actions outside an existing and verifiable approval boundary that involve:
 
-- irreversible destruction, deletion, retirement, or corruption of canonical or irreplaceable data;
-- disclosure or external transfer of personal, confidential, privileged, regulated, or credential-bearing data outside an already authorized boundary;
-- production deployment or activation, destructive production migration, or externally consequential cutover;
-- acceptance of material security, privacy, legal, compliance, financial, contractual, or operational risk;
-- expenditure, procurement, subscription, or financial commitment outside an already approved mechanism and amount;
-- bypassing or weakening repository governance, acceptance criteria, security controls, or independent-review requirements;
-- action when exact repository, branch, commit, environment, target-system, or data-source identity cannot be established;
-- a choice between materially different product outcomes when evidence cannot establish operator intent;
-- an irreversible action whose blast radius cannot be reliably bounded or recovered;
-- credential creation, disclosure, rotation, or mutation; live personal-data access; source-system mutation; or amendment of this policy.
+- creation, disclosure, rotation, or mutation of live credentials, keys, authorization grants, or privileged production access;
+- external disclosure of protected/private/regulated material to a recipient or processing service not already authorized for that material;
+- irreversible destruction or corruption of canonical/production data, or migrations with materially unbounded loss risk;
+- production activation, externally consequential cutover, or deployment **outside** a separately adopted standing release envelope;
+- acceptance of material security, privacy, legal, financial, contractual or operational risk; procurement outside approved limits;
+- deliberate disabling of mandatory security checks, branch protections, or critical acceptance criteria; a substantive policy amendment;
+- material scope/product-outcome changes not resolved by the approved objective, or high-impact action with an unverified real target.
 
-Absence of an item from this reserved list does not by itself authorize work outside the accepted objective. Conversely, routine Git and GitHub lifecycle operations listed in section 8.1 are expressly authorized and must not be escalated merely because a tool classifies them as state-changing.
+Ordinary S0/S1 handling **inside an already authorized boundary**, reversible code changes, synthetic testing, branch operations and corrections are not escalated just because a tool labels them `write`, `security`, or `production-related`. Valid standing release authority must be documented separately before it is used; this governance change does not grant production deployment, live access or secret mutation.
 
-Use ADRs only for durable, cross-cutting, difficult-to-reverse decisions. Ordinary implementation choices belong in code, tests, issues, and pull requests. Update documentation only when behavior, contracts, architecture, operations, or developer workflow materially changes.
+Nothing in this section delegates operator risk acceptance or overrides platform, law, project-level restrictions or repository branch settings.
 
-### 8.3 Mandatory tiered agent execution
+### 8.3 Proportionate agent execution
 
-Substantive AI-assisted repository work MUST use the following three-tier execution topology:
+Use the smallest reliable agent configuration for the accepted objective: one bounded agent, an orchestrator with specialists, or independent reviewers when actually useful. A fixed manager → orchestrator → worker hierarchy is **not mandatory**. Do not stop merely because a tool lacks multi-agent delegation.
 
-**Manager → Orchestrator → Specialized Workers**
+For concurrent edits, designate a single integration owner and nonoverlapping paths; verify the exact repository/branch/base/head and applicable tests. When an independent review is required, the reviewer must be distinct from the author and have authority to block; bind the result to the exact reviewed head. Additional changes invalidate only approval that depended on the old head, not the whole objective.
 
-This is a repository execution-control requirement. It applies whether the accepted objective is governed through AEOS, another durable workflow, or a direct bounded/non-AEOS operator instruction. The topology does not itself create implementation authority, widen scope, authorize merge or deployment, or add a generalized agent framework to the `my-pa` product architecture.
-
-A task is substantive for this section when it includes implementation, schema or migration work, security/privacy changes, cross-layer or multi-file changes, review/audit/corrective cycles, deployment/readiness work, or two or more separable technical specialties. Such work MUST NOT be collapsed into one monolithic authoring context.
-
-#### Manager
-
-The Manager is the top-level controlling context for the accepted objective. The Manager MUST:
-
-- establish and preserve operator intent, objective, acceptance criteria, exact repository/base identity, in-scope behavior, prohibitions, and stop conditions;
-- instantiate one dedicated Orchestrator for technical execution;
-- retain final campaign accountability and resolve material scope or contract conflicts surfaced by the Orchestrator;
-- keep implementation, review, and operator-only authority distinctions explicit;
-- avoid becoming the routine feature-implementation worker except for a small integration correction that cannot reasonably be delegated without adding risk.
-
-The Manager may not delegate final accountability or treat worker output as self-validating evidence.
-
-#### Orchestrator
-
-The Orchestrator is a dedicated context separate from the Manager and routine feature workers. It owns the execution graph and MUST:
-
-- reauthenticate the current repository/base before execution and read the governing repository sources for the paths in scope;
-- decompose the objective into bounded tasks and dispatch specialized workers for distinct domains or technical concerns;
-- assign explicit worker file/path ownership, dependencies, acceptance criteria, and prohibitions before parallel work begins;
-- serialize dependent work and shared-file edits; concurrent workers are permitted only when dependencies are satisfied and write ownership does not overlap;
-- prefer isolated worker branches/worktrees for concurrent write tasks where the harness supports them;
-- assign a single integration owner for shared dispatcher, registry, migration-chain, or other contention-prone files rather than allowing competing edits;
-- collect worker handoffs, integrate the resulting changes, run the applicable test tiers, and coordinate corrective cycles;
-- preserve exact commit/tree identity through integration and review;
-- never substitute its own review for the independent exact-head review required for merge.
-
-The Orchestrator is the designated orchestration agent referenced by section 8.1 when standing orchestration authority is being exercised.
-
-#### Specialized workers
-
-Workers MUST be specialized to a bounded, unique task rather than given the entire objective. Examples include persistence/migrations, domain/application behavior, transport/policy integration, security/privacy validation, testing/evaluation, documentation, or independent review.
-
-Every worker assignment MUST specify:
-
-- worker role and objective;
-- exact base commit/tree or worktree identity;
-- in-scope files/behavior and explicit out-of-scope items;
-- dependencies and owned write paths;
-- acceptance criteria and required tests/evidence;
-- authority ceiling and prohibited actions;
-- required handoff fields.
-
-Every worker handoff MUST report:
-
-- exact base and resulting commit/tree when it performed writes;
-- files changed;
-- requirement/work-item IDs addressed when they exist;
-- tests/evidence produced and exact results;
-- assumptions, limitations, blockers, and intentionally unperformed work.
-
-Workers MUST NOT widen scope, redesign accepted contracts, merge to `main`, deploy, accept risk, or claim final objective completion unless the governing operator instruction independently grants that authority.
-
-#### Specialized independent reviewer
-
-When independent review is required, the Orchestrator MUST commission a fresh specialized reviewer context that did not author the change, has authority to block, and is not instructed toward an approval outcome. The reviewer binds its verdict to the exact reviewed head. Any later commit invalidates that verdict and requires a new exact-head review.
-
-#### Harness limitation
-
-If a substantive task requires this topology but the available execution harness cannot instantiate the necessary separate Manager, Orchestrator, and worker contexts, stop and report the limitation. Do not silently collapse the work into a single context unless the operator explicitly authorizes that exception for the exact task.
-
-A truly atomic, low-risk task that does not meet the substantive criteria above may use direct bounded execution; do not manufacture meaningless subagents for a trivial read or isolated mechanical edit. The controlling context must be able to explain why the task was classified as atomic if challenged.
+Keep GitHub issues, commits, PR threads, checks and reviews as the routine handoff. After qualified MY-PA activation, archive session deliverables and evidence via the automatic publisher; do not impose duplicate per-message request/response/receipt documents.
 
 ### 8.4 Repeatable NAS build and deployment
 
@@ -300,11 +211,14 @@ Sections 8.1–8.3 and every operator-only gate and mandatory stop in sections
 
 ## 9. Mandatory stops
 
-Stop and report the blocker when:
+Stop the **affected action** and report an actionable blocker when:
 
-- repository or base identity has drifted;
-- the objective, acceptance criteria, or path scope materially conflicts;
-- credentials, production access, destructive data operations, or undisclosed irreversible actions become necessary;
-- a security, privacy, or data-loss risk cannot be contained within the accepted scope;
-- the change requires a new architecture component not covered by the accepted objective;
-- substantive agent-assisted work cannot satisfy section 8.3 role separation because the execution harness lacks the required contexts and the operator has not authorized an exception.
+- verified base/head or real target identity cannot be established and a wrong-target action could be consequential;
+- a material scope or acceptance conflict requires a new operator decision;
+- an unmitigated confirmed critical security or unauthorized-disclosure exposure would be introduced;
+- an irreversible/destructive production or canonical-data action, live credential/grant mutation, or external disclosure needs authority not already supplied;
+- an applicable mandatory test/check fails and cannot be corrected within scope;
+- deployment, merge or release is outside actual permission, repository rules or approved release envelope.
+
+Do not stop unrelated authorized work merely because routine findings, advisory warnings, noncritical technical debt or a missing agent-topology role exist. Track nonblocking defects for follow-up; preserve the failure evidence and state the final disposition.
+

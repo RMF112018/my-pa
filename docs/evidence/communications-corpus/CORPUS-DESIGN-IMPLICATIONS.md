@@ -26,7 +26,7 @@ Each row maps a measured finding to the design decision it forces and to where t
 | 18 | 160 empty bodies, 439 empty derived texts ([search](COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)) | Empty → metadata-only, flagged; never a search hit on text | D11; §6 |
 | 19 | Construction identifiers frequent (GMP 518, FPL 263, RFI 67 records by analysis) ([search](COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)) | Exact identifier index beside FTS; exact-match tiers rank first | D12; §7, §14 |
 | 20 | Six-digit spec-like numbers in 1,713 records ([search](COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)) | Spec sections need a cue by default; bare numbers never | D12; §7 |
-| 21 | Analysis CO/PCO/COR 104 vs v1 `co` 0; FPL and submittal recall far below analysis ([search](COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)) | Extractor versioned; WP4 measures recall and decides new kinds | D12; §7, §20.4 |
+| 21 | Analysis CO/PCO/COR 104 vs v1 `co` 0; FPL and submittal recall far below analysis ([search](COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)) | Extractor versioned; WP4 measures recall and decides new kinds; low recall is an open WP4 defect (Manager ruling 2026-11-21, R5) | D12; §7, §20.4 |
 | 22 | Corpus fits tens of thousands of rows a year ([search](COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)) | PostgreSQL FTS + `pg_trgm` only; no semantic index or engine | D12; §6 |
 | 23 | Friday window 33.2 h labelled 24 ([coverage](COMMUNICATIONS-COVERAGE-BASELINE.md)) | Coverage from bounds only; `hours` is a label | D13; §9 |
 | 24 | Inclusive end; backfill windows 1 s apart ([coverage](COMMUNICATIONS-COVERAGE-BASELINE.md)) | Inclusive containment; merge when ≤ 1 s apart | D13; §9 |
@@ -34,7 +34,7 @@ Each row maps a measured finding to the design decision it forces and to where t
 | 26 | 49 h fall-back weekend, UTC anchor 04:00Z → 05:00Z ([coverage](COMMUNICATIONS-COVERAGE-BASELINE.md)) | Windows taken as declared in UTC; DST flag cross-checked; real 49 h shape tested | D13; §9, §20.1 |
 | 27 | One continuous interval, no gaps; v1 gap closed by a later backfill ([coverage](COMMUNICATIONS-COVERAGE-BASELINE.md)) | Gaps reported with bounds; reads state coverage of the queried range | D13; §9, §13 |
 | 28 | `procore_rfis` lane `not_authorized` everywhere ([inventory](COMMUNICATIONS-CORPUS-INVENTORY.md)) | Lane states reported separately; `not_authorized` never reads as "no messages" | D13; §9 |
-| 29 | Rich files overlap canonical windows ([coverage](COMMUNICATIONS-COVERAGE-BASELINE.md)) | Overlap is repeat observations; admitting the 2 rich files is an operator decision | D2; §10, §11 |
+| 29 | Rich files overlap canonical windows ([coverage](COMMUNICATIONS-COVERAGE-BASELINE.md)) | Overlap is repeat observations; the 2 rich files are admitted to backfill as explicitly registered sources (Manager ruling 2026-11-21, R2) | D2; §10, §11 |
 | 30 | Publications are files in a client-writable workspace (ADR-019 decision 3), identified in this analysis by SHA-256 ([inventory](COMMUNICATIONS-CORPUS-INVENTORY.md)) | Snapshot identity = file SHA-256; idempotency by `(source, sha256)`; shared with PULSE | D2; §1 |
 | 31 | No calendar identity in the corpus; meetings carry no provider columns ([inventory](COMMUNICATIONS-CORPUS-INVENTORY.md)) | Meeting provider bindings keyed by iCalendar UID and original start; WP2, synthetic fixtures | D14; §12 |
 | 32 | 703 records flag attachments that are never collected ([search](COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)) | Attachments out of scope; `has_attachments` stored as an attribute | D10; §5.1 |
@@ -44,4 +44,5 @@ Each row maps a measured finding to the design decision it forces and to where t
 
 - Whether the collector should return folder ids in the lean dialect (would turn 3,944 lane claims into verified roles) — an operator request to the collector, WP5 directive.
 - External-model eligibility of mail text returned to connected clients — operator decision (spec §17).
+- Manager rulings 2026-11-21 on the spec's open items (R1–R5 and the WP2 meeting-sync deferral) are in spec §21; ADR-021 stays Proposed.
 - Spring-forward DST, a schema major bump, record-level faults and identity conflicts do not occur in the corpus; they are covered by synthetic fixtures only.

@@ -41,7 +41,7 @@ After each WP the Manager runs the aggregate validation against the real corpus 
 
 ### 1.1 Where publications come from
 
-The ChatLLM collector writes `communications_evidence_v2` publications into the `mcp` file workspace (ADR-019), canonical folder `My PA/Daily Intelligence/communications/`, one file per business date (`YYYYMMDD-comms.json`). Two rich-dialect publications sit elsewhere under `My PA/Daily Intelligence/`. my-pa **reads** them through the files workspace store's read path (list, stat with fingerprint version token, streamed read); it never writes, renames or trashes them. No new mount, source root or connector is introduced. Confirming that the worker can compose a read-only view of the `mcp` workspace (ADR-019 decision 7 keeps workspace and source roots disjoint; this is a workspace read, not a source root) is a WP3 preflight item.
+The ChatLLM collector writes `communications_evidence_v2` publications into the `mcp` file workspace (ADR-019), canonical folder `My PA/Daily Intelligence/communications/`, one file per business date (`YYYYMMDD-comms.json`). Two rich-dialect publications sit elsewhere under `My PA/Daily Intelligence/`. my-pa **reads** them through the files workspace store's read path (list, stat with fingerprint version token, streamed read); it never writes, renames or trashes them. No new mount, source root or connector is introduced. Confirming that the worker can compose a read-only view of the `mcp` workspace (ADR-019 decision 7 keeps workspace and source roots disjoint; this is a workspace read, not a source root) is a WP3 preflight item. **Manager ruling 2026-11-21 (R1, section 21):** reading the `mcp` workspace through the files store as an ingestion source is ratified by the Manager, subject to that ADR-019 decision 7 preflight in WP3.
 
 ### 1.2 Shared lifecycle (WP3; consumers: communications first, PULSE second)
 
@@ -165,7 +165,7 @@ search_document tsvector GENERATED ALWAYS AS (
 ) STORED
 ```
 
-**Configuration.** `english` (stemming) as the report plane uses, because mail queries are topical ("schedule delay", "change orders"). The capture plane's `simple` argument (`D-90`, exact text) is answered here by the exact identifier index (section 7) and an exact-substring confirmation of quoted phrases (`strpos` over the narrowed candidates, as the capture plane does), not by a second tsvector. Query parsing: `websearch_to_tsquery('english', q)`. Participant addresses, identifiers and dates are structured filters, not text.
+**Configuration.** `english` (stemming) as the report plane uses, because mail queries are topical ("schedule delay", "change orders"). The capture plane's `simple` argument (`D-90`, exact text) is answered here by the exact identifier index (section 7) and an exact-substring confirmation of quoted phrases (`strpos` over the narrowed candidates, as the capture plane does), not by a second tsvector. Query parsing: `websearch_to_tsquery('english', q)`. Participant addresses, identifiers and dates are structured filters, not text. **Manager ruling 2026-11-21 (R3, section 21):** `english` FTS plus the exact-identifier index plus `strpos` confirmation is accepted for now; WP4 must measure `english` against `simple` on synthetic and aggregate data and may switch.
 
 Corpus derivation result: 3,563 records body-based, 142 unique-body-based, 436 metadata-only; quoted chain removed in 2,011.
 
@@ -186,7 +186,7 @@ Every match is token-bounded: `RFI 17` never matches `RFI 174`, `RFI 1740` or `R
 
 **Six-digit noise policy.** A bare six-digit number is never a spec section by default (1,713 corpus records hold one). `include_uncued_spec_sections=True` admits only the bare *spaced* form and is off in every stored index; turning it on is a new extractor version.
 
-**Indexing.** Extraction runs over `subject + "\n" + search_text` (never over quoted chains), stored in `communication_identifiers` with the extractor version. A new version is written beside the old and switched atomically by a read setting; old rows are removed only after the switch. Corpus v1 result (records): `gmp` 458, `fpl` 134, `rfi` 51, `submittal` 28, `cb` 10, `spec` 1, `co` 0. WP4 measures recall on a labelled synthetic set and decides whether `pco`/`cor` kinds are added.
+**Indexing.** Extraction runs over `subject + "\n" + search_text` (never over quoted chains), stored in `communication_identifiers` with the extractor version. A new version is written beside the old and switched atomically by a read setting; old rows are removed only after the switch. Corpus v1 result (records): `gmp` 458, `fpl` 134, `rfi` 51, `submittal` 28, `cb` 10, `spec` 1, `co` 0. WP4 measures recall on a labelled synthetic set and decides whether `pco`/`cor` kinds are added. **Open WP4 defect (Manager ruling 2026-11-21, R5, section 21):** `comms_identifiers_v1` recall is low against the analysis counts ([search characteristics](../evidence/communications-corpus/COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)): change orders 0 against 104 records, `fpl` 134 against 263, `submittal` 28 against 128. WP4 must fix it with tests; it does not block WP1.
 
 ## 8. Lineage
 
@@ -209,7 +209,7 @@ Corpus: one interval 2026-10-17T04:00:00Z → 2026-11-20T14:12:05Z, no gaps (`su
 
 - Backfill is an operator CLI action naming a source and an explicit file list or path glob; it creates one run with trigger `backfill`.
 - Files are ingested in ascending `window.start_utc` order, each snapshot in its own transaction, so a stop leaves a consistent prefix and a rerun skips ingested SHA-256 values.
-- The 29 canonical publications are the initial backfill. Admitting the 2 rich publications outside the canonical folder is an **operator decision** (they overlap canonical windows and add only verified lanes and privacy classes).
+- The 29 canonical publications are the initial backfill. Admitting the 2 rich publications outside the canonical folder was an open decision (they overlap canonical windows and add only verified lanes and privacy classes). **Manager ruling 2026-11-21 (R2, section 21):** both are admitted to backfill as explicitly registered sources; their overlap with canonical windows deduplicates by identity (sections 3 and 11).
 - A dry-run mode parses, classifies and reports aggregate counts (the WP1 CLI output) without writing.
 
 ## 11. Incremental ingestion (WP3)
@@ -244,7 +244,7 @@ Meetings today: `meetings` with nullable `meeting_series_id`, no provider column
 
 ### 12.3 Source
 
-A ChatLLM meeting-sync publication (calendar events with UID, recurrence master UID, original start, attendees with normalized addresses) defined in WP2, ingested on the shared lifecycle as a third consumer, or written by a client through the reconciliation capability — the WP2 decision. No calendar data is in the WP1 corpus; WP2 fixtures are synthetic.
+A ChatLLM meeting-sync publication (calendar events with UID, recurrence master UID, original start, attendees with normalized addresses) defined in WP2, ingested on the shared lifecycle as a third consumer, or written by a client through the reconciliation capability — the WP2 decision. **Manager ruling 2026-11-21 (section 21):** this source choice is deferred to WP2's investigation. No calendar data is in the WP1 corpus; WP2 fixtures are synthetic.
 
 ## 13. Retrieval (WP4)
 
@@ -277,7 +277,7 @@ Attendees with no address and Meetings with no provider binding still work (titl
 
 ## 16. Batch MCP contracts (WP4, WP5)
 
-Proposed names (neutral; not in `Capability` yet). All read-only, Principal-scoped, behind `MY_PA_COMMUNICATIONS_ENABLED` (default off), one new purpose `communications_read`, ChatLLM profile data-conditional on a new `COMMUNICATIONS` prerequisite.
+Proposed names (neutral; not in `Capability` yet; accepted as proposals by Manager ruling 2026-11-21, R4, section 21). All read-only, Principal-scoped, behind `MY_PA_COMMUNICATIONS_ENABLED` (default off), one new purpose `communications_read`, ChatLLM profile data-conditional on a new `COMMUNICATIONS` prerequisite.
 
 | Name | Request | Response | Bounds |
 | --- | --- | --- | --- |
@@ -341,3 +341,16 @@ FTS and identifier query correctness (`RFI 17` ≠ `RFI 174`), ranking total ord
 ### 20.5 WP5
 
 Batch context over synthetic Meetings with and without bindings, attendee joins, coverage gaps stated, PULSE absent → `unavailable` with communications intact, response bounds, measured latency for 10 Meetings on the real-corpus-sized isolated database.
+
+## 21. Manager rulings 2026-11-21
+
+The Manager ruled on the open items of this spec and ADR-021 after WP1. These are Manager rulings, not operator ratification: ADR-021 stays **Proposed**, and every operator gate in ADR-021 "Implementation status" and section 17 stands.
+
+| ID | Item | Ruling | Where |
+| --- | --- | --- | --- |
+| R1 | The worker reads the `mcp` workspace through the files store as an ingestion source | Ratified by the Manager, subject to the ADR-019 decision 7 preflight in WP3 | section 1.1 |
+| R2 | The 2 rich publications outside the canonical folder | Admitted to backfill as explicitly registered sources; overlap deduplicates by identity | sections 10, 11 |
+| R3 | Text-search configuration | `english` FTS plus the exact-identifier index plus `strpos` confirmation accepted for now; WP4 must measure `english` against `simple` on synthetic and aggregate data and may switch | section 6 |
+| R4 | Capability names, the `communications_read` purpose, the default-off switches | Accepted as proposals. Grants, external-model eligibility and ADR-021 acceptance remain operator-gated | sections 16, 17, 19 |
+| R5 | `comms_identifiers_v1` recall (change orders 0 against 104, `fpl` 134 against 263, `submittal` 28 against 128) | Recorded as an **open WP4 defect**, to be fixed with tests; does not block WP1 | sections 7, 20.4 |
+| — | WP2 meeting-sync source | Deferred to WP2's investigation | section 12.3 |

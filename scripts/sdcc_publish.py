@@ -158,7 +158,8 @@ def _walk_output_directory(source: Path) -> tuple[int, Path]:
         raise PublicationError("unsupported_output_platform")
     if ".." in source.parts:
         raise PublicationError("invalid_source_directory")
-    root = Path(os.path.abspath(source))
+    # Preserve lexical components: Path.resolve() would follow a forbidden symlink.
+    root = Path(os.path.abspath(source))  # noqa: PTH100
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     fd = -1
     try:

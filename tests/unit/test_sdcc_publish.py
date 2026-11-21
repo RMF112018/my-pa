@@ -573,15 +573,16 @@ def test_unverified_artifact_version_blocks_ready(tmp_path: Path) -> None:
     assert payload(store, result["manifest_path"])["artifacts"][0]["version"] is None
 
 
-
 def _r3_git_repo(tmp_path: Path) -> tuple[Path, dict]:
     """Two-commit disposable binary repository and exact Git identity."""
     root = tmp_path / "repo"
     root.mkdir()
 
     def git(*arguments: str) -> str:
+        executable = shutil.which("git")
+        assert executable is not None
         result = subprocess.run(  # noqa: S603 - synthetic Git-only setup
-            ["git", *arguments], cwd=root, check=True, capture_output=True
+            [executable, *arguments], cwd=root, check=True, capture_output=True
         )
         return result.stdout.decode().strip()
 
@@ -611,7 +612,7 @@ def _r3_snapshot(root: Path) -> list[tuple[str, bytes | str]]:
     for path in sorted(root.rglob("*")):
         name = path.relative_to(root).as_posix()
         if path.is_symlink():
-            result.append((name, "SYMLINK:" + os.readlink(path)))
+            result.append((name, "SYMLINK:" + str(path.readlink())))
         elif path.is_file():
             result.append((name, path.read_bytes()))
         else:
@@ -620,7 +621,9 @@ def _r3_snapshot(root: Path) -> list[tuple[str, bytes | str]]:
 
 
 def _r3_assert_clean(root: Path) -> None:
-    assert subprocess.check_output(["git", "status", "--porcelain"], cwd=root) == b""  # noqa: S603
+    executable = shutil.which("git")
+    assert executable is not None
+    assert subprocess.check_output([executable, "status", "--porcelain"], cwd=root) == b""
 
 
 def test_r3_distinct_output_binary_patch_replay_and_publication(tmp_path: Path) -> None:
@@ -666,7 +669,7 @@ def test_r3_output_boundary_rejects_without_local_writes(tmp_path: Path, case: s
         output = alias / "outputs"
     before = _r3_snapshot(protected)
     with pytest.raises(
-        PublicationError, match="invalid_source_directory|output_overlaps_repository"
+        PublicationError, match=r"invalid_source_directory|output_overlaps_repository"
     ):
         capture_git(output, data, repository)
     assert _r3_snapshot(protected) == before
@@ -806,7 +809,10 @@ def test_r3_git_subdir_replacement_race_cannot_follow_symlink(
     ],
 )
 def test_r3_cli_preflight_refuses_without_git_artifacts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, endpoint: str, token: str | None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+    token: str | None,
     expected: str,
 ) -> None:
     repository, data = _r3_git_repo(tmp_path)
@@ -819,8 +825,11 @@ def test_r3_cli_preflight_refuses_without_git_artifacts(
     else:
         monkeypatch.setenv("SDCR_MYPA_TOKEN", token)
     args = SimpleNamespace(
-        source_dir=output, repo_dir=repository, spec=spec_file,
-        endpoint=endpoint, protected_root=[],
+        source_dir=output,
+        repo_dir=repository,
+        spec=spec_file,
+        endpoint=endpoint,
+        protected_root=[],
     )
     with pytest.raises(PublicationError, match=expected):
         asyncio.run(publisher._main(args))
@@ -858,8 +867,8 @@ def test_r3_remote_write_preflight_accepts_direct_writable_workspace() -> None:
     class Stub:
         async def call(self, name: str, payload: dict, *, write: bool = False) -> dict:
             assert name == "files.workspaces.list" and payload == {} and not write
-            return {"workspaces": [
-                {"workspace_id": "mcp", "writable": True, "write_mode": "direct"}
-            ]}
+            return {
+                "workspaces": [{"workspace_id": "mcp", "writable": True, "write_mode": "direct"}]
+            }
 
     asyncio.run(publisher._remote_write_preflight(Stub()))

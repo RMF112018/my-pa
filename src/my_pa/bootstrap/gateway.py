@@ -750,7 +750,16 @@ def files_workspaces(settings: Settings, work_engine: Engine) -> tuple[ComposedF
     composed: list[ComposedFileWorkspace] = []
     for config in configs:
         sdcr_gate = (
-            load_sdcr_gate(settings.files_sdcr_policy_file, config.root)
+            load_sdcr_gate(
+                settings.files_sdcr_policy_file,
+                config.root,
+                forbidden_roots=[
+                    *trees,
+                    *source_roots,
+                    *([managed] if managed else []),
+                    *([report] if report else []),
+                ],
+            )
             if config.workspace_id == "mcp" and settings.files_sdcr_policy_file.strip()
             else None
         )
@@ -830,7 +839,16 @@ def files_apply_stores(
             disk_reserve_bytes=config.disk_reserve_bytes,
             require_read_only_mount=False,
             sdcr_placement_gate=(
-                load_sdcr_gate(settings.files_sdcr_policy_file, config.root)
+                load_sdcr_gate(
+                    settings.files_sdcr_policy_file,
+                    config.root,
+                    forbidden_roots=[
+                        *trees,
+                        *([config.state_root] if config.state_root else []),
+                        *([settings.managed_document_root] if settings.managed_document_root else []),
+                        *([settings.report_content_root] if settings.report_content_root else []),
+                    ],
+                )
                 if workspace_id == "mcp" and settings.files_sdcr_policy_file.strip()
                 else None
             ),

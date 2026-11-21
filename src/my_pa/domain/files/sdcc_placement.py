@@ -158,7 +158,6 @@ def _program(
             and rest[1].endswith(".json")
             and role == "canonical_pointer"
         ):
-        ):
             return "CANONICAL_POINTER"
         _deny("CANONICAL_MUST_BE_POINTER")
     if group == "follow-ups":
@@ -200,7 +199,6 @@ def _program(
             and not is_dir
             and _file_name(tail[1])
             and role == "review"
-        ):
         ):
             return "REVIEW_EVIDENCE"
         _deny("INVALID_REVIEW_LAYOUT")
@@ -246,7 +244,6 @@ def _other_top(
             "50-Shared-Evidence": "pointers",
             "60-Cross-Program-Decisions": "pointers",
         }
-        }
         child = lookup[name]
         if p[0] != child:
             _deny("UNREGISTERED_COLLECTION_CHILD")
@@ -274,7 +271,6 @@ def _other_top(
             and p[1].endswith(".json")
             and _ident(p[1][:-5])
             and role == "locator"
-        ):
         ):
             return "CANONICAL_OWNER_POINTER"
         _deny("INVALID_POINTER_LAYOUT")
@@ -309,7 +305,6 @@ def _other_top(
             and _ident(p[1][:-5])
             and role == "locator"
         ):
-        ):
             return "PUBLICATION_META"
         _deny("INVALID_PUBLICATION_PATH")
     if name == "70-Client-Adapters":
@@ -341,7 +336,6 @@ def _other_top(
             and _ident(p[1])
             and p[2] in ("BATCH_MANIFEST.json", "BATCH_RECEIPT.json", "HANDOFF.md")
         ):
-        ):
             return "MIGRATION_BATCH_CONTROL"
         if len(p) == 3 and is_dir and _ident(p[1]) and p[2] == "artifacts":
             return "MIGRATION_ARTIFACT_DIRECTORY"
@@ -352,7 +346,6 @@ def _other_top(
             and p[2] == "artifacts"
             and _file_name(p[3])
             and role == "migration"
-        ):
         ):
             return "MIGRATION_ARTIFACT"
         _deny("INVALID_MIGRATION_LAYOUT")
@@ -374,7 +367,6 @@ def _other_top(
             and p[2] == "artifacts"
             and _file_name(p[3])
             and role == "legacy"
-        ):
         ):
             return "LEGACY_FILE"
         _deny("INVALID_LEGACY_LAYOUT")
@@ -459,7 +451,6 @@ def authorize_mutation(
             seq = _parts(path)
             return "/".join(seq[:7]) if len(seq) > 6 and seq[1] == "20-Programs" else None
 
-        if owned_item(source) != owned_item(target) and not privileged_migration:
         if owned_item(source) != owned_item(target) and not privileged_migration:
             _deny("CROSS_OWNER_COPY_REQUIRES_AUTHORITY")
     return result

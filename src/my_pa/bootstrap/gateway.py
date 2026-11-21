@@ -233,6 +233,7 @@ from my_pa.domain.capture.client import admit_client_binding, parse_client_crede
 from my_pa.domain.capture.errors import CaptureError
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.files.sdcc_placement import SDCRPlacementGate
 from my_pa.domain.files.workspaces import WriteMode
 from my_pa.domain.identity.auth_sessions import AuthSession
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
@@ -247,6 +248,7 @@ from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.file_workspace.handle_fetch import HandleFetchPolicy, SafeHandleFetcher
 from my_pa.infrastructure.file_workspace.pending import FilesystemPendingChanges
+from my_pa.infrastructure.file_workspace.sdcc_placement_config import load_sdcr_gate
 from my_pa.infrastructure.file_workspace.store import FilesystemFileWorkspaceStore
 from my_pa.infrastructure.jobs.reenrichment import (
     claim_reenrichment_work,
@@ -703,6 +705,7 @@ def files_workspace_store(
     other_roots: Sequence[Path],
     disk_reserve_bytes: int,
     require_read_only_mount: bool,
+    sdcr_placement_gate: SDCRPlacementGate | None = None,
 ) -> FileWorkspaceStore:
     """The one constructor of a files workspace store (contract sections 9 and 18).
 
@@ -722,6 +725,7 @@ def files_workspace_store(
         other_roots=other_roots,
         disk_reserve_bytes=disk_reserve_bytes,
         require_read_only_mount=require_read_only_mount,
+        sdcr_placement_gate=sdcr_placement_gate,
     )
 
 
@@ -745,8 +749,28 @@ def files_workspaces(settings: Settings, work_engine: Engine) -> tuple[ComposedF
     ]
     composed: list[ComposedFileWorkspace] = []
     for config in configs:
+        sdcr_gate = (
+            load_sdcr_gate(
+                settings.files_sdcr_policy_file,
+                config.root,
+                forbidden_roots=[
+                    *trees,
+                    *source_roots,
+                    *([managed] if managed else []),
+                    *([report] if report else []),
+                ],
+            )
+            if config.workspace_id == "mcp" and settings.files_sdcr_policy_file.strip()
+            else None
+        )
 
-        def build(root: str, *, read_only: bool, reserve: int) -> FileWorkspaceStore:
+        def build(
+            root: str,
+            *,
+            read_only: bool,
+            reserve: int,
+            placement_guard: SDCRPlacementGate | None = None,
+        ) -> FileWorkspaceStore:
             return files_workspace_store(
                 Path(root),
                 source_roots=source_roots,
@@ -755,12 +779,14 @@ def files_workspaces(settings: Settings, work_engine: Engine) -> tuple[ComposedF
                 other_roots=[Path(tree) for tree in trees if tree != root],
                 disk_reserve_bytes=reserve,
                 require_read_only_mount=read_only,
+                sdcr_placement_gate=placement_guard,
             )
 
         store = build(
             config.root,
             read_only=config.write_mode.requires_read_only_mount,
             reserve=config.disk_reserve_bytes,
+            placement_guard=sdcr_gate,
         )
         staging: FileWorkspaceStore | None = None
         pending: FilePendingChangeStore | None = None
@@ -777,6 +803,7 @@ def files_workspaces(settings: Settings, work_engine: Engine) -> tuple[ComposedF
                 pending=pending,
                 max_pending_bytes=config.max_pending_bytes,
                 allowed_clients=config.clients,
+                sdcr_placement_gate=sdcr_gate,
             )
         )
     return tuple(composed)
@@ -818,6 +845,24 @@ def files_apply_stores(
             ],
             disk_reserve_bytes=config.disk_reserve_bytes,
             require_read_only_mount=False,
+            sdcr_placement_gate=(
+                load_sdcr_gate(
+                    settings.files_sdcr_policy_file,
+                    config.root,
+                    forbidden_roots=[
+                        *trees,
+                        *([config.state_root] if config.state_root else []),
+                        *(
+                            [settings.managed_document_root]
+                            if settings.managed_document_root
+                            else []
+                        ),
+                        *([settings.report_content_root] if settings.report_content_root else []),
+                    ],
+                )
+                if workspace_id == "mcp" and settings.files_sdcr_policy_file.strip()
+                else None
+            ),
         )
         if store.root_identity != space.store.root_identity:
             raise FileWorkspaceRootError(

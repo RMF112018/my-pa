@@ -431,7 +431,7 @@ class SDCRPlacementGate:
             # Only typed owner/global index and canonical pointer paths may be
             # revised in place with the existing CAS/preimage machinery.
             basename = path.rsplit("/", 1)[-1]
-            if basename not in {"00_ARTIFACT_INDEX.json", "OWNERSHIP.json"} and not (
+            if basename not in {"00_ARTIFACT_INDEX.json"} and not (
                 basename.startswith("00_") and basename.endswith("_INDEX.json")
             ) and not ("/canonical/" in path and basename.endswith(".json")):
                 _deny("SDCR_IMMUTABLE_CONTENT")

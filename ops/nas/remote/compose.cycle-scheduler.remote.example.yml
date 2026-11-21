@@ -1,0 +1,35 @@
+# The daily Morning Intelligence cycle scheduler (ADR-010 amendment of 2026-11-20) beside the
+# remote MCP process. Used WITH ops/nas/remote/compose.yml and the live overlays already in the
+# app container's com.docker.compose.project.config_files label, project my-pa-remote-mcp.
+# Runbook: ops/runbooks/cycle-scheduler.md. Not a secret.
+# It reads the same owner-only env file as the app (the same database and the same fixed local
+# operator Principal ChatLLM's cycles belong to), needs no mount, no network but data-plane, and
+# publishes nothing. It refuses to start (exit 2) unless MY_PA_CYCLE_SCHEDULER_ENABLED is on.
+# At most one is needed; a second is harmless (a session advisory lock admits one run at a time).
+# Remove the service (and `docker compose ... rm -sf my-pa-cycle-scheduler`) to stop scheduling;
+# ChatLLM's own reports.begin_cycle keeps working either way.
+services:
+  my-pa-cycle-scheduler:
+    profiles: [remote-mcp, remote-edge]
+    image: "${MY_PA_APP_IMAGE_ID:?exact my-pa image id required}"
+    platform: linux/amd64
+    user: "${MY_PA_REMOTE_UID:?dedicated non-root uid required}:${MY_PA_REMOTE_GID:?dedicated non-root gid required}"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    command: [python, apps/worker.py, run, --plane, cycles]
+    env_file:
+      - "${MY_PA_REMOTE_ENV_FILE:?owner-only remote MCP env file required}"
+    environment:
+      MY_PA_CYCLE_SCHEDULER_ENABLED: "true"
+      MY_PA_CYCLE_SCHEDULER_TIMEZONE: America/New_York
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    networks: [data-plane]
+    labels:
+      io.my-pa.runtime-role: cycle-scheduler
+      io.my-pa.background-worker: "true"

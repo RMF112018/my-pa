@@ -208,6 +208,12 @@ class SafeDetail(StrEnum):
     #: Intelligence Artifact / Report plane. Each names a field and never its
     #: value. Markdown bodies and source URLs are data and are never echoed.
     CYCLE_RUN_ID = "cycle_run_id"
+    #: `reports.begin_cycle` named a `cycle_id` the catalog does not define.
+    CYCLE_ID = "cycle_id"
+    #: A new `reports.commit` or `reports.record_run_state` named a cycle that
+    #: the daily cycle scheduler has already closed. Rides on `conflict` after
+    #: `CYCLE_RUN_ID` (ADR-010 amendment of 2026-11-20).
+    CYCLE_CLOSED = "cycle_closed"
     ARTIFACT_ID = "artifact_id"
     FOCUS_AREA_ID = "focus_area_id"
     STAGE = "stage"

@@ -53,6 +53,9 @@ class PublicationRejection(StrEnum):
     INVALID_TOP_LEVEL_FIELD = "invalid_top_level_field"
     INVALID_WINDOW = "invalid_window"
     FILE_UNREADABLE = "file_unreadable"
+    # The aggregate CLI's last resort: parsing this file raised unexpectedly.
+    # Content-free by construction: no exception type, message or input.
+    INTERNAL_ERROR = "internal_error"
 
 
 class ReasonCode(StrEnum):
@@ -71,6 +74,7 @@ class ReasonCode(StrEnum):
     # Degradation: the record is usable with a stated weakness.
     IDENTITY_PROVIDER_ID_ONLY = "identity_provider_id_only"
     IDENTITY_STATE_INCONSISTENT = "identity_state_inconsistent"
+    LANE_IDENTITY_INCONSISTENT = "lane_identity_inconsistent"
     CONVERSATION_ID_ABSENT = "conversation_id_absent"
     SELECTED_TIMESTAMP_INCONSISTENT = "selected_timestamp_inconsistent"
     RAW_TIMESTAMP_UNPARSEABLE = "raw_timestamp_unparseable"

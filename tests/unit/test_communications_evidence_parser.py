@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from my_pa.domain.communications.corpus import summarize_corpus
 from my_pa.domain.communications.diagnostics import (
     MAX_DIAGNOSTICS,
     DiagnosticCode,
@@ -213,6 +214,82 @@ def test_an_unusable_window_rejects_the_publication(start: str, end: str) -> Non
     document["window"]["start_utc"] = start
     document["window"]["end_utc"] = end
     assert rejected(document) is PublicationRejection.INVALID_WINDOW
+
+
+# Out-of-range instants: `fromisoformat` accepts them, converting to UTC overflows.
+YEAR_9999_WEST = "9999-12-31T23:59:59-01:00"
+YEAR_0001_EAST = "0001-01-01T00:00:00+01:00"
+
+
+@pytest.mark.parametrize("value", [YEAR_0001_EAST, YEAR_9999_WEST, "0001-01-01T00:00:00Z"])
+def test_an_out_of_range_window_bound_is_an_invalid_window(value: str) -> None:
+    for key in ("start_utc", "end_utc"):
+        document = s.lean_publication()
+        document["window"][key] = value
+        assert rejected(document) is PublicationRejection.INVALID_WINDOW
+
+
+def test_an_out_of_range_selected_time_quarantines_only_that_record() -> None:
+    document = s.lean_publication()
+    document["messages"][1]["timestamps"]["selected_utc"] = YEAR_9999_WEST
+    records = accepted(document).records
+    assert records[1].classification is C.QUARANTINED
+    assert R.UNPARSEABLE_TIMESTAMP in records[1].reasons
+    baseline = accepted(s.lean_publication()).records
+    assert baseline[1].classification is C.ACCEPTED
+    others = [r.classification for i, r in enumerate(records) if i != 1]
+    assert others == [r.classification for i, r in enumerate(baseline) if i != 1]
+
+
+@pytest.mark.parametrize("key", ["received_raw", "sent_raw", "selected_raw"])
+def test_an_out_of_range_raw_time_only_degrades(key: str) -> None:
+    record = s.message(1)
+    record["timestamps"][key] = YEAR_9999_WEST
+    outcome = only(lean_with(record))
+    assert outcome.classification is not C.QUARANTINED
+    assert R.RAW_TIMESTAMP_UNPARSEABLE in outcome.reasons
+
+
+@pytest.mark.parametrize(
+    "hours",
+    [
+        pytest.param(1e306, id="1e306"),
+        pytest.param(-1, id="negative"),
+        pytest.param(10_001, id="above-bound"),
+        pytest.param(10**400, id="int-beyond-float"),
+    ],
+)
+def test_an_unusable_declared_hours_is_a_window_field_diagnostic(hours: float) -> None:
+    document = s.lean_publication()
+    document["window"]["hours"] = hours
+    result = parse(document)
+    assert result.status is PublicationStatus.ACCEPTED
+    assert result.publication is not None
+    assert result.publication.window.declared_hours is None
+    assert result.diagnostics.code_counts[DiagnosticCode.WINDOW_FIELD_INVALID] == 1
+    assert DiagnosticCode.WINDOW_HOURS_MISMATCH not in result.diagnostics.code_counts
+
+
+def test_a_json_literal_that_overflows_to_infinity_is_a_window_field_diagnostic() -> None:
+    # `1e400` is a finite-looking literal that `json` parses to `inf`; `json.dumps`
+    # would write `Infinity` (rejected outright), so the literal is spliced in.
+    data = s.encode(s.lean_publication())
+    assert data.count(b'"hours": 24,') == 1
+    result = parse_publication(data.replace(b'"hours": 24,', b'"hours": 1e400,'))
+    assert result.status is PublicationStatus.ACCEPTED
+    assert result.publication is not None
+    assert result.publication.window.declared_hours is None
+    assert result.diagnostics.code_counts[DiagnosticCode.WINDOW_FIELD_INVALID] == 1
+
+
+def test_a_window_bound_at_the_edge_of_the_range_survives_a_zone_conversion() -> None:
+    # Accepted bounds keep a day clear of the `datetime` range, so the DST check's
+    # conversion into a named zone cannot overflow.
+    document = s.lean_publication()
+    document["window"]["start_utc"] = "0001-01-02T00:00:00Z"
+    document["window"]["tz"] = "America/New_York"
+    result = parse(document)
+    assert result.status is PublicationStatus.ACCEPTED
 
 
 # --- dialects ---------------------------------------------------------------------
@@ -577,6 +654,67 @@ def test_one_provider_id_with_different_content_is_a_provider_id_conflict() -> N
     records = accepted(lean_with(a, b)).records
     assert [r.classification for r in records] == [C.QUARANTINED, C.QUARANTINED]
     assert all(R.PROVIDER_ID_CONFLICT in r.reasons for r in records)
+
+
+def _sent_sibling_without_imid(record: dict[str, Any]) -> dict[str, Any]:
+    sibling = copy.deepcopy(record)
+    sibling["source_folder"]["role"] = "sent"
+    sibling["source_folder"]["key"] = "sent"
+    sibling["internet_message_id"] = None
+    sibling["internet_message_id_state"] = "absent"
+    return sibling
+
+
+def test_a_lane_missing_the_internet_message_id_is_degraded_not_conflicted() -> None:
+    # R1's probe 6(a): same provider id, inbox lane with the id, sent lane without it.
+    document = s.lean_publication()
+    first = copy.deepcopy(document["messages"][0])
+    document["messages"] = [first, _sent_sibling_without_imid(first)]
+    inbox, sent = accepted(document).records
+    assert sent.classification is C.ACCEPTED_DEGRADED  # the sent lane is primary
+    assert inbox.classification is C.LANE_OBSERVATION_MERGED
+    for record in (inbox, sent):
+        assert R.LANE_IDENTITY_INCONSISTENT in record.reasons
+        assert R.PROVIDER_ID_CONFLICT not in record.reasons
+    assert R.IDENTITY_PROVIDER_ID_ONLY in sent.reasons
+
+
+def test_a_lane_missing_the_id_still_meets_the_identity_rules_through_its_sibling() -> None:
+    # The id the inbox lane supplied puts the item under the identity rules: a
+    # second provider id with that id and another sender conflicts with it.
+    document = s.lean_publication()
+    first = copy.deepcopy(document["messages"][0])
+    other = copy.deepcopy(first)
+    other["id"] = other["message_id"] = "SYNTH-OTHER"
+    other["from"]["value"]["address_normalized"] = "zzz@example.invalid"
+    other["from"]["value"]["address"] = "zzz@example.invalid"
+    document["messages"] = [first, _sent_sibling_without_imid(first), other]
+    records = accepted(document).records
+    assert [r.classification for r in records] == [C.QUARANTINED] * 3
+    assert all(R.IDENTITY_CONFLICT in r.reasons for r in records)
+
+
+def test_two_different_internet_message_ids_on_one_provider_id_still_conflict() -> None:
+    a = s.message(1, imid="<one@example.invalid>")
+    b = s.message(1, imid="<two@example.invalid>")
+    records = accepted(lean_with(a, b)).records
+    assert all(R.PROVIDER_ID_CONFLICT in r.reasons for r in records)
+
+
+def test_a_repeat_of_an_identity_conflicted_record_is_quarantined_too() -> None:
+    # R1's probe 6(b): the repeat used to stay `duplicate_observation` and count as usable.
+    document = s.lean_publication()
+    a = copy.deepcopy(document["messages"][0])
+    b, c = copy.deepcopy(a), copy.deepcopy(a)
+    b["id"] = b["message_id"] = "SYNTH-OTHER"
+    b["from"]["value"]["address_normalized"] = "zzz@example.invalid"
+    b["from"]["value"]["address"] = "zzz@example.invalid"
+    document["messages"] = [a, b, c]
+    publication = accepted(document)
+    assert [r.classification for r in publication.records] == [C.QUARANTINED] * 3
+    assert all(R.IDENTITY_CONFLICT in r.reasons for r in publication.records)
+    assert publication.items == ()
+    assert summarize_corpus([publication]).usable_observations == 0
 
 
 # --- window -----------------------------------------------------------------------

@@ -4,7 +4,11 @@ Coverage. Only an accepted publication whose overall coverage is `complete`
 contributes its window. Windows are inclusive at both ends, so two windows
 whose bounds are at most `WINDOW_RESOLUTION` (one second) apart are contiguous
 -- a backfill day ending `04:59:59` and the next starting `05:00:00` leave no gap.
-A gap runs from one merged interval's end to the next one's start.
+A gap is the uncovered span between two merged intervals, inclusive at both
+ends like a window: from one second after the earlier interval's end to one
+second before the next one's start. Its length in seconds is therefore
+`(end - start) + 1` (`Interval.inclusive_seconds`) -- covered until `03:59:59`
+and covered again from `04:00:00` the next day is a gap of exactly 86,400 s.
 
 Identity. Counts are taken over *usable* records -- every classification but
 `quarantined`. An identity seen in two publications is a cross-publication
@@ -53,8 +57,15 @@ ADJACENCY_TOLERANCE_SECONDS = int(WINDOW_RESOLUTION.total_seconds())
 
 @dataclass(frozen=True, slots=True, order=True)
 class Interval:
+    """A span of UTC instants, inclusive at both ends at `WINDOW_RESOLUTION`."""
+
     start: datetime
     end: datetime
+
+    @property
+    def inclusive_seconds(self) -> int:
+        """The number of whole seconds the span holds, counting both ends."""
+        return int((self.end - self.start) / WINDOW_RESOLUTION) + 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +105,10 @@ def merge_intervals(intervals: Sequence[Interval]) -> tuple[Interval, ...]:
 
 
 def _gaps(merged: Sequence[Interval]) -> tuple[Interval, ...]:
-    return tuple(Interval(a.end, b.start) for a, b in pairwise(merged))
+    return tuple(
+        Interval(a.end + WINDOW_RESOLUTION, b.start - WINDOW_RESOLUTION)
+        for a, b in pairwise(merged)
+    )
 
 
 def summarize_corpus(publications: Sequence[Publication]) -> CorpusSummary:

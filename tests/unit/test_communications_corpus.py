@@ -66,7 +66,10 @@ def test_the_corpus_summary_over_the_fixtures() -> None:
         Interval(at(17, 5), datetime(2026, 11, 18, 4, 59, 59, tzinfo=UTC)),
         Interval(at(19, 5), datetime(2026, 11, 20, 14, 12, 5, tzinfo=UTC)),
     )
-    assert summary.coverage_gaps[0] == Interval(at(16, 7), at(17, 5))
+    second = timedelta(seconds=1)
+    # Inclusive like a window: the first and last uncovered seconds.
+    assert summary.coverage_gaps[0] == Interval(at(16, 7) + second, at(17, 5) - second)
+    assert summary.coverage_gaps[0].inclusive_seconds == 22 * 3600 - 1
     assert summary.publications_excluded_from_coverage == 0
 
 

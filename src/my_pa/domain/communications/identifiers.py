@@ -6,8 +6,9 @@ normalizes a query, so a query matches a message exactly when their normalized
 identifiers are equal -- `RFI 17` and `RFI 174` never match each other.
 
 Rules (every match is token-bounded: no letter or digit immediately before it,
-and the number may not continue into another digit or a `.`/`-`/`/` followed by
-a digit -- so `RFI 1740` is never `rfi:174` and `RFI 174.1` is not an RFI):
+and the number may not continue into another digit or a `.`/`-`/`/`/`,` followed
+by a digit -- so `RFI 1740` is never `rfi:174`, `RFI 174.1` is not an RFI, and a
+thousands separator such as `RFI 1,740` is not `rfi:1`):
 
 * **RFI** -- `RFI 174`, `RFI-174`, `RFI #174`, `RFI No. 174`, `RFI174`;
   case-insensitive (`rfi 174` counts) -> `rfi:174`;
@@ -80,7 +81,7 @@ class TechnicalIdentifier:
 _BARE: Final = frozenset({IdentifierKind.GMP, IdentifierKind.FPL})
 
 _LEFT = r"(?<![A-Za-z0-9])"
-_NUMBER_END = r"(?![0-9])(?![.\-/][0-9])"
+_NUMBER_END = r"(?![0-9])(?![.\-/,][0-9])"
 _SEPARATOR_OPTIONAL = r"(?:\s*(?:#|No\.?)\s*|\s*-\s*|\s*)"
 _SEPARATOR_REQUIRED = r"(?:\s*(?:#|No\.?)\s*|\s*-\s*|\s+)"
 

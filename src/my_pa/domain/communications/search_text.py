@@ -29,11 +29,27 @@ unstripped text is kept and flagged `quoted_chain_retained`.
 
 **Disclaimer / signature markers** (heuristic; a cut from the start of the
 paragraph holding the first marker to the end, never leaving the text empty):
-a signature delimiter line `--`/`-- `; a line starting `Disclaimer`;
-`confidentiality notice`; `if you are not the intended recipient`;
-`if you have received this (e-mail|email|message|communication) in error`;
-`this (e-mail|email|message|communication|transmission) ... confidential|privileged`
-within one line.
+
+* the RFC 3676 signature delimiter: a line that is exactly `-- ` (dash, dash,
+  space -- `normalize_plain_text` keeps that one line's trailing space) with at
+  most `SIGNATURE_TAIL_LINES` non-blank lines after it; the cut is at the
+  delimiter itself. A bare `--` line is ordinary text;
+* a line starting `Disclaimer`; `confidentiality notice`;
+  `if you are not the intended recipient`;
+  `if you have received this (e-mail|email|message|communication) in error`;
+* a line that *starts* a paragraph with `this` or `the information (contained)
+  in this`, then `e-mail|email|message|communication|transmission`, then
+  `confidential|privileged` within the line -- and only when that paragraph is
+  in the trailing region (at most `SIGNATURE_TAIL_LINES` non-blank lines from it
+  to the end) or follows a signature break (`--`, `-- `, or a rule of five or
+  more `_` or `-`). A mid-paragraph sentence such as "... this message includes
+  confidential pricing ..." never truncates body text.
+
+**Version.** These rules are a pre-merge correction of `comms_search_text_v1`
+(WP1 fix F1, after review R1): the identifier stays `v1` because no searchable
+text has been persisted or published under it, so no stored output changes
+meaning. Corpus counts measured before the correction (spec §7, `ac0d06ae`) used
+the earlier, broader markers.
 
 **Content is inert data.** HTML is parsed with `html.parser` and only text
 nodes are kept: no attribute value (an `onerror=`, a `javascript:` href, a
@@ -58,6 +74,7 @@ from my_pa.domain.communications.model import BodyState, ContentType, Normalized
 __all__ = [
     "MAX_SEARCH_TEXT_CHARS",
     "SEARCH_TEXT_VERSION",
+    "SIGNATURE_TAIL_LINES",
     "SearchText",
     "SearchTextBasis",
     "SearchTextFlag",
@@ -69,6 +86,8 @@ __all__ = [
 ]
 
 SEARCH_TEXT_VERSION: Final = "comms_search_text_v1"
+#: The RFC 3676 signature delimiter line (`-- `, with its trailing space).
+_SIGNATURE_DELIMITER: Final = "-- "
 MAX_SEARCH_TEXT_CHARS: Final = 262_144
 
 
@@ -174,9 +193,18 @@ _BLANK_RUN: Final = re.compile(r"\n{3,}")
 
 
 def normalize_plain_text(text: str) -> str:
-    """Unify newlines, collapse inline whitespace, trim lines, and collapse blank runs."""
+    """Unify newlines, collapse inline whitespace, trim lines, and collapse blank runs.
+
+    A line that is exactly `-- ` (the RFC 3676 signature delimiter) is kept as is.
+    """
     unified = text.replace("\r\n", "\n").replace("\r", "\n")
-    lines = [_INLINE_SPACE.sub(" ", line).strip() for line in unified.split("\n")]
+    lines = [
+        # The RFC 3676 signature delimiter `-- ` keeps its significant space.
+        _SIGNATURE_DELIMITER
+        if line == _SIGNATURE_DELIMITER
+        else _INLINE_SPACE.sub(" ", line).strip()
+        for line in unified.split("\n")
+    ]
     return _BLANK_RUN.sub("\n\n", "\n".join(lines)).strip()
 
 
@@ -225,35 +253,56 @@ def strip_quoted_chain(text: str) -> tuple[str, SearchTextFlag | None]:
     return result, SearchTextFlag.QUOTED_CHAIN_REMOVED
 
 
-_SIGNATURE_DELIMITER: Final = re.compile(r"--\s?")
+#: A signature delimiter or a "this email ... confidential" paragraph counts only
+#: when at most this many non-blank lines follow from it to the end of the text.
+SIGNATURE_TAIL_LINES: Final = 15
+_SIGNATURE_BREAK: Final = re.compile(r"--\s?|_{5,}|-{5,}")
 _DISCLAIMER_MARKERS: Final = (
     re.compile(r"disclaimer\b", re.I),
     re.compile(r".*\bconfidentiality notice\b", re.I),
     re.compile(r".*\bif you are not the intended recipient\b", re.I),
     re.compile(r".*\bif you have received this (?:e-?mail|message|communication) in error\b", re.I),
-    re.compile(
-        r".*\bthis (?:e-?mail|message|communication|transmission)\b"
-        r".*\b(?:confidential|privileged)\b",
-        re.I,
-    ),
 )
+_THIS_MESSAGE_CONFIDENTIAL: Final = re.compile(
+    r"(?:this|the information (?:contained )?in this) "
+    r"(?:e-?mail|message|communication|transmission)\b"
+    r".*\b(?:confidential|privileged)\b",
+    re.I,
+)
+
+
+def _in_tail(lines: list[str], index: int) -> bool:
+    return sum(1 for line in lines[index:] if line.strip()) <= SIGNATURE_TAIL_LINES
+
+
+def _is_disclaimer_start(lines: list[str], index: int, after_break: bool) -> bool:
+    line = lines[index]
+    if any(marker.match(line) for marker in _DISCLAIMER_MARKERS):
+        return True
+    return (
+        _THIS_MESSAGE_CONFIDENTIAL.match(line) is not None
+        and not lines[index - 1].strip()
+        and (after_break or _in_tail(lines, index))
+    )
 
 
 def strip_disclaimer(text: str) -> tuple[str, bool]:
     """Cut from the paragraph holding the first disclaimer/signature marker to the end."""
     lines = text.split("\n")
+    after_break = False
     for index, line in enumerate(lines):
         if not any(part.strip() for part in lines[:index]):
             continue
-        if _SIGNATURE_DELIMITER.fullmatch(line):
+        if line == _SIGNATURE_DELIMITER and _in_tail(lines, index + 1):
             cut = index
-        elif any(marker.match(line) for marker in _DISCLAIMER_MARKERS):
+        elif _is_disclaimer_start(lines, index, after_break):
             cut = index
             while cut > 0 and lines[cut - 1].strip():
                 cut -= 1
             if not any(part.strip() for part in lines[:cut]):
                 cut = index
         else:
+            after_break = after_break or _SIGNATURE_BREAK.fullmatch(line) is not None
             continue
         return normalize_plain_text("\n".join(lines[:cut])), True
     return text, False

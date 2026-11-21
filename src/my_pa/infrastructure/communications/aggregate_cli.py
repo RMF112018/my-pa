@@ -243,6 +243,18 @@ def summarize_files(paths: Sequence[Path]) -> tuple[Json, bool]:
             parsed = parse_publication(data)
         except OSError:
             data, parsed = None, None
+        except Exception:  # one bad file never aborts the batch
+            # Content-free on purpose: neither the exception nor its message is
+            # reported, because either could quote file content.
+            all_accepted = False
+            files.append(
+                {
+                    "file": path.name,
+                    "status": PublicationStatus.REJECTED.value,
+                    "rejection": PublicationRejection.INTERNAL_ERROR.value,
+                }
+            )
+            continue
         if parsed is None or parsed.status is not PublicationStatus.ACCEPTED:
             all_accepted = False
         elif parsed.publication is not None:
@@ -288,7 +300,7 @@ def summarize_files(paths: Sequence[Path]) -> tuple[Json, bool]:
                     {
                         "start_utc": _iso(g.start),
                         "end_utc": _iso(g.end),
-                        "seconds": int((g.end - g.start).total_seconds()),
+                        "seconds": g.inclusive_seconds,
                     }
                     for g in summary.coverage_gaps
                 ],

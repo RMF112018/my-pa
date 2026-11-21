@@ -36,6 +36,16 @@ def test_rfi_174_is_not_found_inside_a_longer_token(text: str) -> None:
     assert "rfi:174" not in normalized(text)
 
 
+@pytest.mark.parametrize("text", ["RFI 1,740", "CB 1,250", "CO 2,500", "Submittal 3,100"])
+def test_a_thousands_separator_never_yields_the_leading_group(text: str) -> None:
+    # R1's probe 7: `RFI 1,740` was `rfi:1`.
+    assert normalized(text) == set()
+
+
+def test_a_comma_before_a_space_still_ends_the_number() -> None:
+    assert normalized("RFI 174, RFI 175") == {"rfi:174", "rfi:175"}
+
+
 def test_a_query_for_rfi_17_does_not_match_rfi_174() -> None:
     query = normalized("RFI 17")
     assert query == {"rfi:17"}

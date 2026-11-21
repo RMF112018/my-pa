@@ -21,13 +21,22 @@ ordinal, in this precedence (first match wins):
 Identity rules, all within one publication:
 
 * **provider id conflict** -- one provider id whose observations disagree on
-  canonical key (internet message id) or body digest: every observation of it
-  is quarantined (`provider_id_conflict`, the provider-id form of an identity
-  conflict); there is no way to know which one is right;
+  body digest, or carry two different internet message ids: every observation
+  of it, exact repeats included, is quarantined (`provider_id_conflict`, the
+  provider-id form of an identity conflict); there is no way to know which one
+  is right;
+* **lane identity degradation** -- one provider id whose observations agree,
+  except that some carry the internet message id and others do not (for
+  example the sent lane has it and the inbox lane does not): a missing id is a
+  degradation, not a conflict. The observations merge as usual, every one of
+  them gains `lane_identity_inconsistent`, and the identity rules below use the
+  internet message id the other lane supplied. The item's own canonical key
+  stays its primary observation's;
 * **identity conflict** -- one canonical internet-message-id key whose primary
   observations (distinct provider ids) disagree on sender address or body
-  digest: every observation, merged lane siblings included, is quarantined
-  (`identity_conflict`) and never merged;
+  digest: every observation of those provider ids -- merged lane siblings and
+  exact repeats included -- is quarantined (`identity_conflict`) and never
+  merged, so none of them is counted as usable;
 * Inbox + Sent copies of one internet message id under **two provider ids**
   (two genuine mailbox items, e.g. self-addressed mail) are two observations of
   one identity. That is expected, not a conflict, and their selected timestamps
@@ -42,6 +51,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import replace
 
 from my_pa.domain.communications.diagnostics import (
     DiagnosticCode,
@@ -88,13 +98,27 @@ def classify_records(
     for message in usable:
         by_provider_id[message.provider_id].append(message)
     first_observations: list[NormalizedMessage] = []
-    lane_siblings: dict[int, list[NormalizedMessage]] = {}
+    # Every other observation of a primary's provider id: lane siblings and repeats.
+    followers: dict[int, list[NormalizedMessage]] = {}
+    # The internet-message-id key each primary is checked under (see module docstring).
+    identity_key: dict[int, CanonicalKey] = {}
     for group in by_provider_id.values():
-        signatures = {(m.canonical_key, m.body.sha256) for m in group}
-        if len(signatures) > 1:
+        digests = {m.body.sha256 for m in group}
+        imid_keys = {
+            m.canonical_key for m in group if m.identity_state is IdentityState.PROVIDER_RETURNED
+        }
+        if len(digests) > 1 or len(imid_keys) > 1:
             for message in group:
                 quarantine(message, ReasonCode.PROVIDER_ID_CONFLICT)
             continue
+        if imid_keys and len({m.identity_state for m in group}) > 1:
+            group = [
+                replace(
+                    m,
+                    degraded_reasons=(*m.degraded_reasons, ReasonCode.LANE_IDENTITY_INCONSISTENT),
+                )
+                for m in group
+            ]
         per_role: dict[FolderRole, NormalizedMessage] = {}
         for message in sorted(group, key=lambda m: m.ordinal):
             first = per_role.get(message.folder_role)
@@ -113,9 +137,10 @@ def classify_records(
         lanes = sorted(per_role.values(), key=lambda m: m.ordinal)
         primary = per_role.get(FolderRole.SENT, lanes[0])
         first_observations.append(primary)
+        followers[primary.ordinal] = [m for m in group if m is not primary]
+        if imid_keys:
+            (identity_key[primary.ordinal],) = imid_keys
         siblings = [m for m in lanes if m is not primary]
-        if siblings:
-            lane_siblings[primary.ordinal] = siblings
         for message in siblings:
             diagnostics.add(
                 DiagnosticCode.MULTI_LANE_ITEM,
@@ -129,15 +154,16 @@ def classify_records(
 
     by_identity: defaultdict[CanonicalKey, list[NormalizedMessage]] = defaultdict(list)
     for message in first_observations:
-        if message.identity_state is IdentityState.PROVIDER_RETURNED:
-            by_identity[message.canonical_key].append(message)
+        key = identity_key.get(message.ordinal)
+        if key is not None:
+            by_identity[key].append(message)
     conflicted: set[int] = set()
     for group in by_identity.values():
         senders = {m.sender_address for m in group if m.sender_address is not None}
         digests = {m.body.sha256 for m in group}
         if len(senders) > 1 or len(digests) > 1:
             for message in group:
-                for observation in (message, *lane_siblings.get(message.ordinal, ())):
+                for observation in (message, *followers[message.ordinal]):
                     quarantine(observation, ReasonCode.IDENTITY_CONFLICT)
                 conflicted.add(message.ordinal)
 

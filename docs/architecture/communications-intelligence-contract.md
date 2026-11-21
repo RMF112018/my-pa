@@ -68,25 +68,29 @@ One lifecycle, content-free, with domain-specific storage behind it:
 2. an object whose `schema` is `communications_evidence_v2` (`unknown_schema`);
 3. `schema_version` is `MAJOR.MINOR.PATCH` (`invalid_schema_version`); **major 2 only** (`unsupported_major_version`); a newer minor is accepted with diagnostic `schema_minor_newer`;
 4. required keys `schema`, `schema_version`, `business_date`, `window`, `coverage`, `mailbox_ref`, `messages` (`missing_required_key`); `id_header`, `cycle_run_id` optional;
-5. field types and an aware-UTC window with `end >= start` (`invalid_top_level_field`, `invalid_window`).
+5. field types and an aware-UTC window with `end >= start` (`invalid_top_level_field`, `invalid_window`). A timestamp whose UTC instant falls outside the `datetime` range, or within one day of either end of it (year 9999 west of UTC, year 0001 east of it), is unparseable: in the window it is `invalid_window`; in a record it is `unparseable_timestamp` for `selected_utc` (that record only is quarantined) and `raw_timestamp_unparseable` for a raw field (a degradation).
 
 **Dialects.** Lean carries the 9 canonical keys; rich adds `candidates`, `counts`, `provenance`, `threads`, `transport`. None of those 5 markers → lean; any → rich; a partial set → rich with `dialect_markers_incomplete`. Records are parsed field-driven, so rich per-record fields (privacy screen, `unique_body`, `links`, `fetch_state`, `in_window`, `parent_folder_id_returned`) are understood wherever they occur. Unknown top-level and record keys are counted (`unknown_top_level_keys`, `unknown_record_keys`) and never fatal.
 
 **Record level.** A record that cannot be normalized is quarantined with reason codes (`missing_required_field`, `invalid_field_type`, `unparseable_timestamp`, `integrity_mismatch`, `mailbox_ref_mismatch`, …); usable records with a defect are `accepted_degraded` (`subject_empty`, `participant_from_absent`, `body_truncated`, `identity_provider_id_only`, …). One bad record never rejects its publication.
 
+**The aggregate CLI isolates files.** A parse that raises unexpectedly for one file is reported as that file's rejection `internal_error`, which carries no exception type, message or content, and the other files' aggregates are still printed.
+
 **Integrity.** When content is present its SHA-256 and UTF-8 byte count must match the declared values (`verified` / `mismatch`); a withheld body is `not_verifiable_withheld`; an absent digest is `not_declared`.
 
-**Window.** `window.hours` is compared with the actual duration and a difference beyond 60 s raises `window_hours_mismatch` (a diagnostic, not a rejection). The DST flag is checked against the computed offset change in the declared time zone (`dst_flag_disagreement`); an unrecognized rule is tolerated as `unrecognized`.
+**Window.** `window.hours` is used only when it is a finite number from 0 to 10,000; anything else (`1e306`, a literal such as `1e400` that parses to infinity, a negative number, a string) raises `window_field_invalid` and is ignored, and the publication is still accepted. A usable `window.hours` is compared with the actual duration and a difference beyond 60 s raises `window_hours_mismatch` (a diagnostic, not a rejection). The DST flag is checked against the computed offset change in the declared time zone (`dst_flag_disagreement`); an unrecognized rule is tolerated as `unrecognized`.
 
 Corpus result: 31 of 31 accepted, 0 quarantined, 0 unknown keys.
 
 ## 3. Identity resolution (WP1 rules; WP3 persists them)
 
 - **Canonical key.** `CanonicalKey(mailbox_ref, kind, value)`: `kind = provider_returned` and `value` = Internet Message-ID when present; otherwise `kind = provider_id_only` and `value` = provider id. Persistence prefixes the Principal: `(principal_id, mailbox_ref, identity_kind, identity_value)`. The kinds are separate key spaces and never merge.
-- **Provider id conflict** — one provider id whose observations disagree on Internet Message-ID or body digest: every observation of it is quarantined (`provider_id_conflict`).
-- **Identity conflict** — one canonical key whose distinct mailbox items disagree on sender address or body digest: every observation is quarantined (`identity_conflict`), never merged.
+- **Provider id conflict** — one provider id whose observations disagree on body digest or carry two different Internet Message-IDs: every observation of it, exact repeats included, is quarantined (`provider_id_conflict`).
+- **Lane identity degradation** — one provider id whose observations agree except that some lanes carry the Internet Message-ID and others do not (for example the sent lane lacks it): a missing id is a degradation, not a conflict. The lanes merge as usual, every observation gains `lane_identity_inconsistent`, and the identity rules use the Message-ID the other lane supplied. The item's canonical key stays its primary observation's.
+- **Identity conflict** — one canonical key whose distinct mailbox items disagree on sender address or body digest: every observation of those items, merged lane siblings and exact repeats included, is quarantined (`identity_conflict`) and never merged, so none of them counts as usable.
 - **Two items, one message** — Inbox and Sent (or 2 Inbox) items under one Internet Message-ID are expected; their selected times legitimately differ.
 - **Across publications (WP3).** A new snapshot's observation of an existing canonical key is checked against the stored message (sender, body digest). Agreement adds an observation; disagreement quarantines the new observation (`identity_conflict`), sets `identity_conflict = true` on the message, and counts it in the run. The stored message is not rewritten. Corpus: 0 conflicts.
+- **WP3 cross-publication checks (review R1, findings 6c and 6d; not WP1 code).** WP1 checks identity within one publication only. WP3 must add, with tests: (c) one provider id observed with two different Internet Message-IDs across publications is detected and quarantined, never merged (today that fact comes from the Manager's corpus analysis only); (d) the `in_window` disagreement check runs on every observation, `lane_observation_merged` siblings included, not on primaries only.
 - **Mutable provider ids.** A provider id is item identity at collection time only. An item moved between folders may reappear under a new provider id; it becomes a new mailbox item under the same canonical message, which is correct.
 - **Never identity:** producer `dedup_key`, body SHA-256, subject (ADR-021 decision 8).
 
@@ -154,7 +158,7 @@ Section 12.
 
 ## 6. Full-text search (WP4; text derivation WP1)
 
-**Indexed text** is `comms_search_text_v1` output, never the raw body: basis `unique_body` (rich), else digest-verified producer text, else the stored body; html reduced to text nodes; quoted chains cut (`-----Original Message-----`, `On … wrote:`, a `From:` header block, `>` lines; a cut that would leave nothing keeps the text and flags `quoted_chain_retained`); signature/disclaimer paragraphs removed; capped at 262,144 characters. Withheld, truncated and empty bodies yield no text (`metadata_only`).
+**Indexed text** is `comms_search_text_v1` output, never the raw body: basis `unique_body` (rich), else digest-verified producer text, else the stored body; html reduced to text nodes; quoted chains cut (`-----Original Message-----`, `On … wrote:`, a `From:` header block, `>` lines; a cut that would leave nothing keeps the text and flags `quoted_chain_retained`); signature/disclaimer paragraphs removed (an RFC 3676 `-- ` delimiter near the end, explicit disclaimer phrases, and a paragraph that *starts* "This email … confidential" only in the trailing region or after a signature break, so a mid-paragraph sentence never truncates body text); capped at 262,144 characters. Withheld, truncated and empty bodies yield no text (`metadata_only`).
 
 **Document:**
 
@@ -167,7 +171,9 @@ search_document tsvector GENERATED ALWAYS AS (
 
 **Configuration.** `english` (stemming) as the report plane uses, because mail queries are topical ("schedule delay", "change orders"). The capture plane's `simple` argument (`D-90`, exact text) is answered here by the exact identifier index (section 7) and an exact-substring confirmation of quoted phrases (`strpos` over the narrowed candidates, as the capture plane does), not by a second tsvector. Query parsing: `websearch_to_tsquery('english', q)`. Participant addresses, identifiers and dates are structured filters, not text. **Manager ruling 2026-11-21 (R3, section 21):** `english` FTS plus the exact-identifier index plus `strpos` confirmation is accepted for now; WP4 must measure `english` against `simple` on synthetic and aggregate data and may switch.
 
-Corpus derivation result: 3,563 records body-based, 142 unique-body-based, 436 metadata-only; quoted chain removed in 2,011.
+Corpus derivation result: 3,563 records body-based, 142 unique-body-based, 436 metadata-only; quoted chain removed in 2,011. The `disclaimer_removed` count (684) was measured at `ac0d06ae`, before fix F1 narrowed the disclaimer markers (review R1, finding 4).
+
+**Version decision (F1).** The narrowed markers change output for some valid inputs, but the identifier stays `comms_search_text_v1`: nothing has been persisted or published under it, WP1 is unmerged, and the corrected rules are the first `v1` that will be stored. Any change after WP3 persists searchable text is a new version.
 
 ## 7. Exact technical-identifier indexing (extractor WP1; index WP3/WP4)
 
@@ -182,11 +188,11 @@ Corpus derivation result: 3,563 records body-based, 142 unique-body-based, 436 m
 | `gmp`, `fpl` | bare upper-case tokens; plural normalizes | `gmp`, `fpl` |
 | `spec` | **cue required** (`Section`, `Spec`, `Specification`, …) before `03 30 00` or `033000` (optionally `.13`), first pair 00–49 | `spec:033000` |
 
-Every match is token-bounded: `RFI 17` never matches `RFI 174`, `RFI 1740` or `RFI 174.1`. Integer kinds drop leading zeros (`RFI 0174` is `rfi:174`); submittals and spec sections are kept digit-for-digit.
+Every match is token-bounded: `RFI 17` never matches `RFI 174`, `RFI 1740` or `RFI 174.1`, and a number never continues into `.`, `-`, `/` or `,` followed by a digit, so the thousands form `RFI 1,740` yields nothing rather than `rfi:1`. Integer kinds drop leading zeros (`RFI 0174` is `rfi:174`); submittals and spec sections are kept digit-for-digit.
 
 **Six-digit noise policy.** A bare six-digit number is never a spec section by default (1,713 corpus records hold one). `include_uncued_spec_sections=True` admits only the bare *spaced* form and is off in every stored index; turning it on is a new extractor version.
 
-**Indexing.** Extraction runs over `subject + "\n" + search_text` (never over quoted chains), stored in `communication_identifiers` with the extractor version. A new version is written beside the old and switched atomically by a read setting; old rows are removed only after the switch. Corpus v1 result (records): `gmp` 458, `fpl` 134, `rfi` 51, `submittal` 28, `cb` 10, `spec` 1, `co` 0. WP4 measures recall on a labelled synthetic set and decides whether `pco`/`cor` kinds are added. **Open WP4 defect (Manager ruling 2026-11-21, R5, section 21):** `comms_identifiers_v1` recall is low against the analysis counts ([search characteristics](../evidence/communications-corpus/COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)): change orders 0 against 104 records, `fpl` 134 against 263, `submittal` 28 against 128. WP4 must fix it with tests; it does not block WP1.
+**Indexing.** Extraction runs over `subject + "\n" + search_text` (never over quoted chains), stored in `communication_identifiers` with the extractor version. A new version is written beside the old and switched atomically by a read setting; old rows are removed only after the switch. Result over corpus v2 with extractor `comms_identifiers_v1` at `ac0d06ae` (records): `gmp` 458, `fpl` 134, `rfi` 51, `submittal` 28, `cb` 10, `spec` 1, `co` 0. WP4 measures recall on a labelled synthetic set and decides whether `pco`/`cor` kinds are added. **Open WP4 defect (Manager ruling 2026-11-21, R5, section 21):** `comms_identifiers_v1` recall is low against the analysis counts ([search characteristics](../evidence/communications-corpus/COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)): change orders 0 against 104 records, `fpl` 134 against 263, `submittal` 28 against 128. WP4 must fix it with tests; it does not block WP1.
 
 ## 8. Lineage
 
@@ -197,7 +203,7 @@ Every match is token-bounded: `RFI 17` never matches `RFI 174`, `RFI 1740` or `R
 ## 9. Coverage and freshness (summary WP1; persistence WP3; read WP4)
 
 - A publication contributes coverage only when accepted and overall coverage is `complete`; it contributes its declared `[start_utc, end_utc]` with the **end inclusive**.
-- Intervals are merged when the next start is at most 1 s (`WINDOW_RESOLUTION`) after the previous end; anything wider is a **gap**, reported with its bounds.
+- Intervals are merged when the next start is at most 1 s (`WINDOW_RESOLUTION`) after the previous end; anything wider is a **gap**. A gap is inclusive like a window: it runs from 1 s after the earlier end to 1 s before the next start, and its `seconds` counts both ends (`(end − start) + 1`). Covered through 03:59:59 and again from 04:00:00 the next day is a gap of exactly 86,400 s.
 - `window.hours` and `business_date` never decide coverage (the Friday window is 33.2 h labelled 24).
 - DST: windows are taken as declared in UTC; a 49 h (fall-back) or 47 h (spring-forward) weekend is valid. The declared DST flag is cross-checked (`dst_flag_disagreement`).
 - Per-lane coverage: a lane (`inbox`, `sent`, `procore_rfis`) is reported separately; `not_authorized` lanes are reported as such and never as "no messages".
@@ -317,12 +323,14 @@ Cursors are opaque, grant-bound and keyed on the section 14 order (precedent: S3
 
 ### 20.1 WP1 (implemented)
 
-- FAST unit tests over synthetic fixtures for: both dialects, withheld bodies, null derived text, Inbox+Sent under one Message-ID, lane pairs, within-file repeat, out-of-window and exact-end boundary, the 33 h Friday window, the 48 h and 49 h weekend windows, missing Message-ID, malformed JSON, missing required fields, unknown major version, hostile HTML and prompt-injection text kept inert, identifier boundaries, search-text derivation, coverage merging; the architecture scope guard.
+- FAST unit tests over synthetic fixtures for: both dialects, withheld bodies, null derived text, Inbox+Sent under one Message-ID, lane pairs, within-file repeat, out-of-window and exact-end boundary, the 33 h Friday window, the 48 h and 49 h weekend windows, missing Message-ID, malformed JSON, missing required fields, unknown major version, hostile HTML and prompt-injection text kept inert, identifier boundaries, search-text derivation, coverage merging; the architecture scope guard. Fix F1 (review R1) added regressions for out-of-range timestamps and `window.hours`, a mixed good/bad CLI batch, the content-free `internal_error`, ordinary text that mentions "this message … confidential" or a bare `--`, the lane identity degradation, repeats of a conflicted item, the `RFI 1,740` boundary and inclusive gap seconds.
 - **Real-corpus validation (Manager only, aggregate output):**
 
   ```
-  PYTHONPATH=src python -I -m my_pa.infrastructure.communications.aggregate_cli FILE [FILE ...]
+  PYTHONPATH=src python -m my_pa.infrastructure.communications.aggregate_cli FILE [FILE ...]
   ```
+
+  This is the source-checkout form. `-I` would ignore `PYTHONPATH` (and, with an editable install, import a stale tree); use `python -I -m …` only where the package is installed.
 
   It prints counts, closed-vocabulary values, validated timestamps and basenames only; exit 0 when every file is accepted, 1 otherwise, 2 on usage error. Result at `ac0d06ae`: 31/31 accepted, 4,141 observations, 3,461 identities, 3,527 provider ids, 421 multi-lane items, 0 conflicts, 197 verified vs 3,944 unverified lanes, one coverage interval.
 

@@ -84,7 +84,7 @@ Changed modules (one line each; exact edits belong to the WP):
 | `tests/architecture/` | scope guard `test_project_reports_scope.py`, partition and policy closure coverage | WP3P, WP4P |
 | `tests/fixtures/project_reports/` | synthetic CSV fixtures only | WP3P |
 
-Not touched: the communications domain and parser, the Reports plane, the financial F-1 slice (unless section 7.1's option A is chosen), Entities, record lineage.
+Not touched: the communications domain and parser, the Reports plane, the financial F-1 slice (section 7.1 chose option B, so it stays untouched), Entities, record lineage.
 
 ## 3. Proposed migrations
 
@@ -123,7 +123,7 @@ Each family adapter declares its group-key columns (none, 1 or 2) and its numeri
 | level-1 key filled | `group_header(1, key)`; `(Blank)` is a real key |
 | level-2 key filled, level-1 empty, inside a level-1 group | `group_header(2, key)` |
 | no group key, fields of a record present | `detail`, inheriting the current group path |
-| group header never followed by detail before the next header or end | re-labelled `grouping_only` |
+| group header with no detail row before the next header of the same or higher level, or end of file | re-labelled `grouping_only` (a level-1 header followed directly by its level-2 headers is still `group_header(1, key)`) |
 | anything the family rules cannot place | `malformed` |
 
 Inherited context is stored as the ordered group path `[(level, key, header row ordinal), …]`. Every snapshot's role counts must sum to its data-row count.
@@ -281,7 +281,7 @@ Rules:
 
 - Every amount is `Decimal` with `NUMERIC(20,4)` semantics; no `float` in any PULSE module (AST guard). Inputs with more than 4 decimals are refused, never rounded (ADR-018 decision 4).
 - Export shapes: currency sign, thousands separators, 2 decimals; negatives in parentheses; plain decimals in daily logs ([financial integrity](../evidence/pulse/PULSE-FINANCIAL-DATA-INTEGRITY-ASSESSMENT.md) section 1). Anything else is a `type_error`.
-- **Reuse decision (WP3P preflight, Manager):** option A reuses `domain/project_controls/financial/money.py` (`parse_amount`, `money_sum`), which needs `tests/architecture/test_financial_source_scope.py`'s isolation rule widened to admit `domain/project_reports`; option B keeps a PULSE-local parser with the same context and a parity test against shared cases. Default B unless the widening is approved.
+- **Reuse decision (WP3P preflight, Manager):** option A reuses `domain/project_controls/financial/money.py` (`parse_amount`, `money_sum`), which needs `tests/architecture/test_financial_source_scope.py`'s isolation rule widened to admit `domain/project_reports`; option B keeps a PULSE-local parser with the same context and a parity test against shared cases. **Manager ruling 2026-11-21: option B.** WP3P writes a PULSE-local `Decimal` parser in `domain/project_reports/money.py` with a parity test against the ADR-018 money module (`domain/project_controls/financial/money.py`) over shared cases; the ADR-018 import-isolation guard (`tests/architecture/test_financial_source_scope.py`) stays unchanged.
 - Currency is a source attribute: a single currency per source declared in the binding's source admission; no FX.
 
 ### 7.2 What a measure may sum
@@ -354,7 +354,7 @@ Cursors are opaque, grant-bound and keyed on a total order (`publication_date_la
 Each case is a small synthetic CSV with synthetic project numbers, vendors and amounts:
 
 - every one of the 15 header signatures, plus a reordered-header variant (new signature → quarantine) and an unknown family;
-- role classification: flat; 1-level; 2-level with `(Blank)`; `Grand Totals`; spacer rows; grouping-only; a header followed by no detail; a malformed width; role counts summing to rows;
+- role classification: flat; 1-level; 2-level with `(Blank)`; `Grand Totals`; spacer rows; grouping-only; a header followed by no detail; in a 2-level export, a level-1 header followed directly by a level-2 header stays `group_header(1, key)` while a level-2 header with no detail before the next level-1 or level-2 header is `grouping_only`; a malformed width; role counts summing to rows;
 - the 2-level double-count case (detail-only sum = 99 against a naive 198, synthetic);
 - RFC 4180: embedded CRLF in quotes, doubled quotes, a trailing record without terminator, BOM, non-UTF-8, unterminated quote;
 - byte-exact reconstruction of every fixture from Layer A records;
@@ -374,7 +374,7 @@ Each case is a small synthetic CSV with synthetic project numbers, vendors and a
 ### 12.3 DB tier and real-data validation
 
 - DB tier: migration from empty and from the predecessor head; append-only and TRUNCATE refusals; partition guard; idempotency (same SHA-256 twice writes once); the byte-identical file in 2 sources = 2 snapshots; binding apply atomicity and every refusal; quarantine keeps Layer A `unclassified` rows; backfill resume; dry run writes nothing; downgrade refuses with rows.
-- **Manager-only real-data validation**, aggregate output, in an isolated local database: `PYTHONPATH=src python -I -m my_pa.infrastructure.project_reports.aggregate_cli FILE [FILE ...]` prints counts, roles, signatures, completeness classes and reconciliation outcomes only. It must reproduce the evidence: 20 files, 15 signatures, 2,593 data rows, the per-file role counts, 143/143, 9/9, 3/3, 3/3 matches, the cross-report match.
+- **Manager-only real-data validation**, aggregate output, in an isolated local database: `PYTHONPATH=src python -m my_pa.infrastructure.project_reports.aggregate_cli FILE [FILE ...]` (from a source checkout; `-I` ignores `PYTHONPATH`, so use `python -I -m …` only where the package is installed) prints counts, roles, signatures, completeness classes and reconciliation outcomes only. It must reproduce the evidence: 20 files, 15 signatures, 2,593 data rows, the per-file role counts, 143/143, 9/9, 3/3, 3/3 matches, the cross-report match.
 
 ## 13. Deployment and migration
 
@@ -447,7 +447,7 @@ PULSE needs a decision record before WP3P merges: a new ADR (next free number af
 | PULSE-OQ-06 | 1 folder per Project in v1 | refuse a second folder |
 | PULSE-OQ-07 | Original budget column unloaded: is a budget export planned? | `not_reportable` |
 
-Manager-level decision (not operator): section 7.1's money reuse option A or B.
+Manager-level decision (not operator): section 7.1's money reuse. Decided by Manager ruling 2026-11-21: option B (a PULSE-local parser with a parity test; the ADR-018 isolation guard unchanged).
 
 ### 16.2 Risks
 

@@ -15,7 +15,7 @@
 4. `Grand Totals` is the report total: a row whose first column holds that literal.
 5. In a 2-level report the second key column starts a sub-group inside the current first-level group, with its own subtotal; detail rows inherit both keys.
 6. A **fully blank row** (every cell empty) is a structural spacer, not a record.
-7. A row holding only a group key and no detail beneath it is **grouping-only**: the export states that a group exists and gives no record.
+7. A group header with no detail row beneath it — none before the next header of the same or a higher level, or the end of the file — is **grouping-only**: the export states that a group exists and gives no record. In a 2-level report a level-1 header followed directly by its level-2 headers is not grouping-only, because detail follows under those sub-groups.
 
 ## 3. Row roles
 
@@ -27,7 +27,7 @@ Every data row of every export receives exactly one role. Group headers carry a 
 | `group_header(level, key)` | starts a group at `level` (1 or 2); its numerics are subtotals | no (stored as stated-total evidence) |
 | `grand_total` | the report total row | no (stored as stated-total evidence) |
 | `spacer` | every cell empty | no |
-| `grouping_only` | a group key with no detail in the whole export | no |
+| `grouping_only` | a group header with no detail row before the next header of the same or a higher level, or end of file | no |
 | `malformed` | a row the family adapter cannot place (wrong width, key pattern it does not recognize) | no; counted and reported |
 
 Verified counts per file are in [the inventory](PULSE-SOURCE-INVENTORY.md) section 3. Across the 20 files no row is `malformed` under the verified rules.

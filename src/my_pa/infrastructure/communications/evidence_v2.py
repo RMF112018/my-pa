@@ -44,10 +44,11 @@ bounded, content-free `DiagnosticCollector`.
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Final
@@ -143,6 +144,14 @@ _ISO_TIMESTAMP: Final = re.compile(
 )
 _TZ_NAME: Final = re.compile(r"UTC|[A-Z][A-Za-z_]{1,30}(?:/[A-Za-z_\-+0-9]{1,30}){1,2}")
 _HOURS_TOLERANCE_SECONDS: Final = 60
+# A declared `window.hours` outside this closed range (or non-finite) is
+# `window_field_invalid`; a real window is at most a few days.
+_MAX_DECLARED_HOURS: Final = 10_000
+# Every accepted timestamp is at least a day inside the `datetime` range, so a
+# later conversion to any named zone (offsets are under 24 h) or a +/- 1 s
+# step cannot overflow.
+_MIN_UTC: Final = datetime.min.replace(tzinfo=UTC) + timedelta(days=1)
+_MAX_UTC: Final = datetime.max.replace(tzinfo=UTC) - timedelta(days=1)
 
 _ID_FORMATS: Final = MappingProxyType(
     {
@@ -216,14 +225,22 @@ def _pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 
 def _parse_utc(value: object) -> datetime | None:
-    """An aware ISO-8601 `YYYY-MM-DDTHH:MM:SS[.f](Z|+HH:MM)` as UTC, else `None`."""
+    """An aware ISO-8601 `YYYY-MM-DDTHH:MM:SS[.f](Z|+HH:MM)` as UTC, else `None`.
+
+    A value whose UTC instant falls outside the `datetime` range (year 9999 with
+    a negative offset, year 0001 with a positive one), or within a day of either
+    end of it, is `None` too, so it maps to the caller's usual code
+    (`invalid_window`, `unparseable_timestamp`, `raw_timestamp_unparseable`).
+    """
     if not isinstance(value, str) or _ISO_TIMESTAMP.fullmatch(value) is None:
         return None
     try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
+        parsed = datetime.fromisoformat(value).astimezone(UTC)
+    except (OverflowError, ValueError):
         return None
-    return parsed.astimezone(UTC)
+    if not _MIN_UTC <= parsed <= _MAX_UTC:
+        return None
+    return parsed
 
 
 def _as_count(value: object) -> int | None:
@@ -414,7 +431,13 @@ def _window(raw: object, d: DiagnosticCollector) -> Window:
 
     hours_raw = window.get("hours")
     declared_hours: float | None = None
-    if isinstance(hours_raw, int | float) and not isinstance(hours_raw, bool):
+    if (
+        isinstance(hours_raw, int | float)
+        and not isinstance(hours_raw, bool)
+        # Range first: `math.isfinite` raises on an int too large for a float.
+        and 0 <= hours_raw <= _MAX_DECLARED_HOURS
+        and math.isfinite(hours_raw)
+    ):
         declared_hours = float(hours_raw)
     elif hours_raw is not None:
         d.add(DiagnosticCode.WINDOW_FIELD_INVALID, "window.hours")

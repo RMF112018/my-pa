@@ -43,7 +43,7 @@ Lean derived text carries no digest, so the contract does not trust it as the te
 | `withheld` | 44 |
 | `truncated` | 1 |
 
-Quoted-chain stripping removed a chain in 2,011 records against 2,143 records the analysis heuristic saw a chain in; signature/disclaimer removal fired in 684 against 1,056 marker hits, because the contract's disclaimer rules are deliberately conservative (it never cuts to empty and needs a paragraph-level marker).
+Quoted-chain stripping removed a chain in 2,011 records against 2,143 records the analysis heuristic saw a chain in; signature/disclaimer removal fired in 684 against 1,056 marker hits, because the contract's disclaimer rules are deliberately conservative (it never cuts to empty and needs a paragraph-level marker). The 684 was measured at `ac0d06ae`; fix F1 (review R1) then narrowed the rules further, so that only an exact RFC 3676 `-- ` delimiter near the end counts and a "this email … confidential" sentence counts only when it starts a trailing paragraph. The current count is at most 684 and has not been re-measured.
 
 ## Privacy screen (rich dialect only)
 
@@ -72,9 +72,9 @@ Two measurements, not to be confused. The analysis column is a broad regex over 
 Readings:
 
 - **Six-digit numbers are noise by default.** 1,713 records hold a bare six-digit number shaped like a CSI MasterFormat section; the analysis could not tell sections from other numbers, so a bare six-digit number is not evidence of a section. v1 admits a spec section only after a `Section`/`Spec` cue, and found 1.
-- **Change orders.** v1 extracts only upper-case `CO` with a separator and excludes `PCO`/`COR` (letter before), and found none; the analysis pattern included `PCO` and `COR`. Adding `pco`/`cor` kinds is a measured WP4 decision, not a v1 defect.
+- **Change orders.** v1 extracts only upper-case `CO` with a separator and excludes `PCO`/`COR` (letter before), and found none; the analysis pattern included `PCO` and `COR`. Per Manager ruling 2026-11-21 (R5), this low recall is an **open WP4 defect**, to be fixed with tests; WP4 decides whether `pco`/`cor` kinds are added.
 - **FPL and submittals** drop most sharply because v1 requires an upper-case acronym (`FPL`) and a number after `Submittal`; the analysis matched words. Recall of v1 against labelled examples is a WP4 acceptance item.
-- **Exactness.** `RFI 17` never matches `RFI 174` or `RFI 1740` in v1 (token-bounded, leading zeros dropped for integer kinds); the unit tests pin it.
+- **Exactness.** `RFI 17` never matches `RFI 174` or `RFI 1740` in v1 (token-bounded, leading zeros dropped for integer kinds), and `RFI 1,740` is not `rfi:1` (a number never continues into `,` followed by a digit, added in fix F1 after the corpus measurement); the unit tests pin it.
 
 ## Text size planning
 

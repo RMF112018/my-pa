@@ -365,7 +365,13 @@ def test_adjacent_inclusive_windows_merge_and_a_real_gap_remains() -> None:
         datetime(2026, 10, 20, 3, 59, 59, tzinfo=UTC),
     )
     assert summary.coverage_intervals[0] == Interval(start, end)
-    assert summary.coverage_gaps == (Interval(end, datetime(2026, 10, 21, 4, tzinfo=UTC)),)
+    (gap,) = summary.coverage_gaps
+    # Covered through 10-20 03:59:59 and again from 10-21 04:00:00: exactly one day
+    # of uncovered seconds, both ends inclusive.
+    assert gap == Interval(
+        datetime(2026, 10, 20, 4, tzinfo=UTC), datetime(2026, 10, 21, 3, 59, 59, tzinfo=UTC)
+    )
+    assert gap.inclusive_seconds == 86_400
     assert summary.window_rules == {"weekday_prior_24h": 2, "weekend_prior_48h": 1}
 
 

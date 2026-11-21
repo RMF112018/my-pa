@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from my_pa.infrastructure.communications.aggregate_cli import main, summarize_files
+from my_pa.infrastructure.communications.evidence_v2 import PublicationParse
 from tests.fixtures.communications_evidence import synthetic as s
 
 SRC = Path(__file__).resolve().parents[2] / "src"
@@ -151,9 +152,9 @@ def test_all_fixtures_accepted_exits_zero(capsys: pytest.CaptureFixture[str]) ->
     }
     assert summary["coverage"]["adjacency_tolerance_seconds"] == 1
     assert {
-        "start_utc": "2026-11-16T07:00:00Z",
-        "end_utc": "2026-11-17T05:00:00Z",
-        "seconds": 22 * 3600,
+        "start_utc": "2026-11-16T07:00:01Z",
+        "end_utc": "2026-11-17T04:59:59Z",
+        "seconds": 22 * 3600 - 1,
     } in summary["coverage"]["gaps"]
 
 
@@ -180,6 +181,53 @@ def test_an_unreadable_file_is_a_rejection(
         "status": "rejected",
         "rejection": "file_unreadable",
     }
+
+
+def test_an_out_of_range_timestamp_never_aborts_the_batch(tmp_path: Path) -> None:
+    # R1's probe: a year-9999 instant west of UTC overflowed `astimezone`, the
+    # traceback killed the run and even the good file got no aggregate.
+    document = s.lean_publication()
+    document["messages"][3]["timestamps"]["selected_utc"] = "9999-12-31T23:59:59-01:00"
+    bad = write(tmp_path, "bad.json", s.encode(document))
+    completed = run_cli(s.HERE / "rich_publication.json", bad)
+    assert completed.stderr == ""
+    assert completed.returncode == 0
+    files = json.loads(completed.stdout)["files"]
+    assert [f["file"] for f in files] == ["rich_publication.json", "bad.json"]
+    assert [f["status"] for f in files] == ["accepted", "accepted"]
+    assert files[1]["records"]["by_reason"]["unparseable_timestamp"] == 1
+
+
+def test_an_unexpected_parser_error_is_a_content_free_rejection(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from my_pa.infrastructure.communications import aggregate_cli
+
+    real = aggregate_cli.parse_publication
+
+    def explode_on_canary(data: bytes) -> PublicationParse:
+        if b"CANARY-BODY" in data:
+            raise RuntimeError("CANARY-BODY CANARY-SUBJECT-xyz")
+        return real(data)
+
+    monkeypatch.setattr(aggregate_cli, "parse_publication", explode_on_canary)
+    poison = write(tmp_path, "poison.json", s.encode(canary_publication()))
+    assert main([str(poison), str(s.HERE / "rich_publication.json")]) == 1
+    captured = capsys.readouterr()
+    document = json.loads(captured.out)
+    assert document["files"][0] == {
+        "file": "poison.json",
+        "status": "rejected",
+        "rejection": "internal_error",
+    }
+    assert document["files"][1]["status"] == "accepted"
+    assert document["files"][1]["records"]["total"] > 0
+    assert document["summary"]["accepted"] == 1
+    assert document["summary"]["rejected"] == 1
+    output = (captured.out + captured.err).lower()
+    for canary in CANARIES:
+        assert canary.lower() not in output, canary
+    assert "runtimeerror" not in output
 
 
 def test_no_arguments_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:

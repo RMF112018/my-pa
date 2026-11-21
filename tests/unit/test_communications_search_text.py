@@ -10,10 +10,12 @@ from my_pa.domain.communications.model import NormalizedMessage
 from my_pa.domain.communications.search_text import (
     MAX_SEARCH_TEXT_CHARS,
     SEARCH_TEXT_VERSION,
+    SIGNATURE_TAIL_LINES,
     SearchTextBasis,
     SearchTextFlag,
     derive_search_text,
     html_to_text,
+    normalize_plain_text,
     strip_disclaimer,
     strip_quoted_chain,
 )
@@ -194,6 +196,52 @@ def test_a_disclaimer_first_line_is_never_stripped_to_nothing() -> None:
 def test_a_mention_of_confidential_in_ordinary_prose_is_kept() -> None:
     text = "Main text.\n\nKeep the pricing confidential until Friday."
     assert strip_disclaimer(text) == (text, False)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # R1's probes: body text and its identifiers must survive.
+        "Hi Bob,\nPlease see RFI 174; this message includes confidential pricing for the GMP."
+        "\nThanks",
+        "Hi Bob,\n\nThe GMP is attached. This email covers the confidential pricing."
+        "\nCall me.\n\nAlpha",
+        "Update\n--\nRFI 174 answered",
+    ],
+)
+def test_ordinary_body_text_is_never_cut_as_a_disclaimer(text: str) -> None:
+    assert strip_disclaimer(text) == (text, False)
+
+
+def test_a_this_message_confidential_paragraph_far_from_the_end_is_kept() -> None:
+    body = "\n".join(f"Line {n} of the body." for n in range(SIGNATURE_TAIL_LINES + 1))
+    text = f"Hi Bob,\n\nThis message is confidential pricing for the GMP.\n{body}"
+    assert strip_disclaimer(text) == (text, False)
+
+
+def test_a_this_message_confidential_paragraph_after_a_signature_break_is_cut() -> None:
+    tail = "\n".join(f"Legal line {n}." for n in range(SIGNATURE_TAIL_LINES + 1))
+    text = f"Main text.\n__________\nAlpha\n\nThis email is privileged.\n{tail}"
+    assert strip_disclaimer(text) == ("Main text.\n__________\nAlpha", True)
+
+
+def test_the_information_in_this_email_form_is_a_disclaimer() -> None:
+    text = "Main text.\n\nThe information contained in this email is confidential."
+    assert strip_disclaimer(text) == ("Main text.", True)
+
+
+def test_a_signature_delimiter_far_from_the_end_is_ordinary_text() -> None:
+    body = "\n".join(f"Line {n}." for n in range(SIGNATURE_TAIL_LINES + 1))
+    text = f"Main text.\n-- \n{body}"
+    assert strip_disclaimer(text) == (text, False)
+
+
+def test_the_rfc_3676_delimiter_survives_normalization_and_cuts_the_signature() -> None:
+    record = s.message(1, content="Main text.\r\n-- \r\nAlpha Synthetic\r\n", content_type="text")
+    result = derive_search_text(one(record))
+    assert result.text == "Main text."
+    assert F.DISCLAIMER_REMOVED in result.flags
+    assert normalize_plain_text("a  \n-- \n--  \nb") == "a\n-- \n--\nb"
 
 
 def test_output_is_capped() -> None:

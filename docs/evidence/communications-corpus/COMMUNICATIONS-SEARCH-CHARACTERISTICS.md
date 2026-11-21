@@ -1,6 +1,6 @@
 # Communications search characteristics
 
-**Basis:** see the [common basis](README.md#common-basis) (aggregate JSON SHA-256 `82edeee885125a6552a00f7046adbefe0337d5e035905fc08dcceb2261a7945d`, 2026-11-21, Manager-run collection; 31 publications = 29 canonical lean + 2 rich), and the contract CLI result measured at `184ac6ca` (Manager real-corpus run, 2026-11-21) (derivation `comms_search_text_v1`, extractor `comms_identifiers_v1`; contract head `184ac6cadd49be9a19f94fcbf60acda22c35a06c`, the WP1 head after fix F1). Aggregates only. All counts are over the 4,141 records (observations), so lane duplicates are counted twice.
+**Basis:** see the [common basis](README.md#common-basis) (aggregate JSON SHA-256 `82edeee885125a6552a00f7046adbefe0337d5e035905fc08dcceb2261a7945d`, 2026-11-21, Manager-run collection; 31 publications = 29 canonical lean + 2 rich), and the contract CLI result measured at `80208caa` (Manager real-corpus run, 2026-11-21) (derivation `comms_search_text_v1`, extractor `comms_identifiers_v1`; contract head `80208caabe92de03be676a93fae8984d31d2b8c1`, the WP1 head after fix F2). Aggregates only. All counts are over the 4,141 records (observations), so lane duplicates are counted twice.
 
 ## Bodies
 
@@ -27,7 +27,7 @@ Lean derived text carries no digest, so the contract does not trust it as the te
 
 ## Searchable text derived by the contract (`comms_search_text_v1`)
 
-All contract figures in this section and the next were measured at `184ac6ca` (Manager real-corpus run, 2026-11-21). The identity, lane, quarantine and coverage results were re-verified unchanged at `184ac6ca` against the earlier `ac0d06ae` run; only `disclaimer_removed` and the `rfi`, `submittal` and `spec` identifier counts moved.
+All contract figures in this section and the next were measured at `184ac6ca` (Manager real-corpus run, 2026-11-21), except `disclaimer_removed`, which is measured at `80208caa` (Manager real-corpus run, 2026-11-21). The identity, lane, quarantine and coverage results were re-verified unchanged at `184ac6ca` against the earlier `ac0d06ae` run; only `disclaimer_removed` and the `rfi`, `submittal` and `spec` identifier counts moved. At `80208caa`, after fix F2, every figure here was re-verified unchanged except `disclaimer_removed` (125 → 108), and 0 window bounds were floored.
 
 | Basis | Records |
 | --- | ---: |
@@ -40,12 +40,14 @@ All contract figures in this section and the next were measured at `184ac6ca` (M
 | `markup_dropped` | 3,754 |
 | `quoted_chain_removed` | 2,011 |
 | `quoted_chain_retained` (cut would leave nothing; text kept) | 59 |
-| `disclaimer_removed` | 125 |
+| `disclaimer_removed` | 108 |
 | `metadata_only` | 436 |
 | `withheld` | 44 |
 | `truncated` | 1 |
 
-Quoted-chain stripping removed a chain in 2,011 records against 2,143 records the analysis heuristic saw a chain in; signature/disclaimer removal fired in 125 against 1,056 marker hits, because the contract's disclaimer rules are deliberately conservative (it never cuts to empty and needs a paragraph-level marker). Fix F1 (review R1) narrowed the rules so that only an exact RFC 3676 `-- ` delimiter near the end counts and a "this email … confidential" sentence counts only when it starts a trailing paragraph; that took the count from 684 at `ac0d06ae` to 125 measured at `184ac6ca` (Manager real-corpus run, 2026-11-21). Fix F2 (review R2) narrowed the rules again: a signature break counts only in the trailing region, and "if you are not the intended recipient" and "confidentiality notice" count only when they start a trailing paragraph. A marker paragraph directly under a trailing dash rule now counts too. The count may therefore differ from 125; it has not been re-measured since F2.
+Quoted-chain stripping removed a chain in 2,011 records against 2,143 records the analysis heuristic saw a chain in; signature/disclaimer removal fired in 108 (measured at `80208caa` (Manager real-corpus run, 2026-11-21)) against 1,056 marker hits, because the contract's disclaimer rules are deliberately conservative (it never cuts to empty and needs a paragraph-level marker). Fix F1 (review R1) narrowed the rules so that only an exact RFC 3676 `-- ` delimiter near the end counts and a "this email … confidential" sentence counts only when it starts a trailing paragraph; that took the count from 684 at `ac0d06ae` to 125 measured at `184ac6ca` (Manager real-corpus run, 2026-11-21). Fix F2 (review R2) narrowed the rules again: a signature break counts only in the trailing region, and "if you are not the intended recipient" and "confidentiality notice" count only when they start a trailing paragraph. A marker paragraph directly under a trailing dash rule now counts too. That took the count from 125 at `184ac6ca` to 108 measured at `80208caa` (Manager real-corpus run, 2026-11-21).
+
+**Open WP4 item (Manager ruling 2026-11-21: not fixed in WP1).** Two disclaimer markers are still unanchored: a line starting `Disclaimer` and the "if you have received this … in error" phrase match on any line anywhere in the text, not only on a paragraph-start line in the trailing region as the other markers do, and the "received this … in error" phrase matches anywhere within its line. WP4 must anchor them, with tests; until then they can cut body text that merely mentions a disclaimer.
 
 ## Privacy screen (rich dialect only)
 

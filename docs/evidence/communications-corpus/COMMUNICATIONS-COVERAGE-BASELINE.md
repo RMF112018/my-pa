@@ -1,6 +1,6 @@
 # Communications coverage baseline
 
-**Basis:** see the [common basis](README.md#common-basis) (aggregate JSON SHA-256 `82edeee885125a6552a00f7046adbefe0337d5e035905fc08dcceb2261a7945d`, 2026-11-21, Manager-run collection; 31 publications = 29 canonical lean + 2 rich), plus the Manager's contract-CLI result measured at `184ac6ca` (Manager real-corpus run, 2026-11-21); the identity, lane, quarantine and coverage results were re-verified unchanged at `184ac6ca` against the earlier `ac0d06ae` run. Aggregates only.
+**Basis:** see the [common basis](README.md#common-basis) (aggregate JSON SHA-256 `82edeee885125a6552a00f7046adbefe0337d5e035905fc08dcceb2261a7945d`, 2026-11-21, Manager-run collection; 31 publications = 29 canonical lean + 2 rich), plus the Manager's contract-CLI result measured at `80208caa` (Manager real-corpus run, 2026-11-21); the identity, lane, quarantine and coverage results were re-verified unchanged at `184ac6ca` against the earlier `ac0d06ae` run, and re-verified unchanged again at `80208caa` (Manager real-corpus run, 2026-11-21), where 0 window bounds were floored. Aggregates only.
 
 ## Result
 

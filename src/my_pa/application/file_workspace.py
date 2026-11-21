@@ -114,6 +114,7 @@ from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import format_rfc3339
 from my_pa.domain.files.errors import FilesArgumentError, FilesRefusal
+from my_pa.domain.files.sdcc_placement import PlacementDenied, SDCRPlacementGate
 from my_pa.domain.files.paths import parse_path
 from my_pa.domain.files.transfer import (
     BROWSER_DOWNLOAD_INSTRUCTIONS,
@@ -312,6 +313,7 @@ class ComposedFileWorkspace:
     max_pending_bytes: int = DEFAULT_MAX_PENDING_BYTES
     #: Section 18.1 `clients=`: `None` admits every client its grants admit.
     allowed_clients: frozenset[str] | None = None
+    sdcr_placement_gate: SDCRPlacementGate | None = None
 
     def __post_init__(self) -> None:
         approval = self.write_mode is WriteMode.APPROVAL
@@ -904,6 +906,13 @@ class FileWorkspaceApplication:
             ):
                 raise NotFoundError(SafeDetail.NOT_FOUND)
             target = item.original_path if command.to_path is None else command.to_path
+            if call.space.sdcr_placement_gate is not None:
+                try:
+                    call.space.sdcr_placement_gate.admit_transition(
+                        target, source=item.original_path
+                    )
+                except PlacementDenied:
+                    raise _refusal(FilesReason.INVALID_PATH) from None
             entry = call.store.restore(
                 command.trash_item_id, target, trashed_version=item.trashed_version
             )
@@ -949,6 +958,13 @@ class FileWorkspaceApplication:
     # ---- uploads --------------------------------------------------------------------
 
     def _upload_begin(self, call: _Call, command: BeginFileUpload) -> dict[str, Any]:
+        if call.space.sdcr_placement_gate is not None:
+            try:
+                call.space.sdcr_placement_gate.admit_create(
+                    command.path, is_directory=False, expected_version=command.expected_version
+                )
+            except PlacementDenied:
+                raise _refusal(FilesReason.INVALID_PATH) from None
         if command.source_file is not None:
             return self._ingest_handle(call, command, command.source_file)
         arguments = {

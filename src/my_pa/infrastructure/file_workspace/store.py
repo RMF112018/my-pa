@@ -136,13 +136,13 @@ from my_pa.contracts.ports import (
     FileWorkspaceUnavailableError,
 )
 from my_pa.domain.files.errors import FilesArgumentError, FilesRefusal
-from my_pa.domain.files.sdcc_placement import PlacementDenied, SDCRPlacementGate
 from my_pa.domain.files.paths import (
     WorkspacePath,
     is_reserved_name,
     parse_path,
     validate_name,
 )
+from my_pa.domain.files.sdcc_placement import PlacementDeniedError, SDCRPlacementGate
 from my_pa.domain.files.transfer import (
     TRASH_ITEM_ID_PREFIX,
     UPLOAD_ID_PREFIX,
@@ -604,7 +604,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             return
         try:
             gate.admit_create(path, is_directory=directory, expected_version=expected_version)
-        except PlacementDenied:
+        except PlacementDeniedError:
             raise _refuse("path", FilesReason.INVALID_PATH) from None
 
     def _sdcr_directory(self, path: str) -> None:
@@ -613,7 +613,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             return
         try:
             gate.admit_directory_tree(path)
-        except PlacementDenied:
+        except PlacementDeniedError:
             raise _refuse("path", FilesReason.INVALID_PATH) from None
 
     def _sdcr_transition(self, path: str, source: str | None = None) -> None:
@@ -622,7 +622,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
             return
         try:
             gate.admit_transition(path, source=source)
-        except PlacementDenied:
+        except PlacementDeniedError:
             raise _refuse("path", FilesReason.INVALID_PATH) from None
 
     # ---- a seam for tests: called immediately before each fingerprint re-check

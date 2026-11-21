@@ -149,6 +149,58 @@ def test_config_must_be_outside_workspace_and_not_mutable(tmp_path: Path) -> Non
         load_sdcr_gate(str(config), str(workspace))
 
 
+def test_config_in_another_workspace_is_not_trusted(tmp_path: Path) -> None:
+    mcp = tmp_path / "mcp"
+    alternate = tmp_path / "alternate"
+    mcp.mkdir()
+    alternate.mkdir()
+    data = json.loads(CONFIG.read_text())
+    data["policy"]["status"] = "APPROVED_FOR_QUALIFICATION"
+    external = alternate / "rogue.json"
+    external.write_text(json.dumps(data))
+    external.chmod(0o600)
+    with pytest.raises(SDCRConfigurationError, match="outside_workspace"):
+        load_sdcr_gate(str(external), str(mcp), forbidden_roots=[alternate])
+
+
+def test_real_store_rejects_raw_mutation_bypass(tmp_path: Path) -> None:
+    from my_pa.domain.files.errors import FilesRefusal
+    from my_pa.infrastructure.file_workspace.store import FilesystemFileWorkspaceStore
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+    store = FilesystemFileWorkspaceStore(
+        root, disk_reserve_bytes=0, sdcr_placement_gate=gate()
+    )
+    with pytest.raises(FilesRefusal):
+        store.mkdir("SDCR/misc", parents=True)
+    with pytest.raises(FilesRefusal):
+        store.write_text("SDCR/random.txt", "blocked")
+    with pytest.raises(FilesRefusal):
+        store.publish_upload("fake", "SDCR/random.txt", length=0, sha256="0" * 64)
+
+    directory = OWNED + "/sessions/S1/artifacts/evidence"
+    store.mkdir(directory, parents=True)
+    file_path = directory + "/EVID-1__case.log"
+    published = store.write_text(file_path, "synthetic evidence")
+    assert published.entry.path == file_path
+    with pytest.raises(FilesRefusal):
+        store.write_text(
+            file_path, "override", expected_version=published.entry.version
+        )
+    with pytest.raises(FilesRefusal):
+        store.copy(file_path, directory + "/EVID-2__copy.log")
+    with pytest.raises(FilesRefusal):
+        store.move(file_path, "outside.log")
+    with pytest.raises(FilesRefusal):
+        store.trash(file_path, "fwtrs_fake")
+
+    # Everything outside SDCR remains subject to the existing Files contract.
+    store.mkdir("reproof", parents=True)
+    store.write_text("reproof/a.txt", "unchanged unrelated path")
+    assert store.copy("reproof/a.txt", "reproof/b.txt").path == "reproof/b.txt"
+
+
 def test_nonconfig_cannot_enable_guard(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

@@ -36,7 +36,6 @@ SESSION_FILES = frozenset(
     }
 )
 WORK_FILES = frozenset({"WORK_ITEM.md", "00_ARTIFACT_INDEX.json", "OWNERSHIP.json"})
-WORK_FILES = frozenset({"WORK_ITEM.md", "00_ARTIFACT_INDEX.json", "OWNERSHIP.json"})
 ROOT_INDEX_FILES = {
     "30-Exchange": "00_ACTIVE_WORK_INDEX.md",
     "40-Publication": "00_SESSION_REGISTRY_INDEX.md",
@@ -78,7 +77,6 @@ def _parts(raw: str) -> list[str]:
     parts = raw.split("/")
     if any(
         not p or p in (".", "..") or p.lower() in SAFE_RESERVED or len(p.encode("utf-8")) > 255
-        for p in parts
         for p in parts
     ):
         _deny("INVALID_PATH")
@@ -263,10 +261,6 @@ def _other_top(
                 return "CLIENT_POINTER"
         elif (
             len(p) == 2
-            ):
-                return "CLIENT_POINTER"
-        elif (
-            len(p) == 2
             and not is_dir
             and p[1].endswith(".json")
             and _ident(p[1][:-5])
@@ -292,10 +286,6 @@ def _other_top(
                 and p[3].endswith(".json")
                 and _ident(p[3][:-5])
                 and role == "locator"
-            ):
-                return "PUBLICATION_POINTER"
-        elif (
-            len(p) == 2
             ):
                 return "PUBLICATION_POINTER"
         elif (
@@ -616,15 +606,9 @@ class SDCRPlacementGate:
         result = authorize_path(
             self._policy,
             self._registrations,
-                _deny("SDCR_IMMUTABLE_CONTENT")
-        result = authorize_path(
-            self._policy,
-            self._registrations,
             path=path,
             is_directory=is_directory,
             role=_derived_role(path),
-        )
-
         )
         # Policy and trusted owner registry are supplied only by deployment,
         # not by mutable `00-Control` content in the Files workspace.

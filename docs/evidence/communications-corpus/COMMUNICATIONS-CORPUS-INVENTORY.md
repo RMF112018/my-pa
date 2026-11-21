@@ -67,9 +67,9 @@ The record counts per folder role include the backfill lane duplicates described
 
 Every publication declares the same 3 sources: `inbox` (mail lane, authorized, coverage `complete`), `sent` (mail lane, authorized, coverage `complete`) and `procore_rfis` (project-system lane, `not_authorized`, 0 records). Paging status is not reported in the lean dialect (`pages` 0). Only the rich dialect carries a `counts` block.
 
-## Contract validation result (Manager, contract head `ac0d06ae`)
+## Contract validation result (Manager, contract head `184ac6ca`)
 
-The WP1 aggregate CLI accepted **31 of 31** publications (0 rejected; 29 lean, 2 rich), with 0 unknown top-level keys and 0 unknown record keys in every file. Diagnostic codes over the corpus: `multi_lane_item` 421, `subject_empty` 7, `participant_from_absent` 2, `participant_entry_invalid` 2, `duplicate_provider_id` 1, `window_hours_mismatch` 1 (the Friday live file, 24 declared vs 33.2 actual), `body_truncated` 1.
+These figures were measured at `184ac6ca` (Manager real-corpus run, 2026-11-21) at contract head `184ac6cadd49be9a19f94fcbf60acda22c35a06c`, after fix F1; they match the earlier `ac0d06ae` run, and the identity, lane, quarantine and coverage results were re-verified unchanged. The WP1 aggregate CLI accepted **31 of 31** publications (0 rejected; 29 lean, 2 rich), with 0 unknown top-level keys and 0 unknown record keys in every file. Diagnostic codes over the corpus: `multi_lane_item` 421, `subject_empty` 7, `participant_from_absent` 2, `participant_entry_invalid` 2, `duplicate_provider_id` 1, `window_hours_mismatch` 1 (the Friday live file, 24 declared vs 33.2 actual), `body_truncated` 1.
 
 ## What changed from v1
 

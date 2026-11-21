@@ -1,6 +1,6 @@
 # Communications search characteristics
 
-**Basis:** see the [common basis](README.md#common-basis) (aggregate JSON SHA-256 `82edeee885125a6552a00f7046adbefe0337d5e035905fc08dcceb2261a7945d`, 2026-11-21, Manager-run collection; 31 publications = 29 canonical lean + 2 rich), and the contract CLI result at `ac0d06ae` (derivation `comms_search_text_v1`, extractor `comms_identifiers_v1`). Aggregates only. All counts are over the 4,141 records (observations), so lane duplicates are counted twice.
+**Basis:** see the [common basis](README.md#common-basis) (aggregate JSON SHA-256 `82edeee885125a6552a00f7046adbefe0337d5e035905fc08dcceb2261a7945d`, 2026-11-21, Manager-run collection; 31 publications = 29 canonical lean + 2 rich), and the contract CLI result measured at `184ac6ca` (Manager real-corpus run, 2026-11-21) (derivation `comms_search_text_v1`, extractor `comms_identifiers_v1`; contract head `184ac6cadd49be9a19f94fcbf60acda22c35a06c`, the WP1 head after fix F1). Aggregates only. All counts are over the 4,141 records (observations), so lane duplicates are counted twice.
 
 ## Bodies
 
@@ -27,6 +27,8 @@ Lean derived text carries no digest, so the contract does not trust it as the te
 
 ## Searchable text derived by the contract (`comms_search_text_v1`)
 
+All contract figures in this section and the next were measured at `184ac6ca` (Manager real-corpus run, 2026-11-21). The identity, lane, quarantine and coverage results were re-verified unchanged at `184ac6ca` against the earlier `ac0d06ae` run; only `disclaimer_removed` and the `rfi`, `submittal` and `spec` identifier counts moved.
+
 | Basis | Records |
 | --- | ---: |
 | `body_content` (contract html→text or passthrough) | 3,563 |
@@ -38,12 +40,12 @@ Lean derived text carries no digest, so the contract does not trust it as the te
 | `markup_dropped` | 3,754 |
 | `quoted_chain_removed` | 2,011 |
 | `quoted_chain_retained` (cut would leave nothing; text kept) | 59 |
-| `disclaimer_removed` | 684 |
+| `disclaimer_removed` | 125 |
 | `metadata_only` | 436 |
 | `withheld` | 44 |
 | `truncated` | 1 |
 
-Quoted-chain stripping removed a chain in 2,011 records against 2,143 records the analysis heuristic saw a chain in; signature/disclaimer removal fired in 684 against 1,056 marker hits, because the contract's disclaimer rules are deliberately conservative (it never cuts to empty and needs a paragraph-level marker). The 684 was measured at `ac0d06ae`; fix F1 (review R1) then narrowed the rules further, so that only an exact RFC 3676 `-- ` delimiter near the end counts and a "this email … confidential" sentence counts only when it starts a trailing paragraph. The current count is at most 684 and has not been re-measured.
+Quoted-chain stripping removed a chain in 2,011 records against 2,143 records the analysis heuristic saw a chain in; signature/disclaimer removal fired in 125 against 1,056 marker hits, because the contract's disclaimer rules are deliberately conservative (it never cuts to empty and needs a paragraph-level marker). Fix F1 (review R1) narrowed the rules so that only an exact RFC 3676 `-- ` delimiter near the end counts and a "this email … confidential" sentence counts only when it starts a trailing paragraph; that took the count from 684 at `ac0d06ae` to 125 measured at `184ac6ca` (Manager real-corpus run, 2026-11-21).
 
 ## Privacy screen (rich dialect only)
 
@@ -61,20 +63,20 @@ Two measurements, not to be confused. The analysis column is a broad regex over 
 
 | Kind | Analysis: records with a match | Contract v1: records | Contract v1: distinct identifiers (sum per record) |
 | --- | ---: | ---: | ---: |
-| RFI number | 67 | 51 | 70 |
+| RFI number | 67 | 75 | 94 |
 | Change bulletin (`CB #n`) | 11 | 10 | 21 |
 | GMP | 518 | 458 | 458 |
 | FPL | 263 | 134 | 134 |
 | Change order (analysis: CO/PCO/COR-n) | 104 | 0 | 0 |
-| Submittal | 128 | 28 | 28 |
-| Six-digit spec-section-like number | 1,713 | 1 (cued only) | 1 |
+| Submittal | 128 | 31 | 31 |
+| Six-digit spec-section-like number | 1,713 | 5 (cued only) | 5 |
 
 Readings:
 
-- **Six-digit numbers are noise by default.** 1,713 records hold a bare six-digit number shaped like a CSI MasterFormat section; the analysis could not tell sections from other numbers, so a bare six-digit number is not evidence of a section. v1 admits a spec section only after a `Section`/`Spec` cue, and found 1.
+- **Six-digit numbers are noise by default.** 1,713 records hold a bare six-digit number shaped like a CSI MasterFormat section; the analysis could not tell sections from other numbers, so a bare six-digit number is not evidence of a section. v1 admits a spec section only after a `Section`/`Spec` cue, and found 5.
 - **Change orders.** v1 extracts only upper-case `CO` with a separator and excludes `PCO`/`COR` (letter before), and found none; the analysis pattern included `PCO` and `COR`. Per Manager ruling 2026-11-21 (R5), this low recall is an **open WP4 defect**, to be fixed with tests; WP4 decides whether `pco`/`cor` kinds are added.
-- **FPL and submittals** drop most sharply because v1 requires an upper-case acronym (`FPL`) and a number after `Submittal`; the analysis matched words. Recall of v1 against labelled examples is a WP4 acceptance item.
-- **Exactness.** `RFI 17` never matches `RFI 174` or `RFI 1740` in v1 (token-bounded, leading zeros dropped for integer kinds), and `RFI 1,740` is not `rfi:1` (a number never continues into `,` followed by a digit, added in fix F1 after the corpus measurement); the unit tests pin it.
+- **FPL and submittals** drop most sharply because v1 requires an upper-case acronym (`FPL`) and a number after `Submittal`; the analysis matched words. Recall of v1 against labelled examples is a WP4 acceptance item; per Manager ruling 2026-11-21 (R5), the low FPL and submittal recall is part of the same **open WP4 defect**, to be fixed with tests.
+- **Exactness.** `RFI 17` never matches `RFI 174` or `RFI 1740` in v1 (token-bounded, leading zeros dropped for integer kinds), and `RFI 1,740` is not `rfi:1` (a number never continues into `,` followed by a digit, added in fix F1); the unit tests pin it.
 
 ## Text size planning
 

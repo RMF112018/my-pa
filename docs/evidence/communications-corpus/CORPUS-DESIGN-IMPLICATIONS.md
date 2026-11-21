@@ -1,6 +1,6 @@
 # Corpus design implications
 
-**Basis:** see the [common basis](README.md#common-basis) (aggregate JSON SHA-256 `82edeee885125a6552a00f7046adbefe0337d5e035905fc08dcceb2261a7945d`, 2026-11-21, Manager-run collection; 31 publications = 29 canonical lean + 2 rich), with the post-validation corrections at contract head `ac0d06ae`. Aggregates only.
+**Basis:** see the [common basis](README.md#common-basis) (aggregate JSON SHA-256 `82edeee885125a6552a00f7046adbefe0337d5e035905fc08dcceb2261a7945d`, 2026-11-21, Manager-run collection; 31 publications = 29 canonical lean + 2 rich), with the post-validation corrections at contract head `ac0d06ae` and the contract figures measured at `184ac6ca` (Manager real-corpus run, 2026-11-21); the identity, lane, quarantine and coverage results were re-verified unchanged at `184ac6ca` against the earlier `ac0d06ae` run. Aggregates only.
 
 Each row maps a measured finding to the design decision it forces and to where that decision is recorded: "D*n*" is a decision of [ADR-021](../../decisions/ADR-021-communications-intelligence.md); "§*n*" is a section of [`communications-intelligence-contract.md`](../../architecture/communications-intelligence-contract.md).
 
@@ -26,7 +26,7 @@ Each row maps a measured finding to the design decision it forces and to where t
 | 18 | 160 empty bodies, 439 empty derived texts ([search](COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)) | Empty → metadata-only, flagged; never a search hit on text | D11; §6 |
 | 19 | Construction identifiers frequent (GMP 518, FPL 263, RFI 67 records by analysis) ([search](COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)) | Exact identifier index beside FTS; exact-match tiers rank first | D12; §7, §14 |
 | 20 | Six-digit spec-like numbers in 1,713 records ([search](COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)) | Spec sections need a cue by default; bare numbers never | D12; §7 |
-| 21 | Analysis CO/PCO/COR 104 vs v1 `co` 0; FPL and submittal recall far below analysis ([search](COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)) | Extractor versioned; WP4 measures recall and decides new kinds; low recall is an open WP4 defect (Manager ruling 2026-11-21, R5) | D12; §7, §20.4 |
+| 21 | Analysis CO/PCO/COR 104 vs v1 `co` 0; FPL (134 vs 263) and submittal (31 vs 128, measured at `184ac6ca` (Manager real-corpus run, 2026-11-21)) recall far below analysis ([search](COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)) | Extractor versioned; WP4 measures recall and decides new kinds; low recall is an open WP4 defect (Manager ruling 2026-11-21, R5) | D12; §7, §20.4 |
 | 22 | Corpus fits tens of thousands of rows a year ([search](COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)) | PostgreSQL FTS + `pg_trgm` only; no semantic index or engine | D12; §6 |
 | 23 | Friday window 33.2 h labelled 24 ([coverage](COMMUNICATIONS-COVERAGE-BASELINE.md)) | Coverage from bounds only; `hours` is a label | D13; §9 |
 | 24 | Inclusive end; backfill windows 1 s apart ([coverage](COMMUNICATIONS-COVERAGE-BASELINE.md)) | Inclusive containment; merge when ≤ 1 s apart | D13; §9 |

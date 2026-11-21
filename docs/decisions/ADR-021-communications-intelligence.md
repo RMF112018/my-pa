@@ -4,7 +4,7 @@
 - **Decision ID:** `MYPA-COMMS-D-021`
 - **Goal:** `MYPA-COMMS-MEETCTX-P1P3-20261121`, extended by `MYPA-PULSE-INTELLIGENCE-EXTENSION-20261121` (shared ingestion lifecycle only)
 - **Repository:** `RMF112018/my-pa`
-- **Repository identity:** branch `feat/comms-intelligence` at `ac0d06ae85200c3aa48c66279745a76808684a35` (tree `44c2dbd6d59af088036f1110281cdbf2b93a85ca`), on `origin/main@092610d36b7d1493fc7fda6e352a4bd06e914f61` (the cycles worker plane, #367, merged). Alembic single head `640aaacc78e8` (129 revision files). `ADR-020` is taken by the meeting prep briefs of PR #368 (branch `feat/meeting-prep`, not merged here), so this is `ADR-021`.
+- **Repository identity:** contract head measured: branch `feat/comms-intelligence` at `184ac6cadd49be9a19f94fcbf60acda22c35a06c` (tree `9fd1dc787519fbbd71b4b0aaef746498bf9a9129`), the WP1 head after fix F1, real-corpus aggregate measured at `184ac6ca` (Manager real-corpus run, 2026-11-21), on `origin/main@092610d36b7d1493fc7fda6e352a4bd06e914f61` (the cycles worker plane, #367, merged). Alembic single head `640aaacc78e8` (129 revision files). `ADR-020` is taken by the meeting prep briefs of PR #368 (branch `feat/meeting-prep`, not merged here), so this is `ADR-021`.
 - **Scope:** communications as an evidence class (Outlook mail collected by the ChatLLM collector and published as `communications_evidence_v2` JSON), its identity, storage, search, coverage and meeting-context retrieval, and the ingestion lifecycle it shares with Procore PULSE exports. The concrete contract is [`communications-intelligence-contract.md`](../architecture/communications-intelligence-contract.md) ("the spec"); the corpus evidence is [`docs/evidence/communications-corpus/`](../evidence/communications-corpus/README.md).
 
 ## Context

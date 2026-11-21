@@ -1,6 +1,6 @@
 # Message identity and deduplication assessment
 
-**Basis:** see the [common basis](README.md#common-basis) (aggregate JSON SHA-256 `82edeee885125a6552a00f7046adbefe0337d5e035905fc08dcceb2261a7945d`, 2026-11-21, Manager-run collection; 31 publications = 29 canonical lean + 2 rich), with the post-validation corrections of 2026-11-21 (contract head `ac0d06ae`). Aggregates only: no identifier value appears here.
+**Basis:** see the [common basis](README.md#common-basis) (aggregate JSON SHA-256 `82edeee885125a6552a00f7046adbefe0337d5e035905fc08dcceb2261a7945d`, 2026-11-21, Manager-run collection; 31 publications = 29 canonical lean + 2 rich), with the post-validation corrections of 2026-11-21 (contract head `ac0d06ae`), re-measured at `184ac6ca` (Manager real-corpus run, 2026-11-21); the identity, lane, quarantine and coverage results were re-verified unchanged at `184ac6ca` against the earlier `ac0d06ae` run. Aggregates only: no identifier value appears here.
 
 ## Identity fields
 

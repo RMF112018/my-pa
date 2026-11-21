@@ -514,6 +514,8 @@ class SafeDetail(StrEnum):
     LOCATION_TEXT = "location_text"
     RESPONSE_STATUS = "response_status"
     CLEAR_FIELDS = "clear_fields"
+    #: ADR-020 C2: the Meeting prep brief field, named and never its content.
+    PREP = "prep"
     #: The Record Event feed (WP-RE-06): the requested family narrowing was
     #: empty, named an unknown family or repeated one. `CURSOR` and `PAGE_SIZE`
     #: are reused for the feed's other two fields.

@@ -997,7 +997,8 @@
     "meetings.read": {
       "purpose": "meeting_read",
       "payloadFields": [
-        "meeting_id"
+        "meeting_id",
+        "prep_version_number"
       ],
       "probe": {
         "meeting_id": "mtg_aaaaaaaa11111111"
@@ -1064,6 +1065,7 @@
         "attachment_remove_ids",
         "notes_mode",
         "notes_markdown",
+        "prep_markdown",
         "meeting_series_id"
       ],
       "probe": {

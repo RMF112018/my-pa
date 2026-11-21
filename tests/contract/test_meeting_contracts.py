@@ -21,12 +21,14 @@ from my_pa.contracts.v1.meetings import (
     MeetingHistoryView,
     MeetingListEntry,
     MeetingNoteView,
+    MeetingPrepView,
     MeetingSeriesHistoryView,
     MeetingSeriesView,
     MeetingView,
 )
 from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.meeting import (
+    MAX_MEETING_PREP_CHARACTERS,
     AttendeeResponseStatus,
     MeetingAttachmentAvailability,
     MeetingStatus,
@@ -150,6 +152,8 @@ EXPECTED_FIELDS: dict[type[StrictModel], set[str]] = {
         "attendees",
         "attachments",
         "notes",
+        "prep",
+        "prep_version",
     },
     MeetingListEntry: {
         "meeting_id",
@@ -244,7 +248,15 @@ def test_every_view_is_a_strict_model(view: type[StrictModel]) -> None:
 
 def test_list_rows_exclude_pii_links_description_and_notes() -> None:
     fields = set(MeetingListEntry.model_fields)
-    for excluded in ("description", "virtual_meeting_url", "attendees", "attachments", "notes"):
+    for excluded in (
+        "description",
+        "virtual_meeting_url",
+        "attendees",
+        "attachments",
+        "notes",
+        "prep",
+        "prep_version",
+    ):
         assert excluded not in fields
 
 
@@ -469,3 +481,87 @@ def test_views_are_frozen() -> None:
     view = _meeting()
     with pytest.raises(ValidationError):
         view.title = "changed"
+
+
+# ------------------------------------------------------------ ADR-020 prep view
+
+PREP = make_identifier(IdKind.MEETING_PREP_VERSION, "aaaa1111bbbb")
+PREP_PRIOR = make_identifier(IdKind.MEETING_PREP_VERSION, "cccc3333dddd")
+_SHA = "a" * 64
+
+
+def _prep(**overrides: Any) -> MeetingPrepView:  # noqa: ANN401
+    arguments: dict[str, Any] = {
+        "prep_version_id": PREP,
+        "version_number": 1,
+        "supersedes_prep_version_id": None,
+        "content_sha256": _SHA,
+        "character_count": 5,
+        "recorded_at": AT,
+        "is_current": True,
+        "body_markdown": "Brief",
+    }
+    arguments.update(overrides)
+    return MeetingPrepView(**arguments)
+
+
+def test_prep_view_field_set_is_exactly_adr_020_c4() -> None:
+    assert set(MeetingPrepView.model_fields) == {
+        "prep_version_id",
+        "version_number",
+        "supersedes_prep_version_id",
+        "content_sha256",
+        "character_count",
+        "recorded_at",
+        "is_current",
+        "body_markdown",
+    }
+    assert issubclass(MeetingPrepView, StrictModel)
+    assert MeetingPrepView.model_config["extra"] == "forbid"
+    assert not set(MeetingPrepView.model_fields) & {
+        "principal_id",
+        "meeting_history_id",
+        "idempotency_key",
+        "request_digest",
+    }
+
+
+def test_prep_view_bounds_follow_the_named_cap() -> None:
+    body = "a" * MAX_MEETING_PREP_CHARACTERS
+    assert _prep(body_markdown=body, character_count=len(body)).character_count == len(body)
+    over = body + "a"
+    with pytest.raises(ValidationError):
+        _prep(body_markdown=over, character_count=len(body))
+    with pytest.raises(ValidationError):
+        _prep(body_markdown="   ", character_count=3)
+    with pytest.raises(ValidationError):
+        _prep(character_count=4)
+    with pytest.raises(ValidationError):
+        _prep(content_sha256="A" * 64)
+
+
+def test_prep_view_chain_shape_and_identifier_kinds() -> None:
+    assert _prep(version_number=2, supersedes_prep_version_id=PREP_PRIOR).version_number == 2
+    with pytest.raises(ValidationError):
+        _prep(version_number=2)
+    with pytest.raises(ValidationError):
+        _prep(supersedes_prep_version_id=PREP_PRIOR)
+    with pytest.raises(ValidationError):
+        _prep(prep_version_id=NOTE)
+    with pytest.raises(ValidationError):
+        _prep(version_number=2, supersedes_prep_version_id=NOTE)
+
+
+def test_meeting_view_carries_prep_head_and_requested_version() -> None:
+    view = _meeting(
+        prep=_prep(),
+        prep_version=_prep(is_current=False, prep_version_id=PREP_PRIOR),
+    )
+    dumped = view.to_canonical_dict()
+    assert dumped["prep"]["body_markdown"] == "Brief"
+    assert dumped["prep_version"]["is_current"] is False
+    plain = _meeting().to_canonical_dict()
+    assert plain["prep"] is None
+    assert plain["prep_version"] is None
+    with pytest.raises(ValidationError):
+        _meeting(prep=_prep(is_current=False))

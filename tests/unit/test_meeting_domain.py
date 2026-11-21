@@ -36,6 +36,7 @@ from my_pa.domain.meeting import (
     MAX_MEETING_LOCATION_CHARACTERS,
     MAX_MEETING_NOTES_CHARACTERS,
     MAX_MEETING_PAGE_SIZE,
+    MAX_MEETING_PREP_CHARACTERS,
     MAX_MEETING_QUERY_CHARACTERS,
     MAX_MEETING_TITLE_CHARACTERS,
     MAX_TIMEZONE_NAME_CHARACTERS,
@@ -82,6 +83,7 @@ from my_pa.domain.meeting import (
     validate_meeting_description,
     validate_meeting_location_text,
     validate_meeting_notes_markdown,
+    validate_meeting_prep_markdown,
     validate_meeting_time_range,
     validate_meeting_title,
     validate_timezone_name,
@@ -131,6 +133,8 @@ MEETING_PREFIXES = {
     IdKind.MEETING_HISTORY: "mhst",
     IdKind.MEETING_NOTE_VERSION: "mnote",
     IdKind.MEETING_SERIES_HISTORY: "mshst",
+    # ADR-020 C1: the prep brief version chain.
+    IdKind.MEETING_PREP_VERSION: "mprep",
 }
 
 
@@ -237,6 +241,58 @@ def test_location_and_description_keep_exact_content_including_empty() -> None:
 def test_notes_must_be_nonblank_and_bounded(body: str) -> None:
     with _refused(MeetingErrorField.NOTES):
         validate_meeting_notes_markdown(body)
+
+
+# ------------------------------------------------------------ prep (ADR-020)
+
+
+def test_the_prep_cap_is_four_note_caps() -> None:
+    assert MAX_MEETING_PREP_CHARACTERS == 4 * MAX_MEETING_NOTES_CHARACTERS == 400_000
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["x", " leading and trailing ", "# Agenda\n\n- one", "a" * 400_000],
+    ids=["one", "spaced", "markdown", "at-cap"],
+)
+def test_a_prep_body_is_stored_exactly(body: str) -> None:
+    assert validate_meeting_prep_markdown(body) is body
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["", "   ", "\n\t\n", "a" * 400_001, None, 7, b"bytes", ["x"]],
+    ids=["empty", "spaces", "whitespace", "over-cap", "none", "int", "bytes", "list"],
+)
+def test_a_prep_body_must_be_a_nonblank_bounded_string(body: object) -> None:
+    with _refused(MeetingErrorField.PREP):
+        validate_meeting_prep_markdown(body)
+
+
+def test_create_accepts_an_optional_prep_body() -> None:
+    assert _create().prep_markdown is None
+    assert _create(prep_markdown="Agenda").prep_markdown == "Agenda"
+    with _refused(MeetingErrorField.PREP):
+        _create(prep_markdown=" ")
+    with _refused(MeetingErrorField.PREP):
+        _create(prep_markdown="a" * (MAX_MEETING_PREP_CHARACTERS + 1))
+
+
+def test_update_prep_alone_is_material_and_replace_only() -> None:
+    request = _update(prep_markdown="New brief")
+    assert request.prep_markdown == "New brief"
+    assert request.has_material_selector
+    assert request.notes_mode is None
+    with _refused(MeetingErrorField.PREP):
+        _update(prep_markdown="\n")
+    with _refused(MeetingErrorField.PREP):
+        _update(prep_markdown=7)
+    # No mode field and no clear: `prep` is not a clear field (ADR-020 C2).
+    with pytest.raises(TypeError):
+        _update(prep_markdown="x", prep_mode="replace")
+    assert "prep" not in {member.value for member in MeetingClearField}
+    with _refused(MeetingErrorField.CLEAR_FIELDS):
+        _update(clear_fields=("prep",))
 
 
 # ---------------------------------------------------------------- time and zone
@@ -958,7 +1014,11 @@ def test_error_tokens_are_safe_detail_values() -> None:
         "query",
     }
     existing_safe_detail = {"page_size", "mutations"}
-    assert {token.value for token in MeetingErrorField} == section_35_16 | existing_safe_detail
+    # ADR-020 C2 adds exactly one token, with its `SafeDetail` twin.
+    adr_020 = {"prep"}
+    assert {token.value for token in MeetingErrorField} == (
+        section_35_16 | existing_safe_detail | adr_020
+    )
 
 
 def test_rejected_values_never_reach_the_message() -> None:

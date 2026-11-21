@@ -218,6 +218,7 @@ from my_pa.domain.meeting.model import (
     MAX_MEETING_LOCATION_CHARACTERS,
     MAX_MEETING_NOTES_CHARACTERS,
     MAX_MEETING_PAGE_SIZE,
+    MAX_MEETING_PREP_CHARACTERS,
     MAX_MEETING_QUERY_CHARACTERS,
     MAX_MEETING_TITLE_CHARACTERS,
     MAX_TIMEZONE_NAME_CHARACTERS,
@@ -12873,6 +12874,18 @@ _MEETING_SCALAR_SCHEMAS: Final[Mapping[str, Mapping[str, object]]] = MappingProx
             "maxLength": MAX_MEETING_NOTES_CHARACTERS,
             "description": "Meeting notes as Markdown text, stored as data.",
         },
+        "prep_markdown": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": MAX_MEETING_PREP_CHARACTERS,
+            "description": (
+                "The Meeting prep brief (agenda, background, questions) as Markdown "
+                "text, stored as data and never rendered. Replace only: the body you "
+                "send is the whole new prep version, earlier versions stay readable "
+                "through meetings.read prep_version_number. A body identical to the "
+                "current prep writes nothing; prep cannot be cleared."
+            ),
+        },
     }
 )
 
@@ -12943,6 +12956,7 @@ class CreateMeeting:
     attendees: tuple[dict[str, object], ...] = field(default=(), repr=False)
     attachment_document_ids: tuple[str, ...] = ()
     notes_markdown: str | None = field(default=None, repr=False)
+    prep_markdown: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         _idempotency_key(self.idempotency_key)
@@ -12954,6 +12968,7 @@ class CreateMeeting:
         _optional_storable_text(self.virtual_meeting_url, SafeDetail.VIRTUAL_MEETING_URL)
         _optional_storable_text(self.description, SafeDetail.DESCRIPTION)
         _optional_storable_text(self.notes_markdown, SafeDetail.NOTES)
+        _optional_storable_text(self.prep_markdown, SafeDetail.PREP)
         self.meeting_request()
 
     def meeting_request(self) -> MeetingCreateRequest:
@@ -12975,28 +12990,48 @@ class CreateMeeting:
                 attendees=attendees,
                 attachment_document_ids=documents,
                 notes_markdown=self.notes_markdown,
+                prep_markdown=self.prep_markdown,
             )
         )
 
 
 @dataclass(frozen=True, slots=True)
 class ReadMeeting:
-    """`meetings.read`: one Meeting of yours, with attendees, attachments and current note.
+    """`meetings.read`: one Meeting of yours, with attendees, attachments, current
+    note and current prep brief.
 
-    A Meeting another Principal holds is answered exactly as an absent one:
+    `prep_version_number` (ADR-020 C6) also returns that exact earlier or current
+    prep version as `prep_version`; a number with no version is not_found. A
+    Meeting another Principal holds is answered exactly as an absent one:
     not_found.
     """
 
     capability: ClassVar[Capability] = Capability.MEETINGS_READ
 
     mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
-        {"meeting_id": _meeting_id_schema(IdKind.MEETING, "The Meeting to read.")}
+        {
+            "meeting_id": _meeting_id_schema(IdKind.MEETING, "The Meeting to read."),
+            "prep_version_number": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    "Optional. Also return this exact prep brief version as prep_version "
+                    "(1 is the first; the current prep's version_number is the latest). "
+                    "A number with no version is not_found."
+                ),
+            },
+        }
     )
 
     meeting_id: str
+    prep_version_number: int | None = None
 
     def __post_init__(self) -> None:
         _identifier(self.meeting_id, IdKind.MEETING, SafeDetail.MEETING_ID)
+        if self.prep_version_number is not None and (
+            type(self.prep_version_number) is not int or self.prep_version_number < 1
+        ):
+            raise InvalidRequestError(SafeDetail.PREP)
 
 
 #: The structured filters `meetings.list` and `meetings.search` share.
@@ -13100,7 +13135,8 @@ class SearchMeetings:
     """`meetings.search`: one bounded keyset page of your Meetings matching a query.
 
     The query matches the Meeting title, description and location, its series
-    title, and its current note only; attendee names and emails are never searched
+    title, its current note and its current prep brief only (a superseded note or
+    prep version never matches); attendee names and emails are never searched
     lexically. The `meetings.list` filters apply, and the order is the same
     `(start_at, meeting_id)` keyset.
     """
@@ -13154,7 +13190,10 @@ class UpdateMeeting:
     Omitted means unchanged; a clear is only ever a `clear_fields` member, never
     null. `attendees_replace` replaces the active attendee set (an empty array
     clears it). Attachments are added and removed as relations; the documents are
-    never touched. `notes_mode` and `notes_markdown` come together. Series
+    never touched. `notes_mode` and `notes_markdown` come together.
+    `prep_markdown` replaces the prep brief with a new version (ADR-020); a body
+    identical to the current prep changes nothing, and prep cannot be cleared.
+    Series
     membership is reassignable (operator decision 2026-10-09): omit
     `meeting_series_id` to leave it unchanged, send an existing series id of
     yours to attach or move the Meeting (a missing or foreign series is
@@ -13235,6 +13274,7 @@ class UpdateMeeting:
     attachment_remove_ids: tuple[str, ...] = ()
     notes_mode: MeetingNotesMode | None = None
     notes_markdown: str | None = field(default=None, repr=False)
+    prep_markdown: str | None = field(default=None, repr=False)
     meeting_series_id: str | _SeriesOmitted | None = _SERIES_OMITTED
 
     def __post_init__(self) -> None:
@@ -13248,6 +13288,7 @@ class UpdateMeeting:
         _optional_storable_text(self.virtual_meeting_url, SafeDetail.VIRTUAL_MEETING_URL)
         _optional_storable_text(self.description, SafeDetail.DESCRIPTION)
         _optional_storable_text(self.notes_markdown, SafeDetail.NOTES)
+        _optional_storable_text(self.prep_markdown, SafeDetail.PREP)
         if not isinstance(self.clear_fields, tuple):
             raise InvalidRequestError(SafeDetail.CLEAR_FIELDS)
         if self.status is not None and not isinstance(self.status, MeetingStatus):
@@ -13281,6 +13322,7 @@ class UpdateMeeting:
                 attachment_remove_ids=removed,
                 notes_mode=self.notes_mode,
                 notes_markdown=self.notes_markdown,
+                prep_markdown=self.prep_markdown,
                 meeting_series_id=(
                     None
                     if isinstance(self.meeting_series_id, _SeriesOmitted)

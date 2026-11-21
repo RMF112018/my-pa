@@ -26,6 +26,7 @@ function meeting(): Json {
       virtual_meeting_url: null, description: null, created_at: "2026-08-09T12:00:00Z", cancelled_at: null,
       attendees: [], attachments: [],
       notes: { note_version_id: "mnote_bbbbbbbb22222222", version_number: 2, body_markdown: CURRENT_BODY, recorded_at: "2026-08-09T12:00:00Z" },
+      prep: null, prep_version: null,
     },
   };
 }

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final, get_args
 
@@ -74,11 +74,13 @@ from my_pa.domain.identity.operation import (
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.meeting.model import (
+    MAX_MEETING_PREP_CHARACTERS,
     MEETINGS_CREATE_NAME,
     MEETINGS_SERIES_UPDATE_NAME,
     MEETINGS_UPDATE_NAME,
     AttendeeResponseStatus,
     MeetingClearField,
+    MeetingCreateRequest,
     MeetingErrorField,
     MeetingNotesMode,
     MeetingSortDirection,
@@ -95,6 +97,7 @@ from my_pa.infrastructure.persistence.tables import (
     managed_document_lifecycle_events,
     managed_document_versions,
     managed_documents,
+    meeting_prep_versions,
     meeting_series,
     meeting_write_requests,
     projects,
@@ -250,6 +253,7 @@ def test_create_schema_carries_every_section_35_8_overlay() -> None:
         "attendees",
         "attachment_document_ids",
         "notes_markdown",
+        "prep_markdown",
     }
     assert (
         properties["title"].items() >= {"type": "string", "minLength": 1, "maxLength": 200}.items()
@@ -528,7 +532,10 @@ def test_absent_series_id_and_null_give_three_distinct_update_digests() -> None:
 def test_the_read_list_search_and_series_schemas_are_exact() -> None:
     read = payload_schema_for(ReadMeeting)
     assert read["required"] == ["meeting_id"]
+    assert set(read["properties"]) == {"meeting_id", "prep_version_number"}
     assert read["properties"]["meeting_id"]["pattern"] == _id_pattern(IdKind.MEETING)
+    assert read["properties"]["prep_version_number"]["type"] == "integer"
+    assert read["properties"]["prep_version_number"]["minimum"] == 1
     listed = payload_schema_for(ListMeetings)
     assert listed["required"] == []
     assert listed["properties"]["status"]["enum"] == ["scheduled", "cancelled"]
@@ -752,6 +759,7 @@ _STORABLE_CASES: Final[tuple[tuple[Capability, dict[str, Any], str, str, str], .
     ),
     (Capability.MEETINGS_CREATE, CREATE_MINIMUM, "description", "scalar", "description"),
     (Capability.MEETINGS_CREATE, CREATE_MINIMUM, "notes_markdown", "scalar", "notes"),
+    (Capability.MEETINGS_CREATE, CREATE_MINIMUM, "prep_markdown", "scalar", "prep"),
     (Capability.MEETINGS_CREATE, CREATE_MINIMUM, "idempotency_key", "scalar", "idempotency_key"),
     (Capability.MEETINGS_CREATE, CREATE_MINIMUM, "attendees", "display_name", "attendees"),
     (Capability.MEETINGS_CREATE, CREATE_MINIMUM, "attendees", "email", "attendees"),
@@ -767,6 +775,7 @@ _STORABLE_CASES: Final[tuple[tuple[Capability, dict[str, Any], str, str, str], .
     ),
     (Capability.MEETINGS_UPDATE, _UPDATE_BASE, "description", "scalar", "description"),
     (Capability.MEETINGS_UPDATE, _UPDATE_BASE, "notes_markdown", "notes", "notes"),
+    (Capability.MEETINGS_UPDATE, _UPDATE_BASE, "prep_markdown", "scalar", "prep"),
     (Capability.MEETINGS_UPDATE, _UPDATE_BASE, "idempotency_key", "scalar", "idempotency_key"),
     (Capability.MEETINGS_UPDATE, _UPDATE_BASE, "attendees_replace", "display_name", "attendees"),
     (Capability.MEETINGS_UPDATE, _UPDATE_BASE, "attendees_replace", "email", "attendees"),
@@ -1512,3 +1521,313 @@ def test_e15_same_key_replays_and_a_different_request_conflicts(canonical: Canon
         {**CREATE_MINIMUM, "idempotency_key": "e15-create", "title": "Different"},
     )
     assert (conflict["code"], conflict["safe_details"]) == ("conflict", ["idempotency_conflict"])
+
+
+# ================================================================ ADR-020 prep
+#
+# The meeting prep brief (ADR-020 C2-C9) on the existing create, update, read
+# and search surfaces. FAST cases over the published schemas, `normalize` and
+# the in-memory fake; E-16 below is the database + e2e evidence.
+
+#: `meeting_request_digest` of `_full_create_request()`, computed on base commit
+#: 00880446b, before `meetings.create` had a prep field (ADR-020 C2).
+_PRE_PREP_CREATE_DIGEST: Final = "1c1cecd616b58296761fedd2b44374ba1b96e8d1517e9963243a9f4acf072c48"
+
+
+def _full_create_request(**prep: Any) -> MeetingCreateRequest:  # noqa: ANN401 - prep field
+    """Every pre-existing create field at once, plus `prep` when given."""
+    return MeetingCreateRequest(
+        title="Weekly sync",
+        start_at=_DIGEST_START,
+        timezone_name="America/New_York",
+        end_at=_DIGEST_START + timedelta(minutes=30),
+        series_title="Board",
+        location_text="Room 4",
+        virtual_meeting_url="https://meet.example.invalid/room",
+        description="Agenda",
+        project_id=make_identifier(IdKind.PROJECT, "aaaa1111bbbb"),
+        attendees=(
+            normalize_attendee(
+                display_name="Ada",
+                email="Ada@Example.com",
+                is_organizer=True,
+                response_status=AttendeeResponseStatus.ACCEPTED,
+            ),
+        ),
+        attachment_document_ids=(make_identifier(IdKind.MANAGED_DOCUMENT, "aaaa1111bbbb"),),
+        notes_markdown="Decided **x**.",
+        **prep,
+    )
+
+
+def test_a_create_or_update_without_prep_keeps_its_pre_prep_digest() -> None:
+    """ADR-020 C2: `prep_markdown` enters the digest only when sent."""
+    create = meeting_request_digest(MEETINGS_CREATE_NAME, _DIGEST_PRINCIPAL, _full_create_request())
+    assert create == _PRE_PREP_CREATE_DIGEST
+    assert _update_digest(_digest_request()) == _PRE_REASSIGNMENT_DIGEST
+
+
+def test_a_sent_prep_body_changes_both_digests_and_two_bodies_differ() -> None:
+    def create(body: str) -> str:
+        return meeting_request_digest(
+            MEETINGS_CREATE_NAME, _DIGEST_PRINCIPAL, _full_create_request(prep_markdown=body)
+        )
+
+    def update(body: str) -> str:
+        return _update_digest(replace(_digest_request(), prep_markdown=body))
+
+    assert len({_PRE_PREP_CREATE_DIGEST, create("Brief A"), create("Brief B")}) == 3
+    assert len({_PRE_REASSIGNMENT_DIGEST, update("Brief A"), update("Brief B")}) == 3
+
+
+def test_both_write_schemas_publish_prep_markdown_under_the_named_cap() -> None:
+    for command in (CreateMeeting, UpdateMeeting):
+        schema = payload_schema_for(command)
+        prep = schema["properties"]["prep_markdown"]
+        assert (prep["type"], prep["minLength"], prep["maxLength"]) == (
+            "string",
+            1,
+            MAX_MEETING_PREP_CHARACTERS,
+        )
+        assert "Replace only" in prep["description"]
+        assert "prep_markdown" not in schema["required"]
+    update = payload_schema_for(UpdateMeeting)
+    assert "prep" not in update["properties"]["clear_fields"]["items"]["enum"]
+    assert "prep_mode" not in update["properties"]
+
+
+def test_the_prep_cap_is_admitted_and_one_over_is_refused_at_the_command() -> None:
+    at_cap = "a" * MAX_MEETING_PREP_CHARACTERS
+    over = at_cap + "a"
+    create = {**CREATE_MINIMUM, "prep_markdown": at_cap}
+    update = {**_UPDATE_BASE, "prep_markdown": at_cap}
+    normalize(Capability.MEETINGS_CREATE.value, _request(Capability.MEETINGS_CREATE, create))
+    normalize(Capability.MEETINGS_UPDATE.value, _request(Capability.MEETINGS_UPDATE, update))
+    assert _refusal(Capability.MEETINGS_CREATE, {**create, "prep_markdown": over}) == ("prep",)
+    assert _refusal(Capability.MEETINGS_UPDATE, {**update, "prep_markdown": over}) == ("prep",)
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\n\t "], ids=["empty", "spaces", "whitespace"])
+def test_an_empty_or_blank_prep_body_is_refused_naming_prep(blank: str) -> None:
+    """ADR-020 C2: there is no clear; an empty body is invalid_request on `prep`."""
+    assert _refusal(Capability.MEETINGS_CREATE, {**CREATE_MINIMUM, "prep_markdown": blank}) == (
+        "prep",
+    )
+    assert _refusal(Capability.MEETINGS_UPDATE, {**_UPDATE_BASE, "prep_markdown": blank}) == (
+        "prep",
+    )
+
+
+def test_prep_is_not_a_clear_field() -> None:
+    assert _refusal(Capability.MEETINGS_UPDATE, {**_UPDATE_BASE, "clear_fields": ["prep"]}) == (
+        "clear_fields",
+    )
+
+
+@pytest.mark.parametrize(
+    "bad", [0, -1, True, "1", 1.5], ids=["zero", "negative", "bool", "str", "float"]
+)
+def test_a_malformed_prep_version_number_is_refused_naming_prep(bad: object) -> None:
+    meeting_id = make_identifier(IdKind.MEETING, "prepreadmeeting1")
+    assert _refusal(
+        Capability.MEETINGS_READ, {"meeting_id": meeting_id, "prep_version_number": bad}
+    ) == ("prep",)
+
+
+def test_the_prep_brief_over_the_service(scene: Scene) -> None:
+    """C2/C4/C6 over the in-memory fake: test infrastructure, not database evidence."""
+    service = build_service(scene.world, scene.providers)
+    principal = scene.principal
+
+    def ok(capability: Capability, payload: Mapping[str, Any]) -> dict[str, Any]:
+        envelope = _invoke(service, principal, capability, payload)
+        assert envelope.error is None, envelope.error
+        assert isinstance(envelope.result, dict)
+        return envelope.result
+
+    def update(version: int, key: str, **fields: object) -> ResponseEnvelope:
+        payload = {"meeting_id": meeting_id, "expected_version": version, "idempotency_key": key}
+        return _invoke(service, principal, Capability.MEETINGS_UPDATE, {**payload, **fields})
+
+    created = ok(
+        Capability.MEETINGS_CREATE,
+        {**CREATE_MINIMUM, "idempotency_key": "prep-create-0001", "prep_markdown": "Brief one"},
+    )
+    meeting_id = created["meeting"]["meeting_id"]
+    first = created["meeting"]["prep"]
+    assert (first["version_number"], first["supersedes_prep_version_id"]) == (1, None)
+    assert first["body_markdown"] == "Brief one" and first["is_current"] is True
+    assert first["character_count"] == len("Brief one")
+    assert first["content_sha256"] == hashlib.sha256(b"Brief one").hexdigest()
+    assert created["meeting"]["prep_version"] is None
+    assert "prep" in scene.world.record_events[-1].changed_fields
+
+    second = update(1, "prep-update-0001", prep_markdown="Brief two")
+    assert second.error is None and isinstance(second.result, dict)
+    head = second.result["meeting"]["prep"]
+    assert (head["version_number"], head["supersedes_prep_version_id"]) == (
+        2,
+        first["prep_version_id"],
+    )
+    assert second.result["meeting"]["version"] == 2
+    assert scene.world.record_events[-1].changed_fields == ("prep",)
+
+    events = len(scene.world.record_events)
+    same = update(2, "prep-same-0001", prep_markdown="Brief two")
+    assert same.error is None and isinstance(same.result, dict)
+    assert same.result["history"]["outcome"] == "no_op"
+    assert same.result["meeting"]["version"] == 2
+    assert same.result["meeting"]["prep"] == head
+    assert len(scene.world.record_events) == events
+
+    read = ok(Capability.MEETINGS_READ, {"meeting_id": meeting_id, "prep_version_number": 1})
+    assert read["meeting"]["prep"] == head
+    assert read["meeting"]["prep_version"] == {**first, "is_current": False}
+    plain = ok(Capability.MEETINGS_READ, {"meeting_id": meeting_id})
+    assert plain["meeting"]["prep_version"] is None
+
+    unknown = _invoke(
+        service,
+        principal,
+        Capability.MEETINGS_READ,
+        {"meeting_id": meeting_id, "prep_version_number": 3},
+    )
+    assert _problem(unknown) == (ErrorCode.NOT_FOUND, RetryGuidance.CONDITIONAL, ("prep",))
+    absent = _invoke(
+        service,
+        principal,
+        Capability.MEETINGS_READ,
+        {
+            "meeting_id": make_identifier(IdKind.MEETING, "absentmeeting001"),
+            "prep_version_number": 1,
+        },
+    )
+    assert _problem(absent) == (ErrorCode.NOT_FOUND, RetryGuidance.CONDITIONAL, ("meeting_id",))
+    stale = update(1, "prep-stale-0001", prep_markdown="Brief three")
+    assert _problem(stale) == (ErrorCode.CONFLICT, RetryGuidance.AFTER_REFRESH, ("stale_version",))
+    found = ok(Capability.MEETINGS_SEARCH, {"query": "two"})
+    assert [row["meeting_id"] for row in found["meetings"]] == [meeting_id]
+    assert all("prep" not in row for row in found["meetings"])
+    assert ok(Capability.MEETINGS_SEARCH, {"query": "one"})["meetings"] == []
+
+
+def test_no_prep_body_reaches_a_meeting_error(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    marker = "MARKERPREPBODY"
+    refused = _invoke(
+        service,
+        scene.principal,
+        Capability.MEETINGS_UPDATE,
+        {
+            "meeting_id": scene.meeting_id,
+            "expected_version": 9,
+            "idempotency_key": "prep-marker-0001",
+            "prep_markdown": marker,
+        },
+    )
+    assert refused.error is not None
+    assert marker.lower() not in refused.error.model_dump_json().lower()
+
+
+def _prep_rows(canonical: Canonical, meeting_id: str) -> list[dict[str, Any]]:
+    statement = (
+        select(meeting_prep_versions)
+        .where(meeting_prep_versions.c.meeting_id == meeting_id)
+        .order_by(meeting_prep_versions.c.version_number)
+    )
+    with canonical.engine.connect() as connection:
+        return [dict(row) for row in connection.execute(statement).mappings()]
+
+
+@pytest.mark.database
+@pytest.mark.e2e
+def test_e16_a_prep_brief_versions_reads_searches_and_stays_in_its_partition(
+    canonical: Canonical,
+) -> None:
+    """ADR-020 C1-C7, through the real MCP server on a disposable database."""
+    mine = canonical.mine.principal.principal_id
+    created = _create(canonical, "e16-create", prep_markdown="alpha brief kiwi")
+    meeting_id = created["meeting"]["meeting_id"]
+    receipts = [created["history"]["history_id"]]
+    for version, (key, body) in enumerate(
+        (("e16-v2", "beta brief lychee"), ("e16-v3", "gamma brief mango")), start=1
+    ):
+        written = canonical.ok(
+            Capability.MEETINGS_UPDATE,
+            {
+                "meeting_id": meeting_id,
+                "expected_version": version,
+                "idempotency_key": key,
+                "prep_markdown": body,
+            },
+        )
+        receipts.append(written["history"]["history_id"])
+    assert written["meeting"]["prep"]["version_number"] == 3
+    assert written["meeting"]["version"] == 3
+
+    rows = _prep_rows(canonical, meeting_id)
+    assert [row["version_number"] for row in rows] == [1, 2, 3]
+    assert [row["meeting_history_id"] for row in rows] == receipts
+    assert {row["principal_id"] for row in rows} == {mine}
+    assert rows[0]["supersedes_prep_version_id"] is None
+    assert rows[1]["supersedes_prep_version_id"] == rows[0]["prep_version_id"]
+    assert rows[2]["supersedes_prep_version_id"] == rows[1]["prep_version_id"]
+
+    # No-op: the identical body writes no version and leaves the Meeting version.
+    same = canonical.ok(
+        Capability.MEETINGS_UPDATE,
+        {
+            "meeting_id": meeting_id,
+            "expected_version": 3,
+            "idempotency_key": "e16-same",
+            "prep_markdown": "gamma brief mango",
+        },
+    )
+    assert same["history"]["outcome"] == "no_op" and same["meeting"]["version"] == 3
+    assert len(_prep_rows(canonical, meeting_id)) == 3
+
+    # History: every version by number, with its body, digest and currency.
+    for row in rows:
+        read = canonical.ok(
+            Capability.MEETINGS_READ,
+            {"meeting_id": meeting_id, "prep_version_number": row["version_number"]},
+        )["meeting"]
+        version = read["prep_version"]
+        assert version["prep_version_id"] == row["prep_version_id"]
+        assert version["body_markdown"] == row["content_markdown"]
+        assert version["content_sha256"] == row["content_sha256"]
+        assert version["is_current"] is (row["version_number"] == 3)
+        assert read["prep"]["version_number"] == 3
+    unknown = canonical.refused(
+        Capability.MEETINGS_READ, {"meeting_id": meeting_id, "prep_version_number": 4}
+    )
+    assert (unknown["code"], unknown["safe_details"]) == ("not_found", ["prep"])
+
+    # Search: the current prep only, and only in the caller's partition.
+    hits = canonical.ok(Capability.MEETINGS_SEARCH, {"query": "mango"})
+    assert [entry["meeting_id"] for entry in hits["meetings"]] == [meeting_id]
+    assert canonical.ok(Capability.MEETINGS_SEARCH, {"query": "kiwi"})["meetings"] == []
+    assert canonical.ok(Capability.MEETINGS_SEARCH, {"query": "lychee"})["meetings"] == []
+    theirs = canonical.ok(Capability.MEETINGS_SEARCH, {"query": "mango"}, as_=canonical.theirs)
+    assert theirs["meetings"] == []
+
+    # Principal partition: the other Principal's read, history read and update
+    # are the same not_found as an absent Meeting.
+    for payload in (
+        {"meeting_id": meeting_id},
+        {"meeting_id": meeting_id, "prep_version_number": 1},
+    ):
+        foreign = canonical.refused(Capability.MEETINGS_READ, payload, as_=canonical.theirs)
+        assert (foreign["code"], foreign["safe_details"]) == ("not_found", ["meeting_id"])
+    foreign_update = canonical.refused(
+        Capability.MEETINGS_UPDATE,
+        {
+            "meeting_id": meeting_id,
+            "expected_version": 3,
+            "idempotency_key": "e16-foreign",
+            "prep_markdown": "hijack",
+        },
+        as_=canonical.theirs,
+    )
+    assert (foreign_update["code"], foreign_update["safe_details"]) == ("not_found", ["meeting_id"])
+    assert len(_prep_rows(canonical, meeting_id)) == 3

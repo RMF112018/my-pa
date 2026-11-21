@@ -403,6 +403,7 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "file_workspace_versions",
         "file_workspace_trash",
         "file_workspace_receipts",
+        "meeting_prep_versions",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

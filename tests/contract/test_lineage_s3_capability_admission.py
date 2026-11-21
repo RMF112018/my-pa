@@ -351,6 +351,20 @@ _V1_VIEW_MODULES: Final = (
     "capabilities",
 )
 _V1_VIEW_FIELDS_SHA256: Final = "dff6d5a7482e860134079775c898014ed6b14342fd04164eeae2112d2babc32a"
+#: ADR-020 (meeting prep briefs) deliberately extends `meetings.create`,
+#: `meetings.update` (`prep_markdown`) and `meetings.read` (`prep_version_number`),
+#: and `MeetingView` (`prep`, `prep_version`, beside the new `MeetingPrepView`).
+#: Those tools and views (`_ADR_020_EXTENDED_*`) are excluded and every other shape stays
+#: pinned, each measured at the ADR-020 base `00880446b`. The excluded views'
+#: exact field sets are pinned by `tests/contract/test_meeting_contracts.py`.
+_ADR_020_EXTENDED_TOOLS: Final = frozenset({"meetings.create", "meetings.update", "meetings.read"})
+_ADR_020_EXTENDED_VIEWS: Final = frozenset({"meetings.MeetingView", "meetings.MeetingPrepView"})
+_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_MEETING_PREP: Final = (
+    "ae0f97c41d80eb7b3f8bb08e80c3062b0af0c4a1199933617f539d151f916fad"
+)
+_V1_VIEW_FIELDS_SHA256_WITHOUT_MEETING_VIEW: Final = (
+    "f78a9edb57105e8b25f1330bd2468964b132ca8d7e7af91a7f7c2bf3257825c7"
+)
 
 
 def _canonical_sha256(document: object) -> str:
@@ -398,13 +412,15 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     lineage |= {
         capability.value for capability in Capability if capability.value.startswith("files.")
     }
+    # ADR-020: see `_ADR_020_EXTENDED_TOOLS`.
+    lineage |= _ADR_020_EXTENDED_TOOLS
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
         if tool.name not in lineage
     }
-    assert len(payloads) == 189
-    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG
+    assert len(payloads) == 186
+    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_MEETING_PREP
     views: dict[str, list[str]] = {}
     for name in _V1_VIEW_MODULES:
         module = importlib.import_module(f"my_pa.contracts.v1.{name}")
@@ -415,8 +431,11 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
                 and model.__module__ == module.__name__
             ):
                 views[f"{name}.{model_name}"] = sorted(model.model_fields)
-    assert len(views) == 38
-    assert _canonical_sha256(views) == _V1_VIEW_FIELDS_SHA256
+    # ADR-020: see `_ADR_020_EXTENDED_VIEWS`.
+    for extended in _ADR_020_EXTENDED_VIEWS:
+        views.pop(extended)
+    assert len(views) == 37
+    assert _canonical_sha256(views) == _V1_VIEW_FIELDS_SHA256_WITHOUT_MEETING_VIEW
     # The envelope's `purpose` enum is the one v1 schema S3 widens, and only by
     # its own backfill purpose (section 7.7); S4 widens it by exactly its one
     # Program purpose after it (S4 contract sections 8 and 10, R4-F04, R4-F15).

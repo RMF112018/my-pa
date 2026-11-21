@@ -41,6 +41,11 @@ __all__ = [
     "FolderRole",
     "IdentityState",
     "IntegrityOutcome",
+    "ItemFlag",
+    "LaneObservation",
+    "LaneVerification",
+    "MailboxItem",
+    "MessageTimeBasis",
     "MessageTimestamps",
     "NormalizedMessage",
     "ParticipantField",
@@ -49,12 +54,14 @@ __all__ = [
     "ProviderIdFormat",
     "Publication",
     "QuarantinedRecord",
+    "ReconciledParticipant",
     "RecordClassification",
     "RecordOutcome",
     "SchemaVersion",
     "SourceCoverage",
     "SourceLane",
     "TimestampField",
+    "TimestampState",
     "Window",
     "WindowRule",
 ]
@@ -83,6 +90,7 @@ class RecordClassification(StrEnum):
     ACCEPTED = "accepted"
     ACCEPTED_DEGRADED = "accepted_degraded"
     DUPLICATE_OBSERVATION = "duplicate_observation"
+    LANE_OBSERVATION_MERGED = "lane_observation_merged"
     OUT_OF_WINDOW = "out_of_window"
     QUARANTINED = "quarantined"
 
@@ -106,6 +114,17 @@ class FolderRole(StrEnum):
     OTHER = "other"
 
 
+class LaneVerification(StrEnum):
+    """Whether a record's folder role is verified folder membership or only a lane claim.
+
+    `verified` only when the record returned a folder id or a parent folder id;
+    otherwise the role is the collection lane's claim (`unverified_lane_claim`).
+    """
+
+    VERIFIED = "verified"
+    UNVERIFIED_LANE_CLAIM = "unverified_lane_claim"
+
+
 class SourceLane(StrEnum):
     MAIL = "mail"
     PROJECT_SYSTEM = "project_system"
@@ -120,6 +139,7 @@ class ConversationState(StrEnum):
 class ParticipantState(StrEnum):
     PROVIDER_RETURNED = "provider_returned"
     NOT_EXPOSED = "not_exposed"
+    NOT_RETURNED = "not_returned"
     ABSENT = "absent"
     UNKNOWN = "unknown"
 
@@ -129,6 +149,14 @@ class TimestampField(StrEnum):
 
     RECEIVED = "received"
     SENT = "sent"
+
+
+class TimestampState(StrEnum):
+    """State of one raw provider timestamp (received or sent) on an observation."""
+
+    PRESENT = "present"
+    ABSENT = "absent"
+    UNPARSEABLE = "unparseable"
 
 
 class ContentType(StrEnum):
@@ -169,12 +197,18 @@ class CoverageState(StrEnum):
 
 
 class WindowRule(StrEnum):
-    """The producer's window-selection rule. `hours` is a nominal label under every rule."""
+    """The producer's window-selection rule. `hours` is a nominal label under every rule.
+
+    `weekend_prior_49h` is the weekend that contains the autumn DST fall-back
+    (49 h actual). An unknown rule string is tolerated as `unrecognized`.
+    """
 
     WEEKDAY_PRIOR_24H = "weekday_prior_24h"
     FRIDAY_PRIOR_24H = "friday_prior_24h"
+    WEEKEND_PRIOR_48H = "weekend_prior_48h"
+    WEEKEND_PRIOR_49H = "weekend_prior_49h"
     EXPLICIT_UTC_BOUNDS = "explicit_utc_bounds"
-    OTHER = "other"
+    UNRECOGNIZED = "unrecognized"
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -247,10 +281,14 @@ class ParticipantField:
 
 @dataclass(frozen=True, slots=True)
 class MessageTimestamps:
+    """Both raw provider times are kept per observation, each with its state."""
+
     selected_utc: datetime
     selected_field: TimestampField
     received_utc: datetime | None
     sent_utc: datetime | None
+    received_state: TimestampState
+    sent_state: TimestampState
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,6 +341,7 @@ class NormalizedMessage:
     mailbox_ref: str
     folder_key: str | None
     folder_role: FolderRole
+    folder_verification: LaneVerification
     identity_state: IdentityState
     internet_message_id: str | None
     conversation_state: ConversationState
@@ -352,6 +391,53 @@ class RecordOutcome:
     message: NormalizedMessage | None
 
 
+class ItemFlag(StrEnum):
+    MULTI_LANE = "multi_lane"
+    PARTICIPANTS_RECONCILED = "participants_reconciled"
+    PARTICIPANTS_DISAGREED = "participants_disagreed"
+    BCC_FROM_SENT_LANE = "bcc_from_sent_lane"
+
+
+class MessageTimeBasis(StrEnum):
+    SENT = "sent"
+    RECEIVED = "received"
+    SELECTED_FALLBACK = "selected_fallback"
+
+
+@dataclass(frozen=True, slots=True)
+class ReconciledParticipant:
+    """A canonical participant address and the observations that contributed it."""
+
+    address: str
+    ordinals: tuple[int, ...]
+    lanes: tuple[FolderRole, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LaneObservation:
+    ordinal: int
+    role: FolderRole
+    verification: LaneVerification
+    selected_field: TimestampField
+
+
+@dataclass(frozen=True, slots=True)
+class MailboxItem:
+    """One provider mailbox item (one provider id) and its lane observations.
+
+    Built by `reconciliation.build_items`; see that module for the rules.
+    """
+
+    provider_id: str
+    canonical_key: CanonicalKey
+    primary_ordinal: int
+    observations: tuple[LaneObservation, ...]
+    participants: Mapping[str, tuple[ReconciledParticipant, ...]]
+    flags: frozenset[ItemFlag]
+    message_time: datetime
+    message_time_basis: MessageTimeBasis
+
+
 @dataclass(frozen=True, slots=True)
 class Publication:
     """An accepted publication: its envelope plus every record's outcome."""
@@ -367,3 +453,4 @@ class Publication:
     records: tuple[RecordOutcome, ...]
     unknown_top_level_keys: int
     unknown_record_keys: int
+    items: tuple[MailboxItem, ...]

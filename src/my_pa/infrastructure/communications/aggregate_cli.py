@@ -13,9 +13,14 @@ size, file SHA-256, dialect, schema version, status, window bounds and
 declared/actual hours, coverage, and counts (records per classification,
 reason, folder role, identity state, body state, content type, integrity
 outcome, searchable-text basis and flag, identifier kind, diagnostic code);
-then a cross-file summary (observations, unique identities and provider ids,
-cross-file repeats, Inbox+Sent pairs, identity conflicts, merged coverage
-intervals and gaps).
+mailbox-item counts (multi-lane pairs, participant reconciliations and
+disagreements, message-time basis); then a cross-file summary (observations,
+unique identities and provider ids, cross-file repeats, Inbox+Sent identity
+pairs under distinct provider ids, multi-lane items, reconciliations, lane
+verification states, null-from records, empty subjects, window rules seen and
+DST-flagged windows, identity conflicts, and merged coverage intervals and gaps
+-- inclusive ends, windows at most `adjacency_tolerance_seconds` (1 s) apart
+merge).
 
 **The output is aggregate-only.** It contains no subject, body, address,
 display name, provider id, internet message id, conversation id, source key or
@@ -44,10 +49,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
-from my_pa.domain.communications.corpus import summarize_corpus
+from my_pa.domain.communications.corpus import ADJACENCY_TOLERANCE_SECONDS, summarize_corpus
 from my_pa.domain.communications.diagnostics import PublicationRejection
 from my_pa.domain.communications.identifiers import IDENTIFIER_VERSION, extract_identifiers
 from my_pa.domain.communications.model import (
+    ItemFlag,
     Publication,
     RecordClassification,
     SourceCoverage,
@@ -97,7 +103,8 @@ def _records(publication: Publication) -> Json:
     c: dict[str, Counter[str]] = {
         name: Counter()
         for name in (
-            "by_classification", "by_reason", "by_folder_role", "by_identity_state",
+            "by_classification", "by_reason", "by_folder_role", "by_lane_verification",
+            "by_identity_state", "by_sent_time_state", "by_from_state",
             "by_body_state", "by_content_type", "body_integrity", "unique_body_integrity",
             "derived_text_integrity", "search_text_basis", "search_text_flags",
             "identifier_kind_messages", "identifier_kind_occurrences",
@@ -110,6 +117,9 @@ def _records(publication: Publication) -> Json:
         if message is None:
             continue
         c["by_folder_role"][message.folder_role.value] += 1
+        c["by_lane_verification"][message.folder_verification.value] += 1
+        c["by_sent_time_state"][message.timestamps.sent_state.value] += 1
+        c["by_from_state"][message.participants["from"].state.value] += 1
         c["by_identity_state"][message.identity_state.value] += 1
         c["by_body_state"][message.body.state.value] += 1
         c["by_content_type"][message.body.content_type.value] += 1
@@ -130,6 +140,23 @@ def _records(publication: Publication) -> Json:
     result: Json = {"total": len(publication.records)}
     result.update({name: _counts(counter) for name, counter in c.items()})
     return result
+
+
+def _items(publication: Publication) -> Json:
+    """Mailbox-item aggregates: lane merges and participant reconciliation (counts only)."""
+    flags: Counter[str] = Counter()
+    basis: Counter[str] = Counter()
+    for item in publication.items:
+        flags.update(flag.value for flag in item.flags)
+        basis[item.message_time_basis.value] += 1
+    return {
+        "total": len(publication.items),
+        "multi_lane_pairs": flags[ItemFlag.MULTI_LANE.value],
+        "participants_reconciled": flags[ItemFlag.PARTICIPANTS_RECONCILED.value],
+        "participants_disagreed": flags[ItemFlag.PARTICIPANTS_DISAGREED.value],
+        "bcc_from_sent_lane": flags[ItemFlag.BCC_FROM_SENT_LANE.value],
+        "message_time_basis": _counts(basis),
+    }
 
 
 def _file_report(name: str, data: bytes | None, parsed: PublicationParse | None) -> Json:
@@ -185,6 +212,7 @@ def _file_report(name: str, data: bytes | None, parsed: PublicationParse | None)
                 "record": publication.unknown_record_keys,
             },
             "records": _records(publication),
+            "items": _items(publication),
         }
     )
     return report
@@ -238,7 +266,15 @@ def summarize_files(paths: Sequence[Path]) -> tuple[Json, bool]:
             "unique_provider_ids": summary.unique_provider_ids,
             "provider_id_cross_file_repeats": summary.provider_id_cross_publication_repeats,
             "identity_cross_file_repeats": summary.identity_cross_publication_repeats,
-            "inbox_sent_pairs": summary.inbox_sent_pairs,
+            "inbox_sent_identity_pairs": summary.inbox_sent_identity_pairs,
+            "multi_lane_items": summary.multi_lane_items,
+            "participant_reconciliations": summary.participant_reconciliations,
+            "participant_disagreements": summary.participant_disagreements,
+            "lane_verification": dict(summary.lane_verification),
+            "null_from_records": summary.null_from_records,
+            "empty_subjects": summary.empty_subjects,
+            "window_rules": dict(summary.window_rules),
+            "dst_flagged_windows": summary.dst_flagged_windows,
             "within_file_identity_conflict_records": (
                 summary.within_publication_identity_conflict_records
             ),
@@ -257,6 +293,8 @@ def summarize_files(paths: Sequence[Path]) -> tuple[Json, bool]:
                     for g in summary.coverage_gaps
                 ],
                 "publications_excluded": summary.publications_excluded_from_coverage,
+                "end_inclusive": True,
+                "adjacency_tolerance_seconds": ADJACENCY_TOLERANCE_SECONDS,
             },
         },
     }

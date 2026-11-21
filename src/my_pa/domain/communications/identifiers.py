@@ -22,13 +22,18 @@ a digit -- so `RFI 1740` is never `rfi:174` and `RFI 174.1` is not an RFI):
   embed spec sections whose leading zeros are meaningful;
 * **GMP / FPL** -- bare acronym tokens, upper-case only (`gmp` is not matched,
   nor `GMPX` or `aGMP`); a plural `GMPs` / `GMP's` normalizes to `gmp`;
-* **spec section (CSI MasterFormat)** -- conservative: the spaced form
-  `03 30 00` (optionally `.13`) with a first pair in `00`-`49`, not adjacent to
-  another digit group (so a phone number `561 555 0123`, a time `10:30:00`, a
-  date `2026-11-20` or `11/20/26` are not sections); the contiguous form
-  `033000` only directly after `Section`/`Spec`/`Specification` -> `spec:033000`
-  or `spec:033000.13`. A spaced value that is really a time or date written with
-  spaces (`10 30 00`) is a known, accepted false positive.
+* **spec section (CSI MasterFormat)** -- conservative, and **cue-required by
+  default**: a `Section`/`Sections`/`Spec`/`Specs`/`Specification` cue
+  (case-insensitive, optional `#`/`No.`) directly before either the spaced form
+  `03 30 00` (optionally `.13`) or the contiguous form `033000` (optionally
+  `.13`), first pair `00`-`49` -> `spec:033000` / `spec:033000.13`. Bare
+  six-digit numbers are never sections (corpus v2: such numbers appear in 1,713
+  real messages and are noise). `include_uncued_spec_sections=True` (default off)
+  additionally admits the bare *spaced* form, not adjacent to another digit
+  group (so a phone number `561 555 0123`, a time `10:30:00`, a date
+  `2026-11-20` or `11/20/26` are not sections; a time written with spaces,
+  `10 30 00`, is an accepted false positive of that opt-in). Only the first
+  section after a cue is cued: `Sections 03 30 00 and 09 91 23` yields the first.
 
 Leading-zero policy: RFI, CB and CO numbers are integers -- leading zeros are
 dropped (`RFI 0174` is `rfi:174`, `RFI 000` is `rfi:0`). Submittal numbers and
@@ -92,15 +97,21 @@ _SUBMITTAL: Final = re.compile(
 )
 _ACRONYM: Final = re.compile(_LEFT + r"(GMP|FPL)(?:'?s)?(?![A-Za-z0-9])")
 _SPEC_TAIL = r"(?:\.([0-9]{2}))?(?![0-9])(?![.\-/:][0-9])"
-_SPEC_SPACED: Final = re.compile(
-    r"(?<![0-9])(?<![0-9][ .\-/:])([0-4][0-9]) ([0-9]{2}) ([0-9]{2})" + _SPEC_TAIL + r"(?! [0-9])"
-)
-_SPEC_KEYWORD: Final = re.compile(
+_SPEC_CUE = r"(?:spec(?:ification)?s?|sections?)\s*(?:#|No\.?)?\s*"
+_SPEC_SPACED_BODY = r"([0-4][0-9]) ([0-9]{2}) ([0-9]{2})" + _SPEC_TAIL + r"(?! [0-9])"
+#: Cued forms (always on): `Section 03 30 00`, `SECTION 09 91 23.13`, `Spec 033000`.
+_SPEC_CUED: Final = re.compile(
     _LEFT
-    + r"(?:spec(?:ification)?|section)\s*(?:#|No\.?)?\s*([0-4][0-9])([0-9]{2})([0-9]{2})"
-    + _SPEC_TAIL,
+    + _SPEC_CUE
+    + r"(?:"
+    + _SPEC_SPACED_BODY
+    + r"|([0-4][0-9])([0-9]{2})([0-9]{2})"
+    + _SPEC_TAIL
+    + r")",
     re.I,
 )
+#: The bare spaced form, only with `include_uncued_spec_sections=True`.
+_SPEC_BARE_SPACED: Final = re.compile(r"(?<![0-9])(?<![0-9][ .\-/:])" + _SPEC_SPACED_BODY)
 
 _INTEGER_KINDS: Final = (
     (_RFI, IdentifierKind.RFI),
@@ -109,8 +120,22 @@ _INTEGER_KINDS: Final = (
 )
 
 
-def extract_identifiers(text: str) -> tuple[TechnicalIdentifier, ...]:
-    """Distinct normalized identifiers in `text`, sorted (see module docstring)."""
+def _spec_section(groups: tuple[str | None, ...]) -> str:
+    """`(division, section, subsection, optional tail)` -> `033000` or `033000.13`."""
+    first, second, third, tail = groups
+    section = f"{first}{second}{third}"
+    return f"{section}.{tail}" if tail else section
+
+
+def extract_identifiers(
+    text: str, *, include_uncued_spec_sections: bool = False
+) -> tuple[TechnicalIdentifier, ...]:
+    """Distinct normalized identifiers in `text`, sorted (see module docstring).
+
+    Bare spec-section-like numbers are noise by default (corpus v2: present in
+    1,713 messages); `include_uncued_spec_sections` admits the bare *spaced* form
+    `03 30 00`. A contiguous six-digit number is never a section without a cue.
+    """
     found: set[TechnicalIdentifier] = set()
     for pattern, kind in _INTEGER_KINDS:
         found.update(
@@ -123,10 +148,16 @@ def extract_identifiers(text: str) -> tuple[TechnicalIdentifier, ...]:
         TechnicalIdentifier(IdentifierKind(m.group(1).lower()), m.group(1).lower())
         for m in _ACRONYM.finditer(text)
     )
-    for pattern in (_SPEC_SPACED, _SPEC_KEYWORD):
-        for m in pattern.finditer(text):
-            section = m.group(1) + m.group(2) + m.group(3)
-            if m.group(4):
-                section += "." + m.group(4)
-            found.add(TechnicalIdentifier(IdentifierKind.SPEC_SECTION, section))
+    for m in _SPEC_CUED.finditer(text):
+        groups = m.groups()
+        spaced, contiguous = groups[:4], groups[4:]
+        found.add(
+            TechnicalIdentifier(
+                IdentifierKind.SPEC_SECTION,
+                _spec_section(spaced if spaced[0] is not None else contiguous),
+            )
+        )
+    if include_uncued_spec_sections:
+        for m in _SPEC_BARE_SPACED.finditer(text):
+            found.add(TechnicalIdentifier(IdentifierKind.SPEC_SECTION, _spec_section(m.groups())))
     return tuple(sorted(found))

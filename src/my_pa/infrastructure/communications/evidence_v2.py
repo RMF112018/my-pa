@@ -33,7 +33,9 @@ Provider vocabulary handled here and nowhere else: id formats
 (`graph_default_mutable`, `graph_immutable_verified`), selected timestamp
 fields (`receivedDateTime`, `sentDateTime`), body completeness
 (`graph_full_body`, `truncated_unknown`), participant `raw.emailAddress`, and
-the `procore` coverage lane.
+the `procore` coverage lane, and `source_folder.folder_id` /
+`parent_folder_id_returned` (a role is verified folder membership only when one
+of them is returned; otherwise it is an unverified lane claim).
 
 The parser is pure (bytes in, values out) and records diagnostics through the
 bounded, content-free `DiagnosticCollector`.
@@ -74,6 +76,7 @@ from my_pa.domain.communications.model import (
     FolderRole,
     IdentityState,
     IntegrityOutcome,
+    LaneVerification,
     MessageTimestamps,
     NormalizedMessage,
     ParticipantField,
@@ -86,9 +89,11 @@ from my_pa.domain.communications.model import (
     SourceCoverage,
     SourceLane,
     TimestampField,
+    TimestampState,
     Window,
     WindowRule,
 )
+from my_pa.domain.communications.reconciliation import build_items
 
 __all__ = [
     "MAX_PUBLICATION_BYTES",
@@ -166,10 +171,11 @@ _PARTICIPANT_STATES: Final = MappingProxyType(
     {
         "provider_returned": ParticipantState.PROVIDER_RETURNED,
         "not_exposed": ParticipantState.NOT_EXPOSED,
+        "not_returned": ParticipantState.NOT_RETURNED,
     }
 )
 _WINDOW_RULES: Final = MappingProxyType(
-    {rule.value: rule for rule in WindowRule if rule is not WindowRule.OTHER}
+    {rule.value: rule for rule in WindowRule if rule is not WindowRule.UNRECOGNIZED}
 )
 
 
@@ -377,6 +383,7 @@ def _parse(data: bytes, d: DiagnosticCollector) -> Publication:
                     observed=observed,
                 )
 
+    records = classify_records(entries, window, d)
     return Publication(
         dialect=dialect,
         schema_version=version,
@@ -386,9 +393,10 @@ def _parse(data: bytes, d: DiagnosticCollector) -> Publication:
         coverage_overall=overall,
         sources=sources,
         cycle_run_id_present=document.get("cycle_run_id") is not None,
-        records=classify_records(entries, window, d),
+        records=records,
         unknown_top_level_keys=unknown_top,
         unknown_record_keys=unknown_record_keys,
+        items=build_items(records),
     )
 
 
@@ -411,7 +419,9 @@ def _window(raw: object, d: DiagnosticCollector) -> Window:
     elif hours_raw is not None:
         d.add(DiagnosticCode.WINDOW_FIELD_INVALID, "window.hours")
 
-    rule = _enum(_WINDOW_RULES, window.get("rule"), WindowRule.OTHER)
+    rule = _enum(_WINDOW_RULES, window.get("rule"), WindowRule.UNRECOGNIZED)
+    if rule is WindowRule.UNRECOGNIZED:
+        d.add(DiagnosticCode.WINDOW_RULE_UNRECOGNIZED, "window.rule")
 
     tz_raw = window.get("tz")
     tz = tz_raw if isinstance(tz_raw, str) and _TZ_NAME.fullmatch(tz_raw) else None
@@ -542,13 +552,15 @@ class _RecordParser:
         provider_id = self._provider_id(record)
         id_format = self._id_format(record)
         mailbox = self._mailbox(record)
-        folder_key, folder_role = self._folder(record)
+        folder_key, folder_role, folder_verification = self._folder(record)
         identity_state, imid = self._internet_message_id(record)
         conversation_state, conversation_id = self._conversation(record)
         subject = record.get("subject")
         if subject is not None and not isinstance(subject, str):
             self.flag(ReasonCode.INVALID_FIELD_TYPE, "messages[].subject")
             subject = None
+        elif isinstance(subject, str) and not subject.strip():
+            self.flag(ReasonCode.SUBJECT_EMPTY, "messages[].subject")
         participants = MappingProxyType(
             {name: self._participant(record, name) for name in PARTICIPANT_FIELDS}
         )
@@ -577,6 +589,7 @@ class _RecordParser:
             mailbox_ref=mailbox,
             folder_key=folder_key,
             folder_role=folder_role,
+            folder_verification=folder_verification,
             identity_state=identity_state,
             internet_message_id=imid,
             conversation_state=conversation_state,
@@ -621,25 +634,34 @@ class _RecordParser:
             return None
         return self.mailbox_ref
 
-    def _folder(self, record: Mapping[str, object]) -> tuple[str | None, FolderRole]:
+    def _folder(
+        self, record: Mapping[str, object]
+    ) -> tuple[str | None, FolderRole, LaneVerification]:
+        """Folder key, role, and whether the role is verified membership or a lane claim."""
+        unverified = LaneVerification.UNVERIFIED_LANE_CLAIM
         folder = self.required(record, "source_folder", "messages[].source_folder")
         if folder is None:
-            return None, FolderRole.OTHER
+            return None, FolderRole.OTHER, unverified
         if not isinstance(folder, dict):
             self.flag(ReasonCode.INVALID_FIELD_TYPE, "messages[].source_folder")
-            return None, FolderRole.OTHER
+            return None, FolderRole.OTHER, unverified
         key = folder.get("key")
         role = self.required(folder, "role", "messages[].source_folder.role")
         if role is None:
-            return None, FolderRole.OTHER
+            return None, FolderRole.OTHER, unverified
         if not isinstance(role, str):
             self.flag(ReasonCode.INVALID_FIELD_TYPE, "messages[].source_folder.role")
-            return None, FolderRole.OTHER
+            return None, FolderRole.OTHER, unverified
         mapped = _FOLDER_ROLES.get(role)
         if mapped is None:
             self.flag(ReasonCode.UNKNOWN_FOLDER_ROLE, "messages[].source_folder.role")
             mapped = FolderRole.OTHER
-        return (key if isinstance(key, str) else None), mapped
+        returned = any(
+            _nonempty_str(folder.get(name)) is not None
+            for name in ("folder_id", "parent_folder_id_returned")
+        )
+        verification = LaneVerification.VERIFIED if returned else unverified
+        return (key if isinstance(key, str) else None), mapped, verification
 
     def _internet_message_id(
         self, record: Mapping[str, object]
@@ -731,23 +753,25 @@ class _RecordParser:
             self.flag(ReasonCode.INVALID_FIELD_VALUE, "messages[].timestamps.selected_field")
             return None
 
-        def optional(key: str) -> datetime | None:
+        def optional(key: str) -> tuple[datetime | None, TimestampState]:
             value = raw.get(key)
             if value is None:
-                return None
+                return None, TimestampState.ABSENT
             parsed = _parse_utc(value)
             if parsed is None:
                 self.flag(ReasonCode.RAW_TIMESTAMP_UNPARSEABLE, f"messages[].timestamps.{key}")
-            return parsed
+                return None, TimestampState.UNPARSEABLE
+            return parsed, TimestampState.PRESENT
 
-        received, sent = optional("received_raw"), optional("sent_raw")
-        selected_echo = optional("selected_raw")
+        received, received_state = optional("received_raw")
+        sent, sent_state = optional("sent_raw")
+        selected_echo, _ = optional("selected_raw")
         own = received if field is TimestampField.RECEIVED else sent
         if (own is not None and own != selected) or (
             selected_echo is not None and selected_echo != selected
         ):
             self.flag(ReasonCode.SELECTED_TIMESTAMP_INCONSISTENT, "messages[].timestamps")
-        return MessageTimestamps(selected, field, received, sent)
+        return MessageTimestamps(selected, field, received, sent, received_state, sent_state)
 
     def _body(
         self, raw: object, path: str, privacy_withheld: bool, *, required: bool

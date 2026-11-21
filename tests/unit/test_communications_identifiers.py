@@ -108,7 +108,6 @@ def test_bare_acronym_near_misses(text: str) -> None:
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("per 03 30 00", "spec:033000"),
         ("Section 03 30 00.13 applies", "spec:033000.13"),
         ("Spec 033000", "spec:033000"),
         ("Section #033000", "spec:033000"),
@@ -138,11 +137,46 @@ def test_spec_sections(text: str, expected: str) -> None:
     ],
 )
 def test_spec_section_false_positives_are_rejected(text: str) -> None:
-    assert not any(n.startswith("spec:") for n in normalized(text))
+    for opt_in in (False, True):
+        found = extract_identifiers(text, include_uncued_spec_sections=opt_in)
+        assert not any(i.kind is K.SPEC_SECTION for i in found), (text, opt_in)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Quote 033000 and 099123 attached",
+        "ref 03 30 00 in the log",
+        "job 260411 / PO 033000-1",
+        "invoice 033000.13",
+    ],
+)
+def test_bare_spec_like_numbers_yield_nothing_by_default(text: str) -> None:
+    assert normalized(text) == set()
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("SECTION 09 91 23", {"spec:099123"}),
+        ("per specs 033000", {"spec:033000"}),
+        ("Sections 03 30 00 and 09 91 23", {"spec:033000"}),
+        ("section no. 03 30 00.13", {"spec:033000.13"}),
+    ],
+)
+def test_cued_spec_sections(text: str, expected: set[str]) -> None:
+    assert normalized(text) == expected
+
+
+def test_the_opt_in_admits_only_the_bare_spaced_form() -> None:
+    text = "ref 03 30 00 and 099123"
+    assert normalized(text) == set()
+    found = extract_identifiers(text, include_uncued_spec_sections=True)
+    assert {i.normalized for i in found} == {"spec:033000"}
 
 
 def test_results_are_distinct_sorted_and_typed() -> None:
-    result = extract_identifiers("RFI 2, RFI 1, RFI 2, GMP, CB #3, Submittal 7, 05 12 00")
+    result = extract_identifiers("RFI 2, RFI 1, RFI 2, GMP, CB #3, Submittal 7, Section 05 12 00")
     assert result == tuple(sorted(result))
     assert TechnicalIdentifier(K.RFI, "1") in result
     assert [i.normalized for i in result].count("rfi:2") == 1

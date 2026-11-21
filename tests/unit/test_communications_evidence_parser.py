@@ -646,7 +646,8 @@ def test_an_unknown_rule_and_an_unresolvable_zone_are_tolerated() -> None:
     document["window"]["tz"] = "Canary/Nowhere"
     result = parse(document)
     assert result.publication is not None
-    assert result.publication.window.rule is WindowRule.OTHER
+    assert result.publication.window.rule is WindowRule.UNRECOGNIZED
+    assert result.diagnostics.code_counts[DiagnosticCode.WINDOW_RULE_UNRECOGNIZED] == 1
     assert result.publication.window.dst_change_computed is None
     assert result.diagnostics.code_counts[DiagnosticCode.TZ_UNRESOLVABLE] == 1
 

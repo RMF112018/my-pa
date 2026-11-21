@@ -3,7 +3,8 @@
 This package holds what the `communications_evidence_v2` source contract means
 once a publication has been parsed: the closed vocabularies and immutable
 records (`model.py`), bounded diagnostics (`diagnostics.py`), per-record
-classification and within-publication identity rules (`classification.py`),
+classification and within-publication identity and lane rules (`classification.py`), mailbox
+items with reconciled participants (`reconciliation.py`),
 content-integrity checks (`integrity.py`), the versioned searchable-text
 derivation (`search_text.py`), the versioned technical-identifier extractor
 (`identifiers.py`), and cross-publication coverage and identity summaries

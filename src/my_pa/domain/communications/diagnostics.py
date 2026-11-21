@@ -85,6 +85,7 @@ class ReasonCode(StrEnum):
     FETCH_ERROR_REPORTED = "fetch_error_reported"
     PRIVACY_WITHHELD_CONTENT_PRESENT = "privacy_withheld_content_present"
     DERIVED_TEXT_INVALID = "derived_text_invalid"
+    SUBJECT_EMPTY = "subject_empty"
 
 
 #: Reasons that quarantine a record; every other `ReasonCode` only degrades it.
@@ -118,6 +119,8 @@ class DiagnosticCode(StrEnum):
     COVERAGE_SOURCE_INVALID = "coverage_source_invalid"
     COVERAGE_COUNT_MISMATCH = "coverage_count_mismatch"
     DUPLICATE_PROVIDER_ID = "duplicate_provider_id"
+    MULTI_LANE_ITEM = "multi_lane_item"
+    WINDOW_RULE_UNRECOGNIZED = "window_rule_unrecognized"
     OUT_OF_WINDOW = "out_of_window"
 
 

@@ -56,7 +56,8 @@ def test_the_corpus_summary_over_the_fixtures() -> None:
     assert summary.publications == 3
     assert summary.observations == 13 + 8 + 2
     assert summary.usable_observations == 11 + 5 + 2
-    assert summary.inbox_sent_pairs == 1
+    assert summary.inbox_sent_identity_pairs == 1
+    assert summary.multi_lane_items == 0
     assert summary.within_publication_identity_conflict_records == 2
     assert summary.unique_provider_ids == 10 + 5 + 2
     assert summary.unique_canonical_identities == 9 + 5 + 2

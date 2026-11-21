@@ -117,7 +117,7 @@ def test_the_cli_output_contains_no_canary(tmp_path: Path) -> None:
     assert records["by_body_state"]["withheld"] == 1
     assert records["identifier_kind_messages"]["rfi"] >= 1
     assert report["window"]["tz"] is None
-    assert report["window"]["rule"] == "other"
+    assert report["window"]["rule"] == "unrecognized"
     assert report["coverage"]["sources"][0]["key_kind"] == "other"
     assert document["files"][1]["rejection"] == "malformed_json"
     output = (completed.stdout + completed.stderr).lower()
@@ -132,14 +132,29 @@ def test_all_fixtures_accepted_exits_zero(capsys: pytest.CaptureFixture[str]) ->
     assert main([str(p) for p in paths]) == 0
     document = json.loads(capsys.readouterr().out)
     assert [f["file"] for f in document["files"]] == list(s.COMMITTED)
-    assert document["summary"]["accepted"] == 3
-    assert document["summary"]["inbox_sent_pairs"] == 1
-    gap = document["summary"]["coverage"]["gaps"][0]
-    assert gap == {
+    summary = document["summary"]
+    assert summary["accepted"] == len(s.COMMITTED)
+    # The lean fixture's pair and the 49 h fixture's self-addressed pair: distinct ids.
+    assert summary["inbox_sent_identity_pairs"] == 2
+    assert summary["multi_lane_items"] == 2
+    assert summary["participant_reconciliations"] == 2
+    assert summary["participant_disagreements"] == 1
+    assert summary["null_from_records"] == 1
+    assert summary["empty_subjects"] == 1
+    assert summary["dst_flagged_windows"] == 1
+    assert summary["window_rules"] == {
+        "explicit_utc_bounds": 1,
+        "friday_prior_24h": 1,
+        "weekday_prior_24h": 1,
+        "weekend_prior_48h": 1,
+        "weekend_prior_49h": 1,
+    }
+    assert summary["coverage"]["adjacency_tolerance_seconds"] == 1
+    assert {
         "start_utc": "2026-11-16T07:00:00Z",
         "end_utc": "2026-11-17T05:00:00Z",
         "seconds": 22 * 3600,
-    }
+    } in summary["coverage"]["gaps"]
 
 
 def test_the_per_file_report_carries_the_aggregates() -> None:

@@ -10,12 +10,18 @@ Identity. Counts are taken over *usable* records -- every classification but
 `quarantined`. An identity seen in two publications is a cross-publication
 repeat; if its sender address or body digest differs between them that is a
 cross-publication identity conflict (counted here, never merged).
+
+Items. `multi_lane_items` counts mailbox items (one provider id within one
+publication) observed in more than one folder lane -- the backfill
+folder-attribution shape -- and `inbox_sent_identity_pairs` counts identities
+held by *distinct* provider ids whose primary lanes include both inbox and
+sent (genuine separate mailbox items). The two shapes are counted apart.
 """
 
 from __future__ import annotations
 
-from collections import defaultdict
-from collections.abc import Sequence
+from collections import Counter, defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import pairwise
@@ -27,12 +33,22 @@ from my_pa.domain.communications.model import (
     CoverageState,
     FolderRole,
     IdentityState,
+    ItemFlag,
     NormalizedMessage,
     Publication,
     RecordClassification,
 )
 
-__all__ = ["CorpusSummary", "Interval", "merge_intervals", "summarize_corpus"]
+__all__ = [
+    "ADJACENCY_TOLERANCE_SECONDS",
+    "CorpusSummary",
+    "Interval",
+    "merge_intervals",
+    "summarize_corpus",
+]
+
+#: Inclusive windows at most this far apart are contiguous (`WINDOW_RESOLUTION`).
+ADJACENCY_TOLERANCE_SECONDS = int(WINDOW_RESOLUTION.total_seconds())
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -50,7 +66,15 @@ class CorpusSummary:
     unique_provider_ids: int
     provider_id_cross_publication_repeats: int
     identity_cross_publication_repeats: int
-    inbox_sent_pairs: int
+    inbox_sent_identity_pairs: int
+    multi_lane_items: int
+    participant_reconciliations: int
+    participant_disagreements: int
+    lane_verification: Mapping[str, int]
+    null_from_records: int
+    empty_subjects: int
+    window_rules: Mapping[str, int]
+    dst_flagged_windows: int
     within_publication_identity_conflict_records: int
     cross_publication_identity_conflicts: int
     coverage_intervals: tuple[Interval, ...]
@@ -87,14 +111,27 @@ def summarize_corpus(publications: Sequence[Publication]) -> CorpusSummary:
 
     provider_pubs: defaultdict[tuple[str, str], set[int]] = defaultdict(set)
     identity_pubs: defaultdict[CanonicalKey, set[int]] = defaultdict(set)
-    identity_roles: defaultdict[CanonicalKey, set[FolderRole]] = defaultdict(set)
     identity_signatures: defaultdict[CanonicalKey, set[tuple[str | None, str]]] = defaultdict(set)
     for index, message in usable:
         key = message.canonical_key
         provider_pubs[(message.mailbox_ref, message.provider_id)].add(index)
         identity_pubs[key].add(index)
-        identity_roles[key].add(message.folder_role)
         identity_signatures[key].add((message.sender_address, message.body.sha256))
+
+    items = [item for publication in publications for item in publication.items]
+    identity_items: defaultdict[CanonicalKey, dict[str, set[FolderRole]]] = defaultdict(dict)
+    for item in items:
+        if item.canonical_key.kind is IdentityState.PROVIDER_RETURNED:
+            primary_role = next(
+                o.role for o in item.observations if o.ordinal == item.primary_ordinal
+            )
+            identity_items[item.canonical_key].setdefault(item.provider_id, set()).add(primary_role)
+
+    def distinct_pair(key: CanonicalKey) -> bool:
+        roles_by_item = identity_items[key]
+        inbox = {pid for pid, roles in roles_by_item.items() if FolderRole.INBOX in roles}
+        sent = {pid for pid, roles in roles_by_item.items() if FolderRole.SENT in roles}
+        return any(a != b for a in inbox for b in sent)
 
     def cross_conflict(key: CanonicalKey) -> bool:
         signatures = identity_signatures[key]
@@ -116,11 +153,24 @@ def summarize_corpus(publications: Sequence[Publication]) -> CorpusSummary:
         unique_provider_ids=len(provider_pubs),
         provider_id_cross_publication_repeats=sum(1 for v in provider_pubs.values() if len(v) > 1),
         identity_cross_publication_repeats=sum(1 for v in identity_pubs.values() if len(v) > 1),
-        inbox_sent_pairs=sum(
-            1
-            for key, roles in identity_roles.items()
-            if key.kind is IdentityState.PROVIDER_RETURNED
-            and {FolderRole.INBOX, FolderRole.SENT} <= roles
+        inbox_sent_identity_pairs=sum(1 for key in identity_items if distinct_pair(key)),
+        multi_lane_items=sum(1 for item in items if ItemFlag.MULTI_LANE in item.flags),
+        participant_reconciliations=sum(
+            1 for item in items if ItemFlag.PARTICIPANTS_RECONCILED in item.flags
+        ),
+        participant_disagreements=sum(
+            1 for item in items if ItemFlag.PARTICIPANTS_DISAGREED in item.flags
+        ),
+        lane_verification=dict(
+            sorted(Counter(m.folder_verification.value for _, m in usable).items())
+        ),
+        null_from_records=sum(1 for _, m in usable if not m.participants["from"].addresses),
+        empty_subjects=sum(
+            1 for p in publications for r in p.records if ReasonCode.SUBJECT_EMPTY in r.reasons
+        ),
+        window_rules=dict(sorted(Counter(p.window.rule.value for p in publications).items())),
+        dst_flagged_windows=sum(
+            1 for p in publications if p.window.dst_change_declared or p.window.dst_change_computed
         ),
         within_publication_identity_conflict_records=conflict_records,
         cross_publication_identity_conflicts=sum(1 for key in identity_pubs if cross_conflict(key)),

@@ -5,8 +5,7 @@ and the shapes follow the field paths recorded (as aggregates only) in the
 WP1 corpus analysis. Digests and byte counts are computed here, so a fixture is
 integrity-valid unless a test deliberately breaks it.
 
-`lean_publication()`, `rich_publication()` and `friday_publication()` are the
-three committed fixture files (`*.json` beside this module); the committed bytes
+`COMMITTED` maps each committed fixture file (`*.json` beside this module); the committed bytes
 must equal `encode(builder())`, which `test_communications_fixtures.py` checks.
 """
 
@@ -385,10 +384,94 @@ def friday_publication() -> Doc:
     return document
 
 
+def lane_pair(
+    n: int,
+    *,
+    selected_received: str,
+    selected_sent: str,
+    inbox_cc: list[str] | None = None,
+    sent_cc: list[str] | None = None,
+    bcc: list[str] | None = None,
+) -> list[Doc]:
+    """The backfill folder-attribution shape: one provider id as an inbox AND a sent record."""
+    inbox = message(n, selected=selected_received, sent=selected_sent)
+    sent = message(n, folder="sent", selected=selected_sent, selected_field="sentDateTime")
+    sent["timestamps"]["received_raw"] = selected_received
+    inbox["cc"] = field([person(a) for a in (inbox_cc or [])])
+    sent["cc"] = field([person(a) for a in (sent_cc if sent_cc is not None else inbox_cc or [])])
+    if bcc:
+        sent["bcc"] = field([person(a) for a in bcc])
+    return [inbox, sent]
+
+
+def weekend_49h_publication() -> Doc:
+    """DST fall-back weekend window (49 h actual) holding every corpus-v2 record shape."""
+    pair_same = lane_pair(
+        300,
+        selected_received="2026-10-31T14:00:05Z",
+        selected_sent="2026-10-31T14:00:00Z",
+        inbox_cc=["charlie@example.invalid"],
+        bcc=["delta@example.invalid"],
+    )
+    pair_diff = lane_pair(
+        301,
+        selected_received="2026-11-01T15:00:05Z",
+        selected_sent="2026-11-01T15:00:00Z",
+        inbox_cc=["charlie@example.invalid"],
+        sent_cc=["charlie@example.invalid", "echo@example.invalid"],
+    )
+    self_inbox = message(
+        302, selected="2026-11-01T16:00:03Z", imid="<synthetic-self@example.invalid>"
+    )
+    self_sent = message(
+        303,
+        folder="sent",
+        selected="2026-11-01T16:00:00Z",
+        selected_field="sentDateTime",
+        imid="<synthetic-self@example.invalid>",
+    )
+    repeat = message(304, selected="2026-11-01T17:00:00Z")
+    null_from = message(305, selected="2026-11-01T18:00:00Z")
+    null_from["from"] = {"state": "not_returned", "value": None}
+    null_from["sender"] = {"state": "not_returned", "value": None}
+    empty_subject = message(306, selected="2026-11-01T19:00:00Z", subject="")
+    null_sent = message(307, selected="2026-11-01T20:00:00Z")
+    null_sent["timestamps"]["sent_raw"] = None
+    messages = [
+        *pair_same,
+        *pair_diff,
+        self_inbox,
+        self_sent,
+        repeat,
+        copy.deepcopy(repeat),
+        null_from,
+        empty_subject,
+        null_sent,
+    ]
+    win = window(
+        "2026-10-31T04:00:00Z", "2026-11-02T04:59:59Z", 49, "weekend_prior_49h", backfill=True
+    )
+    win["dst_offset_changes_in_window"] = True
+    document = publication(messages, win)
+    document["business_date"] = "2026-11-01"
+    return document
+
+
+def weekend_48h_publication() -> Doc:
+    win = window(
+        "2026-10-17T04:00:00Z", "2026-10-19T03:59:59Z", 48, "weekend_prior_48h", backfill=True
+    )
+    document = publication([message(400, selected="2026-10-18T12:00:00Z")], win)
+    document["business_date"] = "2026-10-18"
+    return document
+
+
 COMMITTED = {
     "lean_publication.json": lean_publication,
     "rich_publication.json": rich_publication,
     "friday_publication.json": friday_publication,
+    "weekend_49h_lanes_publication.json": weekend_49h_publication,
+    "weekend_48h_publication.json": weekend_48h_publication,
 }
 
 

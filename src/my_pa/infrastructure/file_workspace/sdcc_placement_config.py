@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,12 @@ class SDCRConfigurationError(ValueError):
     """Non-sensitive startup error; does not include host paths or bytes."""
 
 
-def load_sdcr_gate(config_file: str, workspace_root: str) -> SDCRPlacementGate:
+def load_sdcr_gate(
+    config_file: str,
+    workspace_root: str,
+    *,
+    forbidden_roots: Iterable[str | Path] = (),
+) -> SDCRPlacementGate:
     """Read one bounded, owner-managed config outside all workspace paths.
 
     Reject symlinks and writable immediate parent/config file to prevent a
@@ -36,7 +42,10 @@ def load_sdcr_gate(config_file: str, workspace_root: str) -> SDCRPlacementGate:
     try:
         actual_root = root.resolve(strict=True)
         parent = source.parent.resolve(strict=True)
-        if source.is_symlink() or parent == actual_root or actual_root in parent.parents:
+        if source.is_symlink():
+            raise SDCRConfigurationError("sdcr_config_must_be_outside_workspace")
+        roots = (actual_root, *(Path(raw).resolve(strict=True) for raw in forbidden_roots))
+        if any(candidate == parent or candidate in parent.parents for candidate in roots):
             raise SDCRConfigurationError("sdcr_config_must_be_outside_workspace")
         status = source.stat(follow_symlinks=False)
         parent_status = parent.stat(follow_symlinks=False)

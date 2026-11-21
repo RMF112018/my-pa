@@ -417,9 +417,7 @@ def authorize_mutation(
         policy, registrations, path=target, is_directory=is_directory, role=role
     )
     if source is not None:
-        authorize_path(
-            policy, registrations, path=source, is_directory=is_directory, role=role
-        )
+        authorize_path(policy, registrations, path=source, is_directory=is_directory, role=role)
 
         def owned_item(item_path: str) -> str | None:
             seq = _parts(item_path)
@@ -489,7 +487,6 @@ def can_complete(
         }
         for status in recorded_artifacts.values()
     )
-
 
 
 # The existing public Files contract has no new error code for this extension.

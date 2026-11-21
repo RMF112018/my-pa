@@ -11,7 +11,7 @@ import copy
 import re
 from collections.abc import Mapping
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, NoReturn
 
 IDENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 ARTIFACT = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]{0,127})__([A-Za-z0-9][A-Za-z0-9._-]{0,180})\Z")
@@ -55,7 +55,7 @@ class PlacementDeniedError(ValueError):
         self.code = code
 
 
-def _deny(code: str) -> None:
+def _deny(code: str) -> NoReturn:
     raise PlacementDeniedError(code)
 
 
@@ -68,7 +68,7 @@ def _file_name(segment: str) -> bool:
 
 
 def _parts(raw: str) -> list[str]:
-    if not isinstance(raw, str) or len(raw.encode("utf-8")) > 4096:
+    if len(raw.encode("utf-8")) > 4096:
         _deny("INVALID_PATH")
     if raw != "SDCR" and not raw.startswith("SDCR/"):
         _deny("OUTSIDE_SDCR_ROOT")

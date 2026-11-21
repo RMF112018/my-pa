@@ -56,14 +56,36 @@ python scripts/sdcc_publish.py \
   --repo-dir ./my-pa
 ```
 
-`--repo-dir` is optional, read-only against the repository. It requires a clean
-worktree and actual base/head/tree identity. It automatically creates
-`_git/changes.patch`, `_git/changed-paths.txt`, and `_git/IDENTITY.json` in
-**the session output folder**, then archives them. It never commits or pushes.
+`--repo-dir` is optional and read-only against the repository. Git capture
+resolves the **actual worktree and Git metadata roots**, rather than trusting
+`--repo-dir` as the top level. A session output equal to, inside, or containing
+the worktree, Git directory, or common Git directory is refused. So are symlinked
+output roots/ancestors, conflicting files, dirty worktrees, and incorrect SHA/tree
+identity. After preflight the publisher creates `_git/changes.patch`,
+`_git/changed-paths.txt` and `_git/IDENTITY.json` in the output directory.
+It does not commit or push. All Git artifact writes are descriptor-relative,
+use `O_NOFOLLOW` and exclusive creation, and check inode/device bindings;
+same-byte replay does not overwrite previous evidence.
+
+Repeat `--protected-root /absolute/known/root` for **each authoritative,
+configured source or managed-data root** on the client machine. Every supplied
+root must exist, and any parent/child overlap with the output root is refused.
+The publisher cannot discover other clients' arbitrary source directories:
+the operator/client must qualify the output as generated session evidence,
+identify known protected roots and pass them explicitly. An undisclosed or
+unidentified source root is **not** implicitly authorized as output. The
+supported local writing environment is POSIX with directory FDs and no-follow
+operations. OS rename privileges can still relocate an already-open output
+directory, but cannot make descriptor-relative writes follow a substituted
+symlink into a protected target.
 
 The token is read from the environment, never argv, an output manifest or a
-GitHub issue/PR. Do not place a token in a shell command, saved prompt, or file
-if the shell records it. Configure it in the local agent's approved secret
+GitHub issue/PR. Missing or locally malformed authentication material, bad
+HTTPS endpoint syntax and unavailable SDKs fail before Git capture writes.
+The MCP client must initialize before local capture, but this does **not**
+establish remote grant/receiver authority without an authorized real-client
+qualification test. Do not place a token in a recorded shell command, saved
+prompt or file. Configure it in the local agent's approved secret
 injection mechanism. Grant setup and remote deployment are outside Issue #365.
 
 ## Storage protocol
@@ -104,9 +126,10 @@ injection mechanism. Grant setup and remote deployment are outside Issue #365.
   establish MY-PA disclosure eligibility and the completeness of the supplied
   output directory. `READY_FOR_HANDOFF` verifies the inventoried and published
   set; it is not proof that the caller discovered every session-generated file.
-  Missing explicitly status-mapped files are refused before transfer. Never
-  point `--source-dir` at a repository, source system or managed-data root;
-  `--repo-dir` Git capture writes `_git/` only under the session output folder.
+  Missing explicitly status-mapped files are refused before transfer. The
+  publisher enforces Git and caller-supplied protected-root overlap checks,
+  but qualifying otherwise unknown source/managed-data roots remains the
+  originating client's obligation. It must not aim at a source root.
 - Source material scanned as suspected live secret, private key or uninspectable
   ZIP is **not** uploaded. Manifest contains `PROTECTED_WITHHELD` and no raw
   content or hash. Plain S1 inputs go to authenticated MY-PA, never public GitHub.
@@ -129,9 +152,13 @@ PYTHONPATH=. python -m pytest tests/unit/test_sdcc_publish.py -q
 Tests use a fake in-memory files workspace: recursive inventory, raw bytes,
 failed evidence, archive handling, multi-MB binary, no-clobber, retry,
 versioned handoff, secret withholding, injection refusal, local Git patch
-capture, and two-client shared-store receiver simulation. The fake does not
-prove real ChatLLM/Abacus grants, OAuth, unattended GitHub Actions network
-access, live MCP transport or deployment.
+capture, source-root and worktree overlap refusal, no-follow ancestor/file
+refusal, deterministic output/_git replacement races, malformed
+endpoint/token preflight, and two-client receiver simulation. Race injections
+establish protection against following substituted symlinks, not against an
+adversary able to relocate a previously admitted directory inode. The fake
+does not prove real ChatLLM/Abacus grants, OAuth, unattended GitHub Actions
+network access, live MCP transport or deployment.
 
 **Release boundary:** PR implementation and synthetic tests only. Do not use
 this publisher to declare `MCP/SDCR/` authoritative until the operator-approved

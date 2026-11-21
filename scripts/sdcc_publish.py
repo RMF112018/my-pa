@@ -24,12 +24,13 @@ import mimetypes
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import zipfile
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date
@@ -151,11 +152,115 @@ def _contains_obvious_secret(path: Path) -> bool:
     return False
 
 
-def capture_git(source: Path, spec: Mapping[str, Any], repository: Path) -> None:
-    """Archive a reconstructable committed diff under the session output tree.
+def _walk_output_directory(source: Path) -> tuple[int, Path]:
+    """Open each output ancestor without following symlinks."""
+    if os.name != "posix" or not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise PublicationError("unsupported_output_platform")
+    if ".." in source.parts:
+        raise PublicationError("invalid_source_directory")
+    root = Path(os.path.abspath(source))
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = -1
+    try:
+        fd = os.open("/", flags)
+        for part in root.parts[1:]:
+            next_fd = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        return fd, root
+    except OSError:
+        if fd >= 0:
+            os.close(fd)
+        raise PublicationError("invalid_source_directory") from None
 
-    This is read-only against the Git repository. The generated patch and
-    identity report become ordinary session artifacts and are secret-scanned.
+
+def _bound_output_root(root: Path, fd: int) -> None:
+    """Reject replacement of an admitted output root or ancestor."""
+    try:
+        check, _ = _walk_output_directory(root)
+    except PublicationError:
+        raise PublicationError("output_root_changed") from None
+    try:
+        old, current = os.fstat(fd), os.fstat(check)
+        if (old.st_dev, old.st_ino) != (current.st_dev, current.st_ino):
+            raise PublicationError("output_root_changed")
+    finally:
+        os.close(check)
+
+
+def _overlap(left: Path, right: Path) -> bool:
+    return left == right or left in right.parents or right in left.parents
+
+
+def _refuse_protected_output(output_root: Path, protected_roots: Sequence[Path]) -> None:
+    for entry in protected_roots:
+        try:
+            protected = entry.resolve(strict=True)
+        except OSError:
+            raise PublicationError("invalid_protected_root") from None
+        if _overlap(output_root, protected):
+            raise PublicationError("protected_output_root")
+
+
+def _read_git_artifact(fd: int, name: str, expected: bytes) -> bool:
+    """Return False for absent; reject symlinks, special files and conflicts."""
+    try:
+        opened = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        raise PublicationError("git_snapshot_existing_conflict") from None
+    with os.fdopen(opened, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise PublicationError("git_snapshot_existing_conflict")
+        if handle.read(len(expected) + 1) != expected:
+            raise PublicationError("git_snapshot_existing_conflict")
+    return True
+
+
+def _bound_git_directory(root_fd: int, git_fd: int) -> None:
+    try:
+        check = os.open(
+            "_git", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd
+        )
+    except OSError:
+        raise PublicationError("git_snapshot_root_changed") from None
+    try:
+        old, current = os.fstat(git_fd), os.fstat(check)
+        if (old.st_dev, old.st_ino) != (current.st_dev, current.st_ino):
+            raise PublicationError("git_snapshot_root_changed")
+    finally:
+        os.close(check)
+
+
+def _write_git_artifact(git_fd: int, name: str, content: bytes) -> None:
+    if _read_git_artifact(git_fd, name, content):
+        return
+    try:
+        opened = os.open(
+            name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=git_fd,
+        )
+        with os.fdopen(opened, "wb") as handle:
+            handle.write(content)
+    except OSError:
+        raise PublicationError("git_snapshot_existing_conflict") from None
+
+
+def capture_git(
+    source: Path,
+    spec: Mapping[str, Any],
+    repository: Path,
+    protected_roots: Sequence[Path] = (),
+    expected_root_fd: int | None = None,
+) -> None:
+    """Capture Git evidence only in a safe, caller-qualified session output tree.
+
+    Descriptor-relative no-follow writes pin the original directory identity.
+    Unknown non-Git source roots still require upstream client qualification.
     """
     git = spec.get("github", {})
     if not isinstance(git, dict) or not git.get("repo"):
@@ -166,7 +271,6 @@ def capture_git(source: Path, spec: Mapping[str, Any], repository: Path) -> None
         if executable is None:
             raise PublicationError("git_snapshot_failed")
         try:
-            # All arguments are controlled; shell=False. S603 is a false positive.
             result = subprocess.run(  # noqa: S603 - controlled Git argv, no shell
                 [executable, *args],
                 cwd=repository,
@@ -178,37 +282,77 @@ def capture_git(source: Path, spec: Mapping[str, Any], repository: Path) -> None
             raise PublicationError("git_snapshot_failed") from None
         return result.stdout.strip() if args[0] == "rev-parse" else result.stdout
 
-    head = command("rev-parse", "HEAD").decode("ascii")
-    tree = command("rev-parse", "HEAD^{tree}").decode("ascii")
-    if head != git.get("head_sha") or tree != git.get("tree_sha"):
-        raise PublicationError("github_head_identity_mismatch")
-    base = str(git.get("base_sha", ""))
-    if not re.fullmatch(r"[0-9a-f]{40}", base):
-        raise PublicationError("invalid_github_identity")
-    command("merge-base", "--is-ancestor", base, head)
-    if command("status", "--porcelain"):
-        raise PublicationError("dirty_repository_refused")
-    diff = command("diff", "--binary", "--no-ext-diff", base, head)
-    changed = command("diff", "--name-status", "--no-ext-diff", base, head)
-    report = _json(
-        {"repository": git["repo"], "base_sha": base, "head_sha": head, "tree_sha": tree}
-    ).encode("utf-8")
-    target = source / "_git"
-    if target.is_symlink() or (target.exists() and not target.is_dir()):
-        raise PublicationError("git_snapshot_existing_conflict")
-    target.mkdir(exist_ok=True)
-    for name, data in (
-        ("changes.patch", diff),
-        ("changed-paths.txt", changed),
-        ("IDENTITY.json", report),
-    ):
-        output = target / name
-        if output.exists():
-            if output.is_symlink() or output.read_bytes() != data:
-                raise PublicationError("git_snapshot_existing_conflict")
-        else:
-            with output.open("xb") as handle:
-                handle.write(data)
+    try:
+        worktree = Path(command("rev-parse", "--show-toplevel").decode()).resolve(strict=True)
+        gitdir = Path(command("rev-parse", "--absolute-git-dir").decode()).resolve(strict=True)
+        common_raw = Path(command("rev-parse", "--git-common-dir").decode())
+        common_dir = (repository / common_raw).resolve(strict=True)
+    except (OSError, ValueError, UnicodeError, RuntimeError):
+        raise PublicationError("git_snapshot_failed") from None
+
+    output_fd, output_root = _walk_output_directory(source)
+    try:
+        _bound_output_root(output_root, output_fd)
+        if expected_root_fd is not None:
+            expected = os.fstat(expected_root_fd)
+            current = os.fstat(output_fd)
+            if (expected.st_dev, expected.st_ino) != (current.st_dev, current.st_ino):
+                raise PublicationError("output_root_changed")
+        if any(_overlap(output_root, root) for root in (worktree, gitdir, common_dir)):
+            raise PublicationError("output_overlaps_repository")
+        _refuse_protected_output(output_root, protected_roots)
+
+        head = command("rev-parse", "HEAD").decode("ascii")
+        tree = command("rev-parse", "HEAD^{tree}").decode("ascii")
+        if head != git.get("head_sha") or tree != git.get("tree_sha"):
+            raise PublicationError("github_head_identity_mismatch")
+        base = str(git.get("base_sha", ""))
+        if not re.fullmatch(r"[0-9a-f]{40}", base):
+            raise PublicationError("invalid_github_identity")
+        command("merge-base", "--is-ancestor", base, head)
+        if command("status", "--porcelain"):
+            raise PublicationError("dirty_repository_refused")
+        diff = command("diff", "--binary", "--no-ext-diff", base, head)
+        changed = command("diff", "--name-status", "--no-ext-diff", base, head)
+        report = _json(
+            {"repository": git["repo"], "base_sha": base, "head_sha": head, "tree_sha": tree}
+        ).encode("utf-8")
+        files = (
+            ("changes.patch", diff),
+            ("changed-paths.txt", changed),
+            ("IDENTITY.json", report),
+        )
+        _bound_output_root(output_root, output_fd)
+        try:
+            git_fd = os.open(
+                "_git", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=output_fd
+            )
+        except FileNotFoundError:
+            _bound_output_root(output_root, output_fd)
+            try:
+                os.mkdir("_git", mode=0o700, dir_fd=output_fd)
+                git_fd = os.open(
+                    "_git", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=output_fd
+                )
+            except OSError:
+                raise PublicationError("git_snapshot_existing_conflict") from None
+        except OSError:
+            raise PublicationError("git_snapshot_existing_conflict") from None
+        try:
+            _bound_git_directory(output_fd, git_fd)
+            # Refuse any existing conflicting file before creating new files.
+            for name, content in files:
+                _read_git_artifact(git_fd, name, content)
+            for name, content in files:
+                _bound_output_root(output_root, output_fd)
+                _bound_git_directory(output_fd, git_fd)
+                _write_git_artifact(git_fd, name, content)
+            _bound_output_root(output_root, output_fd)
+            _bound_git_directory(output_fd, git_fd)
+        finally:
+            os.close(git_fd)
+    finally:
+        os.close(output_fd)
 
 
 def _spec(spec_path: Path) -> dict[str, Any]:
@@ -637,11 +781,8 @@ async def publish(api: FilesAPI, source: Path, spec: Mapping[str, Any]) -> dict[
     }
 
 
-class RemoteFilesAPI:
-    """MCP facade adapter; uses existing my_pa.read/write and byte routes."""
-
-    def __init__(self, mcp_client: object, endpoint: str) -> None:
-        self.client = mcp_client
+def _endpoint_origin(endpoint: str) -> str:
+    try:
         parsed = urlsplit(endpoint)
         if (
             parsed.scheme != "https"
@@ -653,7 +794,48 @@ class RemoteFilesAPI:
             or parsed.path not in ("/mcp", "/mcp/")
         ):
             raise PublicationError("invalid_endpoint")
-        self.origin = f"{parsed.scheme}://{parsed.netloc}"
+        _ = parsed.port  # Reject invalid ports before any Git capture.
+    except (ValueError, TypeError):
+        raise PublicationError("invalid_endpoint") from None
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _require_local_token() -> str:
+    token = os.environ.get("SDCR_MYPA_TOKEN", "")
+    if not token:
+        raise PublicationError("missing_authenticated_client_token")
+    if (
+        not token.isascii()
+        or not 16 <= len(token) <= 8192
+        or any(ord(char) < 33 or ord(char) > 126 for char in token)
+    ):
+        raise PublicationError("malformed_authenticated_client_token")
+    return token
+
+
+async def _remote_write_preflight(api: FilesAPI) -> None:
+    """Probe available workspace write mode before any Git artifact is created."""
+    try:
+        response = await api.call("files.workspaces.list", {})
+    except Exception:
+        raise PublicationError("workspace_preflight_unavailable") from None
+    spaces = response.get("workspaces") if isinstance(response, dict) else None
+    if not isinstance(spaces, list) or not any(
+        isinstance(entry, dict)
+        and entry.get("workspace_id") == WORKSPACE_ID
+        and entry.get("writable") is True
+        and entry.get("write_mode") == "direct"
+        for entry in spaces
+    ):
+        raise PublicationError("workspace_not_writable")
+
+
+class RemoteFilesAPI:
+    """MCP facade adapter; uses existing my_pa.read/write and byte routes."""
+
+    def __init__(self, mcp_client: object, endpoint: str) -> None:
+        self.client = mcp_client
+        self.origin = _endpoint_origin(endpoint)
 
     async def call(
         self, capability: str, payload: Mapping[str, object], *, write: bool = False
@@ -718,41 +900,48 @@ class RemoteFilesAPI:
 
 async def _main(args: argparse.Namespace) -> int:
     spec = _spec(args.spec)
-    if args.repo_dir is not None:
-        capture_git(args.source_dir, spec, args.repo_dir)
     endpoint = args.endpoint
-    token = os.environ.get("SDCR_MYPA_TOKEN", "")
-    if not token:
-        raise PublicationError("missing_authenticated_client_token")
-    parsed = urlsplit(endpoint)
-    if (
-        parsed.scheme != "https"
-        or parsed.path not in ("/mcp", "/mcp/")
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise PublicationError("invalid_endpoint")
+    _endpoint_origin(endpoint)
+    token = _require_local_token()
+    # Local validation and SDK availability precede all Git snapshot writes.
+    output_fd, output_root = _walk_output_directory(args.source_dir)
     try:
-        import httpx2
-        from mcp.client import Client
-        from mcp.client.streamable_http import streamable_http_client
-    except ImportError:
-        raise PublicationError("missing_mcp_sdk") from None
-    try:
-        async with (
-            httpx2.AsyncClient(
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=httpx2.Timeout(30.0, read=300.0),
-            ) as http,
-            Client(streamable_http_client(endpoint, http_client=http), mode="legacy") as client,
-        ):
-            result = await publish(RemoteFilesAPI(client, endpoint), args.source_dir, spec)
-    except PublicationError:
-        raise
-    except Exception:
-        raise PublicationError("my_pa_connection_failed") from None
+        _bound_output_root(output_root, output_fd)
+        _refuse_protected_output(output_root, args.protected_root)
+        try:
+            import httpx2
+            from mcp.client import Client
+            from mcp.client.streamable_http import streamable_http_client
+        except ImportError:
+            raise PublicationError("missing_mcp_sdk") from None
+        try:
+            async with (
+                httpx2.AsyncClient(
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=httpx2.Timeout(30.0, read=300.0),
+                ) as http,
+                Client(streamable_http_client(endpoint, http_client=http), mode="legacy") as client,
+            ):
+                # Non-mutating connection and write-mode probes precede local capture.
+                api = RemoteFilesAPI(client, endpoint)
+                await _remote_write_preflight(api)
+                _bound_output_root(output_root, output_fd)
+                if args.repo_dir is not None:
+                    capture_git(
+                        args.source_dir,
+                        spec,
+                        args.repo_dir,
+                        args.protected_root,
+                        expected_root_fd=output_fd,
+                    )
+                _bound_output_root(output_root, output_fd)
+                result = await publish(api, args.source_dir, spec)
+        except PublicationError:
+            raise
+        except Exception:
+            raise PublicationError("my_pa_connection_failed") from None
+    finally:
+        os.close(output_fd)
     print(_json(result), end="")
     return 0 if result["status"] == "READY_FOR_HANDOFF" else 2
 
@@ -772,6 +961,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--repo-dir", type=Path, help="Read-only Git diff capture from this repository"
+    )
+    parser.add_argument(
+        "--protected-root",
+        action="append",
+        type=Path,
+        default=[],
+        help="Known source/managed-data root forbidden as output ancestor or descendant",
     )
     args = parser.parse_args(argv)
     try:

@@ -6,6 +6,7 @@ No network, provider accounts, credentials, production file mounts, or source wr
 import asyncio
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import zipfile
@@ -570,3 +571,295 @@ def test_unverified_artifact_version_blocks_ready(tmp_path: Path) -> None:
     assert result["status"] == "PUBLICATION_INCOMPLETE"
     assert payload(store, result["receipt_path"])["disposition"] == "PUBLICATION_INCOMPLETE"
     assert payload(store, result["manifest_path"])["artifacts"][0]["version"] is None
+
+
+
+def _r3_git_repo(tmp_path: Path) -> tuple[Path, dict]:
+    """Two-commit disposable binary repository and exact Git identity."""
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    def git(*arguments: str) -> str:
+        result = subprocess.run(  # noqa: S603 - synthetic Git-only setup
+            ["git", *arguments], cwd=root, check=True, capture_output=True
+        )
+        return result.stdout.decode().strip()
+
+    git("init", "-q")
+    git("config", "user.name", "Synthetic")
+    git("config", "user.email", "synthetic@example.test")
+    (root / "src.bin").write_bytes(b"old" + bytes([0]) + b"0" * 100)
+    git("add", ".")
+    git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    (root / "src.bin").write_bytes(b"new" + bytes([0]) + bytes(range(255)))
+    git("add", ".")
+    git("commit", "-qm", "head")
+    data = spec()
+    data["artifact_statuses"] = {}
+    data["github"] = {
+        "repo": "example/synthetic",
+        "base_sha": base,
+        "head_sha": git("rev-parse", "HEAD"),
+        "tree_sha": git("rev-parse", "HEAD^{tree}"),
+    }
+    return root, data
+
+
+def _r3_snapshot(root: Path) -> list[tuple[str, bytes | str]]:
+    result: list[tuple[str, bytes | str]] = []
+    for path in sorted(root.rglob("*")):
+        name = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            result.append((name, "SYMLINK:" + os.readlink(path)))
+        elif path.is_file():
+            result.append((name, path.read_bytes()))
+        else:
+            result.append((name, "DIR"))
+    return result
+
+
+def _r3_assert_clean(root: Path) -> None:
+    assert subprocess.check_output(["git", "status", "--porcelain"], cwd=root) == b""  # noqa: S603
+
+
+def test_r3_distinct_output_binary_patch_replay_and_publication(tmp_path: Path) -> None:
+    repository, data = _r3_git_repo(tmp_path)
+    output = tmp_path / "outputs"
+    output.mkdir()
+    capture_git(output, data, repository)
+    assert b"GIT binary patch" in (output / "_git/changes.patch").read_bytes()
+    assert b"src.bin" in (output / "_git/changed-paths.txt").read_bytes()
+    assert json.loads((output / "_git/IDENTITY.json").read_text())["head_sha"] == data["github"][
+        "head_sha"
+    ]
+    before = _r3_snapshot(output)
+    capture_git(output, data, repository)
+    assert _r3_snapshot(output) == before
+    store = SyntheticFilesWorkspace()
+    result = run(store, output, data)
+    assert result["status"] == "READY_FOR_HANDOFF"
+    assert result["verified"] == 3
+    assert _r3_snapshot(output) == before
+    _r3_assert_clean(repository)
+
+
+@pytest.mark.parametrize("case", ["same", "inside", "ancestor", "symlink", "symlink_ancestor"])
+def test_r3_output_boundary_rejects_without_local_writes(tmp_path: Path, case: str) -> None:
+    repository, data = _r3_git_repo(tmp_path)
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    if case == "same":
+        output = repository
+    elif case == "inside":
+        output = repository / "outputs"
+        output.mkdir()
+    elif case == "ancestor":
+        output = tmp_path
+    elif case == "symlink":
+        output = tmp_path / "outputs"
+        output.symlink_to(protected, target_is_directory=True)
+    else:
+        alias = tmp_path / "alias"
+        alias.symlink_to(protected, target_is_directory=True)
+        (protected / "outputs").mkdir()
+        output = alias / "outputs"
+    before = _r3_snapshot(protected)
+    with pytest.raises(
+        PublicationError, match="invalid_source_directory|output_overlaps_repository"
+    ):
+        capture_git(output, data, repository)
+    assert _r3_snapshot(protected) == before
+    assert not (output / "_git").exists()
+    _r3_assert_clean(repository)
+
+
+def test_r3_symlinked_git_directory_and_artifact_refuse_without_escape(tmp_path: Path) -> None:
+    repository, data = _r3_git_repo(tmp_path)
+    output, protected = tmp_path / "outputs", tmp_path / "protected"
+    output.mkdir()
+    protected.mkdir()
+    (output / "_git").symlink_to(protected, target_is_directory=True)
+    with pytest.raises(PublicationError, match="git_snapshot_existing_conflict"):
+        capture_git(output, data, repository)
+    assert _r3_snapshot(protected) == []
+    (output / "_git").unlink()
+    (output / "_git").mkdir()
+    (output / "_git/changes.patch").symlink_to(protected / "victim")
+    with pytest.raises(PublicationError, match="git_snapshot_existing_conflict"):
+        capture_git(output, data, repository)
+    assert _r3_snapshot(protected) == []
+    assert not (output / "_git/IDENTITY.json").exists()
+    _r3_assert_clean(repository)
+
+
+def test_r3_conflicting_git_artifact_preflight_is_all_or_nothing(tmp_path: Path) -> None:
+    repository, data = _r3_git_repo(tmp_path)
+    output = tmp_path / "outputs"
+    (output / "_git").mkdir(parents=True)
+    (output / "_git/changed-paths.txt").write_bytes(b"mismatch")
+    before = _r3_snapshot(output)
+    with pytest.raises(PublicationError, match="git_snapshot_existing_conflict"):
+        capture_git(output, data, repository)
+    assert _r3_snapshot(output) == before
+    _r3_assert_clean(repository)
+
+
+@pytest.mark.parametrize("case", ["identity", "dirty", "protected", "unknown_protected"])
+def test_r3_git_preflight_refuses_before_snapshot(tmp_path: Path, case: str) -> None:
+    repository, data = _r3_git_repo(tmp_path)
+    output = tmp_path / "outputs"
+    output.mkdir()
+    protected_roots: list[Path] = []
+    if case == "identity":
+        data["github"]["tree_sha"] = "0" * 40
+    elif case == "dirty":
+        (repository / "dirty").write_text("synthetic")
+    elif case == "protected":
+        protected_roots = [tmp_path]
+    else:
+        protected_roots = [tmp_path / "missing-protected-root"]
+    error = {
+        "identity": "github_head_identity_mismatch",
+        "dirty": "dirty_repository_refused",
+        "protected": "protected_output_root",
+        "unknown_protected": "invalid_protected_root",
+    }[case]
+    with pytest.raises(PublicationError, match=error):
+        capture_git(output, data, repository, protected_roots)
+    assert not (output / "_git").exists()
+    if case != "dirty":
+        _r3_assert_clean(repository)
+
+
+def test_r3_repo_dir_subdirectory_uses_actual_worktree_root(tmp_path: Path) -> None:
+    repository, data = _r3_git_repo(tmp_path)
+    (repository / "nested").mkdir()
+    output = repository / "outputs"
+    output.mkdir()
+    with pytest.raises(PublicationError, match="output_overlaps_repository"):
+        capture_git(output, data, repository / "nested")
+    assert not (output / "_git").exists()
+
+
+def test_r3_output_replacement_race_cannot_write_through_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, data = _r3_git_repo(tmp_path)
+    output, protected, moved = tmp_path / "outputs", tmp_path / "protected", tmp_path / "old"
+    output.mkdir()
+    protected.mkdir()
+    actual_mkdir = publisher.os.mkdir
+    observed = False
+
+    def injected(name: str, *args: object, **kwargs: object) -> None:
+        nonlocal observed
+        if name == "_git" and "dir_fd" in kwargs and not observed:
+            observed = True
+            output.rename(moved)
+            output.symlink_to(protected, target_is_directory=True)
+        actual_mkdir(name, *args, **kwargs)
+
+    monkeypatch.setattr(publisher.os, "mkdir", injected)
+    with pytest.raises(PublicationError, match="output_root_changed"):
+        capture_git(output, data, repository)
+    assert observed
+    assert _r3_snapshot(protected) == []
+    _r3_assert_clean(repository)
+
+
+def test_r3_git_subdir_replacement_race_cannot_follow_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repository, data = _r3_git_repo(tmp_path)
+    output, protected = tmp_path / "outputs", tmp_path / "protected"
+    output.mkdir()
+    protected.mkdir()
+    (output / "_git").mkdir()
+    actual_open = publisher.os.open
+    observed = False
+
+    def injected(name: str, flags: int, *args: object, **kwargs: object) -> int:
+        nonlocal observed
+        if name == "changes.patch" and "dir_fd" in kwargs and not observed:
+            observed = True
+            (output / "_git").rename(output / "old-git")
+            (output / "_git").symlink_to(protected, target_is_directory=True)
+        return actual_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(publisher.os, "open", injected)
+    with pytest.raises(PublicationError, match="git_snapshot_root_changed"):
+        capture_git(output, data, repository)
+    assert observed
+    assert _r3_snapshot(protected) == []
+    _r3_assert_clean(repository)
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "token", "expected"),
+    [
+        ("https://synthetic.example/mcp", None, "missing_authenticated_client_token"),
+        ("https://synthetic.example/mcp", "has whitespace", "malformed_authenticated_client_token"),
+        ("https://synthetic.example/mcp", "short", "malformed_authenticated_client_token"),
+        ("http://synthetic.example/mcp", "A" * 32, "invalid_endpoint"),
+        ("https://[invalid/mcp", "A" * 32, "invalid_endpoint"),
+    ],
+)
+def test_r3_cli_preflight_refuses_without_git_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, endpoint: str, token: str | None,
+    expected: str,
+) -> None:
+    repository, data = _r3_git_repo(tmp_path)
+    output = tmp_path / "outputs"
+    output.mkdir()
+    spec_file = tmp_path / "spec.json"
+    spec_file.write_text(json.dumps(data))
+    if token is None:
+        monkeypatch.delenv("SDCR_MYPA_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("SDCR_MYPA_TOKEN", token)
+    args = SimpleNamespace(
+        source_dir=output, repo_dir=repository, spec=spec_file,
+        endpoint=endpoint, protected_root=[],
+    )
+    with pytest.raises(PublicationError, match=expected):
+        asyncio.run(publisher._main(args))
+    assert not (output / "_git").exists()
+    _r3_assert_clean(repository)
+
+
+@pytest.mark.parametrize(
+    ("available", "expected"),
+    [
+        ([], "workspace_not_writable"),
+        (
+            [{"workspace_id": "mcp", "writable": False, "write_mode": "direct"}],
+            "workspace_not_writable",
+        ),
+        (
+            [{"workspace_id": "mcp", "writable": True, "write_mode": "approval"}],
+            "workspace_not_writable",
+        ),
+    ],
+)
+def test_r3_remote_write_preflight_rejects_unqualified_workspace(
+    available: list[dict], expected: str,
+) -> None:
+    class Stub:
+        async def call(self, name: str, payload: dict, *, write: bool = False) -> dict:
+            assert name == "files.workspaces.list" and payload == {} and not write
+            return {"workspaces": available}
+
+    with pytest.raises(PublicationError, match=expected):
+        asyncio.run(publisher._remote_write_preflight(Stub()))
+
+
+def test_r3_remote_write_preflight_accepts_direct_writable_workspace() -> None:
+    class Stub:
+        async def call(self, name: str, payload: dict, *, write: bool = False) -> dict:
+            assert name == "files.workspaces.list" and payload == {} and not write
+            return {"workspaces": [
+                {"workspace_id": "mcp", "writable": True, "write_mode": "direct"}
+            ]}
+
+    asyncio.run(publisher._remote_write_preflight(Stub()))

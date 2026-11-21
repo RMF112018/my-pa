@@ -95,12 +95,13 @@ def _literals(block: object) -> list[str]:
 def test_the_revision_is_on_4c37731671fc_under_the_files_workspace_head() -> None:
     script = ScriptDirectory.from_config(_config())
     # Files workspace WP4 (`640aaacc78e8`) is additive on this revision.
-    assert script.get_heads() == ["640aaacc78e8"]
+    assert script.get_heads() == ["4d1069a7d84f"]
+    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
     assert script.get_revision("640aaacc78e8").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "2a90f91dd786"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 129
+    assert len(list(MIGRATIONS.glob("*.py"))) == 130
 
 
 # ---- the freeze -------------------------------------------------------------

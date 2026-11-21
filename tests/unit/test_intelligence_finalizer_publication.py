@@ -278,9 +278,9 @@ def read(service: ApplicationService, scene: Scene, report_id: str) -> dict[str,
     )
 
 
-def fresh(scene: Scene, key: str) -> tuple[ApplicationService, str, str]:
+def fresh(scene: Scene, key: str, date: str = "2026-08-20") -> tuple[ApplicationService, str, str]:
     service = build_service(scene.world, scene.providers)
-    cycle = str(begin(service, scene, key)["cycle_run_id"])
+    cycle = str(begin(service, scene, key, date=date)["cycle_run_id"])
     return service, cycle, collector(service, scene, cycle, f"{key}-c")
 
 
@@ -872,7 +872,8 @@ def test_absent_failed_and_partial_run_lanes_are_non_blocking(scene: Scene) -> N
         assert lanes["onedrive"]["readiness_reason"] == "partial_run_without_artifact"
         assert lanes["sharepoint"]["readiness_reason"] == "ready"
         assert all(m["required"] is False for m in lanes.values())
-    empty_service, empty_cycle, _ = fresh(scene, "nb-empty")
+    # Another date: a second begin on the same date would join the open cycle.
+    empty_service, empty_cycle, _ = fresh(scene, "nb-empty", date="2026-08-21")
     absent = resolve(empty_service, scene, empty_cycle, ResolverSetId.SYNTHESIZER_INPUTS)
     assert absent["aggregate"] == "BLOCKED"
     assert {m["readiness_reason"] for m in members(absent)} == {"absent"}
@@ -1011,16 +1012,17 @@ def test_identical_synthesizer_and_reporter_commits_replay_without_duplicates(
 def test_p3_cycle_selection_by_list_and_forked_cycle_refused(scene: Scene) -> None:
     """F1/M2: a Finalizer selects the one current cycle from ``reports.list``.
 
-    A forked empty cycle for the same date never appears in the researcher
-    listing, and a Synthesizer committed into it with the real cycle's
-    researchers is refused as the wrong cycle.
+    ADR-010 amendment of 2026-11-20: a second begin for the same date joins the
+    open cycle instead of forking one. A forked empty cycle (another date) never
+    appears in the researcher listing, and a Synthesizer committed into it with
+    the real cycle's researchers is refused as the wrong cycle.
     """
     service = build_service(scene.world, scene.providers)
     day = "2026-08-20"
     real = str(begin(service, scene, "p3-real", date=day)["cycle_run_id"])
     coll = collector(service, scene, real, "p3-c")
     ids = tuple(researcher(service, scene, real, coll, lane, f"p3-{lane.value}") for lane in THREE)
-    forked = payload(
+    joined = payload(
         run(
             service,
             scene,
@@ -1031,6 +1033,21 @@ def test_p3_cycle_selection_by_list_and_forked_cycle_refused(scene: Scene) -> No
                 idempotency_key="p3-fork",
                 automation_platform="abacusai_agent",
                 external_orchestration_id="pcc_report_finalizer_fork",
+            ),
+        )
+    )
+    assert (joined["cycle_run_id"], joined["created"], joined["replayed"]) == (real, False, True)
+    forked = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_AUTHORING,
+            BeginIntelligenceCycle(
+                cycle_id=CYCLE_MORNING_INTELLIGENCE,
+                business_date="2026-08-21",
+                idempotency_key="p3-fork-other-day",
+                automation_platform="abacusai_agent",
+                external_orchestration_id="pcc_report_finalizer_fork_2",
             ),
         )
     )
@@ -1094,7 +1111,11 @@ def test_f1_begin_cycle_with_different_platform_and_external_root_forks_new_cycl
         )
 
     first = payload(begin_with("f1-a", "2026-08-20", "p1", None))
-    second = payload(begin_with("f1-b", "2026-08-20", "p2", "root-x"))
+    # ADR-010 amendment of 2026-11-20: a new key on the same date joins the
+    # open cycle; a new key on another date forks a new one.
+    joined = payload(begin_with("f1-j", "2026-08-20", "p2", "root-j"))
+    assert (joined["cycle_run_id"], joined["created"]) == (first["cycle_run_id"], False)
+    second = payload(begin_with("f1-b", "2026-08-21", "p2", "root-x"))
     assert first["cycle_run_id"] != second["cycle_run_id"]
     assert second["created"] is True
     assert second["replayed"] is False
@@ -1103,7 +1124,7 @@ def test_f1_begin_cycle_with_different_platform_and_external_root_forks_new_cycl
     )
     assert resolved["aggregate"] == "BLOCKED"
     assert {m["readiness"] for m in members(resolved)} == {"MISSING"}
-    replay = payload(begin_with("f1-b", "2026-08-20", "p2", "root-x"))
+    replay = payload(begin_with("f1-b", "2026-08-21", "p2", "root-x"))
     assert replay["cycle_run_id"] == second["cycle_run_id"]
     assert replay["replayed"] is True
     # intelligence.py begin_cycle: cycle_for_external_root bound -> IntelligenceConflictError.

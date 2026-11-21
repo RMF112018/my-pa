@@ -107,6 +107,8 @@ MEETING_TABLES: Final = (
     "meeting_attachments",
     "meeting_history",
     "meeting_note_versions",
+    # ADR-020: the prep brief chain.
+    "meeting_prep_versions",
     "meeting_series_history",
     "meeting_write_requests",
 )

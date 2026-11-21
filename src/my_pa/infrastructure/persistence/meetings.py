@@ -1,8 +1,9 @@
 """The Meeting records tables, behind `contracts.ports.MeetingRepository` (WP-MTG-02).
 
-Eight tables are reached here and nowhere else: `meeting_series`, `meetings`,
+Nine tables are reached here and nowhere else: `meeting_series`, `meetings`,
 `meeting_attendees`, `meeting_attachments`, `meeting_history`,
-`meeting_note_versions`, `meeting_series_history` and `meeting_write_requests`.
+`meeting_note_versions`, `meeting_prep_versions` (ADR-020),
+`meeting_series_history` and `meeting_write_requests`.
 Three tables of other planes are read and never written: `entities` (the
 attendee Person references, share-locked), `projects` (ownership only) and the
 managed-document tables (ownership, state and the safe title/media projection of
@@ -33,8 +34,9 @@ it; it never sees a raw `IntegrityError`.
 
 **Search is the package section 34.15 statement.** One `websearch_to_tsquery`
 under the `simple` configuration, matched against the Meeting core text, the
-series title through its own correlated `EXISTS`, or the current note head
-through a correlated `EXISTS` with a `NOT EXISTS` successor test. The text-search
+series title through its own correlated `EXISTS`, or the current note head or
+the current prep head (ADR-020 C5), each through a correlated `EXISTS` with a
+`NOT EXISTS` successor test. The text-search
 configuration and the empty and separator strings are rendered as SQL literals,
 never bound, so each expression is the same tree as its functional GIN index.
 """
@@ -74,6 +76,8 @@ from my_pa.contracts.ports import (
     MeetingNoteRecord,
     MeetingNoteVersionPage,
     MeetingNoteVersionRecord,
+    MeetingPrepRecord,
+    MeetingPrepVersionRecord,
     MeetingRecord,
     MeetingRepository,
     MeetingWriteRequestRecord,
@@ -120,6 +124,7 @@ from my_pa.infrastructure.persistence.tables import (
     meeting_attendees,
     meeting_history,
     meeting_note_versions,
+    meeting_prep_versions,
     meeting_series,
     meeting_series_history,
     meeting_write_requests,
@@ -156,6 +161,8 @@ _SPACE: Final = literal_column("' '", Text)
 #: note table. A `Table`-typed alias so the partition helpers accept it; at run
 #: time every helper reads only its column collection, which the alias has.
 _SUCCESSOR: Final = cast(Table, meeting_note_versions.alias("successor"))
+#: The prep version that supersedes another (ADR-020), on the same argument.
+_PREP_SUCCESSOR: Final = cast(Table, meeting_prep_versions.alias("prep_successor"))
 
 _MEETING_COLUMNS: Final = (
     meetings.c.meeting_id,
@@ -207,6 +214,11 @@ def _series_document() -> ColumnElement[Any]:
 def _note_document() -> ColumnElement[Any]:
     """The note body text, the same expression as `meeting_note_versions_text`."""
     return func.to_tsvector(_SIMPLE, meeting_note_versions.c.content_markdown)
+
+
+def _prep_document() -> ColumnElement[Any]:
+    """The prep body text, the same expression as `meeting_prep_versions_text`."""
+    return func.to_tsvector(_SIMPLE, meeting_prep_versions.c.content_markdown)
 
 
 def _series_title() -> ColumnElement[Any]:
@@ -296,6 +308,45 @@ def _has_no_successor() -> ColumnElement[bool]:
     )
 
 
+def _prep_has_no_successor() -> ColumnElement[bool]:
+    """The prep version in scope is its Meeting's current head (ADR-020 C1)."""
+    return ~(
+        select(_PREP_SUCCESSOR.c.prep_version_id)
+        .where(
+            matching_partition_criterion(_PREP_SUCCESSOR, meeting_prep_versions),
+            _PREP_SUCCESSOR.c.meeting_id == meeting_prep_versions.c.meeting_id,
+            _PREP_SUCCESSOR.c.supersedes_prep_version_id == meeting_prep_versions.c.prep_version_id,
+        )
+        .exists()
+    )
+
+
+#: The columns of one prep version as the prep reads return it.
+_PREP_COLUMNS: Final = (
+    meeting_prep_versions.c.prep_version_id,
+    meeting_prep_versions.c.meeting_id,
+    meeting_prep_versions.c.version_number,
+    meeting_prep_versions.c.supersedes_prep_version_id,
+    meeting_prep_versions.c.content_sha256,
+    meeting_prep_versions.c.content_markdown,
+    meeting_prep_versions.c.recorded_at,
+)
+
+
+def _to_prep_version(row: Row[Any]) -> MeetingPrepVersionRecord:
+    mapping = row._mapping
+    return MeetingPrepVersionRecord(
+        prep_version_id=mapping["prep_version_id"],
+        meeting_id=mapping["meeting_id"],
+        version_number=mapping["version_number"],
+        supersedes_prep_version_id=mapping["supersedes_prep_version_id"],
+        content_sha256=mapping["content_sha256"],
+        body=mapping["content_markdown"],
+        recorded_at=mapping["recorded_at"],
+        is_current=bool(mapping["is_current"]),
+    )
+
+
 #: The columns of one note version as the S1 note-history reads return it.
 _NOTE_HISTORY_COLUMNS: Final = (
     meeting_note_versions.c.note_version_id,
@@ -323,7 +374,10 @@ def _to_note_version(row: Row[Any]) -> MeetingNoteVersionRecord:
 
 
 def _matches(query: str) -> ColumnElement[bool]:
-    """Package section 34.15: core text, series-title branch, current-note branch."""
+    """Package section 34.15: core text, series-title branch, current-note branch.
+
+    ADR-020 C5 adds the current-prep branch, the note branch's exact parallel.
+    """
     tsquery = func.websearch_to_tsquery(_SIMPLE, literal(query, Text))
     series_branch = (
         select(meeting_series.c.meeting_series_id)
@@ -344,7 +398,17 @@ def _matches(query: str) -> ColumnElement[bool]:
         )
         .exists()
     )
-    return or_(_core_document().bool_op("@@")(tsquery), series_branch, note_branch)
+    prep_branch = (
+        select(meeting_prep_versions.c.prep_version_id)
+        .where(
+            matching_partition_criterion(meeting_prep_versions, meetings),
+            meeting_prep_versions.c.meeting_id == meetings.c.meeting_id,
+            _prep_has_no_successor(),
+            _prep_document().bool_op("@@")(tsquery),
+        )
+        .exists()
+    )
+    return or_(_core_document().bool_op("@@")(tsquery), series_branch, note_branch, prep_branch)
 
 
 def _filters(request: MeetingListRequest, now: datetime) -> list[ColumnElement[bool]]:
@@ -969,7 +1033,55 @@ class SqlMeetingRepository(MeetingRepository):
             )
         )
 
+    def insert_prep_version(self, principal_id: str, prep: MeetingPrepRecord) -> None:
+        self._connection.execute(
+            insert(meeting_prep_versions).values(
+                _bound(
+                    meeting_prep_versions,
+                    principal_id,
+                    {
+                        "prep_version_id": prep.prep_version_id,
+                        "meeting_id": prep.meeting_id,
+                        "version_number": prep.version_number,
+                        "supersedes_prep_version_id": prep.supersedes_prep_version_id,
+                        "content_markdown": prep.content_markdown,
+                        "content_sha256": prep.content_sha256,
+                        "meeting_history_id": prep.meeting_history_id,
+                        "recorded_at": prep.recorded_at,
+                    },
+                )
+            )
+        )
+
     # --- reads -------------------------------------------------------------
+
+    def read_prep_head(self, principal_id: str, meeting_id: str) -> MeetingPrepVersionRecord | None:
+        row = self._connection.execute(
+            principal_scoped(
+                select(*_PREP_COLUMNS, literal(True).label("is_current")),
+                meeting_prep_versions,
+                capture_context(principal_id),
+            ).where(
+                meeting_prep_versions.c.meeting_id == meeting_id,
+                _prep_has_no_successor(),
+            )
+        ).one_or_none()
+        return None if row is None else _to_prep_version(row)
+
+    def read_prep_version(
+        self, principal_id: str, meeting_id: str, version_number: int
+    ) -> MeetingPrepVersionRecord | None:
+        row = self._connection.execute(
+            principal_scoped(
+                select(*_PREP_COLUMNS, _prep_has_no_successor().label("is_current")),
+                meeting_prep_versions,
+                capture_context(principal_id),
+            ).where(
+                meeting_prep_versions.c.meeting_id == meeting_id,
+                meeting_prep_versions.c.version_number == version_number,
+            )
+        ).one_or_none()
+        return None if row is None else _to_prep_version(row)
 
     def current_note(self, principal_id: str, meeting_id: str) -> MeetingNoteView | None:
         row = self._connection.execute(

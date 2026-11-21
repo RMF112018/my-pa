@@ -543,6 +543,8 @@ __all__ = [
     "MeetingNoteRecord",
     "MeetingNoteVersionPage",
     "MeetingNoteVersionRecord",
+    "MeetingPrepRecord",
+    "MeetingPrepVersionRecord",
     "MeetingRecord",
     "MeetingRepository",
     "MeetingWriteRequestRecord",
@@ -11067,6 +11069,24 @@ class MeetingNoteRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class MeetingPrepRecord:
+    """One immutable full-body prep-brief version to insert (ADR-020 C1).
+
+    `supersedes_prep_version_id` is `None` exactly for `version_number == 1`;
+    `meeting_history_id` is the receipt of the write that created it.
+    """
+
+    prep_version_id: str
+    meeting_id: str
+    version_number: int
+    supersedes_prep_version_id: str | None
+    content_markdown: str
+    content_sha256: str
+    meeting_history_id: str
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class MeetingEntityState:
     """What an attendee Entity reference validates against, read under `FOR SHARE`."""
 
@@ -11104,6 +11124,24 @@ class MeetingNoteVersionRecord:
     meeting_id: str
     version_number: int
     supersedes_note_version_id: str | None
+    content_sha256: str
+    body: str
+    recorded_at: datetime
+    is_current: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingPrepVersionRecord:
+    """One immutable `meeting_prep_versions` row (ADR-020 C4, C6).
+
+    `body` is the exact stored text. `is_current` says no later version
+    supersedes this one. Not record-lineage evidence (ADR-020 Consequences).
+    """
+
+    prep_version_id: str
+    meeting_id: str
+    version_number: int
+    supersedes_prep_version_id: str | None
     content_sha256: str
     body: str
     recorded_at: datetime
@@ -11335,11 +11373,29 @@ class MeetingRepository(ABC):
     def insert_note_version(self, principal_id: str, note: MeetingNoteRecord) -> None:
         """Insert one immutable note version."""
 
+    @abstractmethod
+    def insert_prep_version(self, principal_id: str, prep: MeetingPrepRecord) -> None:
+        """Insert one immutable prep-brief version (ADR-020 C2)."""
+
     # --- reads -------------------------------------------------------------
 
     @abstractmethod
     def current_note(self, principal_id: str, meeting_id: str) -> MeetingNoteView | None:
         """The Meeting's current note head: the version no other supersedes."""
+
+    @abstractmethod
+    def read_prep_head(self, principal_id: str, meeting_id: str) -> MeetingPrepVersionRecord | None:
+        """The Meeting's current prep head (ADR-020 C4), or `None` when it has none.
+
+        `None` too when the Meeting is absent or foreign: the caller decides
+        whether the Meeting itself exists.
+        """
+
+    @abstractmethod
+    def read_prep_version(
+        self, principal_id: str, meeting_id: str, version_number: int
+    ) -> MeetingPrepVersionRecord | None:
+        """One prep version by number under that Meeting of this Principal, or `None`."""
 
     @abstractmethod
     def read_meeting(self, principal_id: str, meeting_id: str) -> MeetingView | None:
@@ -11360,8 +11416,9 @@ class MeetingRepository(ABC):
     ) -> MeetingListPage:
         """One keyset page of Meetings matching the query under the filters.
 
-        The query matches the core text, the series title, or the current note
-        only; attendee names and emails are never searched lexically.
+        The query matches the core text, the series title, the current note or
+        the current prep (ADR-020 C5) only; attendee names and emails are never
+        searched lexically.
         """
 
     @abstractmethod

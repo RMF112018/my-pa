@@ -117,6 +117,7 @@ from my_pa.contracts.v1.meetings import (
     MeetingHistoryView,
     MeetingListEntry,
     MeetingNoteView,
+    MeetingPrepView,
     MeetingSeriesHistoryView,
     MeetingSeriesView,
     MeetingView,
@@ -1752,6 +1753,28 @@ def _wp03b_success_payloads() -> dict[str, dict[str, Any]]:
             body_markdown="Synthetic notes",
             recorded_at=AT,
         ),
+        # ADR-020 C4: every MeetingView answer carries the current prep head.
+        prep=MeetingPrepView(
+            prep_version_id="mprep_bbbbbbbb22222222",
+            version_number=2,
+            supersedes_prep_version_id="mprep_aaaaaaaa11111111",
+            content_sha256=DIGEST,
+            character_count=len("Synthetic prep brief"),
+            recorded_at=AT,
+            is_current=True,
+            body_markdown="Synthetic prep brief",
+        ),
+    )
+    # ADR-020 C6: `meetings.read` with `prep_version_number` also carries it.
+    first_prep = MeetingPrepView(
+        prep_version_id="mprep_aaaaaaaa11111111",
+        version_number=1,
+        supersedes_prep_version_id=None,
+        content_sha256=DIGEST,
+        character_count=len("Synthetic first prep"),
+        recorded_at=AT,
+        is_current=False,
+        body_markdown="Synthetic first prep",
     )
     history = MeetingHistoryView(
         history_id="mhst_aaaaaaaa11111111",
@@ -1816,7 +1839,9 @@ def _wp03b_success_payloads() -> dict[str, dict[str, Any]]:
             issued_at=AT,
             created=True,
         ).model_dump(mode="json"),
-        "meetings.read": {"meeting": meeting.to_canonical_dict()},
+        "meetings.read": {
+            "meeting": meeting.model_copy(update={"prep_version": first_prep}).to_canonical_dict()
+        },
         "meetings.list": {"meetings": [row]},
         "meetings.search": {"meetings": [row]},
         "meetings.update": _meeting_write_payload(

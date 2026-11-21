@@ -176,6 +176,7 @@ def test_a_full_create_names_every_optional_part_it_holds(world: World) -> None:
             attendees=(ADA,),
             attachment_document_ids=(_document(world),),
             notes_markdown="First notes",
+            prep_markdown="First prep brief",
         ),
     )
     event = _only(world)
@@ -187,6 +188,7 @@ def test_a_full_create_names_every_optional_part_it_holds(world: World) -> None:
         "end_at",
         "location_text",
         "notes",
+        "prep",
         "start_at",
         "status",
         "timezone_name",
@@ -328,6 +330,33 @@ def test_a_note_append_names_only_notes(world: World) -> None:
         "notes-0001",
     )
     assert _only(world).changed_fields == ("notes",)
+
+
+def test_a_prep_replacement_names_only_prep_never_its_body(world: World) -> None:
+    """ADR-020 C2: the field name `prep`, never the body."""
+    seed = _seeded(world)
+    _update(
+        world,
+        MeetingUpdateRequest(meeting_id=seed.meeting.meeting_id, prep_markdown="MARKERPREPBODY"),
+        1,
+        "prep-0001",
+    )
+    event = _only(world)
+    assert event.changed_fields == ("prep",)
+    assert "MARKERPREPBODY" not in repr(event)
+
+
+def test_an_identical_prep_replacement_stages_nothing(world: World) -> None:
+    seed = _seeded(world, prep_markdown="Same brief")
+    events = len(world.record_events)
+    written = _update(
+        world,
+        MeetingUpdateRequest(meeting_id=seed.meeting.meeting_id, prep_markdown="Same brief"),
+        1,
+        "prep-same-0001",
+    )
+    assert written.meeting.version == 1
+    assert len(world.record_events) == events
 
 
 def test_a_combined_update_names_scalars_and_children_together(world: World) -> None:

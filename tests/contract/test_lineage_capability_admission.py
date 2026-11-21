@@ -461,7 +461,9 @@ _EXISTING_SHAPES: Final[dict[type, tuple[frozenset[str], frozenset[str]]]] = {
         frozenset({"title", "idempotency_key", "project_id", "situation_id", "due_at"}),
         frozenset({"title", "idempotency_key"}),
     ),
-    ReadMeeting: (frozenset({"meeting_id"}), frozenset({"meeting_id"})),
+    # ADR-020 C6 adds one optional field, `prep_version_number`; `meeting_id`
+    # stays the only required one.
+    ReadMeeting: (frozenset({"meeting_id", "prep_version_number"}), frozenset({"meeting_id"})),
 }
 
 

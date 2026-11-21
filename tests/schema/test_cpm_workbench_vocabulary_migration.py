@@ -54,7 +54,7 @@ REVISION: Final = "621ef6786c64"
 PREVIOUS: Final = "6c2306330ceb"
 #: Schedule Scenarios S6-2 (`2a90f91dd786`) is additive on this revision, and Reports
 #: Modernization WP01 (`4c37731671fc`) on it is the head.
-HEAD: Final = "640aaacc78e8"
+HEAD: Final = "4d1069a7d84f"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261028_621ef6786c64_cpm_workbench_vocabulary.py"
 #: The head that restates the capability vocabulary after this one (WP02).
@@ -103,14 +103,15 @@ def _literals(block: object) -> list[str]:
 def test_the_revision_is_the_single_head_on_6c2306330ceb() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "b77334135653"
+    assert script.get_revision(HEAD).down_revision == "640aaacc78e8"
+    assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
     assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
     assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
     assert script.get_revision("2a90f91dd786").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "023f8f7eb499"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 129
+    assert len(list(MIGRATIONS.glob("*.py"))) == 130
 
 
 # ---- the freeze -------------------------------------------------------------

@@ -72,6 +72,13 @@ const attachment = checked(strictObject({
   title: nullable(text(1,200)), media_type: nullable(mediaType), added_at: timestamp,
 }), (value) => value.availability === "unavailable" || (value.title !== null && value.media_type !== null));
 const note = strictObject({note_version_id: identifier("mnote"), version_number: integer(1), body_markdown: nonblank(100000), recorded_at: timestamp});
+// ADR-020 C4/C6: one immutable prep-brief version; version 1 alone supersedes nothing.
+const prep = checked(strictObject({
+  prep_version_id: identifier("mprep"), version_number: integer(1), supersedes_prep_version_id: nullable(identifier("mprep")),
+  content_sha256: checked(text(64,64), (value) => /^[0-9a-f]{64}$/.test(value)), character_count: integer(1,400000),
+  recorded_at: timestamp, is_current: boolean, body_markdown: nonblank(400000),
+}), (value) => (value.version_number === 1) === (value.supersedes_prep_version_id === null) &&
+  value.character_count === Array.from(value.body_markdown).length);
 export const meetingCore = {
   meeting_id: identifier("mtg"), meeting_series_id: nullable(identifier("mser")), series_title: nullable(meetingTitle), series_version: nullable(integer(1)),
   title: meetingTitle, status: enumeration(["scheduled", "cancelled"]), start_at: timestamp, end_at: nullable(timestamp), timezone_name: timezone,
@@ -92,7 +99,8 @@ export function validMeetingCore(value: Core): boolean {
 export const meetingView = checked(strictObject({
   ...meetingCore, virtual_meeting_url: nullable(httpsUrl), description: nullable(text(0,100000)),
   created_at: timestamp, cancelled_at: nullable(timestamp), attendees: arrayOf(attendee,100), attachments: arrayOf(attachment,50), notes: nullable(note),
-}), (value) => validMeetingCore(value) && (value.status === "cancelled") === (value.cancelled_at !== null) &&
+  prep: nullable(prep), prep_version: nullable(prep),
+}), (value) => validMeetingCore(value) && (value.prep === null || value.prep.is_current) && (value.status === "cancelled") === (value.cancelled_at !== null) &&
   new Set(value.attendees.map((row) => row.attendee_id)).size === value.attendees.length &&
   value.attendees.filter((row) => row.is_organizer).length <= 1 &&
   new Set(value.attachments.map((row) => row.attachment_id)).size === value.attachments.length &&

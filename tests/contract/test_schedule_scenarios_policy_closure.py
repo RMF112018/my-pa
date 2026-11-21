@@ -207,7 +207,10 @@ def test_the_six_plane_cursor_orders_and_the_37_details_exist() -> None:
     # Contract section 17.4's quoted-capability hint, 420 -> 421.
     # ADR-019 Amendment 2 (contract section 18): `workspace_read_only` and the
     # `pending_change_id` field detail, 421 -> 423.
-    assert len(SafeDetail) == 423
+    # ADR-010 amendment of 2026-11-20 (daily cycle scheduler): the `cycle_id`
+    # field detail and the `cycle_closed` reason, 423 -> 425.
+    # ADR-020 C2: the Meeting `prep` field detail, 425 -> 426.
+    assert len(SafeDetail) == 426
     for error in ChangeOpError:
         assert SafeDetail(f"change_set_{error.value}").name == f"CHANGE_SET_{error.name}"
 

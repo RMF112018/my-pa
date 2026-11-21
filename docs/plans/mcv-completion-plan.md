@@ -74,11 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Five hundred and twenty Python modules under `src/my_pa` and nine hundred and eighty-seven test modules —
+Five hundred and twenty-three Python modules under `src/my_pa` and nine hundred and eighty-nine test modules —
 
-**Current-tree remeasurement (Meeting prep WP2, ADR-020, branch `feat/meeting-prep`, 2026-11-20):** the two commands below count 520 source modules and 987 test modules: the Meeting prep WP1 520/986 below plus the one test module `tests/database/test_meeting_prep_application.py`. Previously five hundred and twenty and nine hundred and eighty-six.
+**Current-tree remeasurement (Meeting prep, ADR-020, branch `feat/meeting-prep`, merged over the daily cycle scheduler, 2026-11-21):** the two commands below count 523 source modules and 989 test modules: the daily cycle scheduler 523/986 below plus the three Meeting prep test modules `tests/schema/test_meeting_prep_versions_migration.py`, `tests/database/test_meeting_prep_persistence.py` and `tests/database/test_meeting_prep_application.py`. Previously five hundred and twenty-three and nine hundred and eighty-six.
 
-**Historical remeasurement (Meeting prep WP1, ADR-020, branch `feat/meeting-prep`, 2026-11-20):** the two commands below counted 520 source modules and 986 test modules: the files work workspace 520/984 below plus the two test modules `tests/schema/test_meeting_prep_versions_migration.py` and `tests/database/test_meeting_prep_persistence.py`. Previously five hundred and twenty and nine hundred and eighty-four.
+**Historical remeasurement (Daily cycle scheduler, ADR-010 amendment of 2026-11-20, branch `feat/daily-cycle-scheduler`):** the two commands below count 523 source modules and 986 test modules: the Files work workspace 520/984 below plus the three source modules `src/my_pa/domain/intelligence/daily_cycle.py`, `src/my_pa/application/daily_cycle.py` and `src/my_pa/infrastructure/jobs/cycle_scheduler.py` and the two test modules `tests/unit/test_daily_cycle_scheduler.py` and `tests/database/test_daily_cycle_scheduler.py`. Previously five hundred and twenty and nine hundred and eighty-four.
 
 **Historical remeasurement (Files work workspace, ADR-019 Amendment 2, branch `feat/files-work-workspace`, 2026-11-18):** the two commands below counted 520 source modules and 984 test modules: the native-handles 517/982 below plus the three source modules `src/my_pa/domain/files/workspaces.py`, `src/my_pa/infrastructure/file_workspace/pending.py` and `src/my_pa/application/file_workspace_approval.py` and the two test modules `tests/unit/test_files_work_workspace.py` and `tests/database/test_files_work_approval.py`. Previously five hundred and seventeen and nine hundred and eighty-two.
 

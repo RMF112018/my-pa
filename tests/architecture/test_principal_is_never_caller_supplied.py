@@ -287,6 +287,11 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # same shape `MemoryWriteRequest.principal_id` has and the reason
     # `persistence.relationship_memory` is registered below.
     "application/entity_authoring.py": (("request", "principal_id"),) * 2,
+    # The daily cycle runner (ADR-010 amendment of 2026-11-20) reads the
+    # Principal its composition root handed it -- the fixed local operator from
+    # `bootstrap.gateway.local_principal` -- to scope its stores and to state
+    # the correlation `principal_id` beside that same authenticated Principal.
+    "application/daily_cycle.py": (("_principal", "principal_id"),) * 4,
     # The persistence serializer now reads the same server-composed field once
     # more to acquire the Entity mutation scope before any identifier read.
     # WP-RE-04: one more, stamping the same partition onto the Record Events
@@ -295,10 +300,17 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # before the fact-evidence link. It scopes the lifecycle fence; it does
     # not choose a Principal from the payload.
     "infrastructure/persistence/entity_authoring.py": (("request", "principal_id"),) * 25,
+    # ADR-010 amendment of 2026-11-20: the FAST store's cycle-close reads (one
+    # artifact, three cycle) filter its own rows by the partition argument; they
+    # never choose a Principal.
     "application/intelligence.py": (
         ("artifact", "principal_id"),
         ("artifact", "principal_id"),
         ("artifact", "principal_id"),
+        ("artifact", "principal_id"),
+        ("cycle", "principal_id"),
+        ("cycle", "principal_id"),
+        ("cycle", "principal_id"),
         ("cycle", "principal_id"),
         ("cycle", "principal_id"),
         ("receipt", "principal_id"),

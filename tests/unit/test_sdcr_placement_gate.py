@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from my_pa.domain.files.sdcc_placement import PlacementDenied, SDCRPlacementGate
+from my_pa.domain.files.sdcc_placement import PlacementDeniedError, SDCRPlacementGate
 from my_pa.infrastructure.file_workspace.sdcc_placement_config import (
     SDCRConfigurationError,
     load_sdcr_gate,
@@ -56,21 +56,21 @@ def test_correct_typed_session_artifact_and_parents() -> None:
     ],
 )
 def test_unregistered_or_wrong_placement_fails(path: str, is_dir: bool) -> None:
-    with pytest.raises(PlacementDenied):
+    with pytest.raises(PlacementDeniedError):
         gate().admit_create(path, is_directory=is_dir)
 
 
 def test_registered_owner_cannot_be_renamed_by_caller() -> None:
     g = gate()
     bad = OWNED.replace("shared-platform", "my-pa")
-    with pytest.raises(PlacementDenied):
+    with pytest.raises(PlacementDeniedError):
         g.admit_directory_tree(bad + "/sessions/S")
 
 
 def test_no_root_arbitrary_files() -> None:
     g = gate()
     assert g.admit_create("SDCR/20-Programs", is_directory=True) == "DIRECTORY"
-    with pytest.raises(PlacementDenied):
+    with pytest.raises(PlacementDeniedError):
         g.admit_create("SDCR/file.txt", is_directory=False)
 
 
@@ -81,14 +81,14 @@ def test_mutation_denies_copy_move_trash_and_restore_under_sdcr() -> None:
         ("OTHER/folder", OWNED),
         (OWNED, "OTHER/folder"),
     ]:
-        with pytest.raises(PlacementDenied, match="SDCR_LIFECYCLE_CHANGE_REQUIRES_MIGRATION"):
+        with pytest.raises(PlacementDeniedError, match="SDCR_LIFECYCLE_CHANGE_REQUIRES_MIGRATION"):
             g.admit_transition(target, source=source)
     g.admit_transition("OTHER/foo", source="OTHER/bar")
 
 
 def test_write_existing_artifact_is_immutable() -> None:
     p = OWNED + "/sessions/S1/artifacts/evidence/EID__test.log"
-    with pytest.raises(PlacementDenied, match="SDCR_IMMUTABLE_CONTENT"):
+    with pytest.raises(PlacementDeniedError, match="SDCR_IMMUTABLE_CONTENT"):
         gate().admit_create(p, is_directory=False, expected_version="fv1_example")
     assert (
         gate().admit_create(
@@ -101,7 +101,7 @@ def test_write_existing_artifact_is_immutable() -> None:
 
 
 def test_control_plane_content_rejected_from_raw_client() -> None:
-    with pytest.raises(PlacementDenied, match="TRUSTED_CONTROL_REQUIRES_OPERATOR_PROVISIONING"):
+    with pytest.raises(PlacementDeniedError, match="TRUSTED_CONTROL_REQUIRES_OPERATOR_PROVISIONING"):
         gate().admit_create(
             "SDCR/00-Control/12_DIRECTORY_PLACEMENT_POLICY.json", is_directory=False
         )

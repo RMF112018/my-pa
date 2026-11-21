@@ -222,9 +222,7 @@ def _read_git_artifact(fd: int, name: str, expected: bytes) -> bool:
 
 def _bound_git_directory(root_fd: int, git_fd: int) -> None:
     try:
-        check = os.open(
-            "_git", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd
-        )
+        check = os.open("_git", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
     except OSError:
         raise PublicationError("git_snapshot_root_changed") from None
     try:
@@ -325,9 +323,7 @@ def capture_git(
         )
         _bound_output_root(output_root, output_fd)
         try:
-            git_fd = os.open(
-                "_git", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=output_fd
-            )
+            git_fd = os.open("_git", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=output_fd)
         except FileNotFoundError:
             _bound_output_root(output_root, output_fd)
             try:

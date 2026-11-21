@@ -635,9 +635,10 @@ def test_r3_distinct_output_binary_patch_replay_and_publication(tmp_path: Path) 
     capture_git(output, data, repository)
     assert b"GIT binary patch" in (output / "_git/changes.patch").read_bytes()
     assert b"src.bin" in (output / "_git/changed-paths.txt").read_bytes()
-    assert json.loads((output / "_git/IDENTITY.json").read_text())["head_sha"] == data["github"][
-        "head_sha"
-    ]
+    assert (
+        json.loads((output / "_git/IDENTITY.json").read_text())["head_sha"]
+        == data["github"]["head_sha"]
+    )
     before = _r3_snapshot(output)
     capture_git(output, data, repository)
     assert _r3_snapshot(output) == before
@@ -854,7 +855,8 @@ def test_r3_cli_preflight_refuses_without_git_artifacts(
     ],
 )
 def test_r3_remote_write_preflight_rejects_unqualified_workspace(
-    available: list[dict], expected: str,
+    available: list[dict],
+    expected: str,
 ) -> None:
     class Stub:
         async def call(self, name: str, payload: dict, *, write: bool = False) -> dict:

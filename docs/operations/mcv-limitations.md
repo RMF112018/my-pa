@@ -585,8 +585,9 @@ reversible and there is no deleted state.
 
 **Minimized reads, and one bounded search.** List and search rows carry triage
 fields only; attendee identity and email, virtual links, descriptions and note
-bodies need `meetings.read` on a named Meeting. Search matches the current note
-version and never a superseded one. Listings page by keyset cursor at a bounded
+bodies need `meetings.read` on a named Meeting; so do prep briefs (ADR-020).
+Search matches the current note version and the current prep version, and
+never a superseded one. Listings page by keyset cursor at a bounded
 page size, and a cursor from another partition or filter is refused.
 
 **Idempotency keys are content-addressed over the raw remote arguments.**

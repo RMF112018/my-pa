@@ -838,9 +838,10 @@ def test_the_chain_is_readable_and_non_empty() -> None:
     # (Schedule Scenarios S6-2, the scenario and baseline plane) as 126, and
     # `4c37731671fc` (Reports Modernization WP01, the general report plane) as 127,
     # and `b77334135653` (Schedule Scenarios S6-3 revision B) as 128, and
-    # the files workspace WP4 revision (the files plane) as 129.
-    assert len(revisions) == 129
-    assert len({revision for revision, _ in revisions}) == 129
+    # the files workspace WP4 revision (the files plane) as 129, and
+    # the ADR-020 revision (the Meeting prep version chain) as 130.
+    assert len(revisions) == 130
+    assert len({revision for revision, _ in revisions}) == 130
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

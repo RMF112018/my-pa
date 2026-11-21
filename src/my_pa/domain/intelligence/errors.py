@@ -73,3 +73,7 @@ class IntelligenceStaleReferenceError(ValueError):
 
 class IntelligenceConflictError(ValueError):
     """A current-head or external-run uniqueness conflict."""
+
+
+class IntelligenceCycleClosedError(ValueError):
+    """A new write named a cycle that is already `complete`, `failed` or `cancelled`."""

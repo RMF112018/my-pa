@@ -153,14 +153,16 @@ def _ok(
     return envelope.result
 
 
-def _begin(service: ApplicationService, principal: Principal, key: str) -> str:
+def _begin(
+    service: ApplicationService, principal: Principal, key: str, day: str = "2026-08-20"
+) -> str:
     result = _ok(
         service,
         principal,
         Purpose.REPORT_AUTHORING,
         BeginIntelligenceCycle(
             cycle_id=CYCLE_MORNING_INTELLIGENCE,
-            business_date="2026-08-20",
+            business_date=day,
             idempotency_key=key,
         ),
     )
@@ -465,7 +467,9 @@ def test_sql_one_lane_failure_does_not_block_synthesizer_and_refuses_old_fallbac
     assert teams["producer_run_id"] == failed_run_id
     assert teams["artifact_id"] is None
     assert teams["required"] is False
-    other_cycle = _begin(service, principal, "sql-lane-old")
+    # Another date: a second begin on the same date joins the open cycle
+    # (ADR-010 amendment of 2026-11-20).
+    other_cycle = _begin(service, principal, "sql-lane-old", day="2026-08-19")
     old_collector = _commit(
         service,
         principal,

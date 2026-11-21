@@ -36,7 +36,8 @@ def test_client_resume_revision_is_frozen_additive_and_linear(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == ["640aaacc78e8"]
+    assert script.get_heads() == ["4d1069a7d84f"]
+    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
     assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
     assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
     assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"

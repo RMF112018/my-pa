@@ -39,6 +39,14 @@ WORKSPACE_SOURCE = "/volume1/homes/bfetting/MCP"
 #: `/volume1/homes`, its ancestors (`/volume1`, `/`) and a whole home
 #: (`/volume1/homes/<user>`) are never a workspace source, whatever is configured.
 HOMES_ROOT = PurePosixPath("/volume1/homes")
+#: ADR-019 Amendment 2 (files-workspace contract section 18): the `work` workspace's
+#: read-only bind on the app (`ops/nas/remote/compose.files-work.remote.example.yml`),
+#: its product state directory (read-write) and the apply mount, which only the
+#: one-shot `my-pa-files-apply` service may carry -- never the serving app.
+WORK_DESTINATION = "/srv/my-pa/workspaces/work"
+WORK_SOURCE = "/volume1/homes/bfetting/Work"
+WORK_STATE_DESTINATION = "/srv/my-pa/workspace-state/work"
+WORK_APPLY_DESTINATION = "/srv/my-pa/workspaces-apply/work"
 
 
 def docker() -> str:
@@ -168,6 +176,27 @@ def violations(
             if workspace_source != admitted_workspace_source:
                 errors.append("workspace_mount_source_mismatch")
             sources.append(workspace_source)
+    # The `work` workspace is optional too. When mounted it must be read-only,
+    # exactly the Work folder, beside a writable state directory; the app never
+    # carries the apply mount (contract section 18.5).
+    work = app_mounts.get(WORK_DESTINATION)
+    work_state = app_mounts.get(WORK_STATE_DESTINATION)
+    if WORK_APPLY_DESTINATION in app_mounts:
+        errors.append("work_apply_mount_on_app")
+    if work is not None:
+        if work.get("RW") is not False:
+            errors.append("work_mount_not_read_only")
+        if work.get("Source") != WORK_SOURCE:
+            errors.append("work_mount_source_mismatch")
+        sources.append(work.get("Source"))
+        if work_state is None:
+            errors.append("work_state_mount_missing")
+    if work_state is not None:
+        if work_state.get("RW") is not True:
+            errors.append("work_state_mount_not_writable")
+        if work is None:
+            errors.append("work_state_without_work")
+        sources.append(work_state.get("Source"))
     if not all(
         isinstance(source, str) and PurePosixPath(source).is_absolute() for source in sources
     ):

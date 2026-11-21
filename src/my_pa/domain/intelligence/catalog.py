@@ -16,6 +16,7 @@ __all__ = [
     "ARTIFACT_KIND_FOR_STAGE",
     "ARTIFACT_KIND_TOKEN",
     "BUILTIN_REPORT_TYPES",
+    "CLOSED_CYCLE_STATES",
     "CYCLE_MORNING_INTELLIGENCE",
     "EXPECTED_FOCUS_AREAS",
     "EXPECTED_SOURCE_LANES",
@@ -28,6 +29,7 @@ __all__ = [
     "MAX_REPORT_TYPE_DISPLAY_NAME_CHARACTERS",
     "MAX_STRUCTURED_CONTENT_BYTES",
     "MIN_SYNTHESIZER_DEPENDENCY_COUNT",
+    "OPEN_CYCLE_STATES",
     "REQUIRED_DEPENDENCY_COUNT",
     "REQUIRED_MEMBERSHIP",
     "RESOLVER_SET_IDS",
@@ -146,6 +148,15 @@ class CycleState(StrEnum):
     COMPLETE = "complete"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+#: States a cycle may still be written in, and that the daily cycle scheduler
+#: closes (ADR-010 amendment of 2026-11-20).
+OPEN_CYCLE_STATES: Final[frozenset[CycleState]] = frozenset({CycleState.OPEN, CycleState.RUNNING})
+#: Terminal states. A new commit or run-state write to one is refused.
+CLOSED_CYCLE_STATES: Final[frozenset[CycleState]] = frozenset(
+    {CycleState.COMPLETE, CycleState.FAILED, CycleState.CANCELLED}
+)
 
 
 class ProvenanceRelation(StrEnum):

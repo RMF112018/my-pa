@@ -5034,6 +5034,26 @@
         "version_number": 1,
         "body_markdown": "Synthetic notes",
         "recorded_at": "2026-08-09T12:00:00.000Z"
+      },
+      "prep": {
+        "prep_version_id": "mprep_bbbbbbbb22222222",
+        "version_number": 2,
+        "supersedes_prep_version_id": "mprep_aaaaaaaa11111111",
+        "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "character_count": 20,
+        "recorded_at": "2026-08-09T12:00:00.000Z",
+        "is_current": true,
+        "body_markdown": "Synthetic prep brief"
+      },
+      "prep_version": {
+        "prep_version_id": "mprep_aaaaaaaa11111111",
+        "version_number": 1,
+        "supersedes_prep_version_id": null,
+        "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "character_count": 20,
+        "recorded_at": "2026-08-09T12:00:00.000Z",
+        "is_current": false,
+        "body_markdown": "Synthetic first prep"
       }
     }
   },
@@ -5124,7 +5144,18 @@
         "version_number": 1,
         "body_markdown": "Synthetic notes",
         "recorded_at": "2026-08-09T12:00:00.000Z"
-      }
+      },
+      "prep": {
+        "prep_version_id": "mprep_bbbbbbbb22222222",
+        "version_number": 2,
+        "supersedes_prep_version_id": "mprep_aaaaaaaa11111111",
+        "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "character_count": 20,
+        "recorded_at": "2026-08-09T12:00:00.000Z",
+        "is_current": true,
+        "body_markdown": "Synthetic prep brief"
+      },
+      "prep_version": null
     },
     "history": {
       "history_id": "mhst_aaaaaaaa11111111",

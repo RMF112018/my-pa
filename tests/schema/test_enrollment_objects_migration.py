@@ -408,6 +408,7 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "file_workspace_versions",
         "file_workspace_trash",
         "file_workspace_receipts",
+        "meeting_prep_versions",
     }
 )
 

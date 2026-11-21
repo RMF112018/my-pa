@@ -5,6 +5,7 @@
     .venv/bin/python apps/worker.py run --plane capture
     .venv/bin/python apps/worker.py run --plane reenrichment
     .venv/bin/python apps/worker.py run --plane schedule
+    .venv/bin/python apps/worker.py run --plane cycles
     .venv/bin/python apps/worker.py run --max-iterations 20 --lease-seconds 60
 
 This is the only place in the worker that chooses an implementation
@@ -68,6 +69,17 @@ accept.
   a decided match only while the plane is effective. Generic PDF extraction on the
   `enrollment` plane stays `unsupported`.
 
+* `cycles` runs the daily Morning Intelligence cycle scheduler
+  (`infrastructure.jobs.cycle_scheduler`, ADR-010 amendment of 2026-11-20). It
+  claims no job: it polls the clock and, once per local date in
+  `MY_PA_CYCLE_SCHEDULER_TIMEZONE` (at local midnight, or at once on start),
+  closes the operator Principal's stale open cycles and begins the date's cycle
+  through `ApplicationService.invoke` (`application.daily_cycle`). One session
+  advisory lock keeps two `cycles` processes from running a date together. The
+  plane is refused (exit 2, before an engine is built) unless
+  `MY_PA_CYCLE_SCHEDULER_ENABLED` is on. It prints one JSON line per run;
+  `--lease-seconds` does not apply to it.
+
 Three planes and one loop for the job planes: `run_worker` is parameterised over
 the plane (`D-76`, `D-77`), so the lease protocol has one implementation and
 three tables it runs against. The `reenrichment` plane is **not** on that loop, and the reason
@@ -98,21 +110,32 @@ from __future__ import annotations
 
 import argparse
 import functools
+import json
 import signal
 import sys
 import threading
 from collections.abc import Mapping
+from datetime import date
 from types import FrameType, MappingProxyType
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
 from my_pa.application.capture_lifecycle import always_eligible
+from my_pa.application.daily_cycle import DailyCycleRunner
+from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.settings import AuthMode, load_settings
+from my_pa.domain.common.time import utc_now
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.jobs.capture_pipeline import (
     configure_processing_eligibility,
     process_capture_version,
+)
+from my_pa.infrastructure.jobs.cycle_scheduler import (
+    DEFAULT_CYCLE_POLL_SECONDS,
+    CycleSchedulerRun,
+    run_cycle_scheduler,
 )
 from my_pa.infrastructure.jobs.extraction import extract_enrollment
 from my_pa.infrastructure.jobs.reenrichment import (
@@ -132,6 +155,7 @@ from my_pa.infrastructure.jobs.worker import (
     issue_worker_owner,
     run_worker,
 )
+from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.jobs import (
     CAPTURE_JOBS,
     ENROLLMENT_JOBS,
@@ -139,6 +163,7 @@ from my_pa.infrastructure.persistence.jobs import (
     JobPlane,
 )
 from my_pa.infrastructure.persistence.tables import JobState, entity_reenrichment_work
+from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from my_pa.infrastructure.persistence.worker_health import record_worker_heartbeat
 
 configure_processing_eligibility(always_eligible)
@@ -164,7 +189,7 @@ _JOB_PLANES: Mapping[str, tuple[JobPlane, JobHandler]] = MappingProxyType(
 #: that mapping would have required a `JobPlane` for a table that deliberately
 #: is not one. `sorted(_PLANES)` is still the single source of `--plane`'s
 #: choices, so the two cannot disagree.
-_PLANES: frozenset[str] = frozenset({*_JOB_PLANES, "reenrichment"})
+_PLANES: frozenset[str] = frozenset({*_JOB_PLANES, "reenrichment", "cycles"})
 
 #: The signals an operator stops this process with. `SIGHUP` is deliberately
 #: absent: it has no defined meaning for this process, and claiming one would be
@@ -284,6 +309,79 @@ def _run_reenrichment(args: argparse.Namespace) -> int:
     return 0
 
 
+def _log_line(fields: object) -> None:
+    """One structured log line on standard output. Identifiers, counts and codes only."""
+    print(json.dumps(fields, sort_keys=True, default=str), flush=True)
+
+
+def _report_cycles(run: CycleSchedulerRun) -> None:
+    print("plane        cycles")
+    print(f"iterations   {run.iterations}")
+    print(f"runs         {run.runs}")
+    print(f"skipped      {run.skipped}")
+    print(f"failed       {run.failed}")
+
+
+def _run_cycles(args: argparse.Namespace) -> int:
+    """Serve the daily cycle scheduler (ADR-010 amendment of 2026-11-20).
+
+    Refused before an engine is built unless `MY_PA_CYCLE_SCHEDULER_ENABLED` is
+    on. The Principal is the fixed local operator (`local_principal`): every
+    remote OAuth client row is constrained to it, so it owns ChatLLM's cycles.
+    The begin step goes through a minimal `ApplicationService` -- the default
+    composition already serves `reports.begin_cycle` -- with the audit sink on
+    its own engine, as the gateway composes it.
+    """
+    settings = load_settings()
+    if not settings.cycle_scheduler_enabled:
+        print("plane cycles disabled")
+        return 2
+    zone = ZoneInfo(settings.cycle_scheduler_timezone)
+    engine = create_database_engine(settings.parsed_database_url(), statement_timeout_ms=30_000)
+    audit_engine = create_database_engine(
+        settings.parsed_database_url(), statement_timeout_ms=30_000
+    )
+    audit = SqlAlchemyAuditSink(audit_engine)
+
+    def unit_of_work() -> SqlAlchemyUnitOfWork:
+        return SqlAlchemyUnitOfWork(engine, audit=audit)
+
+    runner = DailyCycleRunner(
+        service=ApplicationService(unit_of_work=unit_of_work, limits=settings.effective_limits()),
+        unit_of_work=unit_of_work,
+        principal=local_principal(),
+        clock=utc_now,
+    )
+
+    def run_for(business_date: date) -> bool:
+        outcome = runner(business_date)
+        _log_line(outcome.log_fields())
+        return outcome.begun
+
+    stop = threading.Event()
+    _install_stop_handlers(stop)
+    try:
+        run = run_cycle_scheduler(
+            engine,
+            zone=zone,
+            run_for=run_for,
+            stop=stop,
+            clock=utc_now,
+            log=_log_line,
+            poll_seconds=(
+                DEFAULT_CYCLE_POLL_SECONDS
+                if args.poll_seconds == DEFAULT_POLL_SECONDS
+                else args.poll_seconds
+            ),
+            max_iterations=1 if args.once else args.max_iterations,
+        )
+    finally:
+        engine.dispose()
+        audit_engine.dispose()
+    _report_cycles(run)
+    return 0
+
+
 def _schedule_refusal(args: argparse.Namespace, *, schedule_enabled: bool) -> str | None:
     """Why the `schedule` plane may not run in this process, or `None`.
 
@@ -305,6 +403,8 @@ def _schedule_refusal(args: argparse.Namespace, *, schedule_enabled: bool) -> st
 def _run(args: argparse.Namespace) -> int:
     if args.plane == "reenrichment":
         return _run_reenrichment(args)
+    if args.plane == "cycles":
+        return _run_cycles(args)
     settings = load_settings()
     refusal = _schedule_refusal(args, schedule_enabled=settings.schedule_enabled)
     if refusal is not None:

@@ -120,6 +120,8 @@ from my_pa.contracts.ports import (
     MeetingEntityState,
     MeetingListPage,
     MeetingNoteRecord,
+    MeetingPrepRecord,
+    MeetingPrepVersionRecord,
     MeetingRecord,
     MeetingRepository,
     MeetingWriteRequestRecord,
@@ -1229,6 +1231,7 @@ class World:
     meeting_attachments: dict[tuple[str, str], _MeetingAttachmentRow] = field(default_factory=dict)
     meeting_history: dict[tuple[str, str], MeetingHistoryView] = field(default_factory=dict)
     meeting_note_versions: dict[tuple[str, str], MeetingNoteRecord] = field(default_factory=dict)
+    meeting_prep_versions: dict[tuple[str, str], MeetingPrepRecord] = field(default_factory=dict)
     meeting_series_history: dict[tuple[str, str], MeetingSeriesHistoryView] = field(
         default_factory=dict
     )
@@ -9434,6 +9437,44 @@ class _Meetings:
     def insert_note_version(self, principal_id: str, note: MeetingNoteRecord) -> None:
         self._world.meeting_note_versions[(principal_id, note.note_version_id)] = note
 
+    def insert_prep_version(self, principal_id: str, prep: MeetingPrepRecord) -> None:
+        self._world.meeting_prep_versions[(principal_id, prep.prep_version_id)] = prep
+
+    def _prep_versions(self, principal_id: str, meeting_id: str) -> list[MeetingPrepVersionRecord]:
+        preps = [
+            prep
+            for (owner, _), prep in self._world.meeting_prep_versions.items()
+            if owner == principal_id and prep.meeting_id == meeting_id
+        ]
+        superseded = {prep.supersedes_prep_version_id for prep in preps}
+        return [
+            MeetingPrepVersionRecord(
+                prep_version_id=prep.prep_version_id,
+                meeting_id=prep.meeting_id,
+                version_number=prep.version_number,
+                supersedes_prep_version_id=prep.supersedes_prep_version_id,
+                content_sha256=prep.content_sha256,
+                body=prep.content_markdown,
+                recorded_at=prep.recorded_at,
+                is_current=prep.prep_version_id not in superseded,
+            )
+            for prep in preps
+        ]
+
+    def read_prep_head(self, principal_id: str, meeting_id: str) -> MeetingPrepVersionRecord | None:
+        heads = [v for v in self._prep_versions(principal_id, meeting_id) if v.is_current]
+        return heads[0] if heads else None
+
+    def read_prep_version(
+        self, principal_id: str, meeting_id: str, version_number: int
+    ) -> MeetingPrepVersionRecord | None:
+        found = [
+            v
+            for v in self._prep_versions(principal_id, meeting_id)
+            if v.version_number == version_number
+        ]
+        return found[0] if found else None
+
     # --- reads -------------------------------------------------------------------
 
     def current_note(self, principal_id: str, meeting_id: str) -> MeetingNoteView | None:
@@ -9586,12 +9627,14 @@ class _Meetings:
 
     def _matches(self, principal_id: str, record: MeetingRecord, query: str) -> bool:
         note = self.current_note(principal_id, record.meeting_id)
+        prep = self.read_prep_head(principal_id, record.meeting_id)
         corpus = (
             record.title,
             record.description,
             record.location_text,
             self._series_title(principal_id, record.meeting_series_id),
             None if note is None else note.body_markdown,
+            None if prep is None else prep.body,
         )
         wanted = query.casefold()
         return any(text is not None and wanted in text.casefold() for text in corpus)

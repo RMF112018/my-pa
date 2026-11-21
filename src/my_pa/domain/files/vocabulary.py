@@ -124,3 +124,5 @@ class FilesReason(StrEnum):
     #: fetched (scheme, host, address, redirect, status, TLS, network, deadline).
     #: One token for every cause, so it is no probing oracle.
     FILE_HANDLE_REFUSED = "file_handle_refused"
+    #: Section 18: a write named a `read_only` workspace.
+    WORKSPACE_READ_ONLY = "workspace_read_only"

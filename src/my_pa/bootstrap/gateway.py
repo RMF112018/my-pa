@@ -172,7 +172,8 @@ from __future__ import annotations
 
 import functools
 import logging
-from collections.abc import Callable, Mapping
+import os
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -193,7 +194,12 @@ from my_pa.application.entity_reenrichment import (
     ReenrichmentWork,
 )
 from my_pa.application.file_transfer import FileTransferGate
-from my_pa.application.file_workspace import BrowserDownloads, FileWorkspaceApplication
+from my_pa.application.file_workspace import (
+    BrowserDownloads,
+    ComposedFileWorkspace,
+    FileWorkspaceApplication,
+)
+from my_pa.application.file_workspace_approval import FileApprovalOperator
 from my_pa.application.goodnotes_orchestrator import rollout_stage_permits
 from my_pa.application.native_sources import NativeSourceController
 from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
@@ -209,6 +215,8 @@ from my_pa.bootstrap.goodnotes_rollout import allowed_activation_steps
 from my_pa.bootstrap.settings import AuthMode, Settings
 from my_pa.contracts.ports import (
     FileHandleFetcher,
+    FilePendingChangeStore,
+    FileWorkspaceRootError,
     FileWorkspaceStore,
     ManagedByteStore,
     ProgramReadUnitOfWork,
@@ -225,6 +233,8 @@ from my_pa.domain.capture.client import admit_client_binding, parse_client_crede
 from my_pa.domain.capture.errors import CaptureError
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.files.sdcc_placement import SDCRPlacementGate
+from my_pa.domain.files.workspaces import WriteMode
 from my_pa.domain.identity.auth_sessions import AuthSession
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
 from my_pa.domain.identity.principal import Principal, PrincipalKind
@@ -237,6 +247,8 @@ from my_pa.domain.policy.decision import POLICY_VERSION
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.file_workspace.handle_fetch import HandleFetchPolicy, SafeHandleFetcher
+from my_pa.infrastructure.file_workspace.pending import FilesystemPendingChanges
+from my_pa.infrastructure.file_workspace.sdcc_placement_config import load_sdcr_gate
 from my_pa.infrastructure.file_workspace.store import FilesystemFileWorkspaceStore
 from my_pa.infrastructure.jobs.reenrichment import (
     claim_reenrichment_work,
@@ -301,7 +313,10 @@ __all__ = [
     "RemoteClientAuthenticator",
     "build_gateway_runtime",
     "entra_authenticator",
+    "files_apply_stores",
+    "files_approval_operator",
     "files_workspace_store",
+    "files_workspaces",
     "local_principal",
     "remote_client_authenticator",
     "report_content_backup_store",
@@ -681,46 +696,221 @@ def report_transfer_staging(
     )
 
 
-def files_workspace_store(settings: Settings, work_engine: Engine) -> FileWorkspaceStore | None:
-    """The files workspace store, or `None` when no workspace root is configured.
+def files_workspace_store(
+    root: Path,
+    *,
+    source_roots: Sequence[Path],
+    managed_roots: Sequence[Path],
+    report_roots: Sequence[Path],
+    other_roots: Sequence[Path],
+    disk_reserve_bytes: int,
+    require_read_only_mount: bool,
+    sdcr_placement_gate: SDCRPlacementGate | None = None,
+) -> FileWorkspaceStore:
+    """The one constructor of a files workspace store (contract sections 9 and 18).
 
-    `None` is the plane absent (files-workspace contract section 9): an unset
-    or blank `MY_PA_FILES_WORKSPACE_ROOT` composes no store, serves no
-    `files.*` name and leaves the ChatLLM `FILES_WORKSPACE` prerequisite false.
-    A configured root is handed to `FilesystemFileWorkspaceStore` with the
-    configured source roots, the managed document root and the report content
-    root, whose constructor refuses to start unless the root exists, is a
-    directory and not a link, and neither is, contains nor lies inside any of
-    them -- a misconfiguration the operator must fix, never a quietly absent
-    plane. The setting reaches this function and nothing else.
+    Every workspace root, every `approval` state directory and every apply
+    mount is built here, with every overlap root: the constructor refuses to
+    start unless the root exists, is a directory and not a link, and neither
+    is, contains nor lies inside a configured source, managed-document, report
+    content or other workspace root -- and, for an `approval` or `read_only`
+    root, unless it is mounted read-only. A misconfiguration the operator must
+    fix, never a quietly absent plane.
     """
-    configured = settings.files_workspace_root.strip()
-    if not configured:
-        return None
+    return FilesystemFileWorkspaceStore(
+        root,
+        source_roots=source_roots,
+        managed_roots=managed_roots,
+        report_roots=report_roots,
+        other_roots=other_roots,
+        disk_reserve_bytes=disk_reserve_bytes,
+        require_read_only_mount=require_read_only_mount,
+        sdcr_placement_gate=sdcr_placement_gate,
+    )
+
+
+def files_workspaces(settings: Settings, work_engine: Engine) -> tuple[ComposedFileWorkspace, ...]:
+    """The composed workspaces (contract section 18.1), empty when the plane is absent.
+
+    Empty is the plane absent (contract section 9): no workspace configured
+    composes no store, serves no `files.*` name and leaves the ChatLLM
+    `FILES_WORKSPACE` prerequisite false. The settings reach the stores only
+    through `Settings.files_workspace_configs()` and this function.
+    """
+    configs = settings.files_workspace_configs()
+    if not configs:
+        return ()
     with work_engine.begin() as connection:
-        source_roots = configured_source_roots(connection)
+        source_roots = [Path(root) for root in configured_source_roots(connection)]
     managed = settings.managed_document_root.strip()
     report = settings.report_content_root.strip()
-    return FilesystemFileWorkspaceStore(
-        Path(configured),
-        source_roots=[Path(root) for root in source_roots],
-        managed_roots=[Path(managed)] if managed else [],
-        report_roots=[Path(report)] if report else [],
-        disk_reserve_bytes=settings.files_disk_reserve_bytes,
+    trees = [config.root for config in configs] + [
+        config.state_root for config in configs if config.state_root is not None
+    ]
+    composed: list[ComposedFileWorkspace] = []
+    for config in configs:
+        sdcr_gate = (
+            load_sdcr_gate(
+                settings.files_sdcr_policy_file,
+                config.root,
+                forbidden_roots=[
+                    *trees,
+                    *source_roots,
+                    *([managed] if managed else []),
+                    *([report] if report else []),
+                ],
+            )
+            if config.workspace_id == "mcp" and settings.files_sdcr_policy_file.strip()
+            else None
+        )
+
+        def build(
+            root: str,
+            *,
+            read_only: bool,
+            reserve: int,
+            placement_guard: SDCRPlacementGate | None = None,
+        ) -> FileWorkspaceStore:
+            return files_workspace_store(
+                Path(root),
+                source_roots=source_roots,
+                managed_roots=[Path(managed)] if managed else [],
+                report_roots=[Path(report)] if report else [],
+                other_roots=[Path(tree) for tree in trees if tree != root],
+                disk_reserve_bytes=reserve,
+                require_read_only_mount=read_only,
+                sdcr_placement_gate=placement_guard,
+            )
+
+        store = build(
+            config.root,
+            read_only=config.write_mode.requires_read_only_mount,
+            reserve=config.disk_reserve_bytes,
+            placement_guard=sdcr_gate,
+        )
+        staging: FileWorkspaceStore | None = None
+        pending: FilePendingChangeStore | None = None
+        if config.state_root is not None:
+            staging = build(config.state_root, read_only=False, reserve=config.disk_reserve_bytes)
+            pending = FilesystemPendingChanges(Path(config.state_root))
+        composed.append(
+            ComposedFileWorkspace(
+                workspace_id=config.workspace_id,
+                store=store,
+                write_mode=config.write_mode,
+                max_upload_bytes=config.max_upload_bytes,
+                staging=staging,
+                pending=pending,
+                max_pending_bytes=config.max_pending_bytes,
+                allowed_clients=config.clients,
+                sdcr_placement_gate=sdcr_gate,
+            )
+        )
+    return tuple(composed)
+
+
+def files_apply_stores(
+    settings: Settings, workspaces: Sequence[ComposedFileWorkspace]
+) -> dict[str, FileWorkspaceStore]:
+    """Contract section 18.5: the apply mounts, for the operator apply command only.
+
+    Each `MY_PA_FILES_APPLY_ROOTS` entry names an `approval` workspace's
+    read-write mount, present only in the one-shot apply container. It is built
+    by the one store constructor with every overlap root, refused unless it is
+    writable and the same directory (device and inode) as that workspace's
+    read-only root. Never called by a serving process.
+    """
+    roots = settings.files_apply_root_map()
+    spaces = {space.workspace_id: space for space in workspaces}
+    trees = [str(root) for root in roots.values()]
+    configs = settings.files_workspace_configs()
+    stores: dict[str, FileWorkspaceStore] = {}
+    for workspace_id, root in roots.items():
+        space = spaces.get(workspace_id)
+        if space is None or space.write_mode is not WriteMode.APPROVAL:
+            raise FileWorkspaceRootError("an apply root names no approval workspace")
+        config = next(config for config in configs if config.workspace_id == workspace_id)
+        store = files_workspace_store(
+            Path(root),
+            source_roots=[],
+            managed_roots=[Path(settings.managed_document_root)]
+            if settings.managed_document_root.strip()
+            else [],
+            report_roots=[Path(settings.report_content_root)]
+            if settings.report_content_root.strip()
+            else [],
+            other_roots=[
+                *(Path(tree) for tree in trees if tree != root),
+                *([] if config.state_root is None else [Path(config.state_root)]),
+            ],
+            disk_reserve_bytes=config.disk_reserve_bytes,
+            require_read_only_mount=False,
+            sdcr_placement_gate=(
+                load_sdcr_gate(
+                    settings.files_sdcr_policy_file,
+                    config.root,
+                    forbidden_roots=[
+                        *trees,
+                        *([config.state_root] if config.state_root else []),
+                        *(
+                            [settings.managed_document_root]
+                            if settings.managed_document_root
+                            else []
+                        ),
+                        *([settings.report_content_root] if settings.report_content_root else []),
+                    ],
+                )
+                if workspace_id == "mcp" and settings.files_sdcr_policy_file.strip()
+                else None
+            ),
+        )
+        if store.root_identity != space.store.root_identity:
+            raise FileWorkspaceRootError(
+                "the apply root is not the same directory as the workspace's read-only root"
+            )
+        if os.statvfs(root).f_flag & os.ST_RDONLY:
+            raise FileWorkspaceRootError("the apply root is mounted read-only")
+        stores[workspace_id] = store
+    return stores
+
+
+def files_approval_operator(settings: Settings) -> tuple[FileApprovalOperator, Engine]:
+    """The operator's approval service (contract section 18.5) and its engine to dispose.
+
+    Composed by `apps/cli/remote_mcp.py` only. With `MY_PA_FILES_APPLY_ROOTS`
+    unset it can list and deny but not approve (`no_apply_root`).
+    """
+    engine = create_database_engine(settings.parsed_database_url(), statement_timeout_ms=30_000)
+    audit = SqlAlchemyAuditSink(engine)
+    workspaces = files_workspaces(settings, engine)
+    standing = (
+        DurableRemoteClientStanding(
+            connections=engine.begin,
+            resource=settings.oauth_audience,
+            scopes=frozenset(settings.oauth_scopes.split()),
+        )
+        if settings.oauth_audience.strip()
+        else None
     )
+    operator = FileApprovalOperator(
+        workspaces=workspaces,
+        unit_of_work=lambda: SqlAlchemyUnitOfWork(engine, audit=audit),
+        standing=standing,
+        remote_writes_enabled=settings.remote_writes_enabled,
+        apply_stores=files_apply_stores(settings, workspaces),
+    )
+    return operator, engine
 
 
 def _file_workspace_application(
     settings: Settings, work_engine: Engine
 ) -> FileWorkspaceApplication | None:
-    """The `files.*` handlers over the composed store, or `None` with no store."""
-    store = files_workspace_store(settings, work_engine)
-    if store is None:
+    """The `files.*` handlers over the composed workspaces, or `None` with none."""
+    workspaces = files_workspaces(settings, work_engine)
+    if not workspaces:
         return None
     return FileWorkspaceApplication(
-        store,
-        workspace_id=settings.files_workspace_id,
-        max_upload_bytes=settings.files_max_upload_bytes,
+        workspaces=workspaces,
         handle_fetcher=files_handle_fetcher(settings),
         # Contract section 17.5: tickets name their absolute byte-route URL
         # when the remote MCP public host is configured.
@@ -730,6 +920,7 @@ def _file_workspace_application(
             else None
         ),
         browser_downloads=files_browser_downloads(settings),
+        approval_ttl_seconds=settings.files_approval_ttl_seconds,
     )
 
 
@@ -1599,15 +1790,13 @@ def build_gateway_runtime(
         runtime,
         file_transfer=FileTransferGate(
             service=runtime.service,
-            store=file_workspace.store,
+            workspaces=file_workspace.workspaces,
             unit_of_work=unit_of_work,
             standing=DurableRemoteClientStanding(
                 connections=control_engine.begin,
                 resource=settings.oauth_audience,
                 scopes=frozenset(settings.oauth_scopes.split()),
             ),
-            workspace_id=settings.files_workspace_id,
-            max_upload_bytes=settings.files_max_upload_bytes,
             remote_writes_enabled=settings.remote_writes_enabled,
             browser_client_ids=files_browser_download_client_ids(settings),
         ),

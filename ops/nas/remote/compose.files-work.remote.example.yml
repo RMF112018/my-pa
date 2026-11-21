@@ -1,0 +1,61 @@
+# The `work` workspace with approved-only writes (ADR-019 Amendment 2, files-workspace
+# contract section 18) for the remote MCP process. Used WITH ops/nas/remote/compose.yml,
+# compose.files-workspace.remote.example.yml (the `mcp` bind, kept) and the live overlays
+# already in the container's com.docker.compose.project.config_files label, project
+# my-pa-remote-mcp. Runbook: ops/runbooks/files-workspace.md section 9. Not a secret.
+# The serving app sees Work READ-ONLY (it refuses to compose otherwise) and writes only
+# the state directory; the one-shot `my-pa-files-apply` service (profile files-apply,
+# run by the operator, never started by `up`) alone mounts Work read-write to apply an
+# approved change. live-gate.py refuses a writable, misplaced or overlapping Work mount
+# and an apply mount on the app.
+services:
+  my-pa-mcp-remote:
+    environment:
+      MY_PA_FILES_WORKSPACE_ROOT: ""
+      MY_PA_FILES_WORKSPACES: "mcp=/srv/my-pa/workspaces/mcp,work=/srv/my-pa/workspaces/work;mode=approval;state=/srv/my-pa/workspace-state/work;clients=${MY_PA_FILES_WORK_CLIENT_IDS:?the |-separated OAuth client ids that may see Work required}"
+      MY_PA_FILES_APPROVAL_TTL_SECONDS: "900"
+    volumes:
+      - type: bind
+        source: /volume1/homes/bfetting/Work
+        target: /srv/my-pa/workspaces/work
+        read_only: true
+      - type: bind
+        source: "${MY_PA_NAS_FILES_WORK_STATE_ROOT:?exact NAS state directory for the work workspace required}"
+        target: /srv/my-pa/workspace-state/work
+        read_only: false
+  my-pa-files-apply:
+    profiles: [files-apply]
+    image: "${MY_PA_APP_IMAGE_ID:?exact my-pa image id required}"
+    platform: linux/amd64
+    user: "${MY_PA_REMOTE_UID:?dedicated non-root uid required}:${MY_PA_REMOTE_GID:?dedicated non-root gid required}"
+    init: true
+    restart: "no"
+    entrypoint: [python, apps/cli/remote_mcp.py]
+    command: [files-pending, --workspace, work]
+    env_file:
+      - "${MY_PA_REMOTE_ENV_FILE:?owner-only remote MCP env file required}"
+    environment:
+      MY_PA_GATEWAY_BIND_MODE: container
+      MY_PA_MANAGED_DOCUMENT_ROOT: /srv/my-pa/managed-documents
+      MY_PA_FILES_WORKSPACE_ROOT: ""
+      MY_PA_FILES_WORKSPACES: "work=/srv/my-pa/workspaces/work;mode=approval;state=/srv/my-pa/workspace-state/work"
+      MY_PA_FILES_APPLY_ROOTS: "work=/srv/my-pa/workspaces-apply/work"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - type: bind
+        source: /volume1/homes/bfetting/Work
+        target: /srv/my-pa/workspaces/work
+        read_only: true
+      - type: bind
+        source: "${MY_PA_NAS_FILES_WORK_STATE_ROOT:?exact NAS state directory for the work workspace required}"
+        target: /srv/my-pa/workspace-state/work
+        read_only: false
+      - type: bind
+        source: /volume1/homes/bfetting/Work
+        target: /srv/my-pa/workspaces-apply/work
+        read_only: false
+    networks: [data-plane]

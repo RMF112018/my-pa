@@ -715,3 +715,107 @@ def test_handle_egress_overlay_joins_the_app_to_the_cloudflare_egress_network() 
         "    networks: [data-plane, mcp-origin, cloudflare-egress]",
     ]
     assert "ops/runbooks/files-workspace.md" in text
+
+
+# ---- the `work` workspace (ADR-019 Amendment 2, files-workspace contract section 18) ----
+
+
+def _with_work(
+    app: dict,
+    *,
+    source: object = "/volume1/homes/bfetting/Work",
+    rw: object = False,
+    state: object = "/volume1/my-pa/workspace-state/work",
+    state_rw: object = True,
+    apply: bool = False,
+) -> dict:
+    mounts = [*app["Mounts"]]
+    if source is not None:
+        mounts.append({"Source": source, "Destination": "/srv/my-pa/workspaces/work", "RW": rw})
+    if state is not None:
+        mounts.append(
+            {"Source": state, "Destination": "/srv/my-pa/workspace-state/work", "RW": state_rw}
+        )
+    if apply:
+        mounts.append(
+            {
+                "Source": "/volume1/homes/bfetting/Work",
+                "Destination": "/srv/my-pa/workspaces-apply/work",
+                "RW": True,
+            }
+        )
+    return {**app, "Mounts": mounts}
+
+
+def test_live_gate_accepts_the_read_only_work_mount_beside_its_state() -> None:
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    app, edge, context = _live_gate_shape(gate)
+    assert gate.violations(_with_work(app), edge, **context) == []
+
+
+@pytest.mark.parametrize("rw", [True, None, "false"])
+def test_live_gate_refuses_a_work_mount_that_is_not_read_only(rw: object) -> None:
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    app, edge, context = _live_gate_shape(gate)
+    assert gate.violations(_with_work(app, rw=rw), edge, **context) == ["work_mount_not_read_only"]
+
+
+def test_live_gate_refuses_the_apply_mount_on_the_serving_app() -> None:
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    app, edge, context = _live_gate_shape(gate)
+    errors = gate.violations(_with_work(app, apply=True), edge, **context)
+    assert "work_apply_mount_on_app" in errors
+
+
+def test_live_gate_refuses_a_misplaced_work_or_a_missing_or_read_only_state() -> None:
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    app, edge, context = _live_gate_shape(gate)
+    assert gate.violations(
+        _with_work(app, source="/volume1/homes/bfetting/Other"), edge, **context
+    ) == ["work_mount_source_mismatch"]
+    assert gate.violations(_with_work(app, state=None), edge, **context) == [
+        "work_state_mount_missing"
+    ]
+    assert gate.violations(_with_work(app, state_rw=False), edge, **context) == [
+        "work_state_mount_not_writable"
+    ]
+    assert gate.violations(_with_work(app, source=None), edge, **context) == [
+        "work_state_without_work"
+    ]
+    # A state directory inside Work (or any other mount) overlaps.
+    assert gate.violations(
+        _with_work(app, state="/volume1/homes/bfetting/Work/.state"), edge, **context
+    ) == ["app_mount_overlap"]
+
+
+def test_the_work_overlay_binds_work_read_only_and_only_the_apply_service_writes_it() -> None:
+    text = (ROOT / "ops/nas/remote/compose.files-work.remote.example.yml").read_text(
+        encoding="utf-8"
+    )
+    app, apply = text.split("\n  my-pa-files-apply:\n", 1)
+    assert "MY_PA_FILES_APPLY_ROOTS" not in app
+    assert "workspaces-apply" not in app
+    assert (
+        "        source: /volume1/homes/bfetting/Work\n"
+        "        target: /srv/my-pa/workspaces/work\n"
+        "        read_only: true"
+    ) in app
+    assert (
+        "read_only: false"
+        not in app.split("target: /srv/my-pa/workspaces/work", 1)[1].split("\n      - ", 1)[0]
+    )
+    assert "mode=approval;state=/srv/my-pa/workspace-state/work" in app
+    assert '      MY_PA_FILES_WORKSPACE_ROOT: ""' in app
+    assert "    profiles: [files-apply]" in apply
+    assert '    restart: "no"' in apply
+    assert (
+        "        source: /volume1/homes/bfetting/Work\n"
+        "        target: /srv/my-pa/workspaces-apply/work\n"
+        "        read_only: false"
+    ) in apply
+    assert 'MY_PA_FILES_APPLY_ROOTS: "work=/srv/my-pa/workspaces-apply/work"' in apply
+    gate = _module(ROOT / "ops/nas/remote/live-gate.py")
+    assert gate.WORK_SOURCE == "/volume1/homes/bfetting/Work"
+    assert gate.WORK_DESTINATION == "/srv/my-pa/workspaces/work"
+    assert gate.WORK_APPLY_DESTINATION == "/srv/my-pa/workspaces-apply/work"
+    assert "ops/runbooks/files-workspace.md" in text

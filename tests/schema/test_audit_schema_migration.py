@@ -425,6 +425,8 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "file_workspace_versions",
         "file_workspace_trash",
         "file_workspace_receipts",
+        # ADR-020 stacks the Meeting prep brief version chain.
+        "meeting_prep_versions",
     }
 )
 

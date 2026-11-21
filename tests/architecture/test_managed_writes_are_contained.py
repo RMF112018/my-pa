@@ -112,6 +112,25 @@ CONTAINED_STORES: Final = frozenset(
 #: managed or source root. A module added here is a decision someone has to
 #: write down.
 REGISTERED_WRITERS: Final[dict[str, str]] = {
+    "src/my_pa/application/file_workspace_approval.py": (
+        "ADR-019 Amendment 2 (files-workspace contract section 18.5): the operator's "
+        "apply of an approved pending change. The detector matches its calls of the "
+        "`FileWorkspaceStore` port's own `mkdir`, `copy` and `move` methods on the apply "
+        "store; this module opens, writes and renames nothing itself. Every byte and "
+        "rename is the contained store's (FILE_WORKSPACE_STORE), built by the one "
+        "composition-root constructor with every overlap root, and never a managed or "
+        "source root."
+    ),
+    "src/my_pa/infrastructure/file_workspace/pending.py": (
+        "ADR-019 Amendment 2 (files-workspace contract section 18.2-18.3): pending "
+        "change records (small JSON, 0600) and the append-only decision journal of "
+        "an `approval` workspace, written only under `<state>/.my-pa/` of its "
+        "configured state directory, walked from the state root's descriptor with "
+        "O_NOFOLLOW. The state directory is composed through `files_workspace_store` "
+        "(so it overlaps no source, managed, report or workspace root) and no "
+        "`files.*` argument addresses it; it never writes a workspace, managed or "
+        "source root."
+    ),
     "src/my_pa/application/file_workspace.py": (
         "Files workspace WP5: the detector matches the handlers' calls of the "
         "`FileWorkspaceStore` port's own `mkdir`, `copy`, `move` and `write_text` "
@@ -1014,24 +1033,31 @@ def test_the_report_content_root_setting_is_its_own_and_reaches_only_the_store()
 
 
 def test_the_files_workspace_root_setting_is_its_own_and_reaches_only_the_store() -> None:
-    """Files workspace WP5 (contract section 9): the workspace root, read as the others are.
+    """Files workspace WP5 (contract section 9), amended by section 18.1.
 
-    Empty by default (no store is composed and no `files.*` name is served),
-    read only by the settings and the composition root, which builds
-    `FilesystemFileWorkspaceStore` from it with the configured source roots, the
-    managed document root and the report content root -- so the resolution and
-    all three overlap refusals run wherever the setting is read.
+    Empty by default (no store is composed and no `files.*` name is served).
+    The root settings (`MY_PA_FILES_WORKSPACE_ROOT` and `MY_PA_FILES_WORKSPACES`)
+    are read only by the settings, which turn them into
+    `Settings.files_workspace_configs()`; in the composition root only
+    `files_workspaces` reads those, and only `files_workspace_store` builds
+    `FilesystemFileWorkspaceStore`, with the configured source roots, the
+    managed document root, the report content root and every other workspace
+    tree -- so the resolution and all four overlap refusals run wherever a root
+    is composed.
     """
     from my_pa.bootstrap.settings import Settings
 
-    assert Settings.model_fields["files_workspace_root"].default == "", (
-        "the files workspace root now has a default location. An unconfigured "
-        "process would then acquire a writable workspace by forgetting something"
-    )
+    for name in ("files_workspace_root", "files_workspaces", "files_apply_roots"):
+        assert Settings.model_fields[name].default == "", (
+            f"{name} now has a default location. An unconfigured "
+            "process would then acquire a writable workspace by forgetting something"
+        )
     readers = sorted(
         _relative(path)
         for path in _python_files()
         if "files_workspace_root" in path.read_text(encoding="utf-8")
+        or "files_workspaces" in path.read_text(encoding="utf-8")
+        or "files_workspace_configs" in path.read_text(encoding="utf-8")
     )
     assert readers == ["src/my_pa/bootstrap/gateway.py", "src/my_pa/bootstrap/settings.py"], (
         f"{readers} read the files workspace root setting; each reader must build "
@@ -1050,13 +1076,22 @@ def test_the_files_workspace_root_setting_is_its_own_and_reaches_only_the_store(
         function.name
         for function in functions
         if any(
-            isinstance(node, ast.Attribute) and node.attr == "files_workspace_root"
+            isinstance(node, ast.Attribute)
+            and node.attr
+            in {
+                "files_workspace_root",
+                "files_workspaces",
+                "files_apply_roots",
+                "files_workspace_configs",
+                "files_apply_root_map",
+            }
             for node in ast.walk(function)
         )
     )
-    assert setting_readers == ["files_workspace_store"], (
-        f"{setting_readers} read the files workspace root in the composition root; "
-        "only `files_workspace_store` may, as it builds the store from it"
+    assert setting_readers == ["files_apply_stores", "files_workspaces"], (
+        f"{setting_readers} read the files workspace roots in the composition root; "
+        "only `files_workspaces` (and, for the operator apply mount, "
+        "`files_apply_stores`) may, as they build the stores from them"
     )
     constructions = {
         function.name: [
@@ -1075,7 +1110,7 @@ def test_the_files_workspace_root_setting_is_its_own_and_reaches_only_the_store(
     )
     (call,) = constructions["files_workspace_store"]
     keywords = {keyword.arg for keyword in call.keywords}
-    for keyword in ("source_roots", "managed_roots", "report_roots"):
+    for keyword in ("source_roots", "managed_roots", "report_roots", "other_roots"):
         assert keyword in keywords, (
             f"the composition root builds the files workspace store without `{keyword}=`, "
             "so that overlap refusal compares against nothing"

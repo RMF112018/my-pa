@@ -271,3 +271,104 @@ upload; do not assume failure.
   id, opaque ids, sizes or handler outcome, and byte-route chunks are not
   audited (contract §11, trim T14). The full list is in
   [`docs/operations/mcv-limitations.md`](../../docs/operations/mcv-limitations.md).
+
+## 9. The `work` workspace (approved-only writes)
+
+**Status: UNEXECUTED / OPERATOR-GATED.** ADR-019 Amendment 2 and contract §18.
+A second alias, `work`, serves `/volume1/homes/bfetting/Work` and all its
+subfolders to the clients the operator lists: reads directly, and every write
+only after the operator approves that one operation. `mcp` is unchanged. No
+migration: pending changes live in a product state directory.
+
+### 9.1 Prerequisites
+
+1. **Image** built from merged `main` carrying `feat/files-work-workspace`.
+   There is no Alembic revision for this feature.
+2. **State directory.** Create a product-only directory outside Work, outside
+   every other mounted root, owned by `MY_PA_REMOTE_UID`, mode 0700, e.g.
+   `/volume1/my-pa/workspace-state/work`. Add
+   `MY_PA_NAS_FILES_WORK_STATE_ROOT=<that path>` to the operator's Compose
+   interpolation env (beside `MY_PA_NAS_MANAGED_ROOT`). It holds upload staging,
+   pending change records and staged bytes (capped at 1 GiB by default,
+   `max_pending_bytes`), `decided/` records and `decisions.jsonl`.
+3. **Readers.** Collect the OAuth client ids of ChatGPT and both Abacus
+   registrations (`SELECT oauth_client_id, client_name FROM
+   identity.remote_clients` read-only, or the registration receipts) and set
+   `MY_PA_FILES_WORK_CLIENT_IDS=<id>|<id>|<id>` in the same interpolation env.
+   Only these clients see `work` at all (`clients=`); every other client,
+   whatever its `files.*` grants, gets `not_found`.
+4. **ACL.** `MY_PA_REMOTE_UID` needs read on Work for the serving app and
+   read-write for the apply step (the same UID runs both; the serving app's
+   bind is read-only at the kernel, so the ACL is not what stops it writing).
+   The apply step creates `Work/.my-pa/{staging,versions,trash}` (0700) on first
+   use; it is visible over SMB as a hidden folder and must be kept with Work's
+   backup (it holds preimages and trash).
+5. **Size.** Work is large and holds sensitive data. Nothing indexes or scans it
+   eagerly: list and search are bounded (page 200, walk 20,000 entries, depth
+   32). Synology `@eaDir`, `#recycle`, `#snapshot` and `.my-pa` are never
+   listed or searched and are refused as path components.
+
+### 9.2 Overlay
+
+`ops/nas/remote/compose.files-work.remote.example.yml`, added **after**
+`compose.files-workspace.remote.example.yml` (keep the `mcp` bind) to the live
+`config_files` list of `my-pa-mcp-remote`:
+
+- binds Work → `/srv/my-pa/workspaces/work` **read-only** and the state
+  directory → `/srv/my-pa/workspace-state/work` read-write;
+- replaces `MY_PA_FILES_WORKSPACE_ROOT` with `MY_PA_FILES_WORKSPACES`
+  (`mcp` direct, `work` approval with its state and `clients=`);
+- defines `my-pa-files-apply` (profile `files-apply`, `restart: "no"`), the only
+  container that binds Work read-write (`/srv/my-pa/workspaces-apply/work`, set
+  in `MY_PA_FILES_APPLY_ROOTS`). `up` never starts it; the operator runs it.
+
+The serving app refuses to start if the Work bind is not a read-only mount (an
+unmounted bind is a writable empty directory), and answers `unavailable` if it
+stops being one. After recreating `my-pa-mcp-remote`, run
+`ops/nas/remote/live-gate.py`: it refuses a writable or misplaced Work mount
+(`work_mount_not_read_only`, `work_mount_source_mismatch`), a missing or
+read-only state mount, any overlap, and the apply mount on the serving app
+(`work_apply_mount_on_app`). The private gateway is not given `work`.
+
+### 9.3 Grants
+
+No new capability exists. The listed clients use their existing `files.*`
+grants (the same names as for `mcp`): reads need `file_workspace_read`; a
+write request needs the write grant and remote writes enabled, exactly as for
+`mcp`, and becomes a pending change. A client without any write grant can only
+read `work`. Revoking a grant or a client, or removing it from
+`MY_PA_FILES_WORK_CLIENT_IDS` (then recreate the app), takes effect at once,
+including on approvals not yet applied.
+
+### 9.4 Approving changes
+
+A client's write answers `approval_required` with a `pending_change_id`
+(`fwpnd_…`); nothing is written to Work. The client polls
+`files.history` with `pending_change_id`. Each change expires after
+`MY_PA_FILES_APPROVAL_TTL_SECONDS` (default 900 s). With `CF` the live
+`config_files` list plus this overlay:
+
+```sh
+DC="docker compose -p my-pa-remote-mcp $CF --profile files-apply run --rm my-pa-files-apply"
+$DC files-pending --workspace work            # id, client, operation, paths, size, sha256, binding
+$DC files-approve --workspace work --pending-change-id fwpnd_… --binding <binding from the list>
+$DC files-deny    --workspace work --pending-change-id fwpnd_…
+```
+
+Review each listed change (operation, `path`/`to_path`, `size`, `sha256`)
+before approving; the `binding` is the SHA-256 of exactly what was listed, so
+an approval cannot apply anything else. Exit codes: 0 applied/denied/listed,
+1 the apply `failed` (the folder changed since the request, the client lost
+its grant, ...) or the change `expired`, 2 refused with nothing changed
+(`binding_mismatch`, `not_pending`, `not_found`, `no_apply_root`,
+`apply_root_mismatch`). An approval is single-use; a failed change is final —
+the client asks again. Every decision is a line in
+`<state>/.my-pa/decisions.jsonl` and on the apply container's log
+(`my_pa.files.approval`).
+
+### 9.5 Rollback
+
+Recreate `my-pa-mcp-remote` without the Work overlay (the `mcp` overlay alone).
+Pending changes then simply expire; the state directory can be kept for audit.
+Nothing in Work was changed except by approved applies, whose preimages and
+trash are in `Work/.my-pa/`.

@@ -243,3 +243,27 @@ describe("meetings.read strict canonical success", () => {
     }
   });
 });
+
+// ADR-020 C4/C6: the current prep head and the requested prep version.
+describe("meetings.read prep brief", () => {
+  it("accepts a Meeting with no prep and no requested version", () => {
+    const value = payload(); const meeting = at(value,["meeting"]);
+    meeting.prep = null; meeting.prep_version = null;
+    expect(decode(value)).toEqual({ok:true,value});
+  });
+  it("keeps the prep head current and the version chain well formed", () => {
+    expect(decode(replace(payload(),["meeting","prep","is_current"],false)).ok).toBe(false);
+    expect(decode(replace(payload(),["meeting","prep","supersedes_prep_version_id"],null)).ok).toBe(false);
+    expect(decode(replace(payload(),["meeting","prep_version","supersedes_prep_version_id"],"mprep_cccccccc33333333")).ok).toBe(false);
+    expect(decode(replace(payload(),["meeting","prep","prep_version_id"],"mnote_aaaaaaaa11111111")).ok).toBe(false);
+  });
+  it("binds character_count to the body and bounds the body at the named cap", () => {
+    expect(decode(replace(payload(),["meeting","prep","character_count"],3)).ok).toBe(false);
+    const atCap = "a".repeat(400000);
+    const capped = replace(replace(payload(),["meeting","prep","body_markdown"],atCap),["meeting","prep","character_count"],400000);
+    expect(decode(capped).ok).toBe(true);
+    const over = replace(replace(payload(),["meeting","prep","body_markdown"],atCap+"a"),["meeting","prep","character_count"],400001);
+    expect(decode(over).ok).toBe(false);
+    expect(decode(replace(replace(payload(),["meeting","prep","body_markdown"],"   "),["meeting","prep","character_count"],3)).ok).toBe(false);
+  });
+});

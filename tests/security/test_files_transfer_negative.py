@@ -171,11 +171,9 @@ def test_an_expired_ticket_opens_nothing(harness: Harness) -> None:
     upload_id, token = harness.begin_upload("ex.bin")
     later = FileTransferGate(
         service=harness.service,
-        store=harness.gate._store,
+        workspaces=tuple(harness.gate._spaces.values()),
         unit_of_work=harness.gate._unit_of_work,
         standing=harness.gate._standing,
-        workspace_id=WORKSPACE,
-        max_upload_bytes=1 << 20,
         remote_writes_enabled=True,
         clock=lambda: datetime.now(UTC) + timedelta(days=2),
     )

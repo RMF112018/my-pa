@@ -597,6 +597,17 @@ class IdKind(StrEnum):
     FILE_VERSION = "fwver"
     FILE_TRASH_ITEM = "fwtrs"
     FILE_RECEIPT = "fwrcp"
+    #: ADR-019 Amendment 2 (contract section 18.3): a pending change of an
+    #: `approval` workspace, applied only after an operator approval.
+    FILE_PENDING_CHANGE = "fwpnd"
+    #: ADR-020 C1: one immutable Meeting prep-brief version
+    #: (`knowledge.meeting_prep_versions`). Its own prefix rather than a reuse of
+    #: `MEETING_NOTE_VERSION` (`mnote`): a prep version is not record-lineage note
+    #: evidence, and a stored reference has to say which chain it names. Checked
+    #: against every prior member (a grep of `mprep` over `src`, `tests`,
+    #: `web/src` and `migrations`, and the uniqueness assertion in
+    #: `tests/unit/test_identifiers.py`): none collides (nearest `mprop`).
+    MEETING_PREP_VERSION = "mprep"
 
 
 class InvalidIdentifierError(ValueError):

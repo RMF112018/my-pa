@@ -112,6 +112,17 @@ CONTAINED_STORES: Final = frozenset(
 #: managed or source root. A module added here is a decision someone has to
 #: write down.
 REGISTERED_WRITERS: Final[dict[str, str]] = {
+    "scripts/sdcc_publish.py": (
+        "Issue #365 client-only publisher: after specification, HTTPS/token and "
+        "repository identity preflight, writes only three Git snapshot files under "
+        "an admitted output root (_git/changes.patch, _git/changed-paths.txt, "
+        "_git/IDENTITY.json). Uses descriptor-relative O_NOFOLLOW and O_EXCL, "
+        "dev/inode checks, and real worktree/Git-dir and caller-supplied protected "
+        "root overlap refusal. The operator/client must separately qualify any "
+        "source roots unknown to the script. Oversized metadata stages in a "
+        "process-owned TemporaryDirectory outside the output tree for ticketed "
+        "MY-PA transfer; this script is not a product server writer."
+    ),
     "src/my_pa/application/file_workspace_approval.py": (
         "ADR-019 Amendment 2 (files-workspace contract section 18.5): the operator's "
         "apply of an approved pending change. The detector matches its calls of the "

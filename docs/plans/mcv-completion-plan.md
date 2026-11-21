@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Five hundred and twenty-three Python modules under `src/my_pa` and nine hundred and eighty-nine test modules —
+**Integrated Issue #365 publisher accounting (derived, pending exact merged-tree remeasurement, 2026-11-21):** starting from authenticated `main@f7ec503fcc19069867782f2e674a740214e76744` (523 `src/my_pa` modules and 989 test modules), the isolated publisher branch adds `tests/unit/test_sdcc_publish.py` and no `src/my_pa` module. The integrated tree is therefore **expected to contain 523 source and 990 test modules**. This is path-inventory arithmetic, not an executed post-merge module census; repository guards and exact-head CI must verify it. The Meeting Prep and Daily Cycle Scheduler histories below remain authoritative for their respective earlier heads.
 
-**Current-tree remeasurement (Meeting prep, ADR-020, branch `feat/meeting-prep`, merged over the daily cycle scheduler, 2026-11-21):** the two commands below count 523 source modules and 989 test modules: the daily cycle scheduler 523/986 below plus the three Meeting prep test modules `tests/schema/test_meeting_prep_versions_migration.py`, `tests/database/test_meeting_prep_persistence.py` and `tests/database/test_meeting_prep_application.py`. Previously five hundred and twenty-three and nine hundred and eighty-six.
+Five hundred and twenty-three Python modules under `src/my_pa` and nine hundred and ninety test modules —
+
+**Historical mainline remeasurement (Meeting prep, ADR-020, branch `feat/meeting-prep`, merged over the daily cycle scheduler, 2026-11-21):** the two commands below count 523 source modules and 989 test modules: the daily cycle scheduler 523/986 below plus the three Meeting prep test modules `tests/schema/test_meeting_prep_versions_migration.py`, `tests/database/test_meeting_prep_persistence.py` and `tests/database/test_meeting_prep_application.py`. Previously five hundred and twenty-three and nine hundred and eighty-six.
 
 **Historical remeasurement (Daily cycle scheduler, ADR-010 amendment of 2026-11-20, branch `feat/daily-cycle-scheduler`):** the two commands below count 523 source modules and 986 test modules: the Files work workspace 520/984 below plus the three source modules `src/my_pa/domain/intelligence/daily_cycle.py`, `src/my_pa/application/daily_cycle.py` and `src/my_pa/infrastructure/jobs/cycle_scheduler.py` and the two test modules `tests/unit/test_daily_cycle_scheduler.py` and `tests/database/test_daily_cycle_scheduler.py`. Previously five hundred and twenty and nine hundred and eighty-four.
 

@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Five hundred and twenty-three Python modules under `src/my_pa` and nine hundred and eighty-six test modules —
+Five hundred and thirty-five Python modules under `src/my_pa` and nine hundred and ninety-four test modules —
 
-**Current-tree remeasurement (Daily cycle scheduler, ADR-010 amendment of 2026-11-20, branch `feat/daily-cycle-scheduler`):** the two commands below count 523 source modules and 986 test modules: the Files work workspace 520/984 below plus the three source modules `src/my_pa/domain/intelligence/daily_cycle.py`, `src/my_pa/application/daily_cycle.py` and `src/my_pa/infrastructure/jobs/cycle_scheduler.py` and the two test modules `tests/unit/test_daily_cycle_scheduler.py` and `tests/database/test_daily_cycle_scheduler.py`. Previously five hundred and twenty and nine hundred and eighty-four.
+**Current-tree remeasurement (Communications intelligence WP1, ADR-021, branch `feat/comms-intelligence`, 2026-11-21):** the two commands below count 535 source modules and 994 test modules: the Daily cycle scheduler 523/986 below plus the twelve source modules under `src/my_pa/domain/communications/` and `src/my_pa/infrastructure/communications/` and the eight test modules `tests/unit/test_communications_{aggregate_cli,corpus,evidence_parser,fixtures,identifiers,lanes,search_text}.py` and `tests/architecture/test_communications_source_scope.py`. Previously five hundred and twenty-three and nine hundred and eighty-six.
+
+**Historical remeasurement (Daily cycle scheduler, ADR-010 amendment of 2026-11-20, branch `feat/daily-cycle-scheduler`):** the two commands below counted 523 source modules and 986 test modules: the Files work workspace 520/984 below plus the three source modules `src/my_pa/domain/intelligence/daily_cycle.py`, `src/my_pa/application/daily_cycle.py` and `src/my_pa/infrastructure/jobs/cycle_scheduler.py` and the two test modules `tests/unit/test_daily_cycle_scheduler.py` and `tests/database/test_daily_cycle_scheduler.py`. Previously five hundred and twenty and nine hundred and eighty-four.
 
 **Historical remeasurement (Files work workspace, ADR-019 Amendment 2, branch `feat/files-work-workspace`, 2026-11-18):** the two commands below counted 520 source modules and 984 test modules: the native-handles 517/982 below plus the three source modules `src/my_pa/domain/files/workspaces.py`, `src/my_pa/infrastructure/file_workspace/pending.py` and `src/my_pa/application/file_workspace_approval.py` and the two test modules `tests/unit/test_files_work_workspace.py` and `tests/database/test_files_work_approval.py`. Previously five hundred and seventeen and nine hundred and eighty-two.
 

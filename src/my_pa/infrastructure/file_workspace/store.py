@@ -136,6 +136,7 @@ from my_pa.contracts.ports import (
     FileWorkspaceUnavailableError,
 )
 from my_pa.domain.files.errors import FilesArgumentError, FilesRefusal
+from my_pa.domain.files.sdcc_placement import PlacementDenied, SDCRPlacementGate
 from my_pa.domain.files.paths import (
     WorkspacePath,
     is_reserved_name,
@@ -530,6 +531,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         disk_reserve_bytes: int = DISK_RESERVE_BYTES,
         require_read_only_mount: bool = False,
         read_only_probe: Callable[[int], bool] | None = None,
+        sdcr_placement_gate: SDCRPlacementGate | None = None,
     ) -> None:
         if not _platform_supported():  # pragma: no cover - every supported platform has it
             raise FileWorkspaceRootError(
@@ -590,6 +592,38 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         self._identity: Final = (status.st_dev, status.st_ino)
         self._reserve: Final = _bounded_int(disk_reserve_bytes, "disk_reserve_bytes", 0)
         self._published_mode: Final = _FILE_MODE & ~_process_umask()
+        # Optional SDCR-specific closed-world rule, configured outside this
+        # writable workspace. No policy is imposed on other workspaces.
+        self._sdcr_placement_gate: Final = sdcr_placement_gate
+
+    def _sdcr_create(
+        self, path: str, *, directory: bool, expected_version: str | None = None
+    ) -> None:
+        gate = self._sdcr_placement_gate
+        if gate is None:
+            return
+        try:
+            gate.admit_create(path, is_directory=directory, expected_version=expected_version)
+        except PlacementDenied:
+            raise _refuse("path", FilesReason.INVALID_PATH) from None
+
+    def _sdcr_directory(self, path: str) -> None:
+        gate = self._sdcr_placement_gate
+        if gate is None:
+            return
+        try:
+            gate.admit_directory_tree(path)
+        except PlacementDenied:
+            raise _refuse("path", FilesReason.INVALID_PATH) from None
+
+    def _sdcr_transition(self, path: str, source: str | None = None) -> None:
+        gate = self._sdcr_placement_gate
+        if gate is None:
+            return
+        try:
+            gate.admit_transition(path, source=source)
+        except PlacementDenied:
+            raise _refuse("path", FilesReason.INVALID_PATH) from None
 
     # ---- a seam for tests: called immediately before each fingerprint re-check
 
@@ -1060,6 +1094,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
 
     def mkdir(self, path: str, *, parents: bool = False) -> FileWorkspaceEntry:
         directory_path = parse_path(path)
+        self._sdcr_directory(directory_path.text)
         if type(parents) is not bool:
             raise FilesArgumentError("parents", "type")
         with ExitStack() as stack, _translated():
@@ -1094,6 +1129,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
     ) -> FileWorkspaceEntry:
         source_path = parse_path(path)
         target_path = parse_path(to_path, "to_path")
+        self._sdcr_transition(target_path.text, source_path.text)
         if expected_version is not None:
             validate_version_token(expected_version)
         self._distinct(source_path, target_path)
@@ -1123,6 +1159,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         self, path: str, trash_item_id: str, *, expected_version: str | None = None
     ) -> FileWorkspaceTrashing:
         source_path = parse_path(path)
+        self._sdcr_transition(source_path.text)
         item = _file_id(trash_item_id, TRASH_ITEM_ID_PREFIX, "trash_item_id")
         if expected_version is not None:
             validate_version_token(expected_version)
@@ -1155,6 +1192,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
     ) -> FileWorkspaceEntry:
         item = _file_id(trash_item_id, TRASH_ITEM_ID_PREFIX, "trash_item_id")
         target_path = parse_path(to_path, "to_path")
+        self._sdcr_transition(target_path.text)
         validate_version_token(trashed_version, "trashed_version")
         with ExitStack() as stack, _translated():
             trash = self._required_control(stack, TRASH, "trash_item_id")
@@ -1186,6 +1224,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
     ) -> FileWorkspaceEntry:
         source_path = parse_path(path)
         target_path = parse_path(to_path, "to_path")
+        self._sdcr_transition(target_path.text, source_path.text)
         if expected_version is not None:
             validate_version_token(expected_version)
         self._distinct(source_path, target_path)
@@ -1452,6 +1491,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         preimage_version_id: str | None = None,
     ) -> FileWorkspacePublication:
         file_path = parse_path(path)
+        self._sdcr_create(file_path.text, directory=False, expected_version=expected_version)
         if type(text) is not str:
             raise FilesArgumentError("text", "type")
         try:
@@ -1607,6 +1647,7 @@ class FilesystemFileWorkspaceStore(FileWorkspaceStore):
         staged_version: str | None = None,
     ) -> FileWorkspacePublication:
         file_path = parse_path(path)
+        self._sdcr_create(file_path.text, directory=False, expected_version=expected_version)
         claimed_length = _bounded_int(length, "length", 0)
         claimed_sha256 = validate_sha256(sha256)
         if expected_version is not None:

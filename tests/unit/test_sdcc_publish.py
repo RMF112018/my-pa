@@ -6,7 +6,6 @@ No network, provider accounts, credentials, production file mounts, or source wr
 import asyncio
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import zipfile
@@ -623,7 +622,10 @@ def _r3_snapshot(root: Path) -> list[tuple[str, bytes | str]]:
 def _r3_assert_clean(root: Path) -> None:
     executable = shutil.which("git")
     assert executable is not None
-    assert subprocess.check_output([executable, "status", "--porcelain"], cwd=root) == b""
+    result = subprocess.check_output(  # noqa: S603 - trusted synthetic Git executable
+        [executable, "status", "--porcelain"], cwd=root
+    )
+    assert result == b""
 
 
 def test_r3_distinct_output_binary_patch_replay_and_publication(tmp_path: Path) -> None:

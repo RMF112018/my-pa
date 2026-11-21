@@ -388,8 +388,6 @@ def authorize_path(
     return _other_top(top, rest, policy, is_directory, role)
 
 
-
-
 def authorize_mutation(
     policy: Mapping[str, Any],
     registrations: Mapping[str, Mapping[str, str]],

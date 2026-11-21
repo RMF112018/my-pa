@@ -7,7 +7,7 @@
 | # | Finding (evidence) | Decision | Plan |
 | ---: | --- | --- | --- |
 | 1 | Exports are files written by an external producer into the `mcp` workspace ([inventory](PULSE-SOURCE-INVENTORY.md)) | Read-only original-source evidence; read through the files store; never written, renamed or trashed | 1, 11 |
-| 2 | Same lifecycle needs as communications: snapshot, SHA-256, runs, idempotency, quarantine, freshness | Reuse the ADR-021 decision 2 lifecycle built in WP3 as its second consumer `pulse_csv_export`; no second lifecycle | 1.2, 3 |
+| 2 | Same lifecycle needs as communications: snapshot, SHA-256, runs, idempotency, quarantine, freshness | Reuse the ADR-022 decision 2 lifecycle built in WP3 as its second consumer `pulse_csv_export`; no second lifecycle | 1.2, 3 |
 | 3 | 1 header-only file is byte-identical in 2 project folders ([inventory](PULSE-SOURCE-INVENTORY.md) section 3) | One lifecycle source per project folder; snapshot identity `(principal, source, sha256)`; aliasing only within a source | 6.1 |
 | 4 | Procore exports are not user-authored and not managed documents | Not ADR-003 product-owned records and not ADR-010 report artifacts; the Reports plane is not reused for storage | 1.4 |
 | 5 | No in-file metadata; slug does not describe the filter ([historical coverage](PULSE-HISTORICAL-COVERAGE-ASSESSMENT.md) section 3) | `filter_semantics = unknown` by default; slug and date prefix stored as labels only | 6.2, 8 |

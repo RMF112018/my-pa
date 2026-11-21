@@ -2,7 +2,7 @@
 
 **Status:** planning only, under scope extension `MYPA-PULSE-INTELLIGENCE-EXTENSION-20261121` of goal `MYPA-COMMS-MEETCTX-P1P3-20261121`. Written before any PULSE code exists, as the operator required. No PULSE module, table, migration, capability, purpose, identifier kind, switch or fixture exists; nothing is persisted, exposed, granted or deployed. Every work package below needs its own PR, independent review and merge decision; items marked operator-gated need the operator.
 
-**Basis:** branch `feat/comms-intelligence` at `f586b6c97ee480d47503e450980c4768825ac808` (tree `eb1fb5fc4f7488eb3a0abf6ac406fb4bfe6805b6`) on `origin/main@092610d36b7d1493fc7fda6e352a4bd06e914f61`; Alembic single head `640aaacc78e8`. Shared lifecycle: [ADR-021](../decisions/ADR-021-communications-intelligence.md) decision 2 (Proposed) and [`communications-intelligence-contract.md`](../architecture/communications-intelligence-contract.md) ("contract"), sections 1, 9, 11, 18 and 19, with the Manager rulings of 2026-11-21 in its section 21. Evidence: [`docs/evidence/pulse/`](../evidence/pulse/README.md) ("evidence"), aggregates only. All counts are digits on purpose (spelled-count guard). Paths to files that do not exist yet are not written as links (CI relative-link check).
+**Basis:** branch `feat/comms-intelligence` at `f586b6c97ee480d47503e450980c4768825ac808` (tree `eb1fb5fc4f7488eb3a0abf6ac406fb4bfe6805b6`) on `origin/main@092610d36b7d1493fc7fda6e352a4bd06e914f61`; Alembic single head `640aaacc78e8`. Shared lifecycle: [ADR-022](../decisions/ADR-022-communications-intelligence.md) decision 2 (Proposed) and [`communications-intelligence-contract.md`](../architecture/communications-intelligence-contract.md) ("contract"), sections 1, 9, 11, 18 and 19, with the Manager rulings of 2026-11-21 in its section 21. Evidence: [`docs/evidence/pulse/`](../evidence/pulse/README.md) ("evidence"), aggregates only. All counts are digits on purpose (spelled-count guard). Paths to files that do not exist yet are not written as links (CI relative-link check).
 
 **Committable-data rule.** This plan, its fixtures and its tests name projects by **project number** only and use **synthetic** Project identifiers. The folder-to-Project crosswalk is operator runtime registry data (section 6.4) and is never committed.
 
@@ -20,7 +20,7 @@ PULSE is the **second consumer** of the lifecycle WP3 builds for communications 
 
 - **Layer A — source fidelity.** One extension row per PULSE snapshot plus **every raw row** of the export with its row role (`detail`, `group_header(level, key)`, `grand_total`, `spacer`, `grouping_only`, `malformed`, and `unclassified` for a quarantined snapshot), its inherited group context and its raw physical record text, so the export can be reconstructed byte-exact and every sum can be restricted to detail rows.
 - **Layer B — typed observations** per validated report family: decimal amounts, dates, statuses, identifiers, each pointing back to its Layer A row.
-- Lifecycle tables hold no PULSE content; PULSE tables hold no communications content (ADR-021 decision 2).
+- Lifecycle tables hold no PULSE content; PULSE tables hold no communications content (ADR-022 decision 2).
 
 ### 1.4 Authority class and the Reports feature
 
@@ -32,7 +32,7 @@ PULSE is the **second consumer** of the lifecycle WP3 builds for communications 
 
 | Alternative | Reason rejected |
 | --- | --- |
-| A PULSE-specific ingestion lifecycle | duplicates snapshot, idempotency and quarantine; ADR-021 decision 2 |
+| A PULSE-specific ingestion lifecycle | duplicates snapshot, idempotency and quarantine; ADR-022 decision 2 |
 | One generic evidence table for communications and PULSE | different identities, units and queries |
 | Store PULSE as Intelligence report artifacts | wrong authority class; artifacts are authored and mutable by lifecycle |
 | Adapter chosen by filename slug | slugs do not describe content (evidence: historical coverage section 3); 2 slugs share 1 signature |
@@ -44,7 +44,7 @@ PULSE is the **second consumer** of the lifecycle WP3 builds for communications 
 | Crosswalk as an environment setting | cannot be validated against the Principal's Projects at load and has no revision audit |
 | Infer closure from disappearance | filter semantics are unknown |
 | A Procore API connector | live source access is not authorized (`AGENTS.md` section 3); the operator already exports files |
-| A PULSE record-lineage family | ADR-015 decision 6 not amended; same position as ADR-021 decision 19 |
+| A PULSE record-lineage family | ADR-015 decision 6 not amended; same position as ADR-022 decision 19 |
 
 ## 2. Exact affected modules
 
@@ -137,7 +137,7 @@ Inherited context is stored as the ordered group path `[(level, key, header row 
 
 - **Snapshot-level:** `rejected` (unparseable: `malformed_csv`, `invalid_header`, `oversize`, `not_utf8`) or `quarantined` (`unknown_header_signature`, `malformed_ratio_exceeded`, `source_unbound`, `binding_project_number_mismatch`). A quarantined snapshot keeps its lifecycle row and **all rows in Layer A with role `unclassified`**, so nothing is lost and a later adapter can re-ingest it from the stored rows.
 - **Row-level:** `malformed`, `type_error`, `identity_missing`, `ambiguous_identity`.
-- Diagnostics carry codes, ordinals and counts only, never cell content (ADR-021 decision 18 applies equally).
+- Diagnostics carry codes, ordinals and counts only, never cell content (ADR-022 decision 18 applies equally).
 
 ## 5. Tables and indexes
 
@@ -408,7 +408,7 @@ One work package at a time (`AGENTS.md` section 8.3). Communications-only must w
 
 ### 14.3 ADR
 
-PULSE needs a decision record before WP3P merges: a new ADR (next free number after ADR-021; ADR-020 is taken by PR #368) or an ADR-021 amendment, recording sections 1.3, 1.4, 6.4 and 7. Operator ratification is required for it as for ADR-021.
+PULSE needs a decision record before WP3P merges: a new ADR (next free number after ADR-022; ADR-020 is taken by PR #368 and the number between by PR #370) or an ADR-022 amendment, recording sections 1.3, 1.4, 6.4 and 7. Operator ratification is required for it as for ADR-022.
 
 ## 15. Acceptance criteria
 

@@ -35,6 +35,6 @@ A relationship is **explicit** when one export states it in a row (a shared iden
 
 ## 3. Consequences
 
-- PULSE adds no record-lineage family and no `record_links` rows (ADR-015 decision 6 is not amended), the same position ADR-021 decision 19 takes for communications.
+- PULSE adds no record-lineage family and no `record_links` rows (ADR-015 decision 6 is not amended), the same position ADR-022 decision 19 takes for communications.
 - Explicit within-export relationships are columns of the typed Layer B rows, not a link table.
 - Every relationship returned by a read states its kind (`explicit`, `operator_binding`, `identifier_match`, `ambiguous`).

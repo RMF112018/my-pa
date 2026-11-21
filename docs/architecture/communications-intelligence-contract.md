@@ -1,6 +1,6 @@
 # Communications intelligence — implementation contract
 
-**Status:** proposed implementation contract under [ADR-021](../decisions/ADR-021-communications-intelligence.md) (Proposed — accepted-candidate; not ratified). **WP1 is implemented** on branch `feat/comms-intelligence` (the pure source contract, this spec, the ADR and the corpus evidence); every other section is design for WP2–WP5, which each need their own PR, review and, where marked, operator decision. Nothing is persisted, migrated, exposed, granted or deployed.
+**Status:** proposed implementation contract under [ADR-022](../decisions/ADR-022-communications-intelligence.md) (Proposed — accepted-candidate; not ratified). **WP1 is implemented** on branch `feat/comms-intelligence` (the pure source contract, this spec, the ADR and the corpus evidence); every other section is design for WP2–WP5, which each need their own PR, review and, where marked, operator decision. Nothing is persisted, migrated, exposed, granted or deployed.
 
 **Basis:** contract head measured: branch `feat/comms-intelligence` at `80208caabe92de03be676a93fae8984d31d2b8c1` (tree `057703650c1f7b8976a86ccebc3da0a62f70d1a6`), the WP1 head after fix F2, on `origin/main@092610d36b7d1493fc7fda6e352a4bd06e914f61`; Alembic single head `640aaacc78e8` (129 revision files); 298 `Capability` members and 70 `Purpose` members. PR #368 (ADR-020, meeting prep, migration on `640aaacc78e8`) is open and not on this branch: WP2's migration must chain after whichever head is current when it is written. All counts here are digits on purpose (spelled-count guard). Paths to files that do not exist yet are not written as links (CI relative-link check).
 
@@ -10,7 +10,7 @@
 
 | WP | Content | State |
 | --- | --- | --- |
-| WP1 | ADR-021, this spec, 6 corpus deliverables; pure `communications_evidence_v2` contract (parse/validate/normalize both dialects, classification, lane reconciliation, integrity, `comms_search_text_v1`, `comms_identifiers_v1`, corpus coverage summary), aggregate-only CLI, synthetic fixtures, FAST tests | **implemented** (branch, not merged); no migration |
+| WP1 | ADR-022, this spec, 6 corpus deliverables; pure `communications_evidence_v2` contract (parse/validate/normalize both dialects, classification, lane reconciliation, integrity, `comms_search_text_v1`, `comms_identifiers_v1`, corpus coverage summary), aggregate-only CLI, synthetic fixtures, FAST tests | **implemented** (branch, not merged); no migration |
 | WP2 | Meeting provider identity and recurrence resolution (section 12): migration, persistence, application, MCP surface, reconciliation, ChatLLM meeting-sync contract | planned |
 | WP3 | Shared ingestion lifecycle (section 1) + communications persistence (section 5), ingestion (sections 10–11), coverage (section 9), backfill, scheduled ingestion on the cycles plane, monitoring, runbook | planned |
 | WP3P | Procore PULSE persistence and ingestion on the WP3 lifecycle (designed separately by a later docs package) | planned |
@@ -47,7 +47,7 @@ The ChatLLM collector writes `communications_evidence_v2` publications into the 
 
 One lifecycle, content-free, with domain-specific storage behind it:
 
-- **Source registry** — `ingest_sources`: one row per admitted source: `source_id`, `principal_id`, `consumer` (closed set: `communications_evidence_v2`, `pulse_csv_export`), `workspace_id`, `path_prefix`, `file_pattern`, `enabled`, `admitted_at`, `admitted_by` (operator channel). Admission is an operator CLI action (ADR-021 decision 15: no client capability).
+- **Source registry** — `ingest_sources`: one row per admitted source: `source_id`, `principal_id`, `consumer` (closed set: `communications_evidence_v2`, `pulse_csv_export`), `workspace_id`, `path_prefix`, `file_pattern`, `enabled`, `admitted_at`, `admitted_by` (operator channel). Admission is an operator CLI action (ADR-022 decision 15: no client capability).
 - **Snapshots** — `ingest_snapshots`: one row per distinct file content seen: `snapshot_id`, `principal_id`, `source_id`, `relative_path`, `file_sha256`, `byte_count`, `observed_version_token`, `first_seen_at`, `status` (`pending`, `ingested`, `rejected`, `superseded`), `rejection_code`, `parser_version`. `UNIQUE (principal_id, source_id, file_sha256)` is the idempotency key. A snapshot is immutable once `ingested` or `rejected`.
 - **Runs** — `ingest_runs`: `run_id`, `principal_id`, `source_id`, `trigger` (`schedule`, `operator`, `backfill`), `started_at`, `finished_at`, `outcome` (`completed`, `partial`, `failed`), and code-count JSON (snapshots seen/new/ingested/rejected/skipped, records per classification). `ingest_run_snapshots` links a run to each snapshot it touched with that snapshot's outcome.
 - **Quarantine** — the consumer stores quarantined *records* (section 4.3); the lifecycle stores rejected *snapshots*. Neither stores content.
@@ -92,7 +92,7 @@ Corpus result: 31 of 31 accepted, 0 quarantined, 0 unknown keys.
 - **Across publications (WP3).** A new snapshot's observation of an existing canonical key is checked against the stored message (sender, body digest). Agreement adds an observation; disagreement quarantines the new observation (`identity_conflict`), sets `identity_conflict = true` on the message, and counts it in the run. The stored message is not rewritten. Corpus: 0 conflicts.
 - **WP3 cross-publication checks (review R1, findings 6c and 6d; not WP1 code).** WP1 checks identity within one publication only. WP3 must add, with tests: (c) one provider id observed with two different Internet Message-IDs across publications is detected and quarantined, never merged (today that fact comes from the Manager's corpus analysis only); (d) the `in_window` disagreement check runs on every observation, `lane_observation_merged` siblings included, not on primaries only; (e) one provider id keyed `provider_id_only` in one publication (no lane carried the Internet Message-ID) and `provider_returned` in another (review R3, finding R3-2: today these are two identities) — WP3 decides whether to join them by provider id, with tests.
 - **Mutable provider ids.** A provider id is item identity at collection time only. An item moved between folders may reappear under a new provider id; it becomes a new mailbox item under the same canonical message, which is correct.
-- **Never identity:** producer `dedup_key`, body SHA-256, subject (ADR-021 decision 8).
+- **Never identity:** producer `dedup_key`, body SHA-256, subject (ADR-022 decision 8).
 
 ## 4. Deduplication and observation preservation
 
@@ -102,7 +102,7 @@ Corpus result: 31 of 31 accepted, 0 quarantined, 0 unknown keys.
 
 ### 4.2 Items and observations (WP1)
 
-`build_items` makes one `MailboxItem` per usable provider id per publication. Its observations are the primary plus every `lane_observation_merged` sibling (an exact repeat adds no evidence). The primary is the sent-lane observation when present, else the lowest ordinal. Participant reconciliation and canonical message time follow ADR-021 decision 7.
+`build_items` makes one `MailboxItem` per usable provider id per publication. Its observations are the primary plus every `lane_observation_merged` sibling (an exact repeat adds no evidence). The primary is the sent-lane observation when present, else the lowest ordinal. Participant reconciliation and canonical message time follow ADR-022 decision 7.
 
 ### 4.3 What is preserved (WP3)
 
@@ -150,7 +150,7 @@ Constraints: `UNIQUE (principal_id, mailbox_ref, identity_kind, identity_value)`
 - B-tree `(principal_id, conversation_id, message_time)` (thread collapse and reads);
 - the participant and identifier indexes above.
 
-No raw HTML, body content or display names are stored (ADR-021 decision 10). Display names are deliberately not carried by the WP1 normalized model; resolving a person by name goes through Entities and the address, not through mail text.
+No raw HTML, body content or display names are stored (ADR-022 decision 10). Display names are deliberately not carried by the WP1 normalized model; resolving a person by name goes through Entities and the address, not through mail text.
 
 ### 5.4 Meeting provider bindings (WP2)
 
@@ -198,7 +198,7 @@ Every match is token-bounded: `RFI 17` never matches `RFI 174`, `RFI 1740` or `R
 
 ## 8. Lineage
 
-- **Relation to record lineage (ADR-015).** Communications are not a lineage family in WP3–WP5 (ADR-021 decision 19). No `record_links` row references a message, and no native virtual edge is emitted.
+- **Relation to record lineage (ADR-015).** Communications are not a lineage family in WP3–WP5 (ADR-022 decision 19). No `record_links` row references a message, and no native virtual edge is emitted.
 - **Ingestion lineage is provenance, not record lineage.** Every message row names the snapshot and record ordinal it came from; every snapshot names its source and file SHA-256; every run names the snapshots it touched. That chain answers "where did this come from" without the lineage plane.
 - **Later amendment (not designed further here).** Admitting a `communication` family would anchor passages as code-point slices of the stored `search_text` with `search_text_sha256` as the source digest (ADR-015 decision 5's shape), and would need an ADR-015 decision 6 amendment, a CHECK widening migration and tests. A search-text version change would then have to preserve the anchored version.
 
@@ -354,14 +354,14 @@ Batch context over synthetic Meetings with and without bindings, attendee joins,
 
 ## 21. Manager rulings 2026-11-21
 
-The Manager ruled on the open items of this spec and ADR-021 after WP1. These are Manager rulings, not operator ratification: ADR-021 stays **Proposed**, and every operator gate in ADR-021 "Implementation status" and section 17 stands.
+The Manager ruled on the open items of this spec and ADR-022 after WP1. These are Manager rulings, not operator ratification: ADR-022 stays **Proposed**, and every operator gate in ADR-022 "Implementation status" and section 17 stands.
 
 | ID | Item | Ruling | Where |
 | --- | --- | --- | --- |
 | R1 | The worker reads the `mcp` workspace through the files store as an ingestion source | Ratified by the Manager, subject to the ADR-019 decision 7 preflight in WP3 | section 1.1 |
 | R2 | The 2 rich publications outside the canonical folder | Admitted to backfill as explicitly registered sources; overlap deduplicates by identity | sections 10, 11 |
 | R3 | Text-search configuration | `english` FTS plus the exact-identifier index plus `strpos` confirmation accepted for now; WP4 must measure `english` against `simple` on synthetic and aggregate data and may switch | section 6 |
-| R4 | Capability names, the `communications_read` purpose, the default-off switches | Accepted as proposals. Grants, external-model eligibility and ADR-021 acceptance remain operator-gated | sections 16, 17, 19 |
+| R4 | Capability names, the `communications_read` purpose, the default-off switches | Accepted as proposals. Grants, external-model eligibility and ADR-022 acceptance remain operator-gated | sections 16, 17, 19 |
 | R5 | `comms_identifiers_v1` recall (change orders 0 against 104, `fpl` 134 against 263, `submittal` 28 against 128 as ruled; `submittal` 31 measured at `184ac6ca`) | Recorded as an **open WP4 defect**, to be fixed with tests; does not block WP1 | sections 7, 20.4 |
 | — | WP2 meeting-sync source | Deferred to WP2's investigation | section 12.3 |
 | — | The `Disclaimer` and "received this … in error" disclaimer markers are still unanchored | **Open WP4 item**; not fixed in WP1 | section 6 |

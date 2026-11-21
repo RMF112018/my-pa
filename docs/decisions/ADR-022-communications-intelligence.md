@@ -1,10 +1,10 @@
-# ADR-021: Communications intelligence
+# ADR-022: Communications intelligence
 
 - **Status:** Proposed — accepted-candidate; **not ratified**. Operator ratification is pending. Nothing is persisted, migrated, exposed, granted or deployed. WP1 (this ADR, its implementation spec, the sanitized corpus evidence and the pure source contract) is the only implemented part.
 - **Decision ID:** `MYPA-COMMS-D-021`
 - **Goal:** `MYPA-COMMS-MEETCTX-P1P3-20261121`, extended by `MYPA-PULSE-INTELLIGENCE-EXTENSION-20261121` (shared ingestion lifecycle only)
 - **Repository:** `RMF112018/my-pa`
-- **Repository identity:** contract head measured: branch `feat/comms-intelligence` at `80208caabe92de03be676a93fae8984d31d2b8c1` (tree `057703650c1f7b8976a86ccebc3da0a62f70d1a6`), the WP1 head after fix F2, real-corpus aggregate measured at `80208caa` (Manager real-corpus run, 2026-11-21) (identity, lane, quarantine and coverage results unchanged from `184ac6ca`; 0 window bounds floored), on `origin/main@092610d36b7d1493fc7fda6e352a4bd06e914f61` (the cycles worker plane, #367, merged). Alembic single head `640aaacc78e8` (129 revision files). `ADR-020` is taken by the meeting prep briefs of PR #368 (branch `feat/meeting-prep`, not merged here), so this is `ADR-021`.
+- **Repository identity:** contract head measured: branch `feat/comms-intelligence` at `80208caabe92de03be676a93fae8984d31d2b8c1` (tree `057703650c1f7b8976a86ccebc3da0a62f70d1a6`), the WP1 head after fix F2, real-corpus aggregate measured at `80208caa` (Manager real-corpus run, 2026-11-21) (identity, lane, quarantine and coverage results unchanged from `184ac6ca`; 0 window bounds floored), on `origin/main@092610d36b7d1493fc7fda6e352a4bd06e914f61` (the cycles worker plane, #367, merged). Alembic single head `640aaacc78e8` (129 revision files). `ADR-020` is taken by the meeting prep briefs of PR #368 (branch `feat/meeting-prep`, not merged here), and the next number is taken on `main` by the SDCC subtree placement ADR of PR #370, so this is `ADR-022`.
 - **Scope:** communications as an evidence class (Outlook mail collected by the ChatLLM collector and published as `communications_evidence_v2` JSON), its identity, storage, search, coverage and meeting-context retrieval, and the ingestion lifecycle it shares with Procore PULSE exports. The concrete contract is [`communications-intelligence-contract.md`](../architecture/communications-intelligence-contract.md) ("the spec"); the corpus evidence is [`docs/evidence/communications-corpus/`](../evidence/communications-corpus/README.md).
 
 ## Context

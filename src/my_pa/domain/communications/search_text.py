@@ -45,17 +45,21 @@ paragraph holding the first marker to the end, never leaving the text empty):
   starts a paragraph when the line above it is blank, or is a signature break
   that itself lies in the trailing region -- exactly `-- `, or a rule of five
   or more `-`. Nothing else is a break (not a bare `--`, not an `_` rule), and a
-  break earlier in the text never lifts the trailing-region limit. A
+  break earlier in the text never lifts the trailing-region limit. When the
+  marker line sits directly under a break, the cut is at the break line itself
+  (as for `-- `), so the body paragraph above the break is kept. A
   mid-paragraph sentence such as "... this message includes confidential
   pricing ..." or "If you are not the intended recipient of the GMP, tell me"
   directly under a greeting never truncates body text.
 
 **Version.** These rules are pre-merge corrections of `comms_search_text_v1`
-(WP1 fix F1 after review R1, and fix F2 after review R2): the identifier stays
-`v1` because no searchable text has been persisted or published under it, so
-no stored output changes meaning. Corpus counts measured before a correction
-(spec §7: `ac0d06ae` before F1, `184ac6ca` before F2) used the earlier, broader
-markers.
+(WP1 fix F1 after review R1, fix F2 after review R2, and fix F3 after review
+R3): the identifier stays `v1` because no searchable text has been persisted
+or published under it, so no stored output changes meaning. Corpus counts
+measured before a correction (spec §7: `ac0d06ae` before F1, `184ac6ca` before
+F2) used the earlier, broader markers. F3 moves only where a cut under a break
+falls, never whether a cut happens, so it does not change `disclaimer_removed`
+counts.
 
 **Content is inert data.** HTML is parsed with `html.parser` and only text
 nodes are kept: no attribute value (an `onerror=`, a `javascript:` href, a
@@ -314,8 +318,13 @@ def strip_disclaimer(text: str) -> tuple[str, bool]:
             cut = index
         elif _is_disclaimer_start(lines, index):
             cut = index
-            while cut > 0 and lines[cut - 1].strip():
-                cut -= 1
+            if _SIGNATURE_BREAK.fullmatch(lines[index - 1]):
+                # The paragraph starts under a break: cut at the break itself,
+                # never through it into the body paragraph above (review R3-1).
+                cut = index - 1
+            else:
+                while cut > 0 and lines[cut - 1].strip():
+                    cut -= 1
             if not any(part.strip() for part in lines[:cut]):
                 cut = index
         else:

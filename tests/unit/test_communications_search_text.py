@@ -244,8 +244,33 @@ def test_an_early_signature_break_never_cuts_later_body_text(text: str) -> None:
 @pytest.mark.parametrize("rule", ["-----", "-" * 40])
 def test_a_trailing_dash_rule_starts_the_disclaimer_paragraph_under_it(rule: str) -> None:
     # (A trailing `-- ` is itself a cut, at the delimiter: see the marker tests.)
+    # Review R3-1: the cut is at the rule, so the body line above it is kept.
     text = f"Main text.\n\nAlpha\n{rule}\nThis email is privileged and confidential."
-    assert strip_disclaimer(text) == ("Main text.", True)
+    assert strip_disclaimer(text) == ("Main text.\n\nAlpha", True)
+
+
+@pytest.mark.parametrize(
+    ("text", "kept"),
+    [
+        # R3's R3-1 probes: the cut used to walk back through the rule and drop
+        # the whole body paragraph above it (1 of 5 and 1 of 34 lines kept).
+        (
+            "Hi Bob,\n\nPlease review RFI 174 before Friday.\n-----\n"
+            "This email is confidential and privileged.",
+            "Hi Bob,\n\nPlease review RFI 174 before Friday.",
+        ),
+        (
+            "Hi Bob,\n\n"
+            + "\n".join(f"Item RFI {i} answered" for i in range(30))
+            + "\n-----\nThis email is confidential and privileged.",
+            "Hi Bob,\n\n" + "\n".join(f"Item RFI {i} answered" for i in range(30)),
+        ),
+    ],
+)
+def test_a_disclaimer_under_a_dash_rule_never_removes_the_body_above_the_rule(
+    text: str, kept: str
+) -> None:
+    assert strip_disclaimer(text) == (kept, True)
 
 
 @pytest.mark.parametrize("rule", ["--", "__________", "----"])

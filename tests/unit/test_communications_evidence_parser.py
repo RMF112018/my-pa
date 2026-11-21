@@ -822,6 +822,13 @@ def test_a_sub_second_window_bound_is_floored_and_reported() -> None:
 
 
 def test_a_whole_second_window_bound_is_not_reported_as_floored() -> None:
+    """A `.000` bound is already whole: no `window_bound_floored` diagnostic.
+
+    Prove-red note (review R3, finding R3-3): against the pre-N2 source this
+    test fails only with `AttributeError`, because `WINDOW_BOUND_FLOORED` did
+    not exist yet; that red is trivial. It is still a real guard: a mutation
+    that always reports a floored bound turns it red.
+    """
     document = s.lean_publication()
     document["window"]["start_utc"] = "2026-11-17T05:00:00.000Z"
     result = parse(document)

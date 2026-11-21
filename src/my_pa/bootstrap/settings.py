@@ -448,6 +448,10 @@ class Settings(StrictModel):
     #: Contract section 18.5: `alias=path` apply mounts, read only by the
     #: operator apply command; never set on a serving process.
     files_apply_roots: str = ""
+    #: Optional trusted SDCR placement config outside the mcp workspace,
+    #: env MY_PA_FILES_SDCR_POLICY_FILE. Unset preserves pre-cutover behavior.
+    #: Invalid configured files fail startup, never silently disable checking.
+    files_sdcr_policy_file: str = ""
     #: The Frontier MCP surface's kill switch (WP-28).
     #:
     #: **The switch is off by default and the surface serves**, which is the
@@ -899,6 +903,11 @@ class Settings(StrictModel):
             raise SettingsError(
                 f"MY_PA_FILES_WORKSPACES or MY_PA_FILES_APPLY_ROOTS: {error}"
             ) from None
+        if self.files_sdcr_policy_file.strip() and not any(
+            config.workspace_id == "mcp" and config.write_mode is WriteMode.DIRECT
+            for config in configs
+        ):
+            raise SettingsError("MY_PA_FILES_SDCR_POLICY_FILE requires direct mcp workspace")
         approval = {
             config.workspace_id for config in configs if config.write_mode is WriteMode.APPROVAL
         }

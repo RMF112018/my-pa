@@ -6,6 +6,7 @@ configuration. A caller cannot supply or modify the trusted owner registry.
 """
 from __future__ import annotations
 
+import copy
 import re
 from pathlib import PurePosixPath
 from typing import Any, Mapping
@@ -406,7 +407,7 @@ class SDCRPlacementGate:
             verified[work_id] = {"program": program, "workstream": stream}
         # Copies prevent external caller mutation after gate creation.
         self._registrations = verified
-        self._policy = dict(policy)
+        self._policy = copy.deepcopy(policy)
 
     @property
     def registration_count(self) -> int:

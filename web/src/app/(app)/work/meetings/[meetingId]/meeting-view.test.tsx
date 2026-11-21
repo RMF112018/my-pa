@@ -22,7 +22,7 @@ function meeting(): Json {
       title: "Synthetic site meeting", status: "scheduled", start_at: "2026-08-09T12:00:00Z", end_at: null,
       timezone_name: "UTC", location_text: null, project_id: null, version: 1, updated_at: "2026-08-09T12:00:00Z",
       virtual_meeting_url: null, description: null, created_at: "2026-08-09T12:00:00Z", cancelled_at: null,
-      attendees: [], attachments: [], notes: null,
+      attendees: [], attachments: [], notes: null, prep: null, prep_version: null,
     },
   };
 }

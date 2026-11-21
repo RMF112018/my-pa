@@ -264,6 +264,7 @@ from my_pa.domain.meeting.model import (
     MAX_MEETING_IDEMPOTENCY_KEY_CHARACTERS,
     MAX_MEETING_LOCATION_CHARACTERS,
     MAX_MEETING_NOTES_CHARACTERS,
+    MAX_MEETING_PREP_CHARACTERS,
     MAX_MEETING_TITLE_CHARACTERS,
     MAX_TIMEZONE_NAME_CHARACTERS,
     MAX_VIRTUAL_MEETING_URL_CHARACTERS,
@@ -15430,6 +15431,96 @@ meeting_note_versions = Table(
     ),
     Index(
         "meeting_note_versions_text",
+        text("to_tsvector('simple', content_markdown)"),
+        postgresql_using="gin",
+    ),
+)
+
+#: ADR-020 C1: the Meeting prep brief, a second immutable full-body chain that
+#: copies `meeting_note_versions`. A chain, not a tree:
+#: `supersedes_prep_version_id` is unique. The current prep is the one version
+#: of a Meeting that no other version supersedes. Unlike notes, no lineage
+#: evidence anchor references a prep version, so there is no digest-bearing
+#: unique target.
+meeting_prep_versions = Table(
+    "meeting_prep_versions",
+    METADATA,
+    Column("prep_version_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("meeting_id", Text, nullable=False),
+    Column("version_number", Integer, nullable=False),
+    Column("supersedes_prep_version_id", Text),
+    Column("content_markdown", Text, nullable=False),
+    Column("content_sha256", Text, nullable=False),
+    Column("meeting_history_id", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("prep_version_id", IdKind.MEETING_PREP_VERSION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("meeting_id", IdKind.MEETING),
+    _is_identifier("supersedes_prep_version_id", IdKind.MEETING_PREP_VERSION),
+    _is_identifier("meeting_history_id", IdKind.MEETING_HISTORY),
+    CheckConstraint("version_number >= 1", name="a_meeting_prep_version_number_is_positive"),
+    CheckConstraint(
+        "(version_number = 1) = (supersedes_prep_version_id IS NULL)",
+        name="only_the_first_meeting_prep_supersedes_nothing",
+    ),
+    CheckConstraint(
+        f"length(content_markdown) BETWEEN 1 AND {MAX_MEETING_PREP_CHARACTERS}",
+        name="a_meeting_prep_body_is_bounded",
+    ),
+    CheckConstraint(
+        f"content_sha256 ~ '{_MEETING_DIGEST}'",
+        name="a_meeting_prep_digest_is_sha256",
+    ),
+    UniqueConstraint(
+        "prep_version_id",
+        "meeting_id",
+        "principal_id",
+        name="a_meeting_prep_is_identified_within_its_meeting",
+    ),
+    UniqueConstraint(
+        "meeting_id",
+        "version_number",
+        name="one_meeting_prep_version_number_per_meeting",
+    ),
+    UniqueConstraint(
+        "supersedes_prep_version_id",
+        name="a_meeting_prep_version_is_superseded_once",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_id", "principal_id"],
+        [f"{SCHEMA}.meetings.meeting_id", f"{SCHEMA}.meetings.principal_id"],
+        ondelete="RESTRICT",
+        name="a_meeting_prep_belongs_to_a_meeting_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["supersedes_prep_version_id", "meeting_id", "principal_id"],
+        [
+            f"{SCHEMA}.meeting_prep_versions.prep_version_id",
+            f"{SCHEMA}.meeting_prep_versions.meeting_id",
+            f"{SCHEMA}.meeting_prep_versions.principal_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_meeting_prep_supersedes_a_prep_of_its_meeting",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_history_id", "meeting_id", "principal_id"],
+        [
+            f"{SCHEMA}.meeting_history.history_id",
+            f"{SCHEMA}.meeting_history.meeting_id",
+            f"{SCHEMA}.meeting_history.principal_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_meeting_prep_names_a_receipt_of_its_meeting",
+    ),
+    Index(
+        "meeting_prep_versions_by_principal_meeting",
+        "principal_id",
+        "meeting_id",
+        text("version_number DESC"),
+    ),
+    Index(
+        "meeting_prep_versions_text",
         text("to_tsvector('simple', content_markdown)"),
         postgresql_using="gin",
     ),

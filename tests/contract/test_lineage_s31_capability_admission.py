@@ -40,12 +40,14 @@ from tests.contract.test_lineage_s2_capability_admission import (
     _BASE_PAYLOADS as _S2_PAYLOADS,
 )
 from tests.contract.test_lineage_s3_capability_admission import (
-    _BASE_PAYLOADS as _S3_PAYLOADS,
+    _ADR_020_EXTENDED_TOOLS,
+    _ADR_020_EXTENDED_VIEWS,
+    _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_MEETING_PREP,
+    _V1_VIEW_FIELDS_SHA256_WITHOUT_MEETING_VIEW,
+    _V1_VIEW_MODULES,
 )
 from tests.contract.test_lineage_s3_capability_admission import (
-    _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG,
-    _V1_VIEW_FIELDS_SHA256,
-    _V1_VIEW_MODULES,
+    _BASE_PAYLOADS as _S3_PAYLOADS,
 )
 
 from my_pa.adapters.mcp import remote as remote_mcp
@@ -743,13 +745,15 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
     lineage |= {
         capability.value for capability in Capability if capability.value.startswith("files.")
     }
+    # ADR-020 (meeting prep briefs): its three deliberately extended tools.
+    lineage |= _ADR_020_EXTENDED_TOOLS
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
         if tool.name not in lineage
     }
-    assert len(payloads) == 189
-    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG
+    assert len(payloads) == 186
+    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_MEETING_PREP
     views: dict[str, list[str]] = {}
     for name in _V1_VIEW_MODULES:
         module = importlib.import_module(f"my_pa.contracts.v1.{name}")
@@ -760,7 +764,9 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
                 and model.__module__ == module.__name__
             ):
                 views[f"{name}.{model_name}"] = sorted(model.model_fields)
-    assert _canonical_sha256(views) == _V1_VIEW_FIELDS_SHA256
+    for extended in _ADR_020_EXTENDED_VIEWS:
+        views.pop(extended)
+    assert _canonical_sha256(views) == _V1_VIEW_FIELDS_SHA256_WITHOUT_MEETING_VIEW
     # S3.1 adds no purpose: the envelope's purpose enum is the S4 one.
     published = TOOLS[0].input_schema["$defs"]["Purpose"]["enum"]
     # CPM Workbench S5b-2 appends its 2 purposes after them (contract 3.12),

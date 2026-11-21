@@ -64,6 +64,13 @@ V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ: Final = (
 V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG: Final = (
     "4a66657c422eb2c538a3cf7725cca2fab7b71325b883d3a0e724f200a7093459"
 )
+#: The same measurement also without `meetings.create`, `meetings.update` and
+#: `meetings.read`, at the ADR-020 base `00880446b`: meeting prep briefs
+#: deliberately extend each of them, so they are excluded and the other 186 shapes
+#: stay pinned.
+V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_MEETING_PREP: Final = (
+    "ae0f97c41d80eb7b3f8bb08e80c3062b0af0c4a1199933617f539d151f916fad"
+)
 #: SHA-256 of the envelope `$defs.Purpose.enum` at the S4 basis (`3d1593aa`,
 #: the 59 `Purpose` values in declaration order, compact JSON).
 BASIS_PURPOSE_ENUM_SHA256: Final = (
@@ -228,14 +235,17 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
     excluded |= {
         capability.value for capability in Capability if capability.value.startswith("files.")
     }
+    # ADR-020 (meeting prep briefs): the extended `meetings.create`,
+    # `meetings.update` (`prep_markdown`) and `meetings.read` (`prep_version_number`).
+    excluded |= {"meetings.create", "meetings.update", "meetings.read"}
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
         if tool.name not in excluded
     }
-    assert len(payloads) == 189
+    assert len(payloads) == 186
     assert set(payloads) >= V1_READS
-    assert _canonical_sha256(payloads) == V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG
+    assert _canonical_sha256(payloads) == V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_MEETING_PREP
     # Every tool carries the one envelope purpose enum: the basis enum, then
     # exactly the one S4 purpose -- nothing removed, reordered or added beside it.
     enums = {json.dumps(tool.input_schema["$defs"]["Purpose"]["enum"]) for tool in TOOLS}

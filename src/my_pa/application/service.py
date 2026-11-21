@@ -14301,10 +14301,17 @@ class ApplicationService:
     def _meetings_read(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadMeeting
     ) -> _Result:
-        """`meetings.read`: one Meeting, or the same `not_found` as absence."""
+        """`meetings.read`: one Meeting, or the same `not_found` as absence.
+
+        With `prep_version_number`, the view also carries that prep version
+        (ADR-020 C6); an unknown number is `not_found` naming `prep`.
+        """
         with _translated(), _meeting_translated():
             view = self._meetings.read_meeting(
-                unit_of_work, authorization.principal.principal_id, command.meeting_id
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.meeting_id,
+                command.prep_version_number,
             )
         return _Result(
             payload={"meeting": view.to_canonical_dict()},

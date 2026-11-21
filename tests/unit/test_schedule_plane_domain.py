@@ -98,7 +98,8 @@ def test_the_eight_prefixes_are_s61s_patterns() -> None:
     # and WP05b three more (hold, retention, preservation); the files workspace
     # WP5 five more (`fwupl`, `fwdnl`, `fwver`, `fwtrs`, `fwrcp`).
     # ADR-019 Amendment 2: one more (`fwpnd`, a pending change).
-    assert len(IdKind) == 180
+    # ADR-020 C1: one more (`mprep`, a Meeting prep version).
+    assert len(IdKind) == 181
     new = [
         IdKind.SCHEDULE_SCENARIO,
         IdKind.SCHEDULE_SCENARIO_VERSION,

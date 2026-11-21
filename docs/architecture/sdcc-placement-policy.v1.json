@@ -1,0 +1,73 @@
+{
+  "schema_version": "sdcr.directory-placement.v1",
+  "policy_id": "SDCR-PATH-CONTROL-20261121-001",
+  "status": "PROPOSED_NOT_ACTIVE",
+  "workspace_id": "mcp",
+  "relative_root": "SDCR",
+  "purpose": "Closed-world placement for future SDCR publications; existing pre-cutover files are inventory subjects, not implicitly accepted new paths.",
+  "allowed_root_directories": [
+    "00-Control", "10-Governance", "20-Programs", "30-Exchange", "40-Publication",
+    "50-Shared-Evidence", "60-Cross-Program-Decisions", "70-Client-Adapters",
+    "80-Templates", "90-Migration", "99-Legacy-Archive"
+  ],
+  "control_files": [
+    "00_WORKSPACE_BOOTSTRAP.md", "01_WORKSPACE_MANIFEST.yaml",
+    "02_WORKSPACE_SOURCE_INDEX.md", "03_WORKSPACE_OPERATING_INSTRUCTIONS.md",
+    "04_WORKSPACE_CURRENT_STATE.md", "05_WORKSPACE_CHANGELOG.md",
+    "06_CLIENT_CAPABILITY_MATRIX.yaml", "07_AUTHORITY_CUTOVER_RECORD.yaml",
+    "08_SESSION_PUBLICATION_PROTOCOL.md", "09_RISK_TIER_AND_RELEASE_POLICY.md",
+    "10_TRANSIENT_EXCLUSION_POLICY.md", "11_CROSS_SYSTEM_IDENTITY_REGISTRY.json",
+    "12_DIRECTORY_PLACEMENT_POLICY.json", "13_DIRECTORY_ROUTING_REGISTER.json"
+  ],
+  "governance_collections": [
+    "current-hybrid-policy", "retained-aeos-and-goal-loop-reference",
+    "security-and-privacy", "schemas"
+  ],
+  "program_workstreams": {
+    "my-pa": [
+      "final-ui-ux", "constraint-management", "core-record-lifecycle",
+      "goodnotes", "chatllm-capabilities", "tcc-longitudinal", "mcp-platform"
+    ],
+    "abacus-daily-intelligence": ["collector-v1-3", "task-host-atomicity", "skills"],
+    "pcc-integrations": ["abacus-comms-my-pa-reports"],
+    "moss-pcc": ["full-application"],
+    "shared-platform": ["cross-client-publication", "cross-client-capabilities"]
+  },
+  "session_artifact_categories": [
+    "design", "source", "evidence", "review", "decision", "handoff", "unclassified"
+  ],
+  "template_collections": [
+    "issue-pr-and-handoff", "session-manifests", "review-findings", "release-and-incidents"
+  ],
+  "client_adapter_ids": [
+    "chatgpt", "chatllm", "local-code-agent", "github-publication-bridge",
+    "independent-reviewer"
+  ],
+  "migration_collections": [
+    "source-inventory", "source-crosswalk", "capability-qualification",
+    "staged-batches", "cutover-and-recovery"
+  ],
+  "required_work_item_registration": true,
+  "new_files_create_only": true,
+  "new_session_folders_must_be_owned": true,
+  "no_implicit_folder_creation_from_free_text": true,
+  "unknown_role_behavior": "OWNED_SESSION_UNCLASSIFIED_NOT_READY",
+  "unclassified_location": "20-Programs/<registered-program>/workstreams/<registered-stream>/work-items/<registered-id>/sessions/<session-id>/artifacts/unclassified/",
+  "unknown_owner_behavior": "PREVENT_WRITE_HOLD_IN_CLIENT_STAGING",
+  "protected_withheld_behavior": "RETAIN_MANIFEST_RECORD_NO_RAW_SECRET",
+  "bypass_prevention": {
+    "enforcement_scope": "ALL_FILES_MUTATION_PATHS_UNDER_SDCR",
+    "mutations": [
+      "files.mkdir", "files.write_text", "files.upload.begin", "files.upload.finalize",
+      "files.copy", "files.move", "files.rename", "files.restore", "files.trash"
+    ],
+    "direct_path_writes_without_admission": "DENY",
+    "mcp_alias_only_acl": "NOT_SUFFICIENT",
+    "external_smb_nas_writes": "OUTSIDE_MCP_CONTROL_REQUIRE_ACL_OR_TAMPER_DETECTION"
+  },
+  "legacy_state": {
+    "existing_pre_cutover_paths": "PRESERVE_READ_ONLY_FOR_INVENTORY",
+    "grandfather_rule": "EXPLICIT_ID_AND_VERSION_CROSSWALK_ONLY",
+    "silent_repair_or_delete": false
+  }
+}

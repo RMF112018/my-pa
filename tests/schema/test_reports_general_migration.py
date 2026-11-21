@@ -329,12 +329,13 @@ def _checks() -> dict[str, str]:
 def test_the_revision_is_the_single_head_on_2a90f91dd786() -> None:
     script = ScriptDirectory.from_config(_config())
     # Schedule Scenarios S6-3's revision B (`b77334135653`) is additive on this one.
-    assert script.get_heads() == ["640aaacc78e8"]
+    assert script.get_heads() == ["4d1069a7d84f"]
+    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
     assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
     assert script.get_revision("b77334135653").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 129
+    assert len(list(MIGRATIONS.glob("*.py"))) == 130
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -3847,9 +3848,9 @@ def plane_engine(module_cloned_database_url: str) -> Iterator[Engine]:
     """One current-head clone shared by the guard cases; every case writes its own ids."""
     built = create_database_engine(module_cloned_database_url)
     try:
-        # The clone is at the head, the files workspace revision (WP4), on
-        # Schedule Scenarios S6-3's revision B; neither touches a report table.
-        assert _version(built) == "640aaacc78e8"
+        # The clone is at the head, the Meeting prep revision (ADR-020), on the
+        # files workspace revision (WP4); neither touches a report table.
+        assert _version(built) == "4d1069a7d84f"
         yield built
     finally:
         built.dispose()

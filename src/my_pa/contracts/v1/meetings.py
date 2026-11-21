@@ -8,7 +8,10 @@ receipts (`MeetingHistoryView`, `MeetingSeriesHistoryView`). Record lineage S1
 (S1 contract section 7.2) appends the two note-history shapes:
 `MeetingNoteVersionEntry` (a `meetings.notes.versions` row: no body and no
 digest) and `MeetingNoteVersionView` (`meetings.notes.read_version`: the stored
-content digest, and the body only when the caller asked for it).
+content digest, and the body only when the caller asked for it). ADR-020 C4/C6
+appends `MeetingPrepView`, one immutable prep-brief version, which `MeetingView`
+nests twice: `prep` (the current head, on every answer) and `prep_version` (the
+exact version a `meetings.read` asked for by `prep_version_number`, else `None`).
 
 **What these models cannot carry is the point of them.**
 
@@ -46,6 +49,7 @@ from my_pa.domain.meeting.model import (
     MAX_MEETING_DESCRIPTION_CHARACTERS,
     MAX_MEETING_LOCATION_CHARACTERS,
     MAX_MEETING_NOTES_CHARACTERS,
+    MAX_MEETING_PREP_CHARACTERS,
     MAX_MEETING_TITLE_CHARACTERS,
     MAX_TIMEZONE_NAME_CHARACTERS,
     MAX_VIRTUAL_MEETING_URL_CHARACTERS,
@@ -57,6 +61,7 @@ from my_pa.domain.meeting.model import (
     MeetingStatus,
     validate_cancellation_pairing,
     validate_meeting_notes_markdown,
+    validate_meeting_prep_markdown,
     validate_meeting_time_range,
     validate_meeting_title,
     validate_timezone_name,
@@ -71,6 +76,7 @@ __all__ = [
     "MeetingNoteVersionEntry",
     "MeetingNoteVersionView",
     "MeetingNoteView",
+    "MeetingPrepView",
     "MeetingSeriesHistoryView",
     "MeetingSeriesView",
     "MeetingView",
@@ -162,6 +168,37 @@ class MeetingNoteView(StrictModel):
         return self
 
 
+class MeetingPrepView(StrictModel):
+    """One immutable prep-brief version (ADR-020 C4, C6).
+
+    `body_markdown` is the exact stored text, never rendered; `content_sha256`
+    its stored lowercase SHA-256 hex and `character_count` its length in code
+    points. `is_current` says no later version supersedes it. Version 1, and
+    only version 1, supersedes nothing.
+    """
+
+    prep_version_id: str
+    version_number: int = _Version
+    supersedes_prep_version_id: str | None
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    character_count: int = Field(ge=1, le=MAX_MEETING_PREP_CHARACTERS)
+    recorded_at: UtcDatetime
+    is_current: bool
+    body_markdown: str = Field(min_length=1, max_length=MAX_MEETING_PREP_CHARACTERS)
+
+    @model_validator(mode="after")
+    def _check(self) -> MeetingPrepView:
+        validate_identifier(self.prep_version_id, IdKind.MEETING_PREP_VERSION)
+        if self.supersedes_prep_version_id is not None:
+            validate_identifier(self.supersedes_prep_version_id, IdKind.MEETING_PREP_VERSION)
+        if (self.version_number == 1) != (self.supersedes_prep_version_id is None):
+            raise ValueError("exactly the first prep version supersedes nothing")
+        validate_meeting_prep_markdown(self.body_markdown)
+        if self.character_count != len(self.body_markdown):
+            raise ValueError("character_count is the body's length")
+        return self
+
+
 class MeetingSeriesView(StrictModel):
     """One MeetingSeries: the single canonical owner of the series title."""
 
@@ -211,7 +248,10 @@ class MeetingView(StrictModel):
 
     Attendees are the active set in the deterministic order organizer first,
     then `attendee_id` ascending; attachments are the active relationships;
-    `notes` is the current note head or `None`.
+    `notes` is the current note head or `None`; `prep` is the current prep
+    head or `None` (ADR-020 C4). `prep_version` is the exact prep version a
+    `meetings.read` named by `prep_version_number`, and `None` on every other
+    answer (C6).
     """
 
     meeting_id: str
@@ -240,6 +280,8 @@ class MeetingView(StrictModel):
         default=(), max_length=MAX_MEETING_ATTACHMENTS
     )
     notes: MeetingNoteView | None = None
+    prep: MeetingPrepView | None = None
+    prep_version: MeetingPrepView | None = None
 
     @field_validator("attendees", mode="after")
     @classmethod
@@ -278,6 +320,8 @@ class MeetingView(StrictModel):
             document_ids
         ):
             raise ValueError("a document is attached to a Meeting at most once")
+        if self.prep is not None and not self.prep.is_current:
+            raise ValueError("prep is the current prep head")
         return self
 
 

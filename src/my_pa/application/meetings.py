@@ -30,12 +30,13 @@ never a refusal a caller could correct.
 reserve, nonlocking Project and ManagedDocument reads, Person Entities `FOR
 SHARE` in ascending id, the existing series read without a lock or a new series
 and its receipt, the Meeting, its attendees in digest order, its attachments,
-its receipt, its first note version, then completion. Update: digest, reserve,
-Meeting `FOR UPDATE`, version gate, nonlocking reference reads, Entities `FOR
-SHARE`, a target series read without a lock (only when the request reassigns
-membership), the exact no-op/material delta, the core row and child retire/insert,
-one receipt, the note version, completion. Series update: digest, reserve,
-series `FOR UPDATE`, version gate, the title, one receipt, completion. No child
+its receipt, its first note version, its first prep version (ADR-020), then
+completion. Update: digest, reserve, Meeting `FOR UPDATE`, version gate,
+nonlocking reference reads, Entities `FOR SHARE`, a target series read without a
+lock (only when the request reassigns membership), the prep head read, the exact
+no-op/material delta, the core row and child retire/insert, one receipt, the note
+version, the prep version, completion. Series update: digest, reserve, series
+`FOR UPDATE`, version gate, the title, one receipt, completion. No child
 row is locked, and no Project, ManagedDocument or MeetingSeries read by a
 Meeting write is locked at all.
 
@@ -71,6 +72,8 @@ from my_pa.contracts.ports import (
     MeetingAttendeeRecord,
     MeetingListPage,
     MeetingNoteRecord,
+    MeetingPrepRecord,
+    MeetingPrepVersionRecord,
     MeetingRecord,
     MeetingRepository,
     MeetingWriteRequestRecord,
@@ -81,6 +84,7 @@ from my_pa.contracts.ports import (
 from my_pa.contracts.v1.meetings import (
     MeetingAttendeeView,
     MeetingHistoryView,
+    MeetingPrepView,
     MeetingSeriesHistoryView,
     MeetingSeriesView,
     MeetingView,
@@ -116,6 +120,7 @@ from my_pa.domain.meeting.model import (
     compose_appended_note,
     note_content_sha256,
     validate_meeting_notes_markdown,
+    validate_meeting_prep_markdown,
     validate_meeting_time_range,
 )
 from my_pa.domain.record_events import (
@@ -230,6 +235,9 @@ def _create_document(request: MeetingCreateRequest) -> dict[str, _DigestValue]:
     _present(document, "description", request.description)
     _present(document, "project_id", request.project_id)
     _present(document, "notes_markdown", request.notes_markdown)
+    # ADR-020 C2: present only when sent, so every pre-existing digest is
+    # byte-identical.
+    _present(document, "prep_markdown", request.prep_markdown)
     return document
 
 
@@ -260,6 +268,9 @@ def _update_document(
         document, "notes_mode", None if request.notes_mode is None else request.notes_mode.value
     )
     _present(document, "notes_markdown", request.notes_markdown)
+    # ADR-020 C2: present only when sent (replace only, no mode), so every
+    # pre-existing request digest is byte-identical.
+    _present(document, "prep_markdown", request.prep_markdown)
     # Series membership (operator decision 2026-10-09, retiring AC-007): the key
     # appears only when the caller sent it -- the id to attach or move, JSON null
     # to detach. Absent adds no key, so every pre-existing request digest is
@@ -422,14 +433,36 @@ def _attachment_records(document_ids: tuple[str, ...]) -> tuple[MeetingAttachmen
     )
 
 
+def _prep_view(record: MeetingPrepVersionRecord) -> MeetingPrepView:
+    """One stored prep version as the public view (ADR-020 C4)."""
+    return MeetingPrepView(
+        prep_version_id=record.prep_version_id,
+        version_number=record.version_number,
+        supersedes_prep_version_id=record.supersedes_prep_version_id,
+        content_sha256=record.content_sha256,
+        character_count=len(record.body),
+        recorded_at=record.recorded_at,
+        is_current=record.is_current,
+        body_markdown=record.body,
+    )
+
+
+def _with_prep(meetings: MeetingRepository, principal_id: str, view: MeetingView) -> MeetingView:
+    """`view` carrying its current prep head (ADR-020 C4), read in the same partition."""
+    head = meetings.read_prep_head(principal_id, view.meeting_id)
+    if head is None:
+        return view
+    return view.model_copy(update={"prep": _prep_view(head)})
+
+
 def _current_meeting(
     meetings: MeetingRepository, principal_id: str, meeting_id: str
 ) -> MeetingView:
-    """The Meeting a completed write names. Its absence is an internal fault."""
+    """The Meeting a completed write names, with its prep head. Absence is an internal fault."""
     view = meetings.read_meeting(principal_id, meeting_id)
     if view is None:
         raise RepositoryFailureError
-    return view
+    return _with_prep(meetings, principal_id, view)
 
 
 def _create_completion_ids(
@@ -529,6 +562,7 @@ def _meeting_created_fields(request: MeetingCreateRequest) -> tuple[str, ...]:
         "attendees": bool(request.attendees),
         "attachments": bool(request.attachment_document_ids),
         "notes": request.notes_markdown is not None,
+        "prep": request.prep_markdown is not None,
     }
     return field_set(*_MEETING_CREATED_FIELDS, *(name for name, held in optional.items() if held))
 
@@ -676,6 +710,21 @@ class MeetingApplication:
                     recorded_at=at,
                 ),
             )
+        if request.prep_markdown is not None:
+            prep = validate_meeting_prep_markdown(request.prep_markdown)
+            meetings.insert_prep_version(
+                principal_id,
+                MeetingPrepRecord(
+                    prep_version_id=issue_identifier(IdKind.MEETING_PREP_VERSION),
+                    meeting_id=meeting_id,
+                    version_number=1,
+                    supersedes_prep_version_id=None,
+                    content_markdown=prep,
+                    content_sha256=note_content_sha256(prep),
+                    meeting_history_id=receipt.history_id,
+                    recorded_at=at,
+                ),
+            )
 
         view = _current_meeting(meetings, principal_id, meeting_id)
         completed_series_id, completed_series_receipt_id = _create_completion_ids(
@@ -728,12 +777,32 @@ class MeetingApplication:
 
     # --- meetings.read / list / search -------------------------------------
 
-    def read_meeting(self, uow: UnitOfWork, principal_id: str, meeting_id: str) -> MeetingView:
-        """One Meeting by durable id. Absent and foreign are the same answer."""
-        view = uow.meetings.read_meeting(principal_id, meeting_id)
+    def read_meeting(
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        meeting_id: str,
+        prep_version_number: int | None = None,
+    ) -> MeetingView:
+        """One Meeting by durable id, with its current prep head. Absent and
+        foreign are the same answer.
+
+        With `prep_version_number` (ADR-020 C6), the view also carries that exact
+        prep version as `prep_version`; a number with no version under this
+        Meeting is `not_found` on field `prep`. The Meeting is checked first, so
+        an absent or foreign Meeting stays `not_found` on `meeting_id`.
+        """
+        meetings = uow.meetings
+        view = meetings.read_meeting(principal_id, meeting_id)
         if view is None:
             raise MeetingNotFoundError(MeetingErrorField.MEETING_ID)
-        return view
+        view = _with_prep(meetings, principal_id, view)
+        if prep_version_number is None:
+            return view
+        version = meetings.read_prep_version(principal_id, meeting_id, prep_version_number)
+        if version is None:
+            raise MeetingNotFoundError(MeetingErrorField.PREP)
+        return view.model_copy(update={"prep_version": _prep_view(version)})
 
     def list_meetings(
         self, uow: UnitOfWork, principal_id: str, request: MeetingListRequest, now: datetime
@@ -765,7 +834,7 @@ class MeetingApplication:
         source_capability: str = Capability.MEETINGS_UPDATE.value,
         correlation_id: str | None = None,
     ) -> MeetingWriteResult:
-        """Patch one Meeting's scalars, attendees, attachments and note atomically.
+        """Patch one Meeting's scalars, attendees, attachments, note and prep atomically.
 
         One row lock, one `expected_version` gate and at most one version
         increment, however many children change (section 19.6). A request that
@@ -824,11 +893,16 @@ class MeetingApplication:
         attachments_retired, attachments_added = _attachment_delta(current, request)
 
         note_body = _note_body(current, request)
+        # Read under the Meeting row lock every prep write takes first, so the
+        # head cannot move before this request's version supersedes it.
+        prep_head = meetings.read_prep_head(principal_id, current.meeting_id)
+        prep_body = _prep_body(prep_head, request)
         material = (
             bool(scalar_fields)
             or bool(attendees_retired or attendees_added)
             or bool(attachments_retired or attachments_added)
             or note_body is not None
+            or prep_body is not None
         )
         after_version = current.version + 1 if material else current.version
 
@@ -889,6 +963,22 @@ class MeetingApplication:
                     recorded_at=at,
                 ),
             )
+        if prep_body is not None:
+            meetings.insert_prep_version(
+                principal_id,
+                MeetingPrepRecord(
+                    prep_version_id=issue_identifier(IdKind.MEETING_PREP_VERSION),
+                    meeting_id=current.meeting_id,
+                    version_number=1 if prep_head is None else prep_head.version_number + 1,
+                    supersedes_prep_version_id=(
+                        None if prep_head is None else prep_head.prep_version_id
+                    ),
+                    content_markdown=prep_body,
+                    content_sha256=note_content_sha256(prep_body),
+                    meeting_history_id=receipt.history_id,
+                    recorded_at=at,
+                ),
+            )
         view = _current_meeting(meetings, principal_id, current.meeting_id)
         if view.meeting_series_id != record.meeting_series_id or view.version != after_version:
             raise RepositoryFailureError
@@ -909,6 +999,7 @@ class MeetingApplication:
                 "attendees": bool(attendees_retired or attendees_added),
                 "attachments": bool(attachments_retired or attachments_added),
                 "notes": note_body is not None,
+                "prep": prep_body is not None,
             }
             _stage_meeting_event(
                 uow.record_events,
@@ -1201,5 +1292,19 @@ def _note_body(current: MeetingView, request: MeetingUpdateRequest) -> str | Non
         )
     body = validate_meeting_notes_markdown(request.notes_markdown)
     if head is not None and note_content_sha256(head.body_markdown) == note_content_sha256(body):
+        return None
+    return body
+
+
+def _prep_body(head: MeetingPrepVersionRecord | None, request: MeetingUpdateRequest) -> str | None:
+    """The new prep body, or `None` when the prep does not change (ADR-020 C2).
+
+    Replace only: a sent body is the whole new version, and one whose content
+    hash equals the current head's is a no-op, exactly as a note `replace`.
+    """
+    if request.prep_markdown is None:
+        return None
+    body = validate_meeting_prep_markdown(request.prep_markdown)
+    if head is not None and head.content_sha256 == note_content_sha256(body):
         return None
     return body

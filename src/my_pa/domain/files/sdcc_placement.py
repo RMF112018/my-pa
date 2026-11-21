@@ -4,6 +4,7 @@
 Active only when gateway composition loads an independently managed approved
 configuration. A caller cannot supply or modify the trusted owner registry.
 """
+
 from __future__ import annotations
 
 import copy
@@ -17,14 +18,24 @@ ARTIFACT = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]{0,127})__([A-Za-z0-9][A-Za-z0
 YEAR = re.compile(r"20[0-9]{2}\Z")
 MONTH = re.compile(r"(?:0[1-9]|1[012])\Z")
 SAFE_RESERVED = frozenset({".my-pa", "#recycle", "#snapshot", "@eadir"})
-REPORT_FILES = frozenset({
-    "INDEPENDENT_REVIEW_REPORT.md", "SYNTHETIC_PROOF_AND_CI_LEDGER.md",
-    "EVIDENCE_MANIFEST.json", "REVIEW_RECEIPT.json",
-})
-SESSION_FILES = frozenset({
-    "SESSION_MANIFEST.json", "SESSION_PUBLICATION_RECEIPT.json",
-    "SESSION_RECOVERY.json", "SESSION_PUBLICATION_FAILURE.json", "HANDOFF.md",
-})
+REPORT_FILES = frozenset(
+    {
+        "INDEPENDENT_REVIEW_REPORT.md",
+        "SYNTHETIC_PROOF_AND_CI_LEDGER.md",
+        "EVIDENCE_MANIFEST.json",
+        "REVIEW_RECEIPT.json",
+    }
+)
+SESSION_FILES = frozenset(
+    {
+        "SESSION_MANIFEST.json",
+        "SESSION_PUBLICATION_RECEIPT.json",
+        "SESSION_RECOVERY.json",
+        "SESSION_PUBLICATION_FAILURE.json",
+        "HANDOFF.md",
+    }
+)
+WORK_FILES = frozenset({"WORK_ITEM.md", "00_ARTIFACT_INDEX.json", "OWNERSHIP.json"})
 WORK_FILES = frozenset({"WORK_ITEM.md", "00_ARTIFACT_INDEX.json", "OWNERSHIP.json"})
 ROOT_INDEX_FILES = {
     "30-Exchange": "00_ACTIVE_WORK_INDEX.md",
@@ -66,10 +77,8 @@ def _parts(raw: str) -> list[str]:
         _deny("INVALID_PATH")
     parts = raw.split("/")
     if any(
-        not p
-        or p in (".", "..")
-        or p.lower() in SAFE_RESERVED
-        or len(p.encode("utf-8")) > 255
+        not p or p in (".", "..") or p.lower() in SAFE_RESERVED or len(p.encode("utf-8")) > 255
+        for p in parts
         for p in parts
     ):
         _deny("INVALID_PATH")
@@ -144,10 +153,11 @@ def _program(
     if group == "canonical":
         if (
             len(rest) == 2
-            and             not is_dir
-            and             _ident(rest[1][:-5])
-            and             rest[1].endswith(".json")
-            and             role == "canonical_pointer"
+            and not is_dir
+            and _ident(rest[1][:-5])
+            and rest[1].endswith(".json")
+            and role == "canonical_pointer"
+        ):
         ):
             return "CANONICAL_POINTER"
         _deny("CANONICAL_MUST_BE_POINTER")
@@ -186,10 +196,11 @@ def _program(
             return "REVIEW_ARTIFACT_ROOT"
         if (
             len(tail) == 2
-            and             tail[0] == "artifacts"
-            and             not is_dir
-            and             _file_name(tail[1])
-            and             role == "review"
+            and tail[0] == "artifacts"
+            and not is_dir
+            and _file_name(tail[1])
+            and role == "review"
+        ):
         ):
             return "REVIEW_EVIDENCE"
         _deny("INVALID_REVIEW_LAYOUT")
@@ -231,9 +242,10 @@ def _other_top(
         _deny("UNKNOWN_GOVERNANCE_PATH")
     if name in ("30-Exchange", "50-Shared-Evidence", "60-Cross-Program-Decisions"):
         lookup = {
-            "30-Exchange":"client-notices",
-            "50-Shared-Evidence":"pointers",
-            "60-Cross-Program-Decisions":"pointers",
+            "30-Exchange": "client-notices",
+            "50-Shared-Evidence": "pointers",
+            "60-Cross-Program-Decisions": "pointers",
+        }
         }
         child = lookup[name]
         if p[0] != child:
@@ -245,19 +257,24 @@ def _other_top(
                 return "CLIENT_QUEUE"
             if (
                 len(p) == 3
-                and                 not is_dir
-                and                 p[1] in policy["client_adapter_ids"]
-                and                 p[2].endswith(".json")
-                and                 _ident(p[2][:-5])
-                and                 role == "locator"
+                and not is_dir
+                and p[1] in policy["client_adapter_ids"]
+                and p[2].endswith(".json")
+                and _ident(p[2][:-5])
+                and role == "locator"
             ):
                 return "CLIENT_POINTER"
         elif (
             len(p) == 2
-            and             not is_dir
-            and             p[1].endswith(".json")
-            and             _ident(p[1][:-5])
-            and             role == "locator"
+            ):
+                return "CLIENT_POINTER"
+        elif (
+            len(p) == 2
+            and not is_dir
+            and p[1].endswith(".json")
+            and _ident(p[1][:-5])
+            and role == "locator"
+        ):
         ):
             return "CANONICAL_OWNER_POINTER"
         _deny("INVALID_POINTER_LAYOUT")
@@ -274,19 +291,24 @@ def _other_top(
                 return "PUBLICATION_MONTH"
             if (
                 len(p) == 4
-                and                 not is_dir
-                and                 _yearmonth(p[1:3])
-                and                 p[3].endswith(".json")
-                and                 _ident(p[3][:-5])
-                and                 role == "locator"
+                and not is_dir
+                and _yearmonth(p[1:3])
+                and p[3].endswith(".json")
+                and _ident(p[3][:-5])
+                and role == "locator"
             ):
                 return "PUBLICATION_POINTER"
         elif (
             len(p) == 2
-            and             not is_dir
-            and             p[1].endswith(".json")
-            and             _ident(p[1][:-5])
-            and             role == "locator"
+            ):
+                return "PUBLICATION_POINTER"
+        elif (
+            len(p) == 2
+            and not is_dir
+            and p[1].endswith(".json")
+            and _ident(p[1][:-5])
+            and role == "locator"
+        ):
         ):
             return "PUBLICATION_META"
         _deny("INVALID_PUBLICATION_PATH")
@@ -315,20 +337,22 @@ def _other_top(
             return "MIGRATION_BATCH"
         if (
             len(p) == 3
-            and             not is_dir
-            and             _ident(p[1])
-            and             p[2] in ("BATCH_MANIFEST.json", "BATCH_RECEIPT.json", "HANDOFF.md")
+            and not is_dir
+            and _ident(p[1])
+            and p[2] in ("BATCH_MANIFEST.json", "BATCH_RECEIPT.json", "HANDOFF.md")
+        ):
         ):
             return "MIGRATION_BATCH_CONTROL"
         if len(p) == 3 and is_dir and _ident(p[1]) and p[2] == "artifacts":
             return "MIGRATION_ARTIFACT_DIRECTORY"
         if (
             len(p) == 4
-            and             not is_dir
-            and             _ident(p[1])
-            and             p[2] == "artifacts"
-            and             _file_name(p[3])
-            and             role == "migration"
+            and not is_dir
+            and _ident(p[1])
+            and p[2] == "artifacts"
+            and _file_name(p[3])
+            and role == "migration"
+        ):
         ):
             return "MIGRATION_ARTIFACT"
         _deny("INVALID_MIGRATION_LAYOUT")
@@ -345,11 +369,12 @@ def _other_top(
             return "LEGACY_ARTIFACTS"
         if (
             len(p) == 4
-            and             not is_dir
-            and             _ident(p[1])
-            and             p[2] == "artifacts"
-            and             _file_name(p[3])
-            and             role == "legacy"
+            and not is_dir
+            and _ident(p[1])
+            and p[2] == "artifacts"
+            and _file_name(p[3])
+            and role == "legacy"
+        ):
         ):
             return "LEGACY_FILE"
         _deny("INVALID_LEGACY_LAYOUT")
@@ -377,8 +402,9 @@ def authorize_path(
         _deny("UNKNOWN_ROOT_COLLECTION")
     rest = parts[2:]
     if top == "20-Programs":
-        return _program(rest,policy,registrations,is_directory,role)
-    return _other_top(top,rest,policy,is_directory,role)
+        return _program(rest, policy, registrations, is_directory, role)
+    return _other_top(top, rest, policy, is_directory, role)
+
 
 
 def authorize_mutation(
@@ -401,23 +427,39 @@ def authorize_mutation(
     if capability not in listed:
         _deny("UNKNOWN_MUTATION_CAPABILITY")
     if (
-        capability in ("files.move","files.rename","files.trash","files.restore")
-        and         not privileged_migration
+        capability in ("files.move", "files.rename", "files.trash", "files.restore")
+        and not privileged_migration
     ):
         _deny("LIFECYCLE_CHANGE_REQUIRES_MIGRATION_AUTHORITY")
     if (
         capability in ("files.copy", "files.move", "files.rename", "files.restore")
-        and         source is None
+    ):
+        _deny("LIFECYCLE_CHANGE_REQUIRES_MIGRATION_AUTHORITY")
+    if (
+        capability in ("files.copy", "files.move", "files.rename", "files.restore")
+        and source is None
     ):
         _deny("SOURCE_IDENTITY_REQUIRED")
-    result = authorize_path(policy,registrations,path=target,is_directory=is_directory,role=role)
+    ):
+        _deny("SOURCE_IDENTITY_REQUIRED")
+    result = authorize_path(
+        policy, registrations, path=target, is_directory=is_directory, role=role
+    )
     if source is not None:
         # Only work-item-local copy is acceptable, unless a specifically approved
         # migration transaction handles a legacy reclassification separately.
-        authorize_path(policy,registrations,path=source,is_directory=is_directory,role=role)
+    if source is not None:
+        # Only work-item-local copy is acceptable, unless a specifically approved
+        # migration transaction handles a legacy reclassification separately.
+        authorize_path(policy, registrations, path=source, is_directory=is_directory, role=role)
+
         def owned_item(path: str) -> str | None:
             seq = _parts(path)
-            return "/".join(seq[:7]) if len(seq)>6 and seq[1] == "20-Programs" else None
+        def owned_item(path: str) -> str | None:
+            seq = _parts(path)
+            return "/".join(seq[:7]) if len(seq) > 6 and seq[1] == "20-Programs" else None
+
+        if owned_item(source) != owned_item(target) and not privileged_migration:
         if owned_item(source) != owned_item(target) and not privileged_migration:
             _deny("CROSS_OWNER_COPY_REQUIRES_AUTHORITY")
     return result
@@ -446,10 +488,13 @@ def route_session_artifact(
         or len(filename.encode("utf-8")) > 180
     ):
         _deny("INVALID_ARTIFACT_FILENAME")
-    path = (f"SDCR/20-Programs/{owner['program']}/workstreams/{owner['workstream']}"
-          f"/work-items/{work_item_id}/sessions/{session_id}/artifacts/{category}"
-          f"/{artifact_id}__{filename}")
-    authorize_path(policy,registrations,path=path,is_directory=False,role=category)
+    path = (
+        f"SDCR/20-Programs/{owner['program']}/workstreams/{owner['workstream']}"
+        f"/work-items/{work_item_id}/sessions/{session_id}/artifacts/{category}"
+        f"/{artifact_id}__{filename}"
+    )
+    authorize_path(policy, registrations, path=path, is_directory=False, role=category)
+    return path
     return path
 
 
@@ -463,12 +508,18 @@ def can_complete(
     receipt_verified: bool,
 ) -> bool:
     """No handoff on an incomplete, unclassified or unverified publication."""
-    if not all((hashes_verified,manifest_verified,registry_verified,receipt_verified)):
+    if not all((hashes_verified, manifest_verified, registry_verified, receipt_verified)):
         return False
     if set(recorded_artifacts) != expected_artifact_ids:
         return False
     return all(
-        status not in {
+        return False
+    if set(recorded_artifacts) != expected_artifact_ids:
+        return False
+    return all(
+        status
+        not in {
+            "FAILED_EVIDENCE",
             "FAILED_EVIDENCE",
             "PROTECTED_WITHHELD",
             "UNCLASSIFIED",
@@ -477,6 +528,7 @@ def can_complete(
         }
         for status in recorded_artifacts.values()
     )
+
 
 # The existing public Files contract has no new error code for this extension.
 # The storage adapter maps PlacementDeniedError to the existing invalid_path refusal
@@ -581,16 +633,24 @@ class SDCRPlacementGate:
             # Only typed owner/global index and canonical pointer paths may be
             # revised in place with the existing CAS/preimage machinery.
             basename = path.rsplit("/", 1)[-1]
-            if basename not in {"00_ARTIFACT_INDEX.json"} and not (
-                basename.startswith("00_") and basename.endswith("_INDEX.json")
-            ) and not ("/canonical/" in path and basename.endswith(".json")):
+            if (
+                basename not in {"00_ARTIFACT_INDEX.json"}
+                and not (basename.startswith("00_") and basename.endswith("_INDEX.json"))
+                and not ("/canonical/" in path and basename.endswith(".json"))
+            ):
                 _deny("SDCR_IMMUTABLE_CONTENT")
         result = authorize_path(
             self._policy,
             self._registrations,
-            path = path,
-            is_directory = is_directory,
-            role = _derived_role(path),
+                _deny("SDCR_IMMUTABLE_CONTENT")
+        result = authorize_path(
+            self._policy,
+            self._registrations,
+            path=path,
+            is_directory=is_directory,
+            role=_derived_role(path),
+        )
+
         )
         # Policy and trusted owner registry are supplied only by deployment,
         # not by mutable `00-Control` content in the Files workspace.

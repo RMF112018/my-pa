@@ -9,9 +9,15 @@ ends like a window: from one second after the earlier interval's end to one
 second before the next one's start. Its length in seconds is therefore
 `(end - start) + 1` (`Interval.inclusive_seconds`) -- covered until `03:59:59`
 and covered again from `04:00:00` the next day is a gap of exactly 86,400 s.
+The parser floors sub-second window bounds (`window_bound_floored`), so every
+interval is whole seconds and a gap never ends before it starts.
 
 Identity. Counts are taken over *usable* records -- every classification but
-`quarantined`. An identity seen in two publications is a cross-publication
+`quarantined` -- each under its mailbox item's canonical key: the key lifted
+across lanes (`classification`, lane identity degradation), so one provider id
+is one identity whichever of its lanes carried the internet message id, and a
+lane observation's own provider-id-only key is never counted as a second
+identity. An identity seen in two publications is a cross-publication
 repeat; if its sender address or body digest differs between them that is a
 cross-publication identity conflict (counted here, never merged).
 
@@ -123,11 +129,18 @@ def summarize_corpus(publications: Sequence[Publication]) -> CorpusSummary:
             if record.classification is not RecordClassification.QUARANTINED and record.message:
                 usable.append((index, record.message))
 
+    # Each usable observation counts under its mailbox item's canonical key (the
+    # key lifted across lanes), never under a lane observation's own raw key.
+    item_keys = {
+        (index, item.provider_id): item.canonical_key
+        for index, publication in enumerate(publications)
+        for item in publication.items
+    }
     provider_pubs: defaultdict[tuple[str, str], set[int]] = defaultdict(set)
     identity_pubs: defaultdict[CanonicalKey, set[int]] = defaultdict(set)
     identity_signatures: defaultdict[CanonicalKey, set[tuple[str | None, str]]] = defaultdict(set)
     for index, message in usable:
-        key = message.canonical_key
+        key = item_keys.get((index, message.provider_id), message.canonical_key)
         provider_pubs[(message.mailbox_ref, message.provider_id)].add(index)
         identity_pubs[key].add(index)
         identity_signatures[key].add((message.sender_address, message.body.sha256))

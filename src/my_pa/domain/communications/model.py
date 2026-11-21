@@ -355,13 +355,25 @@ class NormalizedMessage:
     has_attachments: bool | None
     declared_in_window: bool | None
     degraded_reasons: tuple[ReasonCode, ...]
+    #: The provider-returned internet message id another lane observation of the
+    #: same provider id supplied, when this observation lacks its own. Set only by
+    #: `classification.classify_records` (lane identity degradation); the
+    #: record's own `identity_state` and `internet_message_id` stay as evidence.
+    lifted_internet_message_id: str | None = None
 
     @property
     def canonical_key(self) -> CanonicalKey:
+        """`(mailbox_ref, internet message id)` when the id is provider-returned --
+        this observation's own, else one lifted from a lane sibling -- otherwise
+        the weaker `(mailbox_ref, provider_id)` key."""
         if self.identity_state is IdentityState.PROVIDER_RETURNED:
             if self.internet_message_id is None:  # parser invariant; never true when parsed
                 raise ValueError("provider_returned identity without an internet message id")
             return CanonicalKey(self.mailbox_ref, self.identity_state, self.internet_message_id)
+        if self.lifted_internet_message_id is not None:
+            return CanonicalKey(
+                self.mailbox_ref, IdentityState.PROVIDER_RETURNED, self.lifted_internet_message_id
+            )
         return CanonicalKey(self.mailbox_ref, self.identity_state, self.provider_id)
 
     @property

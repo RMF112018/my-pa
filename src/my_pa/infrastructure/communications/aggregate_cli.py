@@ -218,8 +218,69 @@ def _file_report(name: str, data: bytes | None, parsed: PublicationParse | None)
     return report
 
 
+def _internal_error(name: str) -> Json:
+    # Content-free on purpose: neither the exception nor its message is
+    # reported, because either could quote file content.
+    return {
+        "file": name,
+        "status": PublicationStatus.REJECTED.value,
+        "rejection": PublicationRejection.INTERNAL_ERROR.value,
+    }
+
+
+def _summary(paths: Sequence[Path], publications: Sequence[Publication]) -> Json:
+    summary = summarize_corpus(publications)
+    return {
+        "files": len(paths),
+        "accepted": len(publications),
+        "rejected": len(paths) - len(publications),
+        "observations": summary.observations,
+        "usable_observations": summary.usable_observations,
+        "unique_canonical_identities": summary.unique_canonical_identities,
+        "unique_provider_ids": summary.unique_provider_ids,
+        "provider_id_cross_file_repeats": summary.provider_id_cross_publication_repeats,
+        "identity_cross_file_repeats": summary.identity_cross_publication_repeats,
+        "inbox_sent_identity_pairs": summary.inbox_sent_identity_pairs,
+        "multi_lane_items": summary.multi_lane_items,
+        "participant_reconciliations": summary.participant_reconciliations,
+        "participant_disagreements": summary.participant_disagreements,
+        "lane_verification": dict(summary.lane_verification),
+        "null_from_records": summary.null_from_records,
+        "empty_subjects": summary.empty_subjects,
+        "window_rules": dict(summary.window_rules),
+        "dst_flagged_windows": summary.dst_flagged_windows,
+        "within_file_identity_conflict_records": (
+            summary.within_publication_identity_conflict_records
+        ),
+        "cross_file_identity_conflicts": summary.cross_publication_identity_conflicts,
+        "coverage": {
+            "intervals": [
+                {"start_utc": _iso(i.start), "end_utc": _iso(i.end)}
+                for i in summary.coverage_intervals
+            ],
+            "gaps": [
+                {
+                    "start_utc": _iso(g.start),
+                    "end_utc": _iso(g.end),
+                    "seconds": g.inclusive_seconds,
+                }
+                for g in summary.coverage_gaps
+            ],
+            "publications_excluded": summary.publications_excluded_from_coverage,
+            "end_inclusive": True,
+            "adjacency_tolerance_seconds": ADJACENCY_TOLERANCE_SECONDS,
+        },
+    }
+
+
 def summarize_files(paths: Sequence[Path]) -> tuple[Json, bool]:
-    """The aggregate document for `paths`, and whether every file was accepted."""
+    """The aggregate document for `paths`, and whether every file was accepted.
+
+    An unexpected error while reading, parsing or reporting one file makes that
+    file a content-free `internal_error` rejection and the batch goes on; one
+    while summarizing the batch makes the summary a content-free
+    `internal_error` (the per-file reports are still printed).
+    """
     files: list[Json] = []
     publications: list[Publication] = []
     all_accepted = True
@@ -227,88 +288,50 @@ def summarize_files(paths: Sequence[Path]) -> tuple[Json, bool]:
         data: bytes | None
         parsed: PublicationParse | None
         try:
-            size = path.stat().st_size
-            if size > MAX_PUBLICATION_BYTES:
-                all_accepted = False
-                files.append(
-                    {
-                        "file": path.name,
-                        "bytes": size,
-                        "status": PublicationStatus.REJECTED.value,
-                        "rejection": PublicationRejection.FILE_TOO_LARGE.value,
-                    }
-                )
-                continue
-            data = path.read_bytes()
-            parsed = parse_publication(data)
-        except OSError:
-            data, parsed = None, None
+            try:
+                size = path.stat().st_size
+                if size > MAX_PUBLICATION_BYTES:
+                    all_accepted = False
+                    files.append(
+                        {
+                            "file": path.name,
+                            "bytes": size,
+                            "status": PublicationStatus.REJECTED.value,
+                            "rejection": PublicationRejection.FILE_TOO_LARGE.value,
+                        }
+                    )
+                    continue
+                data = path.read_bytes()
+                parsed = parse_publication(data)
+            except OSError:
+                data, parsed = None, None
+            report = _file_report(path.name, data, parsed)
         except Exception:  # one bad file never aborts the batch
-            # Content-free on purpose: neither the exception nor its message is
-            # reported, because either could quote file content.
             all_accepted = False
-            files.append(
-                {
-                    "file": path.name,
-                    "status": PublicationStatus.REJECTED.value,
-                    "rejection": PublicationRejection.INTERNAL_ERROR.value,
-                }
-            )
+            files.append(_internal_error(path.name))
             continue
         if parsed is None or parsed.status is not PublicationStatus.ACCEPTED:
             all_accepted = False
         elif parsed.publication is not None:
             publications.append(parsed.publication)
-        files.append(_file_report(path.name, data, parsed))
+        files.append(report)
 
-    summary = summarize_corpus(publications)
+    try:
+        summary = _summary(paths, publications)
+    except Exception:  # content-free, as for a file
+        all_accepted = False
+        summary = {
+            "files": len(paths),
+            "status": PublicationStatus.REJECTED.value,
+            "rejection": PublicationRejection.INTERNAL_ERROR.value,
+        }
     document: Json = {
         "tool": TOOL,
         "parser_version": PARSER_VERSION,
         "search_text_version": SEARCH_TEXT_VERSION,
         "identifier_version": IDENTIFIER_VERSION,
         "files": files,
-        "summary": {
-            "files": len(paths),
-            "accepted": len(publications),
-            "rejected": len(paths) - len(publications),
-            "observations": summary.observations,
-            "usable_observations": summary.usable_observations,
-            "unique_canonical_identities": summary.unique_canonical_identities,
-            "unique_provider_ids": summary.unique_provider_ids,
-            "provider_id_cross_file_repeats": summary.provider_id_cross_publication_repeats,
-            "identity_cross_file_repeats": summary.identity_cross_publication_repeats,
-            "inbox_sent_identity_pairs": summary.inbox_sent_identity_pairs,
-            "multi_lane_items": summary.multi_lane_items,
-            "participant_reconciliations": summary.participant_reconciliations,
-            "participant_disagreements": summary.participant_disagreements,
-            "lane_verification": dict(summary.lane_verification),
-            "null_from_records": summary.null_from_records,
-            "empty_subjects": summary.empty_subjects,
-            "window_rules": dict(summary.window_rules),
-            "dst_flagged_windows": summary.dst_flagged_windows,
-            "within_file_identity_conflict_records": (
-                summary.within_publication_identity_conflict_records
-            ),
-            "cross_file_identity_conflicts": summary.cross_publication_identity_conflicts,
-            "coverage": {
-                "intervals": [
-                    {"start_utc": _iso(i.start), "end_utc": _iso(i.end)}
-                    for i in summary.coverage_intervals
-                ],
-                "gaps": [
-                    {
-                        "start_utc": _iso(g.start),
-                        "end_utc": _iso(g.end),
-                        "seconds": g.inclusive_seconds,
-                    }
-                    for g in summary.coverage_gaps
-                ],
-                "publications_excluded": summary.publications_excluded_from_coverage,
-                "end_inclusive": True,
-                "adjacency_tolerance_seconds": ADJACENCY_TOLERANCE_SECONDS,
-            },
-        },
+        "summary": summary,
     }
     return document, all_accepted
 

@@ -34,22 +34,28 @@ paragraph holding the first marker to the end, never leaving the text empty):
   space -- `normalize_plain_text` keeps that one line's trailing space) with at
   most `SIGNATURE_TAIL_LINES` non-blank lines after it; the cut is at the
   delimiter itself. A bare `--` line is ordinary text;
-* a line starting `Disclaimer`; `confidentiality notice`;
-  `if you are not the intended recipient`;
+* a line starting `Disclaimer`, or
   `if you have received this (e-mail|email|message|communication) in error`;
-* a line that *starts* a paragraph with `this` or `the information (contained)
-  in this`, then `e-mail|email|message|communication|transmission`, then
-  `confidential|privileged` within the line -- and only when that paragraph is
-  in the trailing region (at most `SIGNATURE_TAIL_LINES` non-blank lines from it
-  to the end) or follows a signature break (`--`, `-- `, or a rule of five or
-  more `_` or `-`). A mid-paragraph sentence such as "... this message includes
-  confidential pricing ..." never truncates body text.
+* a *paragraph-start* line in the *trailing region* that starts with
+  `confidentiality notice` or `if you are not the intended recipient`, or with
+  `this` / `the information (contained) in this`, then
+  `e-mail|email|message|communication|transmission`, then
+  `confidential|privileged` within the line. The trailing region is at most
+  `SIGNATURE_TAIL_LINES` non-blank lines from that line to the end. A line
+  starts a paragraph when the line above it is blank, or is a signature break
+  that itself lies in the trailing region -- exactly `-- `, or a rule of five
+  or more `-`. Nothing else is a break (not a bare `--`, not an `_` rule), and a
+  break earlier in the text never lifts the trailing-region limit. A
+  mid-paragraph sentence such as "... this message includes confidential
+  pricing ..." or "If you are not the intended recipient of the GMP, tell me"
+  directly under a greeting never truncates body text.
 
-**Version.** These rules are a pre-merge correction of `comms_search_text_v1`
-(WP1 fix F1, after review R1): the identifier stays `v1` because no searchable
-text has been persisted or published under it, so no stored output changes
-meaning. Corpus counts measured before the correction (spec §7, `ac0d06ae`) used
-the earlier, broader markers.
+**Version.** These rules are pre-merge corrections of `comms_search_text_v1`
+(WP1 fix F1 after review R1, and fix F2 after review R2): the identifier stays
+`v1` because no searchable text has been persisted or published under it, so
+no stored output changes meaning. Corpus counts measured before a correction
+(spec §7: `ac0d06ae` before F1, `184ac6ca` before F2) used the earlier, broader
+markers.
 
 **Content is inert data.** HTML is parsed with `html.parser` and only text
 nodes are kept: no attribute value (an `onerror=`, a `javascript:` href, a
@@ -253,21 +259,25 @@ def strip_quoted_chain(text: str) -> tuple[str, SearchTextFlag | None]:
     return result, SearchTextFlag.QUOTED_CHAIN_REMOVED
 
 
-#: A signature delimiter or a "this email ... confidential" paragraph counts only
+#: A signature delimiter, a break, or a trailing-paragraph marker counts only
 #: when at most this many non-blank lines follow from it to the end of the text.
 SIGNATURE_TAIL_LINES: Final = 15
-_SIGNATURE_BREAK: Final = re.compile(r"--\s?|_{5,}|-{5,}")
+#: A signature break: the RFC 3676 delimiter or a rule of five or more dashes.
+_SIGNATURE_BREAK: Final = re.compile(r"-- |-{5,}")
 _DISCLAIMER_MARKERS: Final = (
     re.compile(r"disclaimer\b", re.I),
-    re.compile(r".*\bconfidentiality notice\b", re.I),
-    re.compile(r".*\bif you are not the intended recipient\b", re.I),
     re.compile(r".*\bif you have received this (?:e-?mail|message|communication) in error\b", re.I),
 )
-_THIS_MESSAGE_CONFIDENTIAL: Final = re.compile(
-    r"(?:this|the information (?:contained )?in this) "
-    r"(?:e-?mail|message|communication|transmission)\b"
-    r".*\b(?:confidential|privileged)\b",
-    re.I,
+#: Markers that count only on a paragraph-start line in the trailing region.
+_TAIL_PARAGRAPH_MARKERS: Final = (
+    re.compile(r"confidentiality notice\b", re.I),
+    re.compile(r"if you are not the intended recipient\b", re.I),
+    re.compile(
+        r"(?:this|the information (?:contained )?in this) "
+        r"(?:e-?mail|message|communication|transmission)\b"
+        r".*\b(?:confidential|privileged)\b",
+        re.I,
+    ),
 )
 
 
@@ -275,34 +285,40 @@ def _in_tail(lines: list[str], index: int) -> bool:
     return sum(1 for line in lines[index:] if line.strip()) <= SIGNATURE_TAIL_LINES
 
 
-def _is_disclaimer_start(lines: list[str], index: int, after_break: bool) -> bool:
+def _starts_paragraph(lines: list[str], index: int) -> bool:
+    """The line above is blank, or is a signature break lying in the trailing region."""
+    above = lines[index - 1]
+    if not above.strip():
+        return True
+    return _SIGNATURE_BREAK.fullmatch(above) is not None and _in_tail(lines, index - 1)
+
+
+def _is_disclaimer_start(lines: list[str], index: int) -> bool:
     line = lines[index]
     if any(marker.match(line) for marker in _DISCLAIMER_MARKERS):
         return True
     return (
-        _THIS_MESSAGE_CONFIDENTIAL.match(line) is not None
-        and not lines[index - 1].strip()
-        and (after_break or _in_tail(lines, index))
+        any(marker.match(line) for marker in _TAIL_PARAGRAPH_MARKERS)
+        and _in_tail(lines, index)
+        and _starts_paragraph(lines, index)
     )
 
 
 def strip_disclaimer(text: str) -> tuple[str, bool]:
     """Cut from the paragraph holding the first disclaimer/signature marker to the end."""
     lines = text.split("\n")
-    after_break = False
     for index, line in enumerate(lines):
         if not any(part.strip() for part in lines[:index]):
             continue
         if line == _SIGNATURE_DELIMITER and _in_tail(lines, index + 1):
             cut = index
-        elif _is_disclaimer_start(lines, index, after_break):
+        elif _is_disclaimer_start(lines, index):
             cut = index
             while cut > 0 and lines[cut - 1].strip():
                 cut -= 1
             if not any(part.strip() for part in lines[:cut]):
                 cut = index
         else:
-            after_break = after_break or _SIGNATURE_BREAK.fullmatch(line) is not None
             continue
         return normalize_plain_text("\n".join(lines[:cut])), True
     return text, False

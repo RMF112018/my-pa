@@ -694,6 +694,80 @@ def test_a_lane_missing_the_id_still_meets_the_identity_rules_through_its_siblin
     assert all(R.IDENTITY_CONFLICT in r.reasons for r in records)
 
 
+def _lane(role: str, *, imid: bool = True) -> dict[str, Any]:
+    """R2's N1 probe: the lean fixture's first record as an `inbox` or `sent` lane."""
+    record = copy.deepcopy(s.lean_publication()["messages"][0])
+    record["source_folder"]["role"] = record["source_folder"]["key"] = role
+    if not imid:
+        record["internet_message_id"] = None
+        record["internet_message_id_state"] = "absent"
+    return record
+
+
+def _lanes(*records: dict[str, Any]) -> Publication:
+    document = s.lean_publication()
+    document["messages"] = list(records)
+    return accepted(document)
+
+
+def _sent_lacks() -> Publication:  # R2 case A
+    return _lanes(_lane("inbox"), _lane("sent", imid=False))
+
+
+def _both_have() -> Publication:  # R2 case B
+    return _lanes(_lane("inbox"), _lane("sent"))
+
+
+def _inbox_lacks() -> Publication:  # R2 case C
+    return _lanes(_lane("inbox", imid=False), _lane("sent"))
+
+
+@pytest.mark.parametrize("build", [_sent_lacks, _inbox_lacks], ids=["sent-lacks", "inbox-lacks"])
+def test_a_lane_supplied_internet_message_id_is_lifted_to_the_item_and_every_lane(
+    build: Callable[[], Publication],
+) -> None:
+    # R2's N1: the lane that lacked the id kept its provider-id key, so one
+    # message counted as two identities.
+    publication = build()
+    (item,) = publication.items
+    (imid,) = {msg(r).internet_message_id for r in publication.records} - {None}
+    assert imid is not None
+    expected = CanonicalKey(
+        msg(publication.records[0]).mailbox_ref, IdentityState.PROVIDER_RETURNED, imid
+    )
+    assert item.canonical_key == expected
+    assert [msg(r).canonical_key for r in publication.records] == [expected, expected]
+    # The record's own evidence is unchanged: the lane still reports no id.
+    assert {msg(r).identity_state for r in publication.records} == {
+        IdentityState.PROVIDER_RETURNED,
+        IdentityState.PROVIDER_ID_ONLY,
+    }
+    summary = summarize_corpus([publication])
+    assert summary.usable_observations == 2
+    assert summary.unique_canonical_identities == 1
+    assert summary.unique_provider_ids == 1
+
+
+def test_a_lifted_key_is_the_same_key_in_every_publication() -> None:
+    # R2's A+B: the item was `provider_id_only` in one publication and
+    # `provider_returned` in the other -- an unstable key and two identities.
+    a, b = _sent_lacks(), _both_have()
+    assert a.items[0].canonical_key == b.items[0].canonical_key
+    assert a.items[0].canonical_key.kind is IdentityState.PROVIDER_RETURNED
+    summary = summarize_corpus([a, b])
+    assert summary.unique_canonical_identities == 1
+    assert summary.identity_cross_publication_repeats == 1
+    assert summary.cross_publication_identity_conflicts == 0
+
+
+def test_a_repeated_lifted_publication_is_one_cross_publication_repeat() -> None:
+    # R2's A+A: two identities, both "repeated", inflated the repeat count to 2.
+    summary = summarize_corpus([_sent_lacks(), _sent_lacks()])
+    assert summary.unique_canonical_identities == 1
+    assert summary.identity_cross_publication_repeats == 1
+    assert summary.provider_id_cross_publication_repeats == 1
+
+
 def test_two_different_internet_message_ids_on_one_provider_id_still_conflict() -> None:
     a = s.message(1, imid="<one@example.invalid>")
     b = s.message(1, imid="<two@example.invalid>")
@@ -732,6 +806,27 @@ def test_the_window_start_is_inclusive_and_before_it_is_out() -> None:
     before = s.message(2, selected="2026-11-17T04:59:59Z")
     records = accepted(lean_with(at_start, before)).records
     assert [r.classification for r in records] == [C.ACCEPTED, C.OUT_OF_WINDOW]
+
+
+def test_a_sub_second_window_bound_is_floored_and_reported() -> None:
+    # R2's N2: a sub-second bound let a coverage gap end before it started.
+    document = s.lean_publication()
+    document["window"]["start_utc"] = "2026-11-17T05:00:00.500Z"
+    document["window"]["end_utc"] = "2026-11-18T04:59:59.999999Z"
+    result = parse(document)
+    assert result.publication is not None
+    window = result.publication.window
+    assert window.start_utc == datetime(2026, 11, 17, 5, 0, 0, tzinfo=UTC)
+    assert window.end_utc == datetime(2026, 11, 18, 4, 59, 59, tzinfo=UTC)
+    assert result.diagnostics.code_counts[DiagnosticCode.WINDOW_BOUND_FLOORED] == 2
+
+
+def test_a_whole_second_window_bound_is_not_reported_as_floored() -> None:
+    document = s.lean_publication()
+    document["window"]["start_utc"] = "2026-11-17T05:00:00.000Z"
+    result = parse(document)
+    assert result.publication is not None
+    assert DiagnosticCode.WINDOW_BOUND_FLOORED not in result.diagnostics.code_counts
 
 
 def test_a_friday_window_labelled_24_hours_reports_its_real_duration() -> None:

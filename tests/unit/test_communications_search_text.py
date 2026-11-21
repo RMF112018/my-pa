@@ -219,10 +219,62 @@ def test_a_this_message_confidential_paragraph_far_from_the_end_is_kept() -> Non
     assert strip_disclaimer(text) == (text, False)
 
 
-def test_a_this_message_confidential_paragraph_after_a_signature_break_is_cut() -> None:
+def test_a_signature_break_far_from_the_end_never_lifts_the_tail_limit() -> None:
+    # Manager ruling on R2's N3: a break counts only inside the trailing region.
     tail = "\n".join(f"Legal line {n}." for n in range(SIGNATURE_TAIL_LINES + 1))
-    text = f"Main text.\n__________\nAlpha\n\nThis email is privileged.\n{tail}"
-    assert strip_disclaimer(text) == ("Main text.\n__________\nAlpha", True)
+    for rule in ("-----", "__________", "-- "):
+        text = f"Main text.\n{rule}\nAlpha\n\nThis email is privileged.\n{tail}"
+        assert strip_disclaimer(text) == (text, False), rule
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # R2's N3 probes: an early break used to cut 33 of 36 lines of body text.
+        "Update\n--\nItem one\n\nThis message summarises the confidential GMP pricing\n"
+        "for RFI 12.\n" + "\n".join(f"line {i}" for i in range(30)),
+        "Notes\n-----\nTable\n\nThis email covers the confidential GMP.\n"
+        + "\n".join(f"RFI {i}" for i in range(30)),
+    ],
+)
+def test_an_early_signature_break_never_cuts_later_body_text(text: str) -> None:
+    assert strip_disclaimer(text) == (text, False)
+
+
+@pytest.mark.parametrize("rule", ["-----", "-" * 40])
+def test_a_trailing_dash_rule_starts_the_disclaimer_paragraph_under_it(rule: str) -> None:
+    # (A trailing `-- ` is itself a cut, at the delimiter: see the marker tests.)
+    text = f"Main text.\n\nAlpha\n{rule}\nThis email is privileged and confidential."
+    assert strip_disclaimer(text) == ("Main text.", True)
+
+
+@pytest.mark.parametrize("rule", ["--", "__________", "----"])
+def test_only_the_delimiter_or_a_dash_rule_is_a_signature_break(rule: str) -> None:
+    text = f"Main text.\n\nAlpha\n{rule}\nThis email is privileged and confidential."
+    assert strip_disclaimer(text) == (text, False)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # R2's N4 probe: the marker sat mid-paragraph, directly under a greeting.
+        "Hi\nIf you are not the intended recipient of the GMP, tell me. RFI 5\nThanks",
+        "Hi\n\nPlease read the confidentiality notice in the GMP before RFI 5.\nThanks",
+        "Hi\nConfidentiality notice for RFI 5 is attached.\nThanks",
+    ],
+)
+def test_recipient_and_confidentiality_markers_mid_paragraph_are_body_text(text: str) -> None:
+    assert strip_disclaimer(text) == (text, False)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ["CONFIDENTIALITY NOTICE: legal words.", "If you are not the intended recipient, delete."],
+)
+def test_recipient_and_confidentiality_markers_far_from_the_end_are_kept(marker: str) -> None:
+    body = "\n".join(f"Line {n} of the body." for n in range(SIGNATURE_TAIL_LINES + 1))
+    text = f"Hi Bob,\n\n{marker}\n{body}"
+    assert strip_disclaimer(text) == (text, False)
 
 
 def test_the_information_in_this_email_form_is_a_disclaimer() -> None:

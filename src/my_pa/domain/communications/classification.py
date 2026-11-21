@@ -28,10 +28,14 @@ Identity rules, all within one publication:
 * **lane identity degradation** -- one provider id whose observations agree,
   except that some carry the internet message id and others do not (for
   example the sent lane has it and the inbox lane does not): a missing id is a
-  degradation, not a conflict. The observations merge as usual, every one of
-  them gains `lane_identity_inconsistent`, and the identity rules below use the
-  internet message id the other lane supplied. The item's own canonical key
-  stays its primary observation's;
+  degradation, not a conflict. The observations merge as usual and every one of
+  them gains `lane_identity_inconsistent`. The internet message id the other
+  lane supplied is *lifted* onto every observation that lacks it
+  (`NormalizedMessage.lifted_internet_message_id`), so every observation of the
+  provider id -- and therefore the item -- has the one canonical key
+  `(mailbox_ref, internet message id)`, whichever lane is primary and whichever
+  lane lacked the id; the identity rules below use that key. Each record's own
+  `identity_state` and `internet_message_id` stay as reported (evidence);
 * **identity conflict** -- one canonical internet-message-id key whose primary
   observations (distinct provider ids) disagree on sender address or body
   digest: every observation of those provider ids -- merged lane siblings and
@@ -112,10 +116,14 @@ def classify_records(
                 quarantine(message, ReasonCode.PROVIDER_ID_CONFLICT)
             continue
         if imid_keys and len({m.identity_state for m in group}) > 1:
+            (lifted,) = (key.value for key in imid_keys)
             group = [
                 replace(
                     m,
                     degraded_reasons=(*m.degraded_reasons, ReasonCode.LANE_IDENTITY_INCONSISTENT),
+                    lifted_internet_message_id=(
+                        None if m.identity_state is IdentityState.PROVIDER_RETURNED else lifted
+                    ),
                 )
                 for m in group
             ]

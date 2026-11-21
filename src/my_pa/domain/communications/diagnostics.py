@@ -117,6 +117,7 @@ class DiagnosticCode(StrEnum):
     UNKNOWN_RECORD_KEYS = "unknown_record_keys"
     WINDOW_HOURS_MISMATCH = "window_hours_mismatch"
     WINDOW_FIELD_INVALID = "window_field_invalid"
+    WINDOW_BOUND_FLOORED = "window_bound_floored"
     DST_FLAG_DISAGREEMENT = "dst_flag_disagreement"
     TZ_UNRESOLVABLE = "tz_unresolvable"
     COVERAGE_INVALID = "coverage_invalid"

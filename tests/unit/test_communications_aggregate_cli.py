@@ -8,7 +8,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 
@@ -224,6 +224,99 @@ def test_an_unexpected_parser_error_is_a_content_free_rejection(
     assert document["files"][1]["records"]["total"] > 0
     assert document["summary"]["accepted"] == 1
     assert document["summary"]["rejected"] == 1
+    output = (captured.out + captured.err).lower()
+    for canary in CANARIES:
+        assert canary.lower() not in output, canary
+    assert "runtimeerror" not in output
+
+
+def _window_file(tmp_path: Path, name: str, business_date: str, start: str, end: str) -> Path:
+    document = s.lean_publication()
+    document["business_date"] = business_date
+    document["window"]["start_utc"], document["window"]["end_utc"] = start, end
+    return write(tmp_path, name, s.encode(document))
+
+
+def test_sub_second_window_bounds_never_invert_a_coverage_gap(tmp_path: Path) -> None:
+    # R2's N2 CLI probe: the gap printed as 05:00:00Z .. 04:59:59.500000Z.
+    fa = _window_file(
+        tmp_path, "fa.json", "2026-11-18", "2026-11-17T05:00:00.000Z", "2026-11-18T04:59:59.000Z"
+    )
+    fb = _window_file(
+        tmp_path, "fb.json", "2026-11-19", "2026-11-18T05:00:00.500Z", "2026-11-19T04:59:59Z"
+    )
+    fc = _window_file(
+        tmp_path, "fc.json", "2026-11-20", "2026-11-19T05:00:01.500Z", "2026-11-20T04:59:59Z"
+    )
+    document, _ = summarize_files([fa, fb, fc])
+    files: Any = document["files"]
+    assert files[1]["window"]["start_utc"] == "2026-11-18T05:00:00Z"
+    assert files[1]["diagnostics"]["code_counts"]["window_bound_floored"] == 1
+    assert "window_bound_floored" not in files[0]["diagnostics"]["code_counts"]
+    coverage: Any = document["summary"]
+    assert coverage["coverage"]["intervals"] == [
+        {"start_utc": "2026-11-17T05:00:00Z", "end_utc": "2026-11-19T04:59:59Z"},
+        {"start_utc": "2026-11-19T05:00:01Z", "end_utc": "2026-11-20T04:59:59Z"},
+    ]
+    assert coverage["coverage"]["gaps"] == [
+        {"start_utc": "2026-11-19T05:00:00Z", "end_utc": "2026-11-19T05:00:00Z", "seconds": 1}
+    ]
+
+
+def test_an_unexpected_reporting_error_is_content_free_and_spares_the_other_files(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # R2's residual: `_file_report` (search text, identifiers) ran outside the guard.
+    from my_pa.infrastructure.communications import aggregate_cli
+
+    real = aggregate_cli._file_report
+
+    def explode_on_poison(
+        name: str, data: bytes | None, parsed: PublicationParse | None
+    ) -> dict[str, object]:
+        if name == "poison.json":
+            raise RuntimeError("CANARY-BODY CANARY-SUBJECT-xyz")
+        return real(name, data, parsed)
+
+    monkeypatch.setattr(aggregate_cli, "_file_report", explode_on_poison)
+    poison = write(tmp_path, "poison.json", s.encode(canary_publication()))
+    good = s.HERE / "rich_publication.json"
+    assert main([str(good), str(poison), str(s.HERE / "lean_publication.json")]) == 1
+    captured = capsys.readouterr()
+    document = json.loads(captured.out)
+    assert document["files"][1] == {
+        "file": "poison.json",
+        "status": "rejected",
+        "rejection": "internal_error",
+    }
+    assert [f["status"] for f in document["files"]] == ["accepted", "rejected", "accepted"]
+    assert document["summary"]["accepted"] == 2
+    assert document["summary"]["rejected"] == 1
+    output = (captured.out + captured.err).lower()
+    for canary in CANARIES:
+        assert canary.lower() not in output, canary
+    assert "runtimeerror" not in output
+
+
+def test_an_unexpected_summary_error_is_content_free_and_keeps_the_file_reports(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from my_pa.infrastructure.communications import aggregate_cli
+
+    def explode(_: object) -> NoReturn:
+        raise RuntimeError("CANARY-BODY CANARY-SUBJECT-xyz")
+
+    monkeypatch.setattr(aggregate_cli, "summarize_corpus", explode)
+    assert main([str(s.HERE / "rich_publication.json")]) == 1
+    captured = capsys.readouterr()
+    document = json.loads(captured.out)
+    assert document["files"][0]["status"] == "accepted"
+    assert document["files"][0]["records"]["total"] > 0
+    assert document["summary"] == {
+        "files": 1,
+        "status": "rejected",
+        "rejection": "internal_error",
+    }
     output = (captured.out + captured.err).lower()
     for canary in CANARIES:
         assert canary.lower() not in output, canary

@@ -19,7 +19,8 @@ Publication validation, in order (the first failure decides):
    mailbox_ref, messages` (`id_header`, `cycle_run_id` optional);
 5. `business_date` an ISO date, `mailbox_ref` a non-empty string, `messages` a
    list, `coverage` an object; `window.start_utc`/`end_utc` aware ISO-8601
-   timestamps with `end >= start` (`invalid_window`).
+   timestamps with `end >= start` (`invalid_window`); a sub-second bound is
+   floored to its whole second (`window_bound_floored`, a diagnostic).
 
 Dialect: `lean` carries the canonical keys only; `rich` adds `candidates,
 counts, provenance, threads, transport` (and per-message privacy screen,
@@ -428,6 +429,15 @@ def _window(raw: object, d: DiagnosticCollector) -> Window:
         raise _reject(d, PublicationRejection.INVALID_WINDOW, "window.end_utc")
     if end < start:
         raise _reject(d, PublicationRejection.INVALID_WINDOW, "window.end_utc")
+    # Window bounds are whole seconds (`WINDOW_RESOLUTION`): a sub-second bound
+    # is floored to its second and reported, so coverage intervals and gaps are
+    # whole-second spans by construction. Flooring keeps `end >= start`.
+    if start.microsecond:
+        start = start.replace(microsecond=0)
+        d.add(DiagnosticCode.WINDOW_BOUND_FLOORED, "window.start_utc")
+    if end.microsecond:
+        end = end.replace(microsecond=0)
+        d.add(DiagnosticCode.WINDOW_BOUND_FLOORED, "window.end_utc")
 
     hours_raw = window.get("hours")
     declared_hours: float | None = None

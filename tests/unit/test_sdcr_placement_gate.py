@@ -101,7 +101,9 @@ def test_write_existing_artifact_is_immutable() -> None:
 
 
 def test_control_plane_content_rejected_from_raw_client() -> None:
-    with pytest.raises(PlacementDeniedError, match="TRUSTED_CONTROL_REQUIRES_OPERATOR_PROVISIONING"):
+    with pytest.raises(
+        PlacementDeniedError, match="TRUSTED_CONTROL_REQUIRES_OPERATOR_PROVISIONING"
+    ):
         gate().admit_create(
             "SDCR/00-Control/12_DIRECTORY_PLACEMENT_POLICY.json", is_directory=False
         )

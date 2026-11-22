@@ -520,6 +520,22 @@ class SafeDetail(StrEnum):
     #: or detach a provider-bound Meeting's series. Names the refusal, never the
     #: binding.
     MEETING_SERIES_CHANGE_REFUSED_PROVIDER_BOUND = "meeting_series_change_refused_provider_bound"
+    #: Communications intelligence WP2-W3 (`meetings.provider.bind`, ruling
+    #: D10): the provider key's fields, then the closed bind/unbind refusals.
+    #: Each names a field or a rule, never a key value, a binding or the other
+    #: Meeting a key is bound to. `ACTION` is reused.
+    CALENDAR_REF = "calendar_ref"
+    ICAL_UID = "ical_uid"
+    OCCURRENCE_ORIGINAL_START_UTC = "occurrence_original_start_utc"
+    SERIES_ICAL_UID = "series_ical_uid"
+    PROVIDER_EVENT_ID = "provider_event_id"
+    PROVIDER_EVENT_ID_FORMAT = "provider_event_id_format"
+    MEETING_ALREADY_PROVIDER_BOUND = "meeting_already_provider_bound"
+    MEETING_NOT_PROVIDER_BOUND = "meeting_not_provider_bound"
+    PROVIDER_KEY_BOUND_TO_ANOTHER_MEETING = "provider_key_bound_to_another_meeting"
+    PROVIDER_BINDING_KIND_CONFLICT = "provider_binding_kind_conflict"
+    PROVIDER_BINDING_REQUIRES_SERIES = "provider_binding_requires_series"
+    PROVIDER_SERIES_BINDING_CONFLICT = "provider_series_binding_conflict"
     #: The Record Event feed (WP-RE-06): the requested family narrowing was
     #: empty, named an unknown family or repeated one. `CURSOR` and `PAGE_SIZE`
     #: are reused for the feed's other two fields.

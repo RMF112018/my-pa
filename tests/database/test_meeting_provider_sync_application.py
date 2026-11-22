@@ -5,7 +5,8 @@ The `database` tier. Every case drives `MeetingProviderSync` (and, for D6,
 current-head database:
 
 * a known occurrence updates its Meeting through the CAS with a `system` receipt
-  and a `meetings.provider.sync` Record Event;
+  and a `system.meeting_provider.sync` Record Event, its key in that one
+  internal namespace (WP2-W3), so a client key never collides with it;
 * a new occurrence joins a known series; an unknown series is created and bound
   in the same transaction as its first occurrence;
 * a moved occurrence keeps its identity by original start;
@@ -41,6 +42,7 @@ from my_pa.application.meetings import MeetingApplication
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.meeting.model import (
+    MEETING_PROVIDER_SYNC_NAME,
     MeetingCreateRequest,
     MeetingErrorField,
     MeetingInvalidRequestError,
@@ -48,7 +50,7 @@ from my_pa.domain.meeting.model import (
     MeetingUpdateRequest,
 )
 from my_pa.domain.meeting_sync.model import MeetingSyncEvent, ProviderBindingState
-from my_pa.domain.meeting_sync.resolution import ResolutionDiagnostic
+from my_pa.domain.meeting_sync.resolution import ResolutionDiagnostic, sync_idempotency_key
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.meeting_sync.parser import parse_publication
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
@@ -57,6 +59,7 @@ from my_pa.infrastructure.persistence.tables import (
     meeting_provider_bindings,
     meeting_series,
     meeting_series_provider_bindings,
+    meeting_write_requests,
     meetings,
     record_events,
 )
@@ -274,6 +277,47 @@ def test_a_replay_of_an_older_record_does_not_rewind(harness: Harness, principal
     replay = harness.apply(principal, _event(title="Second"), sha=SHA_B)
     assert replay.kind is SyncOutcomeKind.REPLAYED
     assert _meeting(harness, created.meeting_id)["title"] == "Third"
+
+
+def test_a_replay_of_the_creating_record_after_an_update_does_not_rewind(
+    harness: Harness, principal: str
+) -> None:
+    """WP2-W3 carry-over (2): one sync namespace for a create and an update.
+
+    Under per-capability namespaces the creating record's key sat in the create
+    space, so re-applying it after a later update found no key in the update
+    space and rewound the Meeting to the older record.
+    """
+    created = harness.apply(principal, _event())
+    harness.apply(principal, _event(title="Second"), sha=SHA_B)
+    replay = harness.apply(principal, _event())
+    assert replay.kind is SyncOutcomeKind.REPLAYED
+    meeting = _meeting(harness, created.meeting_id)
+    assert (meeting["title"], meeting["version"]) == ("Second", 2)
+    requests = harness.rows(meeting_write_requests, principal_id=principal)
+    assert {row["capability"] for row in requests} == {MEETING_PROVIDER_SYNC_NAME}
+    assert len(requests) == 2
+
+
+def test_a_client_key_never_collides_with_a_sync_key(harness: Harness, principal: str) -> None:
+    """A client `meetings.update` under the very key a sync record will use."""
+    created = harness.apply(principal, _event())
+    key = sync_idempotency_key(_event().key, source_sha256=SHA_B, record_ordinal=0)
+    harness.run(
+        lambda uow: APP.update_meeting(
+            uow,
+            principal,
+            MeetingUpdateRequest(meeting_id=created.meeting_id, title="Mine"),
+            1,
+            key,
+            LATER,
+        )
+    )
+    # The sync record with that key still applies: the client row is in the
+    # `meetings.update` space and neither replays nor suppresses it.
+    applied = harness.apply(principal, _event(title="Provider"), sha=SHA_B, now=LATER)
+    assert applied.kind is SyncOutcomeKind.UPDATED
+    assert _meeting(harness, created.meeting_id)["title"] == "Provider"
 
 
 def test_principals_are_isolated(harness: Harness, principal: str) -> None:

@@ -67,6 +67,13 @@ from my_pa.domain.meeting.model import (
     validate_timezone_name,
     validate_virtual_meeting_url,
 )
+from my_pa.domain.meeting_sync.model import (
+    MAX_CALENDAR_REF_CHARACTERS,
+    MAX_ICAL_UID_CHARACTERS,
+    MAX_PROVIDER_EVENT_ID_CHARACTERS,
+    ProviderBindingState,
+    ProviderEventIdFormat,
+)
 
 __all__ = [
     "MeetingAttachmentView",
@@ -77,6 +84,7 @@ __all__ = [
     "MeetingNoteVersionView",
     "MeetingNoteView",
     "MeetingPrepView",
+    "MeetingProviderBindingView",
     "MeetingSeriesHistoryView",
     "MeetingSeriesView",
     "MeetingView",
@@ -460,3 +468,47 @@ class MeetingNoteVersionView(StrictModel):
         if self.body_markdown is None:
             del dumped["body_markdown"]
         return dumped
+
+
+class MeetingProviderBindingView(StrictModel):
+    """One Meeting's provider binding (communications intelligence WP2-W3).
+
+    What `meetings.provider.bind` answers. The provider key the caller named --
+    `calendar_ref`, `ical_uid` and, for an occurrence, `series_ical_uid` and
+    `occurrence_original_start_utc` (the original start, never the current one)
+    -- plus the mutable attributes: the provider event id and its format, the
+    last observed provider state and when the provider last showed it. No
+    Principal, no publication digest, no Meeting content. Additive and separate:
+    `MeetingView` and `meetings.read` are unchanged (Manager ruling D11).
+    """
+
+    binding_id: str
+    meeting_id: str
+    calendar_ref: str = Field(min_length=1, max_length=MAX_CALENDAR_REF_CHARACTERS)
+    ical_uid: str = Field(min_length=1, max_length=MAX_ICAL_UID_CHARACTERS)
+    occurrence_original_start_utc: UtcDatetime | None = None
+    series_ical_uid: str | None = Field(
+        default=None, min_length=1, max_length=MAX_ICAL_UID_CHARACTERS
+    )
+    meeting_series_id: str | None = None
+    provider_event_id: str | None = Field(
+        default=None, min_length=1, max_length=MAX_PROVIDER_EVENT_ID_CHARACTERS
+    )
+    provider_event_id_format: ProviderEventIdFormat
+    provider_state: ProviderBindingState
+    last_seen_at: UtcDatetime | None = None
+    version: int = _Version
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
+
+    @model_validator(mode="after")
+    def _check(self) -> MeetingProviderBindingView:
+        validate_identifier(self.binding_id, IdKind.MEETING_PROVIDER_BINDING)
+        validate_identifier(self.meeting_id, IdKind.MEETING)
+        if (self.series_ical_uid is None) != (self.occurrence_original_start_utc is None):
+            raise ValueError("an occurrence names its series and original start; a single neither")
+        if self.series_ical_uid is not None and self.meeting_series_id is None:
+            raise ValueError("an occurrence binding names the series its UID is bound to")
+        if self.meeting_series_id is not None:
+            validate_identifier(self.meeting_series_id, IdKind.MEETING_SERIES)
+        return self

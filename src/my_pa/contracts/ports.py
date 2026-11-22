@@ -11548,6 +11548,24 @@ class MeetingRepository(ABC):
         """The one binding of this Meeting (D9), or `None`. Nonlocking."""
 
     @abstractmethod
+    def read_series_provider_binding_for_series(
+        self, principal_id: str, meeting_series_id: str
+    ) -> MeetingSeriesProviderBindingRecord | None:
+        """The series binding of this MeetingSeries, or `None`. Nonlocking.
+
+        `meetings.provider.bind` reads it under the Meeting lock to refuse
+        binding an occurrence whose series is bound to a different provider UID.
+        """
+
+    @abstractmethod
+    def delete_provider_binding(self, principal_id: str, binding_id: str) -> None:
+        """Delete one Meeting's binding (the `meetings.provider.bind` unbind).
+
+        Series bindings are append-only and never deleted. Raises
+        `RepositoryFailureError` when the row is not in this partition.
+        """
+
+    @abstractmethod
     def insert_series_provider_binding(
         self, principal_id: str, binding: MeetingSeriesProviderBindingRecord
     ) -> None:

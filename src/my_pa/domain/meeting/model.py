@@ -107,6 +107,7 @@ __all__ = [
     "validate_aware_instant",
     "validate_cancellation_pairing",
     "validate_meeting_description",
+    "validate_meeting_id",
     "validate_meeting_location_text",
     "validate_meeting_notes_markdown",
     "validate_meeting_prep_markdown",
@@ -287,7 +288,23 @@ class MeetingErrorField(StrEnum):
     # Communications intelligence WP2 (Manager ruling D6): a series move or
     # detach of a provider-bound Meeting is refused; the binding owns it.
     MEETING_SERIES_CHANGE_REFUSED_PROVIDER_BOUND = "meeting_series_change_refused_provider_bound"
+    # Communications intelligence WP2-W3 (`meetings.provider.bind`, ruling D10):
+    # the provider key's fields, then the closed bind/unbind refusals. Each names
+    # a field or a rule, never a key value or the binding it collided with.
+    CALENDAR_REF = "calendar_ref"
+    ICAL_UID = "ical_uid"
+    OCCURRENCE_ORIGINAL_START_UTC = "occurrence_original_start_utc"
+    SERIES_ICAL_UID = "series_ical_uid"
+    PROVIDER_EVENT_ID = "provider_event_id"
+    PROVIDER_EVENT_ID_FORMAT = "provider_event_id_format"
+    MEETING_ALREADY_PROVIDER_BOUND = "meeting_already_provider_bound"
+    MEETING_NOT_PROVIDER_BOUND = "meeting_not_provider_bound"
+    PROVIDER_KEY_BOUND_TO_ANOTHER_MEETING = "provider_key_bound_to_another_meeting"
+    PROVIDER_BINDING_KIND_CONFLICT = "provider_binding_kind_conflict"
+    PROVIDER_BINDING_REQUIRES_SERIES = "provider_binding_requires_series"
+    PROVIDER_SERIES_BINDING_CONFLICT = "provider_series_binding_conflict"
     # Existing `SafeDetail` members, reused.
+    ACTION = "action"
     TITLE = "title"
     STATUS = "status"
     DOCUMENT_ID = "document_id"
@@ -384,6 +401,15 @@ def _identifier(value: object, kind: IdKind, token: MeetingErrorField) -> str:
 
 def _optional_identifier(value: object, kind: IdKind, token: MeetingErrorField) -> str | None:
     return None if value is None else _identifier(value, kind, token)
+
+
+def validate_meeting_id(value: object) -> str:
+    """A Meeting identifier (`mtg_`), or a refusal naming `meeting_id` only.
+
+    Public for the provider-binding request (`domain.meeting_sync.binding`),
+    which may import the Meeting domain and not the identifier registry.
+    """
+    return _identifier(value, IdKind.MEETING, MeetingErrorField.MEETING_ID)
 
 
 def validate_meeting_title(

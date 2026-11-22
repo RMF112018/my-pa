@@ -22,17 +22,22 @@ carries out the decision:
   a content-free diagnostic, and nothing is written.
 
 **Writes are the system's** (ruling D12): every Meeting write records actor
-`system` and the source capability `meetings.provider.sync`. This is a direct
+`system` and the source token `system.meeting_provider.sync`
+(`MEETING_PROVIDER_SYNC_NAME`; under `system.`, the internal-token precedent of
+`system.entity_reenrichment.rebind`, so no reader can take it for a
+`Capability` beside the real `meetings.provider.bind`). This is a direct
 call: no `ApplicationService.invoke`, no grant check and no audit row (WP3
 decides the audit routing).
 
 **Idempotency.** Each applied record has one deterministic key
 (`sync_idempotency_key`: the binding key, the publication SHA-256 and the record
-ordinal), reserved in `meeting_write_requests` under the existing
-`meetings.create`/`meetings.update` capability namespace (the table's frozen
-capability CHECK admits no other name). Re-applying a record already applied,
-or an identical event from any publication, writes no Meeting change and bumps
-no version.
+ordinal), reserved in `meeting_write_requests` under the one internal namespace
+`system.meeting_provider.sync` (WP2-W3), for a create and an update alike. So a
+client's own `meetings.create`/`meetings.update` key can never collide with,
+replay or suppress a sync write, and a record applied once -- as a create or as
+an update -- is recognised as applied whichever path a re-application would
+take. Re-applying a record already applied, or an identical event from any
+publication, writes no Meeting change and bumps no version.
 """
 
 from __future__ import annotations
@@ -53,7 +58,7 @@ from my_pa.contracts.ports import (
 from my_pa.contracts.v1.meetings import MeetingView
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import ensure_utc
-from my_pa.domain.meeting.model import MEETINGS_UPDATE_NAME, MeetingActor
+from my_pa.domain.meeting.model import MEETING_PROVIDER_SYNC_NAME, MeetingActor
 from my_pa.domain.meeting_sync.model import MeetingSyncEvent
 from my_pa.domain.meeting_sync.resolution import (
     BindingAttributes,
@@ -76,9 +81,10 @@ __all__ = [
     "SyncOutcomeKind",
 ]
 
-#: The Record Event `source_capability` of every sync write (ruling D12). Not a
-#: `Capability` member: no client can invoke it.
-MEETINGS_PROVIDER_SYNC_SOURCE: Final = "meetings.provider.sync"
+#: The Record Event `source_capability` of every sync write (ruling D12) and the
+#: `meeting_write_requests` namespace of its key. Not a `Capability` member: no
+#: client can invoke it, and `Capability(...)` of it raises.
+MEETINGS_PROVIDER_SYNC_SOURCE: Final = MEETING_PROVIDER_SYNC_NAME
 
 _SHA256: Final = re.compile(r"[0-9a-f]{64}")
 
@@ -214,7 +220,7 @@ class MeetingProviderSync:
             # The binding already records this exact observation.
             return replayed
         if (
-            repository.read_write_request(principal_id, MEETINGS_UPDATE_NAME, idempotency_key)
+            repository.read_write_request(principal_id, MEETING_PROVIDER_SYNC_NAME, idempotency_key)
             is not None
         ):
             # This record was applied before and a later one has been seen
@@ -236,6 +242,7 @@ class MeetingProviderSync:
                 at,
                 source_capability=MEETINGS_PROVIDER_SYNC_SOURCE,
                 actor=MeetingActor.SYSTEM,
+                request_capability=MEETING_PROVIDER_SYNC_NAME,
             )
         attributes, material = refreshed
         repository.update_provider_binding(
@@ -274,6 +281,16 @@ class MeetingProviderSync:
     ) -> MeetingSyncOutcome:
         """Rules 2, 3 and the standalone case: the Meeting and its bindings (D7)."""
         repository = uow.meetings
+        prior = repository.read_write_request(
+            principal_id, MEETING_PROVIDER_SYNC_NAME, idempotency_key
+        )
+        if prior is not None:
+            # This record was applied before -- as a create or as an update --
+            # and its Meeting's binding has since been removed (the unbind):
+            # never re-create or rebind from it implicitly.
+            return MeetingSyncOutcome(
+                event.ordinal, SyncOutcomeKind.REPLAYED, meeting_id=prior.meeting_id
+            )
         new_series = kind is ResolutionKind.CREATE_SERIES
         result = self.meetings.create_meeting(
             uow,
@@ -283,6 +300,7 @@ class MeetingProviderSync:
             at,
             source_capability=MEETINGS_PROVIDER_SYNC_SOURCE,
             actor=MeetingActor.SYSTEM,
+            request_capability=MEETING_PROVIDER_SYNC_NAME,
         )
         if result.replayed:
             # This record created a Meeting before whose binding has since been

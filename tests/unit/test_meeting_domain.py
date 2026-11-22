@@ -41,8 +41,11 @@ from my_pa.domain.meeting import (
     MAX_MEETING_TITLE_CHARACTERS,
     MAX_TIMEZONE_NAME_CHARACTERS,
     MAX_VIRTUAL_MEETING_URL_CHARACTERS,
+    MEETING_PROVIDER_SYNC_NAME,
     MEETING_WRITE_CAPABILITY_NAMES,
+    MEETING_WRITE_REQUEST_NAMES,
     MEETINGS_CREATE_NAME,
+    MEETINGS_PROVIDER_BIND_NAME,
     MEETINGS_SERIES_UPDATE_NAME,
     MEETINGS_UPDATE_NAME,
     MIN_MEETING_IDEMPOTENCY_KEY_CHARACTERS,
@@ -951,10 +954,23 @@ def test_write_capability_names_are_the_frozen_literals() -> None:
     assert MEETINGS_CREATE_NAME == "meetings.create"
     assert MEETINGS_UPDATE_NAME == "meetings.update"
     assert MEETINGS_SERIES_UPDATE_NAME == "meetings.series.update"
+    assert MEETINGS_PROVIDER_BIND_NAME == "meetings.provider.bind"
     assert (
-        frozenset({"meetings.create", "meetings.update", "meetings.series.update"})
+        frozenset(
+            {
+                "meetings.create",
+                "meetings.update",
+                "meetings.series.update",
+                "meetings.provider.bind",
+            }
+        )
         == MEETING_WRITE_CAPABILITY_NAMES
     )
+    # The internal sync namespace is a write-request name, never a capability.
+    assert MEETING_PROVIDER_SYNC_NAME == "system.meeting_provider.sync"
+    assert MEETING_WRITE_REQUEST_NAMES == MEETING_WRITE_CAPABILITY_NAMES | {
+        MEETING_PROVIDER_SYNC_NAME
+    }
 
 
 # ------------------------------------------------------------------ error family
@@ -1018,8 +1034,25 @@ def test_error_tokens_are_safe_detail_values() -> None:
     adr_020 = {"prep"}
     # Communications intelligence WP2 ruling D6 adds one, with its twin.
     wp2 = {"meeting_series_change_refused_provider_bound"}
+    # WP2-W3 `meetings.provider.bind`: the key's six fields and six refusals,
+    # each with its twin, plus the existing `action`.
+    wp2_bind = {
+        "action",
+        "calendar_ref",
+        "ical_uid",
+        "occurrence_original_start_utc",
+        "series_ical_uid",
+        "provider_event_id",
+        "provider_event_id_format",
+        "meeting_already_provider_bound",
+        "meeting_not_provider_bound",
+        "provider_key_bound_to_another_meeting",
+        "provider_binding_kind_conflict",
+        "provider_binding_requires_series",
+        "provider_series_binding_conflict",
+    }
     assert {token.value for token in MeetingErrorField} == (
-        section_35_16 | existing_safe_detail | adr_020 | wp2
+        section_35_16 | existing_safe_detail | adr_020 | wp2 | wp2_bind
     )
 
 

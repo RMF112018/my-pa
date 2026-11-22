@@ -9626,6 +9626,18 @@ class _Meetings:
                 return binding
         return None
 
+    def read_series_provider_binding_for_series(
+        self, principal_id: str, meeting_series_id: str
+    ) -> MeetingSeriesProviderBindingRecord | None:
+        for (owner, _), series in self._world.meeting_series_provider_bindings.items():
+            if owner == principal_id and series.meeting_series_id == meeting_series_id:
+                return series
+        return None
+
+    def delete_provider_binding(self, principal_id: str, binding_id: str) -> None:
+        if self._world.meeting_provider_bindings.pop((principal_id, binding_id), None) is None:
+            raise RepositoryFailureError("no provider binding to delete in this partition")
+
     def insert_series_provider_binding(
         self, principal_id: str, binding: MeetingSeriesProviderBindingRecord
     ) -> None:

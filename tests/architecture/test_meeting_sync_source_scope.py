@@ -7,7 +7,9 @@
 * `my_pa.infrastructure.meeting_sync` imports only the standard library, the
   meeting-sync domain and itself -- no database, network or framework;
 * only the named consumers import either package: the application resolution
-  service, the Meeting port and its persistence (the binding vocabularies);
+  service, the Meeting port and its persistence (the binding vocabularies), and
+  the `meetings.provider.bind` path (WP2-W3): its command, the Meeting
+  application that arbitrates it and the binding view it answers with;
 * the communications and meeting-sync slices do not import each other;
 * provider vocabulary stays out of the domain.
 """
@@ -31,8 +33,11 @@ MEETING_DOMAIN_NAME = "my_pa.domain.meeting"
 #: The only modules outside the slice that may import it.
 CONSUMERS = frozenset(
     {
+        "application/commands.py",
         "application/meeting_provider_sync.py",
+        "application/meetings.py",
         "contracts/ports.py",
+        "contracts/v1/meetings.py",
         "infrastructure/persistence/meetings.py",
         "infrastructure/persistence/tables.py",
     }

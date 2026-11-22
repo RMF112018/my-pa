@@ -56,6 +56,7 @@ from sqlalchemy import (
     Table,
     Text,
     and_,
+    delete,
     func,
     insert,
     literal,
@@ -1337,6 +1338,45 @@ class SqlMeetingRepository(MeetingRepository):
             ).where(binding.c.meeting_id == meeting_id)
         ).one_or_none()
         return None if row is None else _to_binding(row)
+
+    def read_series_provider_binding_for_series(
+        self, principal_id: str, meeting_series_id: str
+    ) -> MeetingSeriesProviderBindingRecord | None:
+        series = meeting_series_provider_bindings
+        row = self._connection.execute(
+            principal_scoped(
+                select(
+                    series.c.series_binding_id,
+                    series.c.meeting_series_id,
+                    series.c.calendar_ref,
+                    series.c.series_ical_uid,
+                    series.c.created_at,
+                ),
+                series,
+                capture_context(principal_id),
+            ).where(series.c.meeting_series_id == meeting_series_id)
+        ).one_or_none()
+        if row is None:
+            return None
+        return MeetingSeriesProviderBindingRecord(
+            series_binding_id=row.series_binding_id,
+            meeting_series_id=row.meeting_series_id,
+            calendar_ref=row.calendar_ref,
+            series_ical_uid=row.series_ical_uid,
+            created_at=row.created_at,
+        )
+
+    def delete_provider_binding(self, principal_id: str, binding_id: str) -> None:
+        deleted = self._connection.execute(
+            delete(meeting_provider_bindings)
+            .where(
+                _mine(meeting_provider_bindings, principal_id),
+                meeting_provider_bindings.c.binding_id == binding_id,
+            )
+            .returning(meeting_provider_bindings.c.binding_id)
+        ).first()
+        if deleted is None:
+            raise RepositoryFailureError
 
     def insert_series_provider_binding(
         self, principal_id: str, binding: MeetingSeriesProviderBindingRecord

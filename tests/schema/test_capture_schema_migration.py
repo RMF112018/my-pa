@@ -736,6 +736,8 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         *S63_CAPABILITIES,
         # Files workspace WP4, admitted by its revision ahead of the domain (WP5).
         *FILES_CAPABILITIES,
+        # Communications intelligence WP2-W3, admitted by `6418b57081c3`.
+        "meetings.provider.bind",
     }
 )
 

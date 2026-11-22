@@ -598,7 +598,10 @@ def test_runtime_metadata_matches_the_revision(disposable_database: str, engine:
         head, runtime = _checks(engine), _checks(engine, parity)
         assert (
             set(_literals(head["capability_is_known"]))
-            == set(_literals(runtime["capability_is_known"])) | FILES_CAPABILITIES
+            # Communications intelligence WP2-W3: the runtime declares
+            # `meetings.provider.bind`, which `6418b57081c3` admits after this one.
+            == (set(_literals(runtime["capability_is_known"])) - {"meetings.provider.bind"})
+            | FILES_CAPABILITIES
         )
         assert (
             set(_literals(head["purpose_is_known"]))

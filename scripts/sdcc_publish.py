@@ -475,7 +475,6 @@ def inventory(
     ]
 
 
-
 def _file_stamp(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
     """Detect same-inode rewrites as well as pathname replacement."""
     return (
@@ -499,14 +498,10 @@ def _open_source_fd(root_fd: int, source: Path, local: Path) -> int:
     parent_fd = os.dup(root_fd)
     try:
         for part in parts[:-1]:
-            next_fd = os.open(
-                part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd
-            )
+            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
             os.close(parent_fd)
             parent_fd = next_fd
-        opened = os.open(
-            parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd
-        )
+        opened = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
         info = os.fstat(opened)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             os.close(opened)
@@ -596,12 +591,7 @@ def _sealed_snapshot(source: Path, item: Artifact) -> Iterator[Path]:
             if copied != item.size or _file_stamp(before) != _file_stamp(after):
                 raise PublicationError("source_changed_during_publication")
             snapshot.flush()
-            seals = (
-                fcntl.F_SEAL_WRITE
-                | fcntl.F_SEAL_GROW
-                | fcntl.F_SEAL_SHRINK
-                | fcntl.F_SEAL_SEAL
-            )
+            seals = fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
             try:
                 fcntl.fcntl(snapshot.fileno(), fcntl.F_ADD_SEALS, seals)
                 observed = fcntl.fcntl(snapshot.fileno(), fcntl.F_GET_SEALS)

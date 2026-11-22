@@ -877,6 +877,7 @@ def test_r3_remote_write_preflight_accepts_direct_writable_workspace() -> None:
 
     asyncio.run(publisher._remote_write_preflight(Stub()))
 
+
 @pytest.mark.parametrize("replacement", ["symlink", "new_inode", "in_place"])
 def test_f01_source_substitution_after_inventory_has_zero_unqualified_egress(
     tmp_path: Path, replacement: str
@@ -929,7 +930,7 @@ def test_f01_source_substitution_after_inventory_has_zero_unqualified_egress(
 
 
 def test_f01_in_place_mutation_during_multichunk_transfer_uses_only_sealed_bytes(
-    tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     output = tmp_path / "outputs"
     output.mkdir()
@@ -1045,4 +1046,3 @@ def test_f01_inventory_scanner_race_refuses_before_remote_writes(
         run(store, output, data)
     assert modified
     assert not any("/sessions/" in path for path in store.entries)
-

@@ -54,7 +54,7 @@ from my_pa.contracts.v1.meetings import MeetingView
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.meeting.model import MEETINGS_UPDATE_NAME, MeetingActor
-from my_pa.domain.meeting_sync.model import MeetingSyncEvent, MeetingSyncPublication
+from my_pa.domain.meeting_sync.model import MeetingSyncEvent
 from my_pa.domain.meeting_sync.resolution import (
     BindingAttributes,
     KnownOccurrence,
@@ -130,21 +130,6 @@ class MeetingProviderSync:
     """Resolution rules 1-6 over the caller's unit of work."""
 
     meetings: MeetingApplication = field(default_factory=MeetingApplication)
-
-    def apply_publication(
-        self,
-        uow: UnitOfWork,
-        principal_id: str,
-        publication: MeetingSyncPublication,
-        *,
-        source_sha256: str,
-        now: datetime,
-    ) -> tuple[MeetingSyncOutcome, ...]:
-        """Apply every accepted event in ordinal order; quarantined ones are not seen."""
-        return tuple(
-            self.apply_event(uow, principal_id, event, source_sha256=source_sha256, now=now)
-            for event in sorted(publication.events, key=lambda event: event.ordinal)
-        )
 
     def apply_event(
         self,

@@ -424,6 +424,18 @@ class SqlIngestionRepository(IngestionRepository):
         )
         return tuple(_to_path(row) for row in rows)
 
+    def find_snapshot_path(
+        self, principal_id: str, snapshot_id: str, relative_path: str
+    ) -> IngestSnapshotPathRecord | None:
+        row = self._connection.execute(
+            select(*_PATH_COLUMNS).where(
+                _mine(ingest_snapshot_paths, principal_id),
+                ingest_snapshot_paths.c.snapshot_id == snapshot_id,
+                ingest_snapshot_paths.c.relative_path == relative_path,
+            )
+        ).one_or_none()
+        return None if row is None else _to_path(row)
+
     # --- runs ----------------------------------------------------------------
 
     def insert_run(self, principal_id: str, run: IngestRunRecord) -> None:
@@ -534,3 +546,14 @@ class SqlIngestionRepository(IngestionRepository):
             )
         )
         return tuple(_to_coverage(row) for row in rows)
+
+    def get_coverage_window(
+        self, principal_id: str, snapshot_id: str
+    ) -> IngestCoverageWindowRecord | None:
+        row = self._connection.execute(
+            select(*_COVERAGE_COLUMNS).where(
+                _mine(ingest_coverage_windows, principal_id),
+                ingest_coverage_windows.c.snapshot_id == snapshot_id,
+            )
+        ).one_or_none()
+        return None if row is None else _to_coverage(row)

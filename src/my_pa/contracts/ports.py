@@ -487,8 +487,12 @@ __all__ = [
     "EvidenceUnavailableError",
     "FrameRepository",
     "GeneralReportRepository",
+    "IngestApplied",
     "IngestConsumer",
+    "IngestConsumerHandler",
+    "IngestCoverageDeclaration",
     "IngestCoverageWindowRecord",
+    "IngestPrepared",
     "IngestRunOutcome",
     "IngestRunRecord",
     "IngestRunSnapshotOutcome",
@@ -14350,6 +14354,16 @@ class IngestionRepository(ABC):
         """Every path row of one source, ordered by path, then `first_seen_at`."""
 
     @abstractmethod
+    def find_snapshot_path(
+        self, principal_id: str, snapshot_id: str, relative_path: str
+    ) -> IngestSnapshotPathRecord | None:
+        """The one row of a snapshot at a path, superseded or not, or `None`.
+
+        The path-revert test (WP3a-I2): bytes reappearing at a path where their
+        row was already superseded cannot be recorded again.
+        """
+
+    @abstractmethod
     def insert_run(self, principal_id: str, run: IngestRunRecord) -> None:
         """Start a run (unfinished)."""
 
@@ -14388,6 +14402,97 @@ class IngestionRepository(ABC):
         self, principal_id: str, ingest_source_id: str
     ) -> tuple[IngestCoverageWindowRecord, ...]:
         """Every window of one source, ordered by `start_utc`, then `end_utc`, then id."""
+
+    @abstractmethod
+    def get_coverage_window(
+        self, principal_id: str, snapshot_id: str
+    ) -> IngestCoverageWindowRecord | None:
+        """The window of one ingested snapshot, of whatever source, or `None`.
+
+        A consumer orders snapshots by their declared window (the communications
+        projection rule, contract section 11) through this read.
+        """
+
+
+@dataclass(frozen=True, slots=True)
+class IngestCoverageDeclaration:
+    """The window a prepared snapshot declares, as the lifecycle records it.
+
+    `lane_states` follows `IngestCoverageWindowRecord.lane_states`: closed values
+    and booleans only, never a producer string.
+    """
+
+    start_utc: datetime
+    #: Inclusive (contract section 9).
+    end_utc: datetime
+    coverage_state: str
+    lane_states: tuple[Mapping[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class IngestPrepared:
+    """What a consumer made of one file's bytes, before anything is written.
+
+    `rejection_code` is a closed token when the consumer refuses the file as a
+    whole (then nothing else is meaningful). `window_start` orders accepted
+    snapshots oldest first (contract section 10); `coverage` is the window the
+    lifecycle records for an ingested snapshot, or `None` for a consumer that
+    declares none. `record_counts` are code counts only (a dry run reports
+    them). `payload` is the consumer's own parsed form, opaque to the lifecycle.
+    """
+
+    rejection_code: str | None
+    window_start: datetime | None
+    coverage: IngestCoverageDeclaration | None
+    record_counts: Mapping[str, int]
+    payload: object = field(default=None, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class IngestApplied:
+    """What applying one snapshot wrote: code counts only, never content."""
+
+    record_counts: Mapping[str, int]
+
+
+class IngestConsumerHandler(ABC):
+    """One consumer's reading of a snapshot, injected into the lifecycle (ruling M5).
+
+    The lifecycle (`application.ingestion`) knows files, digests, paths, runs
+    and windows; a handler knows what the bytes mean. `prepare` is pure (no
+    write, no clock); `apply` writes the consumer's rows inside the caller's
+    unit of work, which also holds the snapshot's lifecycle rows, so an
+    exception rolls back that snapshot whole.
+    """
+
+    @property
+    @abstractmethod
+    def consumer(self) -> IngestConsumer:
+        """The consumer this handler serves (one handler per consumer)."""
+
+    @property
+    @abstractmethod
+    def parser_version(self) -> str:
+        """The token recorded on every snapshot this handler finalizes."""
+
+    @property
+    @abstractmethod
+    def max_bytes(self) -> int:
+        """Files larger than this are refused before any byte is read."""
+
+    @abstractmethod
+    def prepare(self, data: bytes) -> IngestPrepared:
+        """Parse and classify one file's bytes; never raises for bad input."""
+
+    @abstractmethod
+    def apply(
+        self,
+        unit: UnitOfWork,
+        principal_id: str,
+        snapshot: IngestSnapshotRecord,
+        prepared: IngestPrepared,
+    ) -> IngestApplied:
+        """Write the consumer's rows for one accepted, pending snapshot."""
 
 
 @dataclass(frozen=True, slots=True)

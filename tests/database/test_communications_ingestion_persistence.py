@@ -317,6 +317,12 @@ def test_paths_alias_and_supersede_once(connection: Connection) -> None:
             superseded_by_snapshot_id="isnp_repo0001",
             superseded_at=LATER,
         )
+    # WP3a-I2: a snapshot's row at a path is found superseded or not, and partitioned.
+    assert ingestion.find_snapshot_path(P, "isnp_repo0001", "20261120-comms.json") == replace(
+        first, superseded_by_snapshot_id="isnp_repo0002", superseded_at=LATER
+    )
+    assert ingestion.find_snapshot_path(P, "isnp_repo0002", "copy/20261120-comms.json") is None
+    assert ingestion.find_snapshot_path(OTHER, "isnp_repo0001", "20261120-comms.json") is None
 
 
 def test_a_run_links_snapshots_and_finishes_once(connection: Connection) -> None:
@@ -416,6 +422,10 @@ def test_a_coverage_window_round_trips_its_lane_states(connection: Connection) -
     ingestion.insert_coverage_window(P, earlier)
     assert ingestion.list_coverage_windows(P, SOURCE.ingest_source_id) == (earlier, later)
     assert ingestion.list_coverage_windows(OTHER, SOURCE.ingest_source_id) == ()
+    # WP3a-I2: one snapshot's window, by snapshot id, partitioned.
+    assert ingestion.get_coverage_window(P, "isnp_repo0002") == later
+    assert ingestion.get_coverage_window(OTHER, "isnp_repo0002") is None
+    assert ingestion.get_coverage_window(P, "isnp_absent0001") is None
 
 
 # ---- communications -------------------------------------------------------------------

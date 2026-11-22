@@ -1080,4 +1080,3 @@ def test_f01_oversized_manifest_and_artifacts_both_use_sealed_transfer(
     assert len(store.sealed_targets) == count + 1
     assert result["manifest_path"] in store.sealed_targets
     assert payload(store, result["receipt_path"])["disposition"] == "READY_FOR_HANDOFF"
-

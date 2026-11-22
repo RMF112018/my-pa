@@ -1,0 +1,312 @@
+{
+ "business_date": "2026-11-20",
+ "coverage": {
+  "overall": "complete",
+  "sources": [
+   {
+    "authorized": true,
+    "coverage": "complete",
+    "errors": [],
+    "hydrated_ok": 2,
+    "hydration_failed": 0,
+    "key": "inbox",
+    "lane": "mail",
+    "pages": [
+     {
+      "status": "ok"
+     }
+    ],
+    "raw_messages": 2,
+    "role": "inbox",
+    "warnings": []
+   },
+   {
+    "authorized": true,
+    "coverage": "complete",
+    "errors": [],
+    "hydrated_ok": 0,
+    "hydration_failed": 0,
+    "key": "sent",
+    "lane": "mail",
+    "pages": [
+     {
+      "status": "ok"
+     }
+    ],
+    "raw_messages": 0,
+    "role": "sent",
+    "warnings": []
+   },
+   {
+    "authorized": false,
+    "coverage": "not_authorized",
+    "errors": [],
+    "hydrated_ok": null,
+    "hydration_failed": null,
+    "key": "procore_rfis",
+    "lane": "procore",
+    "pages": [],
+    "raw_messages": 0,
+    "role": "other",
+    "warnings": []
+   }
+  ],
+  "warnings": []
+ },
+ "cycle_run_id": null,
+ "id_header": {
+  "applied_evidence": "none",
+  "requested": false
+ },
+ "mailbox_ref": "synthetic_mailbox",
+ "messages": [
+  {
+   "attachments_note": "attachments not collected",
+   "bcc": {
+    "state": "not_exposed",
+    "value": []
+   },
+   "body": {
+    "body_basis": "graph_full_body",
+    "body_completeness": "graph_full_body",
+    "body_origin": "hydration",
+    "content": "<p>Synthetic body.</p>",
+    "content_type": "html",
+    "hash_scope": "SHA-256 over the UTF-8 bytes of body.content exactly as stored",
+    "sha256": "4f35a3c815c061246b3c0caf99b9004459d5bb00015e035099c22db8f1efd338",
+    "utf8_bytes": 22
+   },
+   "body_derived_plain_text": {
+    "derivation": "html_to_text_v1",
+    "derived": true,
+    "text": ""
+   },
+   "cc": {
+    "state": "provider_returned",
+    "value": []
+   },
+   "conversation_id": "SYNTHETIC-CONVERSATION-0200",
+   "conversation_id_state": "provider_returned",
+   "dedup_key": "synthetic_mailbox|SYNTHETIC-PROVIDER-ID-0200",
+   "duplicate_observations": 1,
+   "from": {
+    "state": "provider_returned",
+    "value": {
+     "address": "alpha@example.invalid",
+     "address_kind": "smtp",
+     "address_normalized": "alpha@example.invalid",
+     "display_name": "Synthetic Person",
+     "raw": {
+      "emailAddress": {
+       "address": "alpha@example.invalid",
+       "name": "Synthetic Person"
+      }
+     },
+     "trust": "provider_returned"
+    }
+   },
+   "from_sender_differ": false,
+   "has_attachments": false,
+   "id": "SYNTHETIC-PROVIDER-ID-0200",
+   "id_format": "graph_default_mutable",
+   "id_header": {
+    "applied_evidence": "none",
+    "requested": false
+   },
+   "importance": "normal",
+   "internet_message_id": "<synthetic-0200@example.invalid>",
+   "internet_message_id_state": "provider_returned",
+   "is_read": true,
+   "mailbox_ref": "synthetic_mailbox",
+   "message_id": "SYNTHETIC-PROVIDER-ID-0200",
+   "reply_to": {
+    "state": "provider_returned",
+    "value": []
+   },
+   "sender": {
+    "state": "provider_returned",
+    "value": {
+     "address": "alpha@example.invalid",
+     "address_kind": "smtp",
+     "address_normalized": "alpha@example.invalid",
+     "display_name": "Synthetic Person",
+     "raw": {
+      "emailAddress": {
+       "address": "alpha@example.invalid",
+       "name": "Synthetic Person"
+      }
+     },
+     "trust": "provider_returned"
+    }
+   },
+   "source_folder": {
+    "display": "Inbox",
+    "folder_id": null,
+    "key": "inbox",
+    "parent_folder_id_returned": null,
+    "role": "inbox"
+   },
+   "source_folders_observed": [
+    "inbox"
+   ],
+   "source_lane": "mail",
+   "subject": "Synthetic subject",
+   "timestamps": {
+    "received_raw": "2026-11-19T10:13:00Z",
+    "selected_field": "receivedDateTime",
+    "selected_raw": "2026-11-19T10:13:00Z",
+    "selected_raw_offset": "Z",
+    "selected_utc": "2026-11-19T10:13:00Z",
+    "sent_raw": "2026-11-19T10:13:00Z"
+   },
+   "to": {
+    "state": "provider_returned",
+    "value": [
+     {
+      "address": "bravo@example.invalid",
+      "address_kind": "smtp",
+      "address_normalized": "bravo@example.invalid",
+      "display_name": "Synthetic Person",
+      "raw": {
+       "emailAddress": {
+        "address": "bravo@example.invalid",
+        "name": "Synthetic Person"
+       }
+      },
+      "trust": "provider_returned"
+     }
+    ]
+   }
+  },
+  {
+   "attachments_note": "attachments not collected",
+   "bcc": {
+    "state": "not_exposed",
+    "value": []
+   },
+   "body": {
+    "body_basis": "graph_full_body",
+    "body_completeness": "graph_full_body",
+    "body_origin": "hydration",
+    "content": "<p>Synthetic body.</p>",
+    "content_type": "html",
+    "hash_scope": "SHA-256 over the UTF-8 bytes of body.content exactly as stored",
+    "sha256": "4f35a3c815c061246b3c0caf99b9004459d5bb00015e035099c22db8f1efd338",
+    "utf8_bytes": 22
+   },
+   "body_derived_plain_text": {
+    "derivation": "html_to_text_v1",
+    "derived": true,
+    "text": ""
+   },
+   "cc": {
+    "state": "provider_returned",
+    "value": []
+   },
+   "conversation_id": "SYNTHETIC-CONVERSATION-0201",
+   "conversation_id_state": "provider_returned",
+   "dedup_key": "synthetic_mailbox|SYNTHETIC-PROVIDER-ID-0201",
+   "duplicate_observations": 1,
+   "from": {
+    "state": "provider_returned",
+    "value": {
+     "address": "alpha@example.invalid",
+     "address_kind": "smtp",
+     "address_normalized": "alpha@example.invalid",
+     "display_name": "Synthetic Person",
+     "raw": {
+      "emailAddress": {
+       "address": "alpha@example.invalid",
+       "name": "Synthetic Person"
+      }
+     },
+     "trust": "provider_returned"
+    }
+   },
+   "from_sender_differ": false,
+   "has_attachments": false,
+   "id": "SYNTHETIC-PROVIDER-ID-0201",
+   "id_format": "graph_default_mutable",
+   "id_header": {
+    "applied_evidence": "none",
+    "requested": false
+   },
+   "importance": "normal",
+   "internet_message_id": "<synthetic-0201@example.invalid>",
+   "internet_message_id_state": "provider_returned",
+   "is_read": true,
+   "mailbox_ref": "synthetic_mailbox",
+   "message_id": "SYNTHETIC-PROVIDER-ID-0201",
+   "reply_to": {
+    "state": "provider_returned",
+    "value": []
+   },
+   "sender": {
+    "state": "provider_returned",
+    "value": {
+     "address": "alpha@example.invalid",
+     "address_kind": "smtp",
+     "address_normalized": "alpha@example.invalid",
+     "display_name": "Synthetic Person",
+     "raw": {
+      "emailAddress": {
+       "address": "alpha@example.invalid",
+       "name": "Synthetic Person"
+      }
+     },
+     "trust": "provider_returned"
+    }
+   },
+   "source_folder": {
+    "display": "Inbox",
+    "folder_id": null,
+    "key": "inbox",
+    "parent_folder_id_returned": null,
+    "role": "inbox"
+   },
+   "source_folders_observed": [
+    "inbox"
+   ],
+   "source_lane": "mail",
+   "subject": "Synthetic subject",
+   "timestamps": {
+    "received_raw": "2026-11-20T14:12:05Z",
+    "selected_field": "receivedDateTime",
+    "selected_raw": "2026-11-20T14:12:05Z",
+    "selected_raw_offset": "Z",
+    "selected_utc": "2026-11-20T14:12:05Z",
+    "sent_raw": "2026-11-20T14:12:05Z"
+   },
+   "to": {
+    "state": "provider_returned",
+    "value": [
+     {
+      "address": "bravo@example.invalid",
+      "address_kind": "smtp",
+      "address_normalized": "bravo@example.invalid",
+      "display_name": "Synthetic Person",
+      "raw": {
+       "emailAddress": {
+        "address": "bravo@example.invalid",
+        "name": "Synthetic Person"
+       }
+      },
+      "trust": "provider_returned"
+     }
+    ]
+   }
+  }
+ ],
+ "schema": "communications_evidence_v2",
+ "schema_version": "2.0.0",
+ "window": {
+  "backfill": false,
+  "dst_offset_changes_in_window": false,
+  "end_utc": "2026-11-20T14:12:05Z",
+  "hours": 24,
+  "rule": "friday_prior_24h",
+  "semantics": "synthetic",
+  "start_utc": "2026-11-19T05:00:00Z",
+  "tz": "America/New_York"
+ }
+}

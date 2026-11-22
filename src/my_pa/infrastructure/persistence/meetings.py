@@ -21,7 +21,10 @@ There is no hand-written partition comparison, and the Principal is only ever a
 parameter: nothing here reads it back from a row or a record.
 
 **Lock order is the package section 35.10 order, and it is structural.** The
-only row locks this module takes are the Meeting or MeetingSeries parent `FOR
+only row locks this module takes are, first, a Meeting provider binding row `FOR
+UPDATE` when the write is a provider bind, unbind or sync (communications
+intelligence WP2: binding before Meeting, the one order every provider path
+uses), then the Meeting or MeetingSeries parent `FOR
 UPDATE` and the attendee Person Entities `FOR SHARE`, the latter sorted by
 `entity_id` in SQL so two writers naming the same Entities lock them in the same
 order. Children are read under the parent lock without locks of their own, and

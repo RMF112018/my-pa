@@ -117,6 +117,7 @@ from my_pa.application.commands import (
     BeginIntelligenceCycle,
     BeginReportTransfer,
     BindEntityIdentifier,
+    BindMeetingProvider,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CheckpointKnowledgeDiscovery,
@@ -1718,6 +1719,15 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "idempotency_key": "http-meetings-series-update-0001",
             "title": "A synthetic meeting series, retitled",
         },
+        # WP2-W3: a single-meeting provider bind of the staged Meeting.
+        Capability.MEETINGS_PROVIDER_BIND: {
+            "action": "bind",
+            "meeting_id": scene.meeting_id,
+            "expected_version": 1,
+            "idempotency_key": "http-meetings-provider-bind-0001",
+            "calendar_ref": "cal-synthetic",
+            "ical_uid": "uid-http@example.invalid",
+        },
         Capability.RECORD_EVENTS_LIST: {"page_size": 10},
         Capability.KNOWLEDGE_ASSERTIONS_READ: {"assertion_id": "kasr_httpknowledge000001"},
         Capability.KNOWLEDGE_ASSERTIONS_LIST: {"page_size": 10},
@@ -3060,6 +3070,14 @@ def commands_for(
             expected_version=1,
             idempotency_key="http-meetings-series-update-0001",
             title="A synthetic meeting series, retitled",
+        ),
+        Capability.MEETINGS_PROVIDER_BIND: BindMeetingProvider(
+            action="bind",
+            meeting_id=scene.meeting_id,
+            expected_version=1,
+            idempotency_key="http-meetings-provider-bind-0001",
+            calendar_ref="cal-synthetic",
+            ical_uid="uid-http@example.invalid",
         ),
         Capability.RECORD_EVENTS_LIST: ListRecordEvents(page_size=10),
         Capability.KNOWLEDGE_ASSERTIONS_READ: ReadKnowledgeAssertion(

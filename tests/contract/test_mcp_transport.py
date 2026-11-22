@@ -158,7 +158,7 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
     # `reports.transfer.read_chunk` is listed. Schedule Scenarios S6-3: the 26
     # plane names need the plane switch this world leaves off. Files workspace
     # WP5: the 17 `files.*` names need a workspace root this world lacks.
-    assert len(listed.tools) == 246
+    assert len(listed.tools) == 247
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 
@@ -167,7 +167,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 298
+    assert len(TOOLS) == 299
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }

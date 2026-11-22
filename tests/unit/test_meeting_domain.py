@@ -968,9 +968,9 @@ def test_write_capability_names_are_the_frozen_literals() -> None:
     )
     # The internal sync namespace is a write-request name, never a capability.
     assert MEETING_PROVIDER_SYNC_NAME == "system.meeting_provider.sync"
-    assert MEETING_WRITE_REQUEST_NAMES == MEETING_WRITE_CAPABILITY_NAMES | {
-        MEETING_PROVIDER_SYNC_NAME
-    }
+    assert (
+        MEETING_WRITE_CAPABILITY_NAMES | {MEETING_PROVIDER_SYNC_NAME} == MEETING_WRITE_REQUEST_NAMES
+    )
 
 
 # ------------------------------------------------------------------ error family

@@ -158,7 +158,7 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
         # Nor the files workspace WP5's 17 `files.*` names.
         and not c.value.startswith("files.")
     }
-    assert len(deployed) == 190
+    assert len(deployed) == 191
     assert deployed <= names
 
 

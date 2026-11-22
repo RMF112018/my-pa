@@ -111,7 +111,8 @@ def test_the_two_vocabularies_are_the_sizes_this_package_states() -> None:
     # `report_retention`. WP06: its 5 transfer names, and no purpose.
     # Schedule Scenarios S6-3: its 26 plane names and their 3 purposes.
     # Files workspace WP5: its 17 `files.*` names and their 2 purposes.
-    assert len(Capability) == 298
+    # Communications intelligence WP2-W3: `meetings.provider.bind`, and no purpose.
+    assert len(Capability) == 299
     assert len(Purpose) == 70
 
 

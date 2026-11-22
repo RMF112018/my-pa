@@ -87,7 +87,7 @@ def test_the_inventory_is_the_17_appended_names_and_the_2_purposes() -> None:
     # ADR-019 Amendment 2 (contract section 18.3): one more IdKind, `fwpnd`.
     # ADR-020 C1: one more, `mprep` (a Meeting prep version).
     # Communications intelligence WP2: two more, `mpbnd` and `msbnd`.
-    assert (len(Capability), len(Purpose), len(IdKind)) == (298, 70, 183)
+    assert (len(Capability), len(Purpose), len(IdKind)) == (299, 70, 183)
     assert frozenset(members[-17:]) == FILE_WORKSPACE_CAPABILITIES
     assert set(FILES_WORKSPACE_COMMAND_TYPES) == FILE_WORKSPACE_CAPABILITIES
     # WP4's frozen audit vocabulary names exactly these (contract section 13).
@@ -146,7 +146,7 @@ def test_the_tool_hints_follow_the_classification() -> None:
 
 
 def test_chatllm_classifies_the_17_data_conditional_on_the_workspace_at_v14() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
     assert FILES_WORKSPACE_DATA_NAMES == FILE_WORKSPACE_CAPABILITIES
     for capability in FILE_WORKSPACE_CAPABILITIES:
         policy = CHATLLM_CAPABILITY_POLICY[capability]

@@ -539,6 +539,8 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     281: "Two hundred and eighty-one",
     # Files workspace WP5: the 17 `files.*` names, 281 -> 298.
     298: "Two hundred and ninety-eight",
+    # Communications intelligence WP2-W3: `meetings.provider.bind`, 298 -> 299.
+    299: "Two hundred and ninety-nine",
 }
 
 
@@ -693,7 +695,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert implemented == 298
+    assert implemented == 299
     assert len(withheld_families) == 174
     assert unwired == set()
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
@@ -760,7 +762,9 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # The files workspace WP5's 17 `files.*` names are a ninth withheld family
     # (composed only with the workspace store): the default is unchanged and the
     # withheld figure grows by seventeen.
-    assert default == 124 and total == 298 and withheld == 174
+    # Communications intelligence WP2-W3's `meetings.provider.bind` is core and
+    # in no withheld family: the default grows by one, the withheld figure holds.
+    assert default == 125 and total == 299 and withheld == 174
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -787,7 +791,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert authenticated_mcp_capabilities == {
         capability.value for capability in application_capabilities
     }
-    assert len(local_mcp_capabilities) == default - 3 == 121
+    assert len(local_mcp_capabilities) == default - 3 == 122
     assert authenticated_mcp_capabilities - local_mcp_capabilities == {
         "goodnotes.pull",
         "goodnotes.complete",

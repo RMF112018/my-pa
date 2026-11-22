@@ -643,6 +643,9 @@ _ORDINAL_UNITS = (
     "two-hundred-ninety-seventh",
     "two-hundred-ninety-eighth",
     "two-hundred-ninety-ninth",
+    # Communications intelligence WP2-W3 takes it to two hundred and ninety-nine;
+    # dense through the three-hundredth.
+    "three-hundredth",
 )
 
 

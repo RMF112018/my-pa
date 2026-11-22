@@ -188,6 +188,9 @@ def test_at_sets_are_the_live_enums_plus_the_files_names() -> None:
         member.value for member in NativeSourceCapability
     }
     at = set(_literals(mine["_CAPABILITIES_AT_THIS_REVISION"]))
+    # Communications intelligence WP2-W3: `6418b57081c3` admits `meetings.provider.bind`
+    # after this revision.
+    declared -= {"meetings.provider.bind"}
     assert at == declared | FILES_CAPABILITIES
     purposes = set(_literals(mine["_PURPOSES_AT_THIS_REVISION"]))
     assert purposes == {member.value for member in Purpose} | FILES_PURPOSES

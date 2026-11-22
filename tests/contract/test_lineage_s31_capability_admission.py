@@ -297,9 +297,9 @@ def test_s31_capabilities_are_operator_decision_required() -> None:
     assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
     # Schedule Scenarios S6-3: its 26 plane names (no operator decision among them).
     # Files workspace WP5: its 17 `files.*` names (none an operator decision).
-    assert len(Capability) == 298
+    assert len(Capability) == 299
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
 
 
 def test_switch_off_withholds_every_s31_capability(scene: Scene) -> None:
@@ -522,7 +522,7 @@ def test_no_s31_capability_is_in_the_chatllm_data_profile() -> None:
             desired_effective_capabilities(composed_off, knowledge_manager=knowledge_manager)
             & lineage_plane
         )
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
 
 
 # ---- client guidance (section 7.12) ----------------------------------------------
@@ -747,6 +747,8 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
     }
     # ADR-020 (meeting prep briefs): its three deliberately extended tools.
     lineage |= _ADR_020_EXTENDED_TOOLS
+    # Communications intelligence WP2-W3: `meetings.provider.bind` is new.
+    lineage |= {"meetings.provider.bind"}
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
@@ -766,6 +768,8 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
                 views[f"{name}.{model_name}"] = sorted(model.model_fields)
     for extended in _ADR_020_EXTENDED_VIEWS:
         views.pop(extended)
+    # Communications intelligence WP2-W3: one new view, no existing one changed.
+    views.pop("meetings.MeetingProviderBindingView")
     assert _canonical_sha256(views) == _V1_VIEW_FIELDS_SHA256_WITHOUT_MEETING_VIEW
     # S3.1 adds no purpose: the envelope's purpose enum is the S4 one.
     published = TOOLS[0].input_schema["$defs"]["Purpose"]["enum"]

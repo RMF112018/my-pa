@@ -231,7 +231,7 @@ def _capability_enum(scene: Scene) -> None:
     ]
     # Reports Modernization WP03 declares its five beside `reports.publish`, and
     # WP05b its four custody names after them, and WP06 its five transfer names.
-    assert len(members) == 298
+    assert len(members) == 299
 
 
 def _purpose_enum(scene: Scene) -> None:
@@ -336,7 +336,7 @@ def _remote_write(scene: Scene) -> None:
 
 def _chatllm_policy(scene: Scene) -> None:
     del scene
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
     for capability in READS:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL, capability
@@ -515,27 +515,28 @@ def test_import_is_control_plane_excluded() -> None:
 
 
 def test_v11_targets() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
     # Schedule Scenarios S6-3 (chatllm-data-v13): the 22 plane names compose only
     # with `schedule_scenarios` too, off here, so every target below is
     # unchanged (`test_v13_targets` has the scenario targets). Files workspace
     # WP5 (chatllm-data-v14): the 17 `files.*` names compose only with
     # `files_workspace`, off here, so every target below is unchanged too.
-    assert len(CHATLLM_CAPABILITY_POLICY) == 298
+    assert len(CHATLLM_CAPABILITY_POLICY) == 299
     # chatllm-data-v12 (Reports Modernization): `reports.publish`, the 5 report
     # management names and the 5 `reports.transfer.*` names (`DATA_REQUIRED`)
-    # add 11 everywhere.
+    # add 11 everywhere; chatllm-data-v15 (WP2-W3) `meetings.provider.bind` adds
+    # 1 everywhere.
     full = _desired(_planes(**_FULL))
-    assert len(full) == 175
-    assert len(_desired(_planes(constraints=True))) == 109
+    assert len(full) == 176
+    assert len(_desired(_planes(constraints=True))) == 110
     with_schedule = _desired(_planes(**_FULL, schedule=True))
-    assert len(with_schedule) == 181
+    assert len(with_schedule) == 182
     assert with_schedule - full == READS
     assert len(_desired(_planes(**_FULL, lineage=True, program_reporting=True, schedule=True))) == (
-        215
+        216
     )
     default_all = _planes(constraints=True, lineage=True, program_reporting=True, schedule=True)
-    assert len(_desired(default_all)) == 147
+    assert len(_desired(default_all)) == 148
     # The `schedule_scenarios` flag doubles the compositions, 512 -> 1,024, and
     # the files workspace's `files_workspace` flag again, 1,024 -> 2,048.
     assert len(_every_composition()) == 2048

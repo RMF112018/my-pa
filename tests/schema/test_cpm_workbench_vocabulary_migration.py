@@ -192,6 +192,9 @@ def test_at_sets_equal_the_live_enums() -> None:
     # Files workspace WP4 restates both sets after revision B; its names are set
     # aside whether or not the domain declares them yet (WP5).
     declared -= FILES_CAPABILITIES
+    # Communications intelligence WP2-W3: `6418b57081c3` admits `meetings.provider.bind`
+    # after this revision.
+    declared -= {"meetings.provider.bind"}
     assert plane["_CAPABILITIES_BEFORE_THIS_REVISION"] == head["_CAPABILITIES_AT_THIS_REVISION"]
     assert plane["_PURPOSES_BEFORE_THIS_REVISION"] == head["_PURPOSES_AT_THIS_REVISION"]
     plane_capabilities = _literals(plane["_CAPABILITIES_AT_THIS_REVISION"])

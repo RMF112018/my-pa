@@ -1450,6 +1450,16 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "idempotency_key": "wire-meetings-series-update-0001",
             "title": "A wire meeting series, retitled",
         },
+        # WP2-W3. Sent after `meetings.update` has moved the same Meeting to
+        # version 2 on the sequential wire walks below.
+        Capability.MEETINGS_PROVIDER_BIND: {
+            "action": "bind",
+            "meeting_id": marked.meeting_id,
+            "expected_version": 2,
+            "idempotency_key": "wire-meetings-provider-bind-0001",
+            "calendar_ref": "cal-synthetic",
+            "ical_uid": "uid-wire@example.invalid",
+        },
         Capability.RECORD_EVENTS_LIST: {"page_size": 10},
         # KLP-WP-03: uncomposed in this world; each still normalizes.
         Capability.KNOWLEDGE_ASSERTIONS_READ: {"assertion_id": "kasr_wireknowledge00001"},
@@ -2431,6 +2441,9 @@ SCOPED_CAPABILITIES = [
         Capability.MEETINGS_SEARCH,
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
+        # WP2-W3: `meetings.provider.bind`, on the identical reading; also in
+        # `_SCOPELESS`.
+        Capability.MEETINGS_PROVIDER_BIND,
         # WP-RE-06: `record_events.list` names only the acting Principal's own
         # change feed and no `src_...` or `enr_...`; also in `_SCOPELESS`.
         Capability.RECORD_EVENTS_LIST,

@@ -270,6 +270,8 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
         - S63_CAPABILITIES
         # Files workspace WP4: admitted by its revision (the head).
         - FILES_CAPABILITIES
+        # Communications intelligence WP2-W3: admitted by `6418b57081c3`.
+        - {"meetings.provider.bind"}
         # Reports Modernization WP02 and WP03: admitted by `4c37731671fc`.
         - {
             "reports.publish",

@@ -97,8 +97,20 @@ injection mechanism. Grant setup and remote deployment are outside Issue #365.
 - Each artifact is **create-only**. A retry accepts pre-existing identical
   size+SHA-256 and observed version; different bytes cause `PUBLICATION_INCOMPLETE`
   and no overwrite.
-- The server computes stored bytes' SHA-256 via `files.stat` after upload.
-  Source bytes are hashed again after transfer to detect a local race.
+- Before any upload ticket or outbound artifact byte, the publisher stages each
+  admitted source through descriptor-relative no-follow opens into an anonymous
+  Linux memfd; seals it against write, shrink and growth, then independently
+  verifies its inventory SHA-256, size and narrow secret scan. The byte-route
+  client reopens only the process-owned sealed descriptor path, not the mutable
+  output pathname. Source inode/device and content are revalidated after upload;
+  source mutation can cause NOT_READY, never unqualified byte egress.
+- This fail-closed pre-egress barrier requires Linux memfd sealing and procfs.
+  Snapshots are per-file, not all 10,000 simultaneously; their size is bounded
+  by inventory size, but system memory/tmpfs availability is an additional
+  runtime capacity constraint for unusually large single files. No unsafe
+  disk-staging fallback silently reduces the immutability guarantee.
+- The server computes stored bytes' SHA-256 via `files.stat` after upload;
+  immutable source-snapshot SHA-256 is verified independently before transfer.
 - Before any artifact bytes transfer, the publisher writes and SHA/verifies an
   immutable `SESSION_RECOVERY.json` with `NOT_READY`, plus the dated discoverable
   pointer `mcp:SDCR/40-Publication/sessions/YYYY/MM/<session-id>.recovery.json`.
@@ -153,9 +165,11 @@ PYTHONPATH=. python -m pytest tests/unit/test_sdcc_publish.py -q
 
 Tests use a fake in-memory files workspace: recursive inventory, raw bytes,
 failed evidence, archive handling, multi-MB binary, no-clobber, retry,
-versioned handoff, secret withholding, injection refusal, local Git patch
-capture, source-root and worktree overlap refusal, no-follow ancestor/file
-refusal, deterministic output/_git replacement races, malformed
+versioned handoff, secret withholding, substitution before transfer, sealed
+snapshot immutable-byte checks during concurrent original-inode mutation,
+scanner/hash race refusals, local Git patch capture, source-root and worktree
+overlap refusal, no-follow ancestor/file refusal, deterministic output/_git
+replacement races, malformed
 endpoint/token preflight, and two-client receiver simulation. Race injections
 establish protection against following substituted symlinks, not against an
 adversary able to relocate a previously admitted directory inode. The fake

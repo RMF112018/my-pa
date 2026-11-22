@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fcntl
 import hashlib
 import json
 import mimetypes
@@ -30,8 +31,8 @@ import sys
 import tempfile
 import zipfile
 from collections import Counter
-from collections.abc import Mapping, Sequence
-from contextlib import suppress
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path, PurePosixPath
@@ -86,6 +87,8 @@ class Artifact:
     sha256: str | None
     status: str
     reason: str | None = None
+    source_device: int | None = None
+    source_inode: int | None = None
 
 
 def _id(value: object) -> str:
@@ -423,6 +426,12 @@ def inventory(
             "SESSION_PUBLICATION_FAILURE.json",
         ):
             raise PublicationError("reserved_artifact_name")
+        try:
+            before = path.lstat()
+        except OSError:
+            raise PublicationError("source_changed_during_inventory") from None
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise PublicationError("nonregular_file_refused")
         size, sha = _hash_file(path)
         # Keys, local environment and token stores are not transferable artifacts.
         private_name = path.name.lower().startswith(".env") or path.suffix.lower() in (
@@ -435,6 +444,12 @@ def inventory(
             secret = private_name or _contains_obvious_secret(path)
         except PublicationError:
             secret = True
+        try:
+            after = path.lstat()
+        except OSError:
+            raise PublicationError("source_changed_during_inventory") from None
+        if not stat.S_ISREG(after.st_mode) or _file_stamp(before) != _file_stamp(after):
+            raise PublicationError("source_changed_during_inventory")
         found.append(
             Artifact(
                 name,
@@ -443,6 +458,8 @@ def inventory(
                 None if secret else sha,
                 "PROTECTED_WITHHELD" if secret else statuses.get(name, "FINAL"),
                 "suspected_secret_or_unscannable_archive" if secret else None,
+                before.st_dev,
+                before.st_ino,
             )
         )
         if len(found) > MAX_FILES:
@@ -456,6 +473,154 @@ def inventory(
         {"category": k, "count": v, "rule": "TRANSIENT_EXCLUSION_POLICY_v3"}
         for k, v in sorted(exclusions.items())
     ]
+
+
+
+def _file_stamp(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    """Detect same-inode rewrites as well as pathname replacement."""
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_nlink,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+def _open_source_fd(root_fd: int, source: Path, local: Path) -> int:
+    """Open below the already-qualified root without following any symlink."""
+    try:
+        parts = local.relative_to(source).parts
+    except ValueError:
+        raise PublicationError("source_outside_output") from None
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        raise PublicationError("source_outside_output")
+    parent_fd = os.dup(root_fd)
+    try:
+        for part in parts[:-1]:
+            next_fd = os.open(
+                part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd
+            )
+            os.close(parent_fd)
+            parent_fd = next_fd
+        opened = os.open(
+            parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd
+        )
+        info = os.fstat(opened)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            os.close(opened)
+            raise PublicationError("source_changed_during_publication")
+        return opened
+    except OSError:
+        raise PublicationError("source_changed_during_publication") from None
+    finally:
+        os.close(parent_fd)
+
+
+def _matches_inventory(item: Artifact, info: os.stat_result) -> bool:
+    return (
+        (item.source_device is None or item.source_device == info.st_dev)
+        and (item.source_inode is None or item.source_inode == info.st_ino)
+        and info.st_size == item.size
+    )
+
+
+def _source_unchanged(source: Path, item: Artifact) -> bool:
+    """Safely recheck the original; never follow a swapped input pathname."""
+    try:
+        root_fd, root = _walk_output_directory(source)
+        try:
+            _bound_output_root(root, root_fd)
+            with os.fdopen(_open_source_fd(root_fd, source, item.local), "rb") as handle:
+                before = os.fstat(handle.fileno())
+                if not _matches_inventory(item, before):
+                    return False
+                digest = hashlib.sha256()
+                size = 0
+                while block := handle.read(CHUNK_SIZE):
+                    size += len(block)
+                    if size > item.size:
+                        return False
+                    digest.update(block)
+                after = os.fstat(handle.fileno())
+            _bound_output_root(root, root_fd)
+            return (
+                _file_stamp(before) == _file_stamp(after)
+                and size == item.size
+                and digest.hexdigest() == item.sha256
+            )
+        finally:
+            os.close(root_fd)
+    except (OSError, PublicationError):
+        return False
+
+
+@contextmanager
+def _sealed_snapshot(source: Path, item: Artifact) -> Iterator[Path]:
+    """Transfer only inventoried, rescanned bytes from an immutable Linux memfd.
+
+    The live output directory cannot address the anonymous sealed snapshot.
+    Sealing precedes the final hash/secret scan and every remote upload ticket.
+    """
+    if not (
+        hasattr(os, "memfd_create")
+        and hasattr(os, "MFD_ALLOW_SEALING")
+        and hasattr(os, "MFD_CLOEXEC")
+        and hasattr(fcntl, "F_ADD_SEALS")
+        and hasattr(fcntl, "F_GET_SEALS")
+        and Path("/proc/self/fd").is_dir()
+    ):
+        raise PublicationError("sealed_snapshot_unavailable")
+    root_fd, root = _walk_output_directory(source)
+    try:
+        _bound_output_root(root, root_fd)
+        try:
+            snapshot_fd = os.memfd_create(
+                "sdcr-eligible-artifact", os.MFD_ALLOW_SEALING | os.MFD_CLOEXEC
+            )
+        except OSError:
+            raise PublicationError("sealed_snapshot_unavailable") from None
+        with os.fdopen(snapshot_fd, "w+b") as snapshot:
+            with os.fdopen(_open_source_fd(root_fd, source, item.local), "rb") as original:
+                before = os.fstat(original.fileno())
+                if not _matches_inventory(item, before):
+                    raise PublicationError("source_changed_during_publication")
+                copied = 0
+                while block := original.read(CHUNK_SIZE):
+                    copied += len(block)
+                    if copied > item.size:
+                        raise PublicationError("source_changed_during_publication")
+                    snapshot.write(block)
+                after = os.fstat(original.fileno())
+            if copied != item.size or _file_stamp(before) != _file_stamp(after):
+                raise PublicationError("source_changed_during_publication")
+            snapshot.flush()
+            seals = (
+                fcntl.F_SEAL_WRITE
+                | fcntl.F_SEAL_GROW
+                | fcntl.F_SEAL_SHRINK
+                | fcntl.F_SEAL_SEAL
+            )
+            try:
+                fcntl.fcntl(snapshot.fileno(), fcntl.F_ADD_SEALS, seals)
+                observed = fcntl.fcntl(snapshot.fileno(), fcntl.F_GET_SEALS)
+            except OSError:
+                raise PublicationError("snapshot_seal_failed") from None
+            if observed & seals != seals:
+                raise PublicationError("snapshot_seal_failed")
+            sealed = Path(f"/proc/self/fd/{snapshot.fileno()}")
+            size, digest = _hash_file(sealed)
+            if size != item.size or digest != item.sha256:
+                raise PublicationError("source_changed_during_publication")
+            if _contains_obvious_secret(sealed):
+                raise PublicationError("source_became_protected")
+            _bound_output_root(root, root_fd)
+            yield sealed
+    except OSError:
+        raise PublicationError("snapshot_unavailable") from None
+    finally:
+        os.close(root_fd)
 
 
 async def _call(
@@ -520,14 +685,21 @@ async def _write_text(api: FilesAPI, path: str, text: str) -> dict[str, Any]:
     return current
 
 
-async def _upload_one(api: FilesAPI, item: Artifact, target: str) -> dict[str, Any]:
+async def _upload_one(
+    api: FilesAPI,
+    item: Artifact,
+    target: str,
+    *,
+    snapshot: Path | None = None,
+    source_root: Path | None = None,
+) -> dict[str, Any]:
     if item.sha256 is None:
         raise PublicationError("withheld_artifact_not_uploadable")
     current = await _stat(api, target)
     if current is None:
         # A lost response can still indicate success; verify actual stored bytes.
         with suppress(Exception):
-            await api.upload(item.local, target, item.sha256, item.size)
+            await api.upload(snapshot if snapshot is not None else item.local, target, item.sha256, item.size)
     stored = await _stat(api, target)
     if (
         stored is None
@@ -538,10 +710,14 @@ async def _upload_one(api: FilesAPI, item: Artifact, target: str) -> dict[str, A
         or not stored["version"]
     ):
         raise PublicationError("artifact_missing_or_mismatched")
-    # Prevent successful publication of a local file changed during transfer.
-    size, digest = _hash_file(item.local)
-    if size != item.size or digest != item.sha256:
-        raise PublicationError("source_changed_during_publication")
+    # The sealed bytes are immutable, and an altered original must not become READY.
+    if snapshot is not None:
+        if source_root is None or not _source_unchanged(source_root, item):
+            raise PublicationError("source_changed_during_publication")
+    else:
+        size, digest = _hash_file(item.local)
+        if size != item.size or digest != item.sha256:
+            raise PublicationError("source_changed_during_publication")
     return stored
 
 
@@ -679,7 +855,10 @@ async def publish(api: FilesAPI, source: Path, spec: Mapping[str, Any]) -> dict[
                 parent = remote.rsplit("/", 1)[0]
                 try:
                     await _mkdir(api, parent)
-                    stored = await _upload_one(api, item, remote)
+                    with _sealed_snapshot(source, item) as snapshot:
+                        stored = await _upload_one(
+                            api, item, remote, snapshot=snapshot, source_root=source
+                        )
                     entry["version"] = stored["version"]
                 except PublicationError as exc:
                     incomplete = True

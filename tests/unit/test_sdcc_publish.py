@@ -876,3 +876,173 @@ def test_r3_remote_write_preflight_accepts_direct_writable_workspace() -> None:
             }
 
     asyncio.run(publisher._remote_write_preflight(Stub()))
+
+@pytest.mark.parametrize("replacement", ["symlink", "new_inode", "in_place"])
+def test_f01_source_substitution_after_inventory_has_zero_unqualified_egress(
+    tmp_path: Path, replacement: str
+) -> None:
+    output = tmp_path / "outputs"
+    output.mkdir()
+    original = output / "report.txt"
+    approved = b"approved bytes for outbound transport"
+    original.write_bytes(approved)
+    restricted = tmp_path / "restricted-synthetic.txt"
+    restricted.write_bytes(b"-----BEGIN PRIVATE KEY-----\\nSYNTHETIC\\n")
+    data = spec()
+    data["artifact_statuses"] = {}
+
+    class SwappingStore(SyntheticFilesWorkspace):
+        def __init__(self) -> None:
+            super().__init__()
+            self.swapped = False
+            self.outbound: list[bytes] = []
+
+        async def call(self, capability: str, payload: dict, *, write: bool = False) -> dict:
+            if (
+                capability == "files.mkdir"
+                and str(payload.get("path", "")).endswith("/artifacts")
+                and not self.swapped
+            ):
+                self.swapped = True
+                if replacement == "symlink":
+                    original.unlink()
+                    original.symlink_to(restricted)
+                elif replacement == "new_inode":
+                    original.unlink()
+                    original.write_bytes(b"X" * len(approved))
+                else:
+                    original.write_bytes(b"Y" * len(approved))
+            return await super().call(capability, payload, write=write)
+
+        async def upload(self, local: Path, destination: str, digest: str, size: int) -> dict:
+            self.outbound.append(local.read_bytes())
+            return await super().upload(local, destination, digest, size)
+
+    store = SwappingStore()
+    result = run(store, output, data)
+    assert store.swapped
+    assert store.outbound == []
+    assert result["status"] == "PUBLICATION_INCOMPLETE"
+    assert result["verified"] == 0
+    assert payload(store, result["recovery_path"])["publication_status"] == "NOT_READY"
+    assert payload(store, result["receipt_path"])["disposition"] == "PUBLICATION_INCOMPLETE"
+
+
+def test_f01_in_place_mutation_during_multichunk_transfer_uses_only_sealed_bytes(
+    tmp_path: Path
+) -> None:
+    output = tmp_path / "outputs"
+    output.mkdir()
+    original = output / "report.bin"
+    approved = b"original-payload-" * (128 * 1024)
+    original.write_bytes(approved)
+    data = spec()
+    data["artifact_statuses"] = {}
+
+    class DuringTransfer(SyntheticFilesWorkspace):
+        def __init__(self) -> None:
+            super().__init__()
+            self.outbound = b""
+            self.seal_write_refused = False
+
+        async def upload(self, local: Path, destination: str, digest: str, size: int) -> dict:
+            if destination.endswith("/report.bin"):
+                with local.open("rb") as reader:
+                    first = reader.read(1024)
+                    original.write_bytes(b"R" * len(approved))
+                    self.outbound = first + reader.read()
+                try:
+                    with local.open("r+b") as attacker:
+                        attacker.write(b"unqualified")
+                except OSError:
+                    self.seal_write_refused = True
+            return await super().upload(local, destination, digest, size)
+
+    store = DuringTransfer()
+    result = run(store, output, data)
+    assert store.outbound == approved
+    assert store.seal_write_refused
+    assert result["status"] == "PUBLICATION_INCOMPLETE"
+    assert result["verified"] == 0
+    remote = f"{publisher._session_path(data)}/artifacts/report.bin"
+    assert store.entries[remote] == approved
+    assert payload(store, result["receipt_path"])["disposition"] == "PUBLICATION_INCOMPLETE"
+
+
+def test_f01_rechecks_secret_eligibility_on_the_sealed_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "outputs"
+    output.mkdir()
+    prohibited = b"-----BEGIN PRIVATE KEY-----\\nsynthetic\\n"
+    local = output / "report.txt"
+    local.write_bytes(prohibited)
+    item = Artifact("report.txt", local, len(prohibited), sha(prohibited), "FINAL")
+    monkeypatch.setattr(publisher, "inventory", lambda _source, _statuses: ([item], []))
+    data = spec()
+    data["artifact_statuses"] = {}
+    store = SyntheticFilesWorkspace()
+    result = run(store, output, data)
+    assert result["status"] == "PUBLICATION_INCOMPLETE"
+    assert result["verified"] == 0
+    assert not any("/artifacts/" in path for path in store.entries)
+
+
+def test_f01_source_changed_at_fd_open_refuses_before_egress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "outputs"
+    output.mkdir()
+    original = output / "report.txt"
+    approved = b"approved data"
+    original.write_bytes(approved)
+    open_source = publisher._open_source_fd
+    modified = False
+
+    def changed_after_open(root_fd: int, source: Path, local: Path) -> int:
+        nonlocal modified
+        opened = open_source(root_fd, source, local)
+        if not modified:
+            modified = True
+            original.write_bytes(b"U" * len(approved))
+        return opened
+
+    monkeypatch.setattr(publisher, "_open_source_fd", changed_after_open)
+    data = spec()
+    data["artifact_statuses"] = {}
+    store = SyntheticFilesWorkspace()
+    result = run(store, output, data)
+    assert modified
+    assert result["status"] == "PUBLICATION_INCOMPLETE"
+    assert result["verified"] == 0
+    assert not any("/artifacts/" in path for path in store.entries)
+
+
+def test_f01_inventory_scanner_race_refuses_before_remote_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "outputs"
+    output.mkdir()
+    local = output / "report.txt"
+    approved = b"approved data"
+    local.write_bytes(approved)
+    scan = publisher._contains_obvious_secret
+    modified = False
+
+    def changed_after_scan(path: Path) -> bool:
+        nonlocal modified
+        result = scan(path)
+        if path == local and not modified:
+            modified = True
+            local.write_bytes(b"U" * len(approved))
+        return result
+
+    monkeypatch.setattr(publisher, "_contains_obvious_secret", changed_after_scan)
+    data = spec()
+    data["artifact_statuses"] = {}
+    store = SyntheticFilesWorkspace()
+    with pytest.raises(PublicationError, match="source_changed_during_inventory"):
+        run(store, output, data)
+    assert modified
+    assert not any("/sessions/" in path for path in store.entries)
+

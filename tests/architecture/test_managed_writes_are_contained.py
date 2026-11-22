@@ -114,7 +114,7 @@ CONTAINED_STORES: Final = frozenset(
 REGISTERED_WRITERS: Final[dict[str, str]] = {
     "scripts/sdcc_publish.py": (
         "Issue #365 client-only publisher: after specification, HTTPS/token and "
-        "repository identity preflight, writes only three Git snapshot files under "
+        "repository identity preflight, writes three Git snapshot files under "
         "an admitted output root (_git/changes.patch, _git/changed-paths.txt, "
         "_git/IDENTITY.json). Uses descriptor-relative O_NOFOLLOW and O_EXCL, "
         "dev/inode checks, and real worktree/Git-dir and caller-supplied protected "

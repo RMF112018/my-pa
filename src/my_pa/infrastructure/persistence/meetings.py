@@ -1339,6 +1339,17 @@ class SqlMeetingRepository(MeetingRepository):
         ).one_or_none()
         return None if row is None else _to_binding(row)
 
+    def lock_provider_binding_for_meeting(
+        self, principal_id: str, meeting_id: str
+    ) -> MeetingProviderBindingRecord | None:
+        binding = meeting_provider_bindings
+        row = self._connection.execute(
+            principal_scoped(select(*_BINDING_COLUMNS), binding, capture_context(principal_id))
+            .where(binding.c.meeting_id == meeting_id)
+            .with_for_update()
+        ).one_or_none()
+        return None if row is None else _to_binding(row)
+
     def read_series_provider_binding_for_series(
         self, principal_id: str, meeting_series_id: str
     ) -> MeetingSeriesProviderBindingRecord | None:

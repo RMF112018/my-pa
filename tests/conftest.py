@@ -9626,6 +9626,11 @@ class _Meetings:
                 return binding
         return None
 
+    def lock_provider_binding_for_meeting(
+        self, principal_id: str, meeting_id: str
+    ) -> MeetingProviderBindingRecord | None:
+        return self.read_provider_binding_for_meeting(principal_id, meeting_id)
+
     def read_series_provider_binding_for_series(
         self, principal_id: str, meeting_series_id: str
     ) -> MeetingSeriesProviderBindingRecord | None:

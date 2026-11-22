@@ -11553,6 +11553,16 @@ class MeetingRepository(ABC):
         """The one binding of this Meeting (D9), or `None`. Nonlocking."""
 
     @abstractmethod
+    def lock_provider_binding_for_meeting(
+        self, principal_id: str, meeting_id: str
+    ) -> MeetingProviderBindingRecord | None:
+        """`SELECT … FOR UPDATE` the one binding of this Meeting (D9), or `None`.
+
+        The unbind takes it before the Meeting lock: the provider sync locks a
+        binding and then its Meeting, so every binding writer locks in that order.
+        """
+
+    @abstractmethod
     def read_series_provider_binding_for_series(
         self, principal_id: str, meeting_series_id: str
     ) -> MeetingSeriesProviderBindingRecord | None:

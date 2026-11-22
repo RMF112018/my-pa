@@ -69,7 +69,7 @@ One record per calendar event: a single meeting, or one occurrence of a recurrin
 
 **Diagnostics** (informational, change no outcome): `schema_minor_newer`, `unknown_top_level_keys`, `unknown_record_keys`, `content_field_ignored`. A publication keeps at most 200 diagnostics and counts the rest. No diagnostic carries a title, location, link, address, name, calendar reference, UID or provider event id.
 
-**Resolution skips** (my-pa side, after parsing; the record is valid but nothing is written): `cancelled_unknown_skipped` (a cancelled event my-pa never bound), `binding_kind_conflict` (the UID is bound as the other kind), `stale_record_skipped` and `ordering_conflict_skipped` (section 5).
+**Resolution skips** (my-pa side, after parsing; the record is valid but nothing is written): `cancelled_unknown_skipped` (a cancelled event my-pa never bound), `binding_kind_conflict` (the UID is bound as the other kind), `stale_record_skipped` and `ordering_conflict_skipped` (section 5). Each is returned in that record's `MeetingSyncOutcome` (kind `skipped`, the code in `diagnostic`), not in the parser's diagnostics.
 
 ## 5. Ordering
 
@@ -79,11 +79,13 @@ One record per calendar event: a single meeting, or one occurrence of a recurrin
 - a record whose stamp equals the binding's but comes from a different publication (different file SHA-256) is ambiguous and skipped (`ordering_conflict_skipped`);
 - a replay of the same publication is idempotent; a newer stamp, or a binding with no stamp yet (just made by `meetings.provider.bind`), applies.
 
-**Known risk.** A producer clock regression makes every record of a known key skip until a publication with a newer stamp than the last applied one arrives. The skips are visible only in diagnostics: nothing fails loudly.
+**Known risk.** A producer clock regression makes every record of a known key skip until a publication with a newer stamp than the last applied one arrives. Nothing fails loudly: each skip is returned only as a `skipped` `MeetingSyncOutcome` carrying its resolution code (`diagnostic`), which the caller must surface; the parser's diagnostics do not list resolution skips.
 
 ## 6. What my-pa does with an event (summary)
 
 Spec section 12.2 rules 1–7: a known key updates only the provider-owned fields of its Meeting (`start_at`, `end_at`, `timezone_name`, `status`, `title`, `location_text`, `virtual_meeting_url`); an unknown occurrence of a known series creates a Meeting in that series; an unknown series is created with its first occurrence, titled by the event; an unknown single event creates a standalone Meeting; a cancelled known event cancels its Meeting and never deletes it. An existing hand-made Meeting is never matched by title or time: it is bound only through `meetings.provider.bind`. Sync writes as actor `system`.
+
+**Unbind (known limitation).** A `meetings.provider.bind` unbind orphans the Meeting from its provider key: the next publication carrying that key creates a duplicate Meeting, and after a series move a rebind is refused (`provider_series_binding_conflict`), because series bindings are append-only; WP3 must ship a rebind or unbind-tombstone path before sync auto-enables (spec sections 12.6 and 12.7).
 
 ## 7. Synthetic example
 
@@ -183,7 +185,7 @@ An event with more than 100 distinct attendees cannot be held and is quarantined
 - [ ] Persist the last stamp the collector published. If the clock reads a time at or before it (clock step, retry within one second), use the last stamp plus 1 second instead.
 - [ ] Never re-use a stamp for different bytes. Re-uploading the exact same file is safe (idempotent).
 
-**Why.** my-pa applies records for a known event only in publication order (resolution rule 7, section 5). Each binding remembers the stamp of the last record applied to it. A publication with an older stamp is skipped (`stale_record_skipped`) and one with an equal stamp but different bytes is skipped as ambiguous (`ordering_conflict_skipped`). Both skips are silent outside diagnostics, so a stamp that goes backwards freezes every known Meeting until a newer stamp arrives.
+**Why.** my-pa applies records for a known event only in publication order (resolution rule 7, section 5). Each binding remembers the stamp of the last record applied to it. A publication with an older stamp is skipped (`stale_record_skipped`) and one with an equal stamp but different bytes is skipped as ambiguous (`ordering_conflict_skipped`). Both skips are reported only in each record's `MeetingSyncOutcome` and fail nothing, so a stamp that goes backwards freezes every known Meeting until a newer stamp arrives.
 
 ### 8.4 File naming and placement (**proposal**)
 

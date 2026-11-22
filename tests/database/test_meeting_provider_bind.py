@@ -17,7 +17,11 @@ write request, Record Event and audit rows are what is checked:
 * the history receipt (`update`, actor `principal`), the `provider_binding`
   Record Event and the audit row naming the capability;
 * the D6 path: a series move of a bound Meeting is refused, then an unbind, then
-  the same move succeeds.
+  the same move succeeds;
+* the lock order (R1-2): an unbind locks the Meeting's binding row, and a bind
+  the requested key's binding row, before the Meeting row -- the provider
+  sync's order -- probed with `NOWAIT` from a third connection while the bind
+  waits on a lock another connection holds.
 
 Every identifier, title and key here is synthetic.
 """
@@ -25,12 +29,15 @@ Every identifier, title and key here is synthetic.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final
 
 import pytest
 from sqlalchemy import Engine, Table, func, select
+from sqlalchemy.exc import OperationalError
 
 from my_pa.application.commands import BindMeetingProvider, Command, CreateMeeting, UpdateMeeting
 from my_pa.contracts.v1.envelope import ResponseEnvelope
@@ -45,6 +52,11 @@ from my_pa.infrastructure.persistence.tables import (
     record_events,
 )
 from tests.contract.test_meeting_mcp import Partition, _insert_partition
+from tests.database.test_meeting_application import (
+    JOIN_TIMEOUT_SECONDS,
+    LOCK_NOT_AVAILABLE,
+    _wait_until_blocked,
+)
 from tests.database.test_task_record_events import Runtime
 
 pytestmark = pytest.mark.database
@@ -479,3 +491,111 @@ def test_d6_a_bound_series_move_is_refused_then_unbind_then_it_succeeds(scene: S
     )
     assert moved["meeting"]["meeting_series_id"] == target["meeting_series_id"]
     assert moved["meeting"]["version"] == 4
+
+
+# ---- lock order (R1-2) -------------------------------------------------------------
+
+
+@contextmanager
+def _row_locked(engine: Engine, table: Table, column: str, value: str) -> Iterator[None]:
+    """Hold one row `FOR UPDATE` on its own connection until the block exits."""
+    with engine.connect() as holder:
+        locked = holder.execute(
+            select(table.c[column]).where(table.c[column] == value).with_for_update()
+        ).all()
+        assert len(locked) == 1
+        try:
+            yield
+        finally:
+            holder.rollback()
+
+
+def _lockable(engine: Engine, table: Table, column: str, value: str) -> bool:
+    """Whether a third connection can row-lock it right now (`NOWAIT`, no waiting)."""
+    with engine.connect() as probe:
+        try:
+            probe.execute(
+                select(table.c[column])
+                .where(table.c[column] == value)
+                .with_for_update(nowait=True, key_share=False)
+            ).one()
+        except OperationalError as error:
+            if getattr(error.orig, "sqlstate", None) != LOCK_NOT_AVAILABLE:
+                raise
+            return False
+        finally:
+            probe.rollback()
+    return True
+
+
+def _while_blocked(
+    scene: Scene,
+    held: tuple[Table, str, str],
+    command: Command,
+    probed: tuple[Table, str, str],
+) -> tuple[bool, ResponseEnvelope]:
+    """Run `command` while `held` is row-locked; probe `probed` once it waits."""
+    table, column, value = held
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future: Future[ResponseEnvelope]
+        with _row_locked(scene.engine, table, column, value):
+            future = pool.submit(scene.invoke, command)
+            _wait_until_blocked(scene.engine, future)
+            lockable = _lockable(scene.engine, *probed)
+        return lockable, future.result(timeout=JOIN_TIMEOUT_SECONDS)
+
+
+def _binding_id(scene: Scene, meeting_id: str) -> str:
+    (row,) = scene.rows(meeting_provider_bindings, meeting_id=meeting_id)
+    return str(row["binding_id"])
+
+
+def test_an_unbind_waits_on_the_binding_before_it_locks_the_meeting(scene: Scene) -> None:
+    """Binding held elsewhere: the unbind waits there, the Meeting row still free."""
+    meeting = _create(scene, "create-order-1")
+    meeting_id = meeting["meeting_id"]
+    scene.ok(_occurrence(meeting_id, "bind-order-1"))
+    binding = (meeting_provider_bindings, "binding_id", _binding_id(scene, meeting_id))
+    lockable, response = _while_blocked(
+        scene,
+        binding,
+        _unbind(meeting_id, "unbind-order-1", 2),
+        (meetings, "meeting_id", meeting_id),
+    )
+    assert lockable, "the unbind locked the Meeting before the binding"
+    assert response.error is None, response.error
+    assert scene.count(meeting_provider_bindings) == 0
+
+
+def test_an_unbind_holds_the_binding_while_it_waits_on_the_meeting(scene: Scene) -> None:
+    """Meeting held elsewhere: the unbind already holds the binding, no inverse wait."""
+    meeting = _create(scene, "create-order-2")
+    meeting_id = meeting["meeting_id"]
+    scene.ok(_occurrence(meeting_id, "bind-order-2"))
+    binding = (meeting_provider_bindings, "binding_id", _binding_id(scene, meeting_id))
+    lockable, response = _while_blocked(
+        scene,
+        (meetings, "meeting_id", meeting_id),
+        _unbind(meeting_id, "unbind-order-2", 2),
+        binding,
+    )
+    assert not lockable, "the unbind waited on the Meeting before locking the binding"
+    assert response.error is None, response.error
+    assert scene.count(meeting_provider_bindings) == 0
+
+
+def test_a_bind_waits_on_the_key_binding_before_it_locks_the_meeting(scene: Scene) -> None:
+    """The key's binding held elsewhere: the bind waits there, the Meeting row still free."""
+    meeting = _create(scene, "create-order-3", series=None)
+    meeting_id = meeting["meeting_id"]
+    scene.ok(_single(meeting_id, "bind-order-3"))
+    binding = (meeting_provider_bindings, "binding_id", _binding_id(scene, meeting_id))
+    lockable, response = _while_blocked(
+        scene,
+        binding,
+        _single(meeting_id, "bind-order-3b", 2),
+        (meetings, "meeting_id", meeting_id),
+    )
+    assert lockable, "the bind locked the Meeting before the key's binding"
+    assert response.error is not None
+    assert "meeting_already_provider_bound" in response.error.safe_details

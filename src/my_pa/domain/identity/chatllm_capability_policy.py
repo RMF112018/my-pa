@@ -112,8 +112,9 @@ _DATA_REQUIRED: Final[frozenset[Capability]] = frozenset(
         Capability.MEETINGS_SEARCH,
         Capability.MEETINGS_SERIES_UPDATE,
         Capability.MEETINGS_UPDATE,
-        # chatllm-data-v15 (communications intelligence WP2-W3, a proposal; the
-        # grant stays operator-gated): classified as `meetings.update` is.
+        # chatllm-data-v15 (communications intelligence WP2-W3; ADR-022 Accepted:
+        # v15 is activated at the consolidated deploy, with operator-profile
+        # grants only): classified as `meetings.update` is.
         Capability.MEETINGS_PROVIDER_BIND,
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_COMMIT,

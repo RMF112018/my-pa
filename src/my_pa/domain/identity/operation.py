@@ -980,7 +980,8 @@ class Capability(StrEnum):
     MEETINGS_UPDATE = "meetings.update"
     MEETINGS_SERIES_UPDATE = "meetings.series.update"
     #: Communications intelligence WP2-W3 (contract section 12.2 rule 4, Manager
-    #: ruling D10; the name is a proposal, ruling R4): the explicit
+    #: ruling D10; the name is ratified, ADR-022 Accepted -- v15 is activated at
+    #: the consolidated deploy, with operator-profile grants only): the explicit
     #: reconciliation that binds an existing Meeting to a provider key, or
     #: unbinds it. A write under `Purpose.MEETING_AUTHORING` and nothing else;
     #: destructive (it versions an existing Meeting and an unbind deletes its

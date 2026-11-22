@@ -1222,10 +1222,11 @@ class MeetingApplication:
     ) -> MeetingProviderBindResult:
         """Bind an existing Meeting to a provider key, or unbind it (rule 4, D10).
 
-        The Meeting write order: digest, reserve, Meeting `FOR UPDATE`, version
-        gate, then the binding reads -- the Meeting's binding, the key's binding
-        `FOR UPDATE`, whether the UID is bound as the other kind, and for an
-        occurrence both series bindings -- the closed `bind_decision`, the
+        The Meeting write order: digest, reserve, the binding row `FOR UPDATE`
+        (the Meeting's own binding for an unbind, the requested key's binding
+        for a bind), Meeting `FOR UPDATE`, version gate, then the binding reads
+        -- the Meeting's binding, whether the UID is bound as the other kind,
+        and for an occurrence both series bindings -- the closed `bind_decision`, the
         binding insert (and, for an occurrence of an unbound provider series,
         the series binding to the Meeting's current series) or the binding
         delete, the Meeting version bump, one `update` receipt, completion, and
@@ -1260,19 +1261,32 @@ class MeetingApplication:
                 replayed=True,
             )
 
+        # The binding row lock comes first, then the Meeting lock: the provider
+        # sync locks a key's binding and then its Meeting, so the opposite order
+        # here could deadlock against it (R1-2). An unbind locks the Meeting's
+        # own binding; a bind locks the requested key's binding.
+        if request.action is ProviderBindAction.UNBIND:
+            locked = meetings.lock_provider_binding_for_meeting(principal_id, request.meeting_id)
+        else:
+            locked = meetings.lock_provider_binding(
+                principal_id,
+                request.key.calendar_ref,
+                request.key.ical_uid,
+                request.key.original_start_utc,
+            )
         current = meetings.lock_meeting_for_update(principal_id, request.meeting_id)
         if current is None:
             raise MeetingNotFoundError(MeetingErrorField.MEETING_ID)
         if current.version != version:
             raise MeetingStaleVersionError()
 
-        existing = meetings.read_provider_binding_for_meeting(principal_id, current.meeting_id)
         if request.action is ProviderBindAction.UNBIND:
-            if existing is None:
+            if locked is None:
                 raise MeetingInvalidRequestError(MeetingErrorField.MEETING_NOT_PROVIDER_BOUND)
-            meetings.delete_provider_binding(principal_id, existing.binding_id)
+            meetings.delete_provider_binding(principal_id, locked.binding_id)
         else:
-            self._bind(meetings, principal_id, request, current, existing is not None, at)
+            existing = meetings.read_provider_binding_for_meeting(principal_id, current.meeting_id)
+            self._bind(meetings, principal_id, request, current, existing is not None, locked, at)
 
         after_version = current.version + 1
         meetings.update_meeting(
@@ -1338,13 +1352,15 @@ class MeetingApplication:
         request: MeetingProviderBindRequest,
         current: MeetingView,
         meeting_is_bound: bool,
+        key_bound: MeetingProviderBindingRecord | None,
         at: datetime,
     ) -> None:
-        """Decide one bind over the state read under the Meeting lock, then write it."""
+        """Decide one bind over the state read under both locks, then write it.
+
+        `key_bound` is the requested key's binding, locked `FOR UPDATE` before
+        the Meeting lock by the caller.
+        """
         key = request.key
-        key_bound = meetings.lock_provider_binding(
-            principal_id, key.calendar_ref, key.ical_uid, key.original_start_utc
-        )
         other_kind_bound = meetings.provider_uid_bound_as_other_kind(
             principal_id, key.calendar_ref, key.ical_uid, occurrence=key.is_occurrence
         )

@@ -281,6 +281,9 @@ class MeetingErrorField(StrEnum):
     CLEAR_FIELDS = "clear_fields"
     # ADR-020 C2 addition.
     PREP = "prep"
+    # Communications intelligence WP2 (Manager ruling D6): a series move or
+    # detach of a provider-bound Meeting is refused; the binding owns it.
+    MEETING_SERIES_CHANGE_REFUSED_PROVIDER_BOUND = "meeting_series_change_refused_provider_bound"
     # Existing `SafeDetail` members, reused.
     TITLE = "title"
     STATUS = "status"

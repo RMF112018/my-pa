@@ -141,8 +141,11 @@ __all__ = [
     "meeting_request_digest",
 ]
 
-#: The receipt actor every v1 write records (readiness F020).
-_ACTOR: Final = MeetingActor.PRINCIPAL
+#: The receipt actor a write records unless its caller names another (readiness
+#: F020). Client writes always take this default; the provider sync
+#: (`application.meeting_provider_sync`, communications intelligence WP2 ruling
+#: D12) is the one caller that passes `MeetingActor.SYSTEM`.
+_DEFAULT_ACTOR: Final = MeetingActor.PRINCIPAL
 
 
 # ------------------------------------------------------------------- results
@@ -522,6 +525,7 @@ def _stage_meeting_event(
     correlation_id: str | None,
     source_receipt_id: str,
     occurred_at: datetime,
+    actor: MeetingActor,
     causation_event_id: str | None = None,
 ) -> RecordEventDraft:
     """Build one Meeting-plane draft, stage it, and return it (for causation).
@@ -537,7 +541,7 @@ def _stage_meeting_event(
         record_version=record_version,
         changed_fields=changed_fields,
         source_capability=source_capability,
-        actor_class=MEETING_ACTOR_CLASSES[_ACTOR],
+        actor_class=MEETING_ACTOR_CLASSES[actor],
         classification=NON_MEMORY_CLASSIFICATION,
         occurred_at=occurred_at,
         source_receipt_id=source_receipt_id,
@@ -590,6 +594,7 @@ class MeetingApplication:
         *,
         source_capability: str = Capability.MEETINGS_CREATE.value,
         correlation_id: str | None = None,
+        actor: MeetingActor = _DEFAULT_ACTOR,
     ) -> MeetingWriteResult:
         """Create a standalone Meeting, a new series and its first occurrence, or
         an occurrence of an existing series, as one request identity (AC-022).
@@ -634,7 +639,7 @@ class MeetingApplication:
                 series_history_id=issue_identifier(IdKind.MEETING_SERIES_HISTORY),
                 meeting_series_id=series.meeting_series_id,
                 action=MeetingHistoryAction.CREATE,
-                actor=_ACTOR,
+                actor=actor,
                 outcome=MeetingOutcome.APPLIED,
                 before_version=0,
                 after_version=1,
@@ -681,7 +686,7 @@ class MeetingApplication:
             history_id=issue_identifier(IdKind.MEETING_HISTORY),
             meeting_id=meeting_id,
             action=MeetingHistoryAction.CREATE,
-            actor=_ACTOR,
+            actor=actor,
             outcome=MeetingOutcome.APPLIED,
             before_version=0,
             after_version=1,
@@ -756,6 +761,7 @@ class MeetingApplication:
                 correlation_id=correlation_id,
                 source_receipt_id=series_receipt.series_history_id,
                 occurred_at=at,
+                actor=actor,
             ).event_id
         _stage_meeting_event(
             uow.record_events,
@@ -769,6 +775,7 @@ class MeetingApplication:
             correlation_id=correlation_id,
             source_receipt_id=receipt.history_id,
             occurred_at=at,
+            actor=actor,
             causation_event_id=series_event_id,
         )
         return MeetingWriteResult(
@@ -833,6 +840,7 @@ class MeetingApplication:
         *,
         source_capability: str = Capability.MEETINGS_UPDATE.value,
         correlation_id: str | None = None,
+        actor: MeetingActor = _DEFAULT_ACTOR,
     ) -> MeetingWriteResult:
         """Patch one Meeting's scalars, attendees, attachments, note and prep atomically.
 
@@ -880,6 +888,15 @@ class MeetingApplication:
             raise MeetingNotFoundError(MeetingErrorField.MEETING_SERIES_ID)
 
         record, scalar_fields = _updated_record(current, request, at)
+        # Ruling D6 (communications intelligence WP2): a provider-bound Meeting's
+        # series is the provider's, so a move or detach is refused. Checked after
+        # the version gate and the reference reads, before anything is written.
+        if record.meeting_series_id != current.meeting_series_id and (
+            meetings.read_provider_binding_for_meeting(principal_id, current.meeting_id) is not None
+        ):
+            raise MeetingInvalidRequestError(
+                MeetingErrorField.MEETING_SERIES_CHANGE_REFUSED_PROVIDER_BOUND
+            )
 
         attendees_retired: tuple[str, ...] = ()
         attendees_added: tuple[MeetingAttendeeRecord, ...] = ()
@@ -929,7 +946,7 @@ class MeetingApplication:
             history_id=issue_identifier(IdKind.MEETING_HISTORY),
             meeting_id=current.meeting_id,
             action=MeetingHistoryAction.UPDATE,
-            actor=_ACTOR,
+            actor=actor,
             outcome=MeetingOutcome.APPLIED if material else MeetingOutcome.NO_OP,
             before_version=current.version,
             after_version=after_version,
@@ -1015,6 +1032,7 @@ class MeetingApplication:
                 correlation_id=correlation_id,
                 source_receipt_id=receipt.history_id,
                 occurred_at=at,
+                actor=actor,
             )
         return MeetingWriteResult(meeting=view, receipt=receipt, replayed=False)
 
@@ -1031,6 +1049,7 @@ class MeetingApplication:
         *,
         source_capability: str = Capability.MEETINGS_SERIES_UPDATE.value,
         correlation_id: str | None = None,
+        actor: MeetingActor = _DEFAULT_ACTOR,
     ) -> MeetingSeriesWriteResult:
         """Retitle one MeetingSeries. No occurrence is locked or rewritten (AC-027).
 
@@ -1077,7 +1096,7 @@ class MeetingApplication:
             series_history_id=issue_identifier(IdKind.MEETING_SERIES_HISTORY),
             meeting_series_id=current.meeting_series_id,
             action=MeetingHistoryAction.UPDATE,
-            actor=_ACTOR,
+            actor=actor,
             outcome=MeetingOutcome.APPLIED if material else MeetingOutcome.NO_OP,
             before_version=current.version,
             after_version=after_version,
@@ -1112,6 +1131,7 @@ class MeetingApplication:
                 correlation_id=correlation_id,
                 source_receipt_id=receipt.series_history_id,
                 occurred_at=at,
+                actor=actor,
             )
         series = meetings.read_owned_series(principal_id, current.meeting_series_id)
         if series is None:

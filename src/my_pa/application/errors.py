@@ -516,6 +516,10 @@ class SafeDetail(StrEnum):
     CLEAR_FIELDS = "clear_fields"
     #: ADR-020 C2: the Meeting prep brief field, named and never its content.
     PREP = "prep"
+    #: Communications intelligence WP2 (ruling D6): `meetings.update` would move
+    #: or detach a provider-bound Meeting's series. Names the refusal, never the
+    #: binding.
+    MEETING_SERIES_CHANGE_REFUSED_PROVIDER_BOUND = "meeting_series_change_refused_provider_bound"
     #: The Record Event feed (WP-RE-06): the requested family narrowing was
     #: empty, named an unknown family or repeated one. `CURSOR` and `PAGE_SIZE`
     #: are reused for the feed's other two fields.

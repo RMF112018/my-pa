@@ -2124,7 +2124,7 @@ _ADMITTED_AFTER_THIS_REVISION: Final = (
     | S63_CAPABILITIES
     # Files workspace WP4: admitted by its revision (the head).
     | FILES_CAPABILITIES
-    # Communications intelligence WP2-W3: admitted by `6418b57081c3`.
+    # Communications intelligence WP2-W3: admitted by the WP2 provider-binding revision.
     | frozenset({"meetings.provider.bind"})
     # And the Reports Modernization general report plane head (`4c37731671fc`).
     | frozenset(

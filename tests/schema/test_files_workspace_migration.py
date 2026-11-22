@@ -188,8 +188,8 @@ def test_at_sets_are_the_live_enums_plus_the_files_names() -> None:
         member.value for member in NativeSourceCapability
     }
     at = set(_literals(mine["_CAPABILITIES_AT_THIS_REVISION"]))
-    # Communications intelligence WP2-W3: `6418b57081c3` admits `meetings.provider.bind`
-    # after this revision.
+    # Communications intelligence WP2-W3: its provider-binding revision admits
+    # `meetings.provider.bind` after this revision.
     declared -= {"meetings.provider.bind"}
     assert at == declared | FILES_CAPABILITIES
     purposes = set(_literals(mine["_PURPOSES_AT_THIS_REVISION"]))
@@ -599,7 +599,7 @@ def test_runtime_metadata_matches_the_revision(disposable_database: str, engine:
         assert (
             set(_literals(head["capability_is_known"]))
             # Communications intelligence WP2-W3: the runtime declares
-            # `meetings.provider.bind`, which `6418b57081c3` admits after this one.
+            # `meetings.provider.bind`, which the WP2 revision admits after this one.
             == (set(_literals(runtime["capability_is_known"])) - {"meetings.provider.bind"})
             | FILES_CAPABILITIES
         )

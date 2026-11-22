@@ -94,7 +94,7 @@ PREVIOUS_REVISION: Final = "16f05c46b8c3"
 #: Reports Modernization WP01 general report plane 127, Schedule Scenarios S6-3
 #: revision B 128, and the files workspace WP4 plane 129. (130 counted the
 #: ADR-020 meeting prep revision.) Communications intelligence WP2's provider
-#: bindings revision `6418b57081c3` makes it 131.
+#: bindings revision makes it 131.
 REVISION_FILE_COUNT: Final = 131
 
 #: The revision's frozen salt, restated. If this and the revision ever disagree

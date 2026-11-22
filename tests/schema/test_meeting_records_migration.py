@@ -120,7 +120,7 @@ OWNER_UNIQUE: Final = "a_managed_document_is_identified_within_its_owner"
 ADDED_BY_LATER_REVISIONS: Final = frozenset(
     {
         "a_meeting_note_digest_is_identified_within_its_meeting",
-        # Communications intelligence WP2-W3: revision `6418b57081c3`.
+        # Communications intelligence WP2-W3: the provider-binding revision.
         "a_completed_meeting_provider_bind_names_its_result",
         "a_completed_meeting_provider_sync_names_its_result",
     }
@@ -332,7 +332,7 @@ ADMITTED_LATER_CAPABILITIES: Final = (
     | S63_CAPABILITIES
     # Files workspace WP4: admitted by its revision (the head).
     | FILES_CAPABILITIES
-    # Communications intelligence WP2-W3: admitted by `6418b57081c3`.
+    # Communications intelligence WP2-W3: admitted by the WP2 provider-binding revision.
     | frozenset({"meetings.provider.bind"})
     # Reports Modernization WP02 and WP03: admitted by `4c37731671fc` and declared with it.
     | frozenset(

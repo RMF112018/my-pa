@@ -156,8 +156,8 @@ def test_at_sets_equal_the_live_enums() -> None:
         member.value for member in NativeSourceCapability
     }
     declared -= FILES_CAPABILITIES
-    # Communications intelligence WP2-W3: `6418b57081c3` admits `meetings.provider.bind`
-    # after this revision.
+    # Communications intelligence WP2-W3: its provider-binding revision admits
+    # `meetings.provider.bind` after this revision.
     declared -= {"meetings.provider.bind"}
     at = _literals(mine["_CAPABILITIES_AT_THIS_REVISION"])
     assert set(at) == declared and len(at) == len(declared) == 292

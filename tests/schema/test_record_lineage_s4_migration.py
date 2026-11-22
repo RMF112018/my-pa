@@ -240,8 +240,8 @@ def test_at_vocabulary_adds_exactly_the_s4_names() -> None:
             "reports.transfer.read_chunk",
         }
     )
-    # Communications intelligence WP2-W3: `6418b57081c3` admits `meetings.provider.bind`
-    # after this revision.
+    # Communications intelligence WP2-W3: its provider-binding revision admits
+    # `meetings.provider.bind` after this revision.
     declared -= {"meetings.provider.bind"}
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s4_admitted_ahead("capability")

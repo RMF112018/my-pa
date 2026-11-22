@@ -1046,3 +1046,38 @@ def test_f01_inventory_scanner_race_refuses_before_remote_writes(
         run(store, output, data)
     assert modified
     assert not any("/sessions/" in path for path in store.entries)
+
+
+def test_f01_oversized_manifest_and_artifacts_both_use_sealed_transfer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    count = 250
+    _synthetic_many(monkeypatch, tmp_path, count)
+
+    class SealedTransfers(SyntheticFilesWorkspace):
+        def __init__(self) -> None:
+            super().__init__()
+            self.sealed_targets: list[str] = []
+
+        async def upload(self, local: Path, destination: str, digest: str, size: int) -> dict:
+            assert str(local).startswith("/proc/self/fd/")
+            try:
+                with local.open("r+b") as opened:
+                    opened.write(b"unqualified")
+            except OSError:
+                pass
+            else:
+                raise AssertionError("mutable transfer source escaped snapshot sealing")
+            self.sealed_targets.append(destination)
+            return await super().upload(local, destination, digest, size)
+
+    store = SealedTransfers()
+    data = spec()
+    data["artifact_statuses"] = {}
+    result = run(store, tmp_path, data)
+    assert result["status"] == "READY_FOR_HANDOFF"
+    assert result["verified"] == count
+    assert len(store.sealed_targets) == count + 1
+    assert result["manifest_path"] in store.sealed_targets
+    assert payload(store, result["receipt_path"])["disposition"] == "READY_FOR_HANDOFF"
+

@@ -676,44 +676,30 @@ async def _write_text(api: FilesAPI, path: str, text: str) -> dict[str, Any]:
 
 
 async def _upload_one(
-    api: FilesAPI,
-    item: Artifact,
-    target: str,
-    *,
-    snapshot: Path | None = None,
-    source_root: Path | None = None,
+    api: FilesAPI, item: Artifact, target: str, *, source_root: Path
 ) -> dict[str, Any]:
+    """All binary writes use only an inventory-bound immutable snapshot."""
     if item.sha256 is None:
         raise PublicationError("withheld_artifact_not_uploadable")
-    current = await _stat(api, target)
-    if current is None:
-        # A lost response can still indicate success; verify actual stored bytes.
-        with suppress(Exception):
-            await api.upload(
-                snapshot if snapshot is not None else item.local,
-                target,
-                item.sha256,
-                item.size,
-            )
-    stored = await _stat(api, target)
-    if (
-        stored is None
-        or stored.get("kind") != "file"
-        or stored.get("size") != item.size
-        or stored.get("sha256") != item.sha256
-        or not isinstance(stored.get("version"), str)
-        or not stored["version"]
-    ):
-        raise PublicationError("artifact_missing_or_mismatched")
-    # The sealed bytes are immutable, and an altered original must not become READY.
-    if snapshot is not None:
-        if source_root is None or not _source_unchanged(source_root, item):
+    with _sealed_snapshot(source_root, item) as snapshot:
+        current = await _stat(api, target)
+        if current is None:
+            # A lost response can still indicate success; verify actual stored bytes.
+            with suppress(Exception):
+                await api.upload(snapshot, target, item.sha256, item.size)
+        stored = await _stat(api, target)
+        if (
+            stored is None
+            or stored.get("kind") != "file"
+            or stored.get("size") != item.size
+            or stored.get("sha256") != item.sha256
+            or not isinstance(stored.get("version"), str)
+            or not stored["version"]
+        ):
+            raise PublicationError("artifact_missing_or_mismatched")
+        if not _source_unchanged(source_root, item):
             raise PublicationError("source_changed_during_publication")
-    else:
-        size, digest = _hash_file(item.local)
-        if size != item.size or digest != item.sha256:
-            raise PublicationError("source_changed_during_publication")
-    return stored
+        return stored
 
 
 def _session_path(spec: Mapping[str, Any]) -> str:
@@ -745,6 +731,7 @@ async def _write_metadata(api: FilesAPI, path: str, text: str) -> dict[str, Any]
             api,
             Artifact("SESSION_MANIFEST.json", local, len(encoded), _sha_bytes(encoded), "SOURCE"),
             path,
+            source_root=Path(temporary),
         )
 
 
@@ -850,10 +837,7 @@ async def publish(api: FilesAPI, source: Path, spec: Mapping[str, Any]) -> dict[
                 parent = remote.rsplit("/", 1)[0]
                 try:
                     await _mkdir(api, parent)
-                    with _sealed_snapshot(source, item) as snapshot:
-                        stored = await _upload_one(
-                            api, item, remote, snapshot=snapshot, source_root=source
-                        )
+                    stored = await _upload_one(api, item, remote, source_root=source)
                     entry["version"] = stored["version"]
                 except PublicationError as exc:
                     incomplete = True

@@ -74,7 +74,9 @@ is not a defect.
 
 ## 3. What is implemented
 
-Five hundred and twenty-five Python modules under `src/my_pa` and nine hundred and ninety test modules —
+Five hundred and thirty-seven Python modules under `src/my_pa` and nine hundred and ninety-eight test modules —
+
+**Current-tree remeasurement (Communications intelligence WP1, ADR-022, branch `feat/comms-intelligence`, merged over PR #370, 2026-11-21):** the two commands below count 537 source modules and 998 test modules: the Issue #369 525/990 below plus the twelve source modules under `src/my_pa/domain/communications/` and `src/my_pa/infrastructure/communications/` and the eight test modules `tests/unit/test_communications_{aggregate_cli,corpus,evidence_parser,fixtures,identifiers,lanes,search_text}.py` and `tests/architecture/test_communications_source_scope.py`. Previously five hundred and twenty-five and nine hundred and ninety.
 
 **Issue #369 branch source-count reconciliation (2026-11-21, before merge):** The PR base `f7ec503fcc19069867782f2e674a740214e76744` has 523 source and 989 test modules. This bounded candidate adds `src/my_pa/domain/files/sdcc_placement.py` and `src/my_pa/infrastructure/file_workspace/sdcc_placement_config.py` plus `tests/unit/test_sdcr_placement_gate.py`, yielding 525 source and 990 test modules by exact file-set delta. The repository architecture count test must verify the corrected tree; this sentence is not a claim of independent CI acceptance.
 

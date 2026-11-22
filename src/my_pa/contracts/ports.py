@@ -138,6 +138,7 @@ from my_pa.domain.meeting.model import (
     MeetingStatus,
     NormalizedAttendee,
 )
+from my_pa.domain.meeting_sync.model import ProviderBindingState, ProviderEventIdFormat
 from my_pa.domain.policy.decision import validate_policy_version
 from my_pa.domain.program.membership import BridgeLink, EntityNode, MemberEdge
 from my_pa.domain.program.reportability import MetricId, SyncTarget
@@ -545,8 +546,10 @@ __all__ = [
     "MeetingNoteVersionRecord",
     "MeetingPrepRecord",
     "MeetingPrepVersionRecord",
+    "MeetingProviderBindingRecord",
     "MeetingRecord",
     "MeetingRepository",
+    "MeetingSeriesProviderBindingRecord",
     "MeetingWriteRequestRecord",
     "MemoryFeedFacts",
     "Operation",
@@ -11156,6 +11159,50 @@ class MeetingNoteVersionPage:
     has_more: bool
 
 
+@dataclass(frozen=True, slots=True)
+class MeetingSeriesProviderBindingRecord:
+    """One append-only provider series binding (communications intelligence WP2).
+
+    Binds one MeetingSeries to one provider series `(calendar_ref,
+    series_ical_uid)`; every occurrence binding of that UID resolves to it.
+    """
+
+    series_binding_id: str
+    meeting_series_id: str
+    calendar_ref: str
+    series_ical_uid: str
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingProviderBindingRecord:
+    """One Meeting's provider binding (contract section 12.1).
+
+    The identity is `(calendar_ref, ical_uid, occurrence_original_start_utc)`,
+    with `series_ical_uid` present exactly for an occurrence; identity columns
+    are immutable. The provider event id, its format, the provider state and
+    the `last_seen_*` observation are mutable attributes, and `version` counts
+    material attribute changes only (a new observation of identical attributes
+    refreshes `last_seen_*` without a version bump).
+    """
+
+    binding_id: str
+    meeting_id: str
+    calendar_ref: str
+    ical_uid: str
+    occurrence_original_start_utc: datetime | None
+    series_ical_uid: str | None
+    provider_event_id: str | None
+    provider_event_id_format: ProviderEventIdFormat
+    provider_state: ProviderBindingState
+    last_seen_source_sha256: str | None
+    last_seen_record_ordinal: int | None
+    last_seen_at: datetime | None
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
 class MeetingRepository(ABC):
     """The Meeting records tables, on the general unit of work's connection.
 
@@ -11457,6 +11504,70 @@ class MeetingRepository(ABC):
         self, principal_id: str, meeting_id: str, note_version_id: str
     ) -> MeetingNoteVersionRecord | None:
         """One note version under that Meeting of this Principal, or `None`."""
+
+    # --- provider bindings (communications intelligence WP2) -----------------
+
+    @abstractmethod
+    def lock_provider_binding(
+        self,
+        principal_id: str,
+        calendar_ref: str,
+        ical_uid: str,
+        occurrence_original_start_utc: datetime | None,
+    ) -> MeetingProviderBindingRecord | None:
+        """`SELECT … FOR UPDATE` the binding with this provider identity, or `None`.
+
+        `occurrence_original_start_utc is None` names the single-meeting binding.
+        """
+
+    @abstractmethod
+    def provider_uid_bound_as_other_kind(
+        self,
+        principal_id: str,
+        calendar_ref: str,
+        ical_uid: str,
+        *,
+        occurrence: bool,
+    ) -> bool:
+        """Whether this UID is bound as the other kind (D9). Nonlocking.
+
+        With `occurrence=True`: is it bound as a single meeting; with `False`:
+        is any occurrence of it bound.
+        """
+
+    @abstractmethod
+    def read_series_provider_binding(
+        self, principal_id: str, calendar_ref: str, series_ical_uid: str
+    ) -> MeetingSeriesProviderBindingRecord | None:
+        """The series binding of this provider series, or `None`. Nonlocking."""
+
+    @abstractmethod
+    def read_provider_binding_for_meeting(
+        self, principal_id: str, meeting_id: str
+    ) -> MeetingProviderBindingRecord | None:
+        """The one binding of this Meeting (D9), or `None`. Nonlocking."""
+
+    @abstractmethod
+    def insert_series_provider_binding(
+        self, principal_id: str, binding: MeetingSeriesProviderBindingRecord
+    ) -> None:
+        """Insert one append-only series binding."""
+
+    @abstractmethod
+    def insert_provider_binding(
+        self, principal_id: str, binding: MeetingProviderBindingRecord
+    ) -> None:
+        """Insert one Meeting provider binding."""
+
+    @abstractmethod
+    def update_provider_binding(
+        self, principal_id: str, binding: MeetingProviderBindingRecord
+    ) -> None:
+        """Rewrite the locked binding's mutable attributes, version and `updated_at`.
+
+        Never rewrites an identity column. Raises `RepositoryFailureError` when
+        the row is not in this partition.
+        """
 
 
 # --- Record lineage S1: the Issue plane (S1 contract sections 6 and 7) ---------

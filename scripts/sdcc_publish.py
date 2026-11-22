@@ -699,7 +699,12 @@ async def _upload_one(
     if current is None:
         # A lost response can still indicate success; verify actual stored bytes.
         with suppress(Exception):
-            await api.upload(snapshot if snapshot is not None else item.local, target, item.sha256, item.size)
+            await api.upload(
+                snapshot if snapshot is not None else item.local,
+                target,
+                item.sha256,
+                item.size,
+            )
     stored = await _stat(api, target)
     if (
         stored is None

@@ -279,6 +279,25 @@ def test_a_replay_of_an_older_record_does_not_rewind(harness: Harness, principal
     assert _meeting(harness, created.meeting_id)["title"] == "Third"
 
 
+def test_an_identical_replay_of_a_binding_only_record_is_replayed(
+    harness: Harness, principal: str
+) -> None:
+    """A record that changed only the binding reserves no key; its replay still writes nothing.
+
+    WP2-W3 prove-red isolation of the identical-observation guard: the creating
+    record's replay is also caught by its reserved key, so this case is the one
+    only that guard covers.
+    """
+    created = harness.apply(principal, _event())
+    renamed = harness.apply(principal, _event(provider_event_id="evt-renamed"), sha=SHA_B)
+    assert renamed.kind is SyncOutcomeKind.UPDATED
+    (before,) = harness.rows(meeting_provider_bindings, meeting_id=created.meeting_id)
+    replay = harness.apply(principal, _event(provider_event_id="evt-renamed"), sha=SHA_B, now=LATER)
+    assert replay.kind is SyncOutcomeKind.REPLAYED
+    (after,) = harness.rows(meeting_provider_bindings, meeting_id=created.meeting_id)
+    assert after == before
+
+
 def test_a_replay_of_the_creating_record_after_an_update_does_not_rewind(
     harness: Harness, principal: str
 ) -> None:

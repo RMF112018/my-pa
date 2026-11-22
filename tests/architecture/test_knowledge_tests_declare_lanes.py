@@ -59,6 +59,12 @@ PYTEST_JOBS: Final = frozenset(
         "database-e2e",
     }
 )
+#: Jobs that run a pytest `-m` selection but are not a lane a module is routed
+#: to: `validate-docs` runs only on a docs-only PR (`tests/ci_classify.py`),
+#: over an explicit list of documentation-reading modules, in place of the
+#: `validate` shards it does not replace on any other run. No module's lane is
+#: decided by it, and it aggregates nothing.
+NOT_LANES: Final = frozenset({"validate-docs"})
 _NARROW: Final = frozenset(
     {
         "database_clone",
@@ -156,6 +162,8 @@ def _raw_selectors() -> dict[str, str]:
     """Job name -> its pytest `-m` expression, for every job that runs one."""
     selectors: dict[str, str] = {}
     for name, block in repository_jobs().items():
+        if name.split(" / ", 1)[1] in NOT_LANES:
+            continue
         flat = " ".join(block.split())
         match = re.search(r'python -m pytest -m (?:"([^"]+)"|([a-z0-9_]+))', flat)
         if match:
@@ -207,6 +215,8 @@ def aggregator_needs() -> dict[str, frozenset[str]]:
     found: dict[str, frozenset[str]] = {}
     for name, block in repository_jobs().items():
         if name in job_selectors() or name in _raw_selectors():
+            continue
+        if name.split(" / ", 1)[1] in NOT_LANES:
             continue
         needs = _needs(block)
         if needs:
@@ -370,6 +380,7 @@ def test_the_pytest_lanes_and_aggregator_are_the_expected_jobs() -> None:
     assert aggregator_needs()[f"{prefix} / database-tier"] == {
         f"{prefix} / {job}"
         for job in (
+            "classify",
             "database-current-head",
             "database-recovery",
             "migration-empty-to-head",

@@ -15,39 +15,175 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # `validate` is three jobs. On PR #337 (run 39283086971) the single 60-minute
-  # FAST job was cancelled by its timeout with no test failed, and S3 adds about
-  # a thousand FAST tests. The operator granted sharding authority on
-  # 2026-10-20 ("Shard FAST + migration-edge"); coverage reduction is still not
-  # authorized, and none is made:
+  # `classify` -- what this run must prove (2026-11-22, "speed up
+  # repository-checks for PRs"; no test deleted, and no coverage reduced on
+  # push to main or workflow_dispatch). The logic is `tests/ci_classify.py`
+  # (standard library, run as a script) and is exercised case by case, without
+  # `act`, by `tests/architecture/test_ci_shards.py`, which also pins every
+  # `if:` and aggregator rule below to these outputs.
+  #
+  # - The diff is `git diff --name-status --no-renames` between the event's own
+  #   immutable SHAs (`pull_request.base.sha`/`head.sha`, merge-base, full
+  #   history), as `frontend-quality.yml` `classify` does; `--no-renames` makes
+  #   a rename an `A` plus a `D`, so both sides are classified.
+  # - The classifier executed is the merge-base's `tests/ci_classify.py`
+  #   (`git show`), never the PR's own, so a PR cannot relax the classifier
+  #   that classifies it; a change to the classifier is not docs-only and runs
+  #   in full. Without a merge-base copy the workflow writes the full-run
+  #   answer itself.
+  # - Fail closed: a non-PR event, an unresolvable or empty diff, an unknown
+  #   status letter, or any path that is absolute, has an empty/`.`/`..`
+  #   segment, a backslash or git quoting gives `docs_only=false` and
+  #   `shard_proof=true`, i.e. today's full run.
+  # - `docs_only=true` iff the PR changes only paths under `docs/`, top-level
+  #   `*.md`, or `*.md` under `ops/runbooks/`. Such a PR skips `validate-fast`,
+  #   `dependency-floor-fast`, `web-security`, every database and migration
+  #   job, and the partition proof; it still runs `validate-static` (document
+  #   and configuration validation, ruff, mypy) and runs `validate-docs`, the
+  #   test modules that read those paths.
+  # - `shard_proof=true` unless the PR cannot change how `tests/ci_shard.py`
+  #   partitions a selection; see the comment on that step in
+  #   `validate-static`.
+  # - A skippable job's condition is "not (PR and classify succeeded and
+  #   docs_only == 'true')" under `!cancelled()`, so a failed `classify` runs
+  #   everything rather than skipping it; on push and workflow_dispatch the
+  #   event test alone keeps every job.
+  # - The aggregators `validate`, `dependency-floor`, `migration-edge` and
+  #   `database-tier` (the required-check compatible names) also need
+  #   `classify`. Each fails unless `classify` is exactly `success`. A needed
+  #   job may then be `skipped` only on a docs-only PR; otherwise the rule is
+  #   unchanged (every needed result exactly `success`). `validate` also needs
+  #   `validate-docs`: `success` on a docs-only PR, `skipped` otherwise.
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+      shard_proof: ${{ steps.classify.outputs.shard_proof }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Record checkout identity
+        shell: bash
+        env:
+          INTENDED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          HEAD="$(git rev-parse HEAD)"
+          TREE="$(git rev-parse 'HEAD^{tree}')"
+          echo "repository=${GITHUB_REPOSITORY}"
+          echo "checked_out_commit=${HEAD}"
+          echo "checked_out_tree=${TREE}"
+          echo "intended_commit=${INTENDED_COMMIT}"
+          echo "github_sha=${GITHUB_SHA}"
+          echo "github_ref=${GITHUB_REF:-}"
+          echo "event_name=${GITHUB_EVENT_NAME}"
+          git log -1 --format='subject=%s'
+          if [[ "${HEAD}" != "${INTENDED_COMMIT}" ]]; then
+            echo "::error::Checked-out HEAD is not the intended commit (${HEAD} != ${INTENDED_COMMIT})"
+            exit 1
+          fi
+
+      - name: Classify the change
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          resolved="false"
+          changed=""
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            if [[ "${PR_BASE_SHA}" =~ ^[0-9a-f]{40}$ && "${PR_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] \
+               && git cat-file -e "${PR_BASE_SHA}^{commit}" 2>/dev/null \
+               && git cat-file -e "${PR_HEAD_SHA}^{commit}" 2>/dev/null \
+               && base="$(git merge-base "${PR_BASE_SHA}" "${PR_HEAD_SHA}" 2>/dev/null)" \
+               && changed="$(git diff --name-status --no-renames "${base}" "${PR_HEAD_SHA}")" \
+               && git show "${base}:tests/ci_classify.py" > "${RUNNER_TEMP}/ci_classify.py" 2>/dev/null; then
+              resolved="true"
+            fi
+          fi
+          printf '%s\n' "${changed}"
+          if [[ "${resolved}" == "true" ]]; then
+            # The merge-base's classifier, not the PR's: a PR cannot classify
+            # itself with a classifier it changes (that change is not
+            # docs-only, so the base classifier sends it to the full run).
+            printf '%s\n' "${changed}" | python3 -I "${RUNNER_TEMP}/ci_classify.py" --event "${EVENT_NAME}" > "${RUNNER_TEMP}/classification"
+          else
+            # Not resolved (a push, workflow_dispatch, a missing object, or a
+            # merge-base without the classifier): the full run, written here
+            # rather than by any classifier the checked-out tree carries.
+            echo "diff not resolved for event '${EVENT_NAME}'; classifying as a full run"
+            printf 'docs_only=false\nshard_proof=true\n' > "${RUNNER_TEMP}/classification"
+          fi
+          cat "${RUNNER_TEMP}/classification"
+          [[ "$(wc -l < "${RUNNER_TEMP}/classification")" -eq 2 ]]
+          grep -Eqx 'docs_only=(true|false)' "${RUNNER_TEMP}/classification"
+          grep -Eqx 'shard_proof=(true|false)' "${RUNNER_TEMP}/classification"
+          cat "${RUNNER_TEMP}/classification" >> "$GITHUB_OUTPUT"
+
+  # `validate` aggregates three jobs, plus `validate-docs` on a docs-only PR.
+  # On PR #337 (run 39283086971) the single 60-minute FAST job was cancelled
+  # by its timeout with no test failed, and S3 adds about a thousand FAST
+  # tests. The operator granted sharding authority on 2026-10-20 ("Shard FAST
+  # + migration-edge"); coverage reduction is still not authorized, and none is
+  # made:
   #
   # - `validate-static` runs every non-pytest step of the former job exactly
   #   once (document/configuration validation, applicability, install, import
   #   smoke, ruff, mypy, governance-candidate packaging) plus the partition
   #   proof: `python -m tests.ci_shard verify` collects each sharded selection
   #   unsharded and once per shard and fails unless the shards are pairwise
-  #   disjoint and their union is exactly the unsharded selection.
+  #   disjoint and their union is exactly the unsharded selection. The proof
+  #   runs on every push and workflow_dispatch, and on a PR when `classify`
+  #   says `shard_proof=true` (the reasoning is on the step).
   # - `validate-fast` runs the unchanged FAST `-m` expression as deterministic
   #   file-level shards (`tests/ci_shard.py`), one matrix leg per shard. The
   #   matrix size, the `/COUNT` in `CI_SHARD` and the verify step are pinned to
   #   each other by `tests/architecture/test_ci_shards.py`.
+  # - `validate-docs` runs only on a docs-only PR, in place of
+  #   `validate-fast`: the FAST tests of the modules that read `docs/`,
+  #   top-level `*.md` or `ops/runbooks/` (the list and how it was found are
+  #   on the job).
   # - `validate` is the required-check compatible aggregator, like
-  #   `database-tier`: it fails unless every needed result is exactly `success`
-  #   (failure, cancelled and skipped all fail).
+  #   `database-tier`: it fails unless `classify` succeeded and every needed
+  #   result is exactly `success` (failure, cancelled and skipped all fail),
+  #   except the docs-only cases stated on `classify`.
   #
   # Per-shard budget, measured on CI (ubuntu-latest). The `fast` weights in
   # `tests/ci_shard_weights.json` are CI per-file averages over the five
   # complete FAST legs of PR head 922db4ab (validate-fast 2,3;
-  # dependency-floor-fast 1,2,3); their plan puts
-  # `test_every_capability_reaching_a_memory_row_is_declared.py` alone in
-  # shard 1. That file took 934-1549 s on complete legs and >1715 s on the
-  # PR run 42623232044 leg cancelled at the old 35 minutes (job 2116 s); main
-  # 3a1bdea7 shard 1 took 1991 s. Collection adds 210-350 s per leg. The file
-  # bounds shard 1 from below, so rebalancing cannot shorten it; making the
-  # file cheaper is the remedy, a follow-up. At 55 minutes (3300 s): 1991 s
-  # is 60%, 2116 s 64%, a ~1900 s walk + 350 s collection + setup (~2285 s)
-  # 69%. Measurement headroom, not a performance SLA.
+  # dependency-floor-fast 1,2,3), with one exception below. Under those
+  # measurements `test_every_capability_reaching_a_memory_row_is_declared.py`
+  # (weight 990.9) sat alone in shard 1: it took 934-1549 s on complete legs
+  # and >1715 s on the PR run 42623232044 leg cancelled at the old 35 minutes
+  # (job 2116 s); main 3a1bdea7 shard 1 took 1991 s. Collection adds
+  # 210-350 s per leg. These are the measurements the timeouts were sized on:
+  # at 55 minutes (3300 s), 1991 s is 60%, 2116 s 64%, a ~1900 s walk + 350 s
+  # collection + setup (~2285 s) 69%. Measurement headroom, not a
+  # performance SLA.
+  #
+  # The exception: commit 1fa7b0ca5 made that file cheaper (841 s -> 41 s
+  # locally). Its weight is now 48.3, an ESTIMATE, not a CI measurement:
+  # 41 s x (990.9 / 841 = 1.18, the CI/local ratio of its old cost). With it,
+  # the plan's three shard totals are 613.7 / 613.7 / 613.8 s of weight
+  # (were 990.9 / 896.4 / 896.5), so no file bounds a shard any longer. The
+  # timeouts are deliberately unchanged until CI legs measure the new plan;
+  # regenerate the table with `python -m tests.ci_shard weigh` from those
+  # legs' JUnit XML.
   validate-static:
+    # Runs on every event, docs-only PRs included, and even when `classify`
+    # failed; only the partition-proof step reads the classification.
+    if: ${{ !cancelled() }}
+    needs:
+      - classify
     runs-on: ubuntu-latest
     # The partition proof alone took 27 minutes on CI; the job took 1684 s on
     # the PR (94% of the old 30 minutes) and 1555 s on main. 1684 s of 45
@@ -198,7 +334,23 @@ jobs:
           python -m mypy
 
       - name: Prove the CI test shards partition their selections
-        if: steps.fast.outputs.applicable == 'true'
+        # Always on push and workflow_dispatch, and on a PR unless `classify`
+        # succeeded and said `shard_proof=false`. Why skipping is sound there:
+        # `tests/ci_shard.py` places a test by `shard_of(path, lane, count)`,
+        # a pure function of the test's *file path*, the shard count and
+        # `tests/ci_shard_weights.json`, applied by a `trylast` hook after
+        # selection. Editing the body of an existing `test_*.py` (or changing
+        # `src/`) can change which tests a file holds but not which shard owns
+        # the file, so unsharded == union of shards still holds. Every input
+        # that can change the partition sets `shard_proof=true`: the selector,
+        # its weights, `tests/architecture/test_ci_shards.py`, this workflow,
+        # `pyproject.toml` (and any `pytest.ini`/`tox.ini`/`setup.cfg`), any
+        # `conftest.py` or other non-`test_*` module under `tests/` (hooks and
+        # plugins, including the auto-marking in `tests/db/fixtures.py`), a
+        # test module loaded through `pytest_plugins`, and adding, deleting or
+        # renaming any `*.py` under `tests/` (`--no-renames`: a rename is
+        # `A`+`D`). The proof runs on every push to `main` regardless.
+        if: steps.fast.outputs.applicable == 'true' && (github.event_name != 'pull_request' || needs.classify.result != 'success' || needs.classify.outputs.shard_proof != 'false')
         shell: bash
         run: |
           # Collection only: no test runs here and no database is needed to
@@ -235,6 +387,10 @@ jobs:
     # applicability check (so a tree without `pyproject.toml` passes here
     # exactly as the single job did) and the install. The failure-annotation
     # ledger and `--durations=50` evidence are per leg.
+    # Skipped only on a docs-only PR (see `classify`).
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && needs.classify.result == 'success' && needs.classify.outputs.docs_only == 'true') }}
+    needs:
+      - classify
     runs-on: ubuntu-latest
     timeout-minutes: 55
     strategy:
@@ -358,35 +514,191 @@ jobs:
             exit "$status"
           fi
 
+  validate-docs:
+    # Only on a docs-only PR (`classify`), where it stands in for
+    # `validate-fast`: the FAST tests of every module that reads `docs/`, a
+    # top-level `*.md` or `ops/runbooks/`, so a documentation change cannot
+    # break a documentation guard unseen. How the list was found: the full
+    # FAST selection was run (2026-11-22, at 1fa7b0ca5) under an
+    # `sys.addaudithook` tracer recording every `open`, `os.listdir` and
+    # `os.scandir` of those paths, attributed to the test (or module
+    # collection) that made it. 46 modules did; one
+    # (`tests/unit/test_file_workspace_application.py`, a synthetic
+    # `notes.md` opened relative to a temporary workspace) was a false
+    # positive, leaving the 45 below. A static sweep of every non-docstring
+    # string literal under `tests/` that names such a path found 40 of them
+    # (the other five reach `ops/runbooks/` only by walking `ops/`) and five
+    # more modules that name a path without reading it.
+    # `tests/architecture/test_ci_shards.py` pins the static half: any module
+    # that names one must be listed here or exempted with a reason. The
+    # selection is FAST's, so a database-marked test in a listed module does
+    # not run here; the static sweep found no database-only documentation
+    # reader.
+    needs:
+      - classify
+    if: github.event_name == 'pull_request' && needs.classify.result == 'success' && needs.classify.outputs.docs_only == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Record checkout identity
+        shell: bash
+        env:
+          INTENDED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          HEAD="$(git rev-parse HEAD)"
+          TREE="$(git rev-parse 'HEAD^{tree}')"
+          echo "repository=${GITHUB_REPOSITORY}"
+          echo "checked_out_commit=${HEAD}"
+          echo "checked_out_tree=${TREE}"
+          echo "intended_commit=${INTENDED_COMMIT}"
+          echo "github_sha=${GITHUB_SHA}"
+          echo "github_ref=${GITHUB_REF:-}"
+          echo "event_name=${GITHUB_EVENT_NAME}"
+          git log -1 --format='subject=%s'
+          if [[ "${HEAD}" != "${INTENDED_COMMIT}" ]]; then
+            echo "::error::Checked-out HEAD is not the intended commit (${HEAD} != ${INTENDED_COMMIT})"
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Python FAST dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Test the modules that read documentation
+        shell: bash
+        run: |
+          python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery" --durations=20 \
+            tests/architecture/test_auth_runtime_evidence.py \
+            tests/architecture/test_canonical_claims_are_supported.py \
+            tests/architecture/test_canonical_mirror_is_byte_faithful.py \
+            tests/architecture/test_ci_invokes_mypy_over_the_declared_tree.py \
+            tests/architecture/test_citations_resolve_at_head.py \
+            tests/architecture/test_claimed_test_counts_match_collection.py \
+            tests/architecture/test_cpm_full_parser_scope.py \
+            tests/architecture/test_cpm_workbench_worker_scope.py \
+            tests/architecture/test_entity_plane_prose_matches_the_capability_sets.py \
+            tests/architecture/test_financial_source_scope.py \
+            tests/architecture/test_knowledge_registry_has_no_runtime_writer.py \
+            tests/architecture/test_limitations_cite_evidence.py \
+            tests/architecture/test_managed_writes_are_contained.py \
+            tests/architecture/test_nas_synology_cloudflare_egress_firewall.py \
+            tests/architecture/test_nas_synology_ingress_firewall.py \
+            tests/architecture/test_no_stored_revision_is_labelled_head.py \
+            tests/architecture/test_non_scaffold_readmes_are_routed.py \
+            tests/architecture/test_open_decision_counts.py \
+            tests/architecture/test_platform_apple_mechanisms.py \
+            tests/architecture/test_readme_state_claims.py \
+            tests/architecture/test_record_event_flush_discipline.py \
+            tests/architecture/test_record_events_are_never_rewritten.py \
+            tests/architecture/test_record_lineage_client_exposure_scope.py \
+            tests/architecture/test_record_lineage_s1_scope.py \
+            tests/architecture/test_record_lineage_s2_scope.py \
+            tests/architecture/test_record_lineage_s31_scope.py \
+            tests/architecture/test_record_lineage_s3_scope.py \
+            tests/architecture/test_record_lineage_s4_scope.py \
+            tests/architecture/test_review_rounds_recorded_match_the_count_claimed.py \
+            tests/architecture/test_runbook_commands_name_real_paths.py \
+            tests/architecture/test_scenario_engine_scope.py \
+            tests/architecture/test_scope_and_hygiene.py \
+            tests/architecture/test_spelled_counts_match_the_sets_they_name.py \
+            tests/architecture/test_wp12_slice_a_checkpoint.py \
+            tests/architecture/test_wp15_native_host_admission.py \
+            tests/contract/test_lineage_client_exposure_policy.py \
+            tests/contract/test_lineage_client_exposure_runbook.py \
+            tests/contract/test_lineage_s31_guidance.py \
+            tests/migration/test_personal_data_containment.py \
+            tests/schema/test_files_workspace_migration.py \
+            tests/security/test_cpm_workbench_security.py \
+            tests/unit/test_frontend_protection_ledger.py \
+            tests/unit/test_goodnotes_rollout.py \
+            tests/unit/test_goodnotes_tbr_preservation.py \
+            tests/unit/test_sdcr_placement_gate.py
+
   validate:
     # Required-check compatible aggregator over the split FAST gate. Does not
     # check out or run pytest. `always()` so a failed, cancelled or skipped
     # dependency is reported here as a failure rather than skipping the
-    # aggregator, which a required check would read as passing.
+    # aggregator, which a required check would read as passing. `classify`
+    # must be `success`; `validate-static` must be `success`; `validate-fast`
+    # must be `success`, or `skipped` on a docs-only PR; `validate-docs` must
+    # be `success` on a docs-only PR and `skipped` otherwise.
     if: always()
     needs:
+      - classify
       - validate-static
       - validate-fast
+      - validate-docs
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Reconcile validate lanes
         shell: bash
         env:
+          CLASSIFY: ${{ needs.classify.result }}
+          DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
+          EVENT_NAME: ${{ github.event_name }}
           STATIC: ${{ needs.validate-static.result }}
           FAST: ${{ needs.validate-fast.result }}
+          DOCS: ${{ needs.validate-docs.result }}
         run: |
           set -euo pipefail
+          echo "classify=${CLASSIFY}"
+          echo "docs_only=${DOCS_ONLY}"
+          echo "event_name=${EVENT_NAME}"
           echo "validate-static=${STATIC}"
           echo "validate-fast=${FAST}"
-          for result in "${STATIC}" "${FAST}"; do
+          echo "validate-docs=${DOCS}"
+          if [[ "${CLASSIFY}" != "success" ]]; then
+            echo "::error::classify did not succeed: ${CLASSIFY}"
+            exit 1
+          fi
+          docs_lane="false"
+          if [[ "${EVENT_NAME}" == "pull_request" && "${DOCS_ONLY}" == "true" ]]; then
+            docs_lane="true"
+          fi
+          for result in "${STATIC}"; do
             if [[ "${result}" != "success" ]]; then
               echo "::error::validate lane failed: ${result}"
               exit 1
             fi
           done
+          for result in "${FAST}"; do
+            if [[ "${result}" == "skipped" && "${docs_lane}" == "true" ]]; then
+              continue
+            fi
+            if [[ "${result}" != "success" ]]; then
+              echo "::error::validate lane failed: ${result}"
+              exit 1
+            fi
+          done
+          expected_docs="skipped"
+          if [[ "${docs_lane}" == "true" ]]; then
+            expected_docs="success"
+          fi
+          if [[ "${DOCS}" != "${expected_docs}" ]]; then
+            echo "::error::validate-docs is ${DOCS}, expected ${expected_docs}"
+            exit 1
+          fi
 
   web-security:
+    # Skipped only on a docs-only PR (see `classify`).
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && needs.classify.result == 'success' && needs.classify.outputs.docs_only == 'true') }}
+    needs:
+      - classify
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -462,10 +774,16 @@ jobs:
     # where the suite fails during collection while the validate job stays
     # green. `src/my_pa/contracts/v1/envelope.py` avoids that form for this
     # reason, and this job is what keeps that reason true.
+    # Skipped only on a docs-only PR (see `classify`).
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && needs.classify.result == 'success' && needs.classify.outputs.docs_only == 'true') }}
+    needs:
+      - classify
     runs-on: ubuntu-latest
     # Per-shard budget, as for `validate-fast` (see the comment above
-    # `validate-static`): shard 1 holds only the walk file, which bounds it
-    # from below; a ~2285 s worst case is about 69% of 55 minutes (3300 s).
+    # `validate-static`): sized when shard 1 held only the walk file, a
+    # ~2285 s worst case, about 69% of 55 minutes (3300 s). Since 1fa7b0ca5
+    # the walk file is estimated, not yet measured, at 48.3 s of weight and
+    # the plan is balanced; the timeout stays until CI measures it.
     # Measurement headroom, not an SLA.
     timeout-minutes: 55
     strategy:
@@ -733,9 +1051,12 @@ jobs:
 
   dependency-floor:
     # Required-check compatible aggregator over the sharded floor gate, with
-    # the same fail-closed rule as `validate` and `database-tier`.
+    # the same fail-closed rule as `validate` and `database-tier`: `classify`
+    # must be `success`, and the shards `success` (or `skipped` on a docs-only
+    # PR).
     if: always()
     needs:
+      - classify
       - dependency-floor-fast
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -743,11 +1064,28 @@ jobs:
       - name: Reconcile dependency-floor shards
         shell: bash
         env:
+          CLASSIFY: ${{ needs.classify.result }}
+          DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
+          EVENT_NAME: ${{ github.event_name }}
           FLOOR: ${{ needs.dependency-floor-fast.result }}
         run: |
           set -euo pipefail
+          echo "classify=${CLASSIFY}"
+          echo "docs_only=${DOCS_ONLY}"
+          echo "event_name=${EVENT_NAME}"
           echo "dependency-floor-fast=${FLOOR}"
+          if [[ "${CLASSIFY}" != "success" ]]; then
+            echo "::error::classify did not succeed: ${CLASSIFY}"
+            exit 1
+          fi
+          docs_lane="false"
+          if [[ "${EVENT_NAME}" == "pull_request" && "${DOCS_ONLY}" == "true" ]]; then
+            docs_lane="true"
+          fi
           for result in "${FLOOR}"; do
+            if [[ "${result}" == "skipped" && "${docs_lane}" == "true" ]]; then
+              continue
+            fi
             if [[ "${result}" != "success" ]]; then
               echo "::error::dependency-floor lane failed: ${result}"
               exit 1
@@ -756,6 +1094,10 @@ jobs:
 
   database-current-head:
     # Ordinary current-schema tests. One Alembic upgrade per worker, then clones.
+    # Skipped only on a docs-only PR (see `classify`).
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && needs.classify.result == 'success' && needs.classify.outputs.docs_only == 'true') }}
+    needs:
+      - classify
     runs-on: ubuntu-latest
     # Main took 3071 s (pytest 2971 s); the PR's pytest ran 3555 s and was
     # cancelled at the old 60 minutes with ~97% of tests done, so pytest
@@ -901,6 +1243,10 @@ jobs:
           PYTEST
 
   database-recovery:
+    # Skipped only on a docs-only PR (see `classify`).
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && needs.classify.result == 'success' && needs.classify.outputs.docs_only == 'true') }}
+    needs:
+      - classify
     runs-on: ubuntu-latest
     timeout-minutes: 40
     services:
@@ -978,7 +1324,13 @@ jobs:
         run: python -m pytest -m recovery
 
   migration-empty-to-head:
-    # Always on PR/push. Path filters must never drop this invariant.
+    # Always on push and workflow_dispatch, and on every PR except a docs-only
+    # one (`classify`), which changes no migration, schema or code. No path
+    # filter beyond that classification may drop this invariant.
+    # Skipped only on a docs-only PR (see `classify`).
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && needs.classify.result == 'success' && needs.classify.outputs.docs_only == 'true') }}
+    needs:
+      - classify
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
@@ -1070,6 +1422,10 @@ jobs:
     # minutes on CI (PostgreSQL 17), so CI is at least about 1.7x local; at
     # 1.7-2.2x a leg is expected at about 13-21 minutes of pytest against a
     # 40-minute timeout. Measurement headroom, not an SLA.
+    # Skipped only on a docs-only PR (see `classify`).
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && needs.classify.result == 'success' && needs.classify.outputs.docs_only == 'true') }}
+    needs:
+      - classify
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -1156,9 +1512,12 @@ jobs:
   migration-edge:
     # Required-check compatible aggregator over the migration-edge shards.
     # `database-tier` still needs this job, so it still fails closed on any
-    # shard that failed, was cancelled or was skipped.
+    # shard that failed, was cancelled or was skipped -- except that on a
+    # docs-only PR (`classify` succeeded with `docs_only=true`) skipped shards
+    # pass. `classify` must be `success`.
     if: always()
     needs:
+      - classify
       - migration-edge-shard
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1166,11 +1525,28 @@ jobs:
       - name: Reconcile migration-edge shards
         shell: bash
         env:
+          CLASSIFY: ${{ needs.classify.result }}
+          DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
+          EVENT_NAME: ${{ github.event_name }}
           SHARDS: ${{ needs.migration-edge-shard.result }}
         run: |
           set -euo pipefail
+          echo "classify=${CLASSIFY}"
+          echo "docs_only=${DOCS_ONLY}"
+          echo "event_name=${EVENT_NAME}"
           echo "migration-edge-shard=${SHARDS}"
+          if [[ "${CLASSIFY}" != "success" ]]; then
+            echo "::error::classify did not succeed: ${CLASSIFY}"
+            exit 1
+          fi
+          docs_lane="false"
+          if [[ "${EVENT_NAME}" == "pull_request" && "${DOCS_ONLY}" == "true" ]]; then
+            docs_lane="true"
+          fi
           for result in "${SHARDS}"; do
+            if [[ "${result}" == "skipped" && "${docs_lane}" == "true" ]]; then
+              continue
+            fi
             if [[ "${result}" != "success" ]]; then
               echo "::error::migration-edge lane failed: ${result}"
               exit 1
@@ -1178,6 +1554,10 @@ jobs:
           done
 
   database-e2e:
+    # Skipped only on a docs-only PR (see `classify`).
+    if: ${{ !cancelled() && !(github.event_name == 'pull_request' && needs.classify.result == 'success' && needs.classify.outputs.docs_only == 'true') }}
+    needs:
+      - classify
     runs-on: ubuntu-latest
     timeout-minutes: 40
     services:
@@ -1259,8 +1639,12 @@ jobs:
     # migration_historical has no tests on this tree and the repository has no
     # scheduled/release workflow appropriate to add one inside this change.
     # Historical compatibility remains a bounded follow-up, not a new job.
+    # `classify` must be `success`; `migration-edge` (itself an `always()`
+    # aggregator) must be `success`; the other lanes `success`, or `skipped`
+    # on a docs-only PR.
     if: always()
     needs:
+      - classify
       - database-current-head
       - database-recovery
       - migration-empty-to-head
@@ -1272,6 +1656,9 @@ jobs:
       - name: Reconcile database-tier lanes
         shell: bash
         env:
+          CLASSIFY: ${{ needs.classify.result }}
+          DOCS_ONLY: ${{ needs.classify.outputs.docs_only }}
+          EVENT_NAME: ${{ github.event_name }}
           CURRENT_HEAD: ${{ needs.database-current-head.result }}
           RECOVERY: ${{ needs.database-recovery.result }}
           EMPTY_TO_HEAD: ${{ needs.migration-empty-to-head.result }}
@@ -1279,12 +1666,32 @@ jobs:
           E2E: ${{ needs.database-e2e.result }}
         run: |
           set -euo pipefail
+          echo "classify=${CLASSIFY}"
+          echo "docs_only=${DOCS_ONLY}"
+          echo "event_name=${EVENT_NAME}"
           echo "database-current-head=${CURRENT_HEAD}"
           echo "database-recovery=${RECOVERY}"
           echo "migration-empty-to-head=${EMPTY_TO_HEAD}"
           echo "migration-edge=${EDGE}"
           echo "database-e2e=${E2E}"
-          for result in "${CURRENT_HEAD}" "${RECOVERY}" "${EMPTY_TO_HEAD}" "${EDGE}" "${E2E}"; do
+          if [[ "${CLASSIFY}" != "success" ]]; then
+            echo "::error::classify did not succeed: ${CLASSIFY}"
+            exit 1
+          fi
+          docs_lane="false"
+          if [[ "${EVENT_NAME}" == "pull_request" && "${DOCS_ONLY}" == "true" ]]; then
+            docs_lane="true"
+          fi
+          for result in "${EDGE}"; do
+            if [[ "${result}" != "success" ]]; then
+              echo "::error::database-tier lane failed: ${result}"
+              exit 1
+            fi
+          done
+          for result in "${CURRENT_HEAD}" "${RECOVERY}" "${EMPTY_TO_HEAD}" "${E2E}"; do
+            if [[ "${result}" == "skipped" && "${docs_lane}" == "true" ]]; then
+              continue
+            fi
             if [[ "${result}" != "success" ]]; then
               echo "::error::database-tier lane failed: ${result}"
               exit 1

@@ -2410,6 +2410,61 @@ def _writes_in(
 Guard = tuple[str, str, str]
 
 
+class _WalkContext:
+    """Everything `_branch_scan` derives about one function that no member changes.
+
+    The branch walk re-runs once per member of every candidate enum, and before
+    this existed each run re-derived the same environment, table names, statement
+    locals and parent map for every function it reached — and re-walked every
+    statement for its writes and its call sites. None of that depends on the enum
+    or the member, so it is derived once per function here and shared. What the
+    member *does* decide — which guard is taken, which branch is alive, which
+    locals are `nulls` — is still evaluated per run in `visit`.
+    """
+
+    def __init__(
+        self, path: Path, function: ast.FunctionDef | ast.AsyncFunctionDef, known: dict[str, str]
+    ) -> None:
+        self.module = _module_name(path)
+        self.known = known
+        self.names = _local_table_names(function, _memory_bindings().get(path, {}))
+        self.statements = _statement_locals(function)
+        self.parents = {
+            child: parent for parent in ast.walk(function) for child in ast.iter_child_nodes(parent)
+        }
+        self._effects: dict[ast.AST, tuple[frozenset[str], tuple[Node, ...]]] = {}
+
+    def effects(self, source: ast.AST) -> tuple[frozenset[str], tuple[Node, ...]]:
+        """`source`'s own writes, and every callee of every call in it, in walk order.
+
+        The callees are flattened in exactly the order the uncached walk visited
+        them — `ast.walk` order over the calls, then each call's own callee set —
+        because the order `visit` meets a cycle in decides what the cycle's
+        members memoise.
+        """
+        cached = self._effects.get(source)
+        if cached is None:
+            writes = _writes_in(source, self.names, self.statements, self.parents)
+            callees = tuple(
+                callee
+                for call in ast.walk(source)
+                if isinstance(call, ast.Call)
+                for callee in _callees(call, self.module, self.known)
+            )
+            cached = self._effects[source] = (writes, callees)
+        return cached
+
+
+@cache
+def _walk_context(node: Node) -> _WalkContext | None:
+    """The member-independent half of one `_branch_scan` visit, derived once."""
+    entry = _nodes().get(node)
+    if entry is None:
+        return None
+    path, enclosing, function = entry
+    return _WalkContext(path, function, _environment(enclosing, function))
+
+
 @cache
 def _branch_scan(enum: str, member: str) -> tuple[dict[Node, frozenset[str]], frozenset[Guard]]:
     """Per function, the memory tables one member of `enum` can make it write.
@@ -2428,28 +2483,22 @@ def _branch_scan(enum: str, member: str) -> tuple[dict[Node, frozenset[str]], fr
             return memo[node]
         if node in stack:
             return frozenset()
-        entry = _nodes().get(node)
-        if entry is None:
+        context = _walk_context(node)
+        if context is None:
             return frozenset()
-        path, enclosing, function = entry
-        module = _module_name(path)
-        known = _environment(enclosing, function)
-        names = _local_table_names(function, _memory_bindings().get(path, {}))
-        statements = _statement_locals(function)
-        parents = {
-            child: parent for parent in ast.walk(function) for child in ast.iter_child_nodes(parent)
-        }
+        function = _nodes()[node][2]
+        module = context.module
+        known = context.known
         deeper = stack | {node}
         collected = node in reaching_nodes()
 
         def expression(source: ast.AST | None) -> frozenset[str]:
             if source is None:
                 return frozenset()
-            found = set(_writes_in(source, names, statements, parents))
-            for call in ast.walk(source):
-                if isinstance(call, ast.Call):
-                    for callee in _callees(call, module, known):
-                        found |= visit(callee, deeper)
+            writes, callees = context.effects(source)
+            found = set(writes)
+            for callee in callees:
+                found |= visit(callee, deeper)
             return frozenset(found)
 
         def block(

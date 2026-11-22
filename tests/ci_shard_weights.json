@@ -28,7 +28,7 @@
       "tests/architecture/test_dependency_direction.py": 161.4,
       "tests/architecture/test_derivation_proposes_and_never_promotes.py": 0.2,
       "tests/architecture/test_entity_plane_prose_matches_the_capability_sets.py": 98.7,
-      "tests/architecture/test_every_capability_reaching_a_memory_row_is_declared.py": 990.9,
+      "tests/architecture/test_every_capability_reaching_a_memory_row_is_declared.py": 48.3,
       "tests/architecture/test_every_engine_is_bounded_or_exempt.py": 5.3,
       "tests/architecture/test_every_write_validates_its_idempotency_key.py": 10.5,
       "tests/architecture/test_financial_source_scope.py": 2.4,

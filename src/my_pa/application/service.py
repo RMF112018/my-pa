@@ -150,6 +150,7 @@ from my_pa.application.commands import (
     BeginIntelligenceCycle,
     BeginReportTransfer,
     BindEntityIdentifier,
+    BindMeetingProvider,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CheckpointKnowledgeDiscovery,
@@ -649,6 +650,7 @@ from my_pa.application.lineage_visibility import (
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.meetings import (
     MeetingApplication,
+    MeetingProviderBindResult,
     MeetingSeriesWriteResult,
     MeetingWriteResult,
 )
@@ -4154,6 +4156,22 @@ def _meeting_write_payload(
         "series_history": (
             None if written.series_receipt is None else written.series_receipt.to_canonical_dict()
         ),
+        "replayed": written.replayed,
+    }
+
+
+def _meeting_provider_bind_payload(written: MeetingProviderBindResult) -> dict[str, Any]:
+    """What `meetings.provider.bind` answers (WP2-W3): ids, versions and the binding.
+
+    `binding` is the Meeting's binding now (`null` after an unbind) and
+    `history` the immutable receipt of the original write; no Meeting content.
+    """
+    return {
+        "meeting_id": written.meeting_id,
+        "version": written.version,
+        "action": written.action.value,
+        "binding": None if written.binding is None else written.binding.to_canonical_dict(),
+        "history": written.receipt.to_canonical_dict(),
         "replayed": written.replayed,
     }
 
@@ -14391,6 +14409,29 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEETING_TRUST_BASIS),
         )
 
+    def _meetings_provider_bind(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: BindMeetingProvider,
+    ) -> _Result:
+        """`meetings.provider.bind`: bind a Meeting to a provider key, or unbind it."""
+        with _translated(), _meeting_translated():
+            written = self._meetings.bind_meeting_provider(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.meeting_request(),
+                command.expected_version,
+                command.idempotency_key,
+                authorization.at,
+                source_capability=authorization.capability.value,
+                correlation_id=authorization.correlation_id,
+            )
+        return _Result(
+            payload=_meeting_provider_bind_payload(written),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEETING_TRUST_BASIS),
+        )
+
     # ---- the record lineage S1 Issue plane (ADR-015) ----------------------------
     #
     # Six handlers over `IssueApplication`, in the Meeting shape: the command
@@ -19697,6 +19738,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.MEETINGS_SEARCH: ApplicationService._meetings_search,
         Capability.MEETINGS_UPDATE: ApplicationService._meetings_update,
         Capability.MEETINGS_SERIES_UPDATE: ApplicationService._meetings_series_update,
+        Capability.MEETINGS_PROVIDER_BIND: ApplicationService._meetings_provider_bind,
         Capability.ISSUES_CREATE: ApplicationService._issues_create,
         Capability.ISSUES_READ: ApplicationService._issues_read,
         Capability.ISSUES_LIST: ApplicationService._issues_list,

@@ -349,6 +349,9 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.MEETINGS_CREATE,
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
+        # WP2-W3: `meetings.provider.bind` carries the same required key over
+        # the same `meeting_write_requests` arbitration.
+        Capability.MEETINGS_PROVIDER_BIND,
         # KLP-WP-03 (R6 6.3). The remote explicit-create key is this set's
         # server-stamped payload hash, so an identical retry replays its stored
         # result permanently and a changed request hashes to a new key. The

@@ -342,6 +342,9 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.MEETINGS_SEARCH,
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
+        # WP2-W3: a provider key is the caller's own reconciliation claim about
+        # its own Meeting, never a configured source or an enrollment.
+        Capability.MEETINGS_PROVIDER_BIND,
         # `record_events.list` (WP-RE-06) is scopeless for the same reason: every
         # event names a product-owned record in the acting Principal's own
         # partition and carries no `source_id` or `enrollment_id`. Capability,

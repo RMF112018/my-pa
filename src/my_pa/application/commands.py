@@ -239,6 +239,13 @@ from my_pa.domain.meeting.model import (
     NormalizedAttendee,
     normalize_attendee,
 )
+from my_pa.domain.meeting_sync.binding import MeetingProviderBindRequest, ProviderBindAction
+from my_pa.domain.meeting_sync.model import (
+    MAX_CALENDAR_REF_CHARACTERS,
+    MAX_ICAL_UID_CHARACTERS,
+    MAX_PROVIDER_EVENT_ID_CHARACTERS,
+    ProviderEventIdFormat,
+)
 from my_pa.domain.project_controls.category import ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import (
     ConstraintLifecycleState,
@@ -479,6 +486,7 @@ __all__ = [
     "BeginFileUpload",
     "BeginIntelligenceCycle",
     "BindEntityIdentifier",
+    "BindMeetingProvider",
     "BulkConfirmTasks",
     "BulkPreviewTasks",
     "CloseCommitment",
@@ -13378,6 +13386,147 @@ class UpdateMeetingSeries:
 
 
 @dataclass(frozen=True, slots=True)
+class BindMeetingProvider:
+    """`meetings.provider.bind`: bind one of your Meetings to a calendar event, or unbind it.
+
+    Reconciliation only: name the Meeting and the event's exact provider key; it
+    never matches by title or time. `action` `bind` names `calendar_ref` and
+    `ical_uid`, and for an occurrence of a recurring event also its
+    `occurrence_original_start_utc` (the original start, not the current one) and
+    `series_ical_uid`; a single event names neither. An occurrence's Meeting must
+    be in a series, and a provider series binds to one series only. `unbind`
+    names only the Meeting and removes its binding (do this before moving a bound
+    Meeting to another series). Either bumps the Meeting version; a stale
+    `expected_version` is conflict and writes nothing.
+
+    The principal is not here. Authority comes from authenticated context.
+    """
+
+    capability: ClassVar[Capability] = Capability.MEETINGS_PROVIDER_BIND
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "action": {
+                "type": "string",
+                "enum": [member.value for member in ProviderBindAction],
+                "description": "bind names the provider key; unbind names only the Meeting.",
+            },
+            "meeting_id": _meeting_id_schema(IdKind.MEETING, "The Meeting to bind or unbind."),
+            "expected_version": _MEETING_EXPECTED_VERSION_SCHEMA,
+            "idempotency_key": _MEETING_IDEMPOTENCY_KEY_SCHEMA,
+            "calendar_ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_CALENDAR_REF_CHARACTERS,
+                "description": "bind only: the neutral calendar reference of the event.",
+            },
+            "ical_uid": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_ICAL_UID_CHARACTERS,
+                "description": "bind only: the event's iCalendar UID, exactly.",
+            },
+            "occurrence_original_start_utc": {
+                "type": "string",
+                "format": "date-time",
+                "description": (
+                    "bind, occurrence only: the occurrence's original start, an "
+                    "offset-aware RFC 3339 instant. Requires series_ical_uid."
+                ),
+            },
+            "series_ical_uid": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_ICAL_UID_CHARACTERS,
+                "description": (
+                    "bind, occurrence only: the recurring series' UID. Requires "
+                    "occurrence_original_start_utc."
+                ),
+            },
+            "provider_event_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_PROVIDER_EVENT_ID_CHARACTERS,
+                "description": "bind only, optional: the provider's event id (an attribute).",
+            },
+            "provider_event_id_format": {
+                "type": "string",
+                "enum": [member.value for member in ProviderEventIdFormat],
+                "description": "bind only, optional: whether that id is stable (default unknown).",
+            },
+        }
+    )
+
+    action: str
+    meeting_id: str
+    expected_version: int
+    idempotency_key: str
+    calendar_ref: str | None = field(default=None, repr=False)
+    ical_uid: str | None = field(default=None, repr=False)
+    occurrence_original_start_utc: datetime | None = None
+    series_ical_uid: str | None = field(default=None, repr=False)
+    provider_event_id: str | None = field(default=None, repr=False)
+    provider_event_id_format: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.meeting_id, IdKind.MEETING, SafeDetail.MEETING_ID)
+        _meeting_expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+        _storable_text(self.idempotency_key, SafeDetail.IDEMPOTENCY_KEY)
+        _optional_storable_text(self.calendar_ref, SafeDetail.CALENDAR_REF)
+        _optional_storable_text(self.ical_uid, SafeDetail.ICAL_UID)
+        _optional_storable_text(self.series_ical_uid, SafeDetail.SERIES_ICAL_UID)
+        _optional_storable_text(self.provider_event_id, SafeDetail.PROVIDER_EVENT_ID)
+        self.meeting_request()
+
+    def meeting_request(self) -> MeetingProviderBindRequest:
+        """The normalized WP2-W3 request this command states."""
+        action = _closed_member(self.action, ProviderBindAction, SafeDetail.ACTION)
+        event_id_format = (
+            None
+            if self.provider_event_id_format is None
+            else _closed_member(
+                self.provider_event_id_format,
+                ProviderEventIdFormat,
+                SafeDetail.PROVIDER_EVENT_ID_FORMAT,
+            )
+        )
+        return _meeting_value(
+            lambda: MeetingProviderBindRequest(
+                action=action,
+                meeting_id=self.meeting_id,
+                calendar_ref=self.calendar_ref,
+                ical_uid=self.ical_uid,
+                occurrence_original_start_utc=self.occurrence_original_start_utc,
+                series_ical_uid=self.series_ical_uid,
+                provider_event_id=self.provider_event_id,
+                provider_event_id_format=event_id_format,
+            )
+        )
+
+
+def _closed_member[MemberT: StrEnum](
+    value: object, vocabulary: type[MemberT], detail: SafeDetail
+) -> MemberT:
+    """`value` as a member of `vocabulary`, or a refusal naming `detail` and its choices.
+
+    The wire string is converted here, not in `adapters.normalization`, because
+    the meeting-sync vocabularies may be imported only by their named consumers
+    (`tests/architecture/test_meeting_sync_source_scope.py`); the handoff
+    correction's `action: str` is the precedent.
+    """
+    member: MemberT | None = None
+    if isinstance(value, str):
+        try:
+            member = vocabulary(value)
+        except ValueError:
+            member = None
+    if member is None:
+        raise invalid_choice(detail, vocabulary)
+    return member
+
+
+@dataclass(frozen=True, slots=True)
 class ListRecordEvents:
     """`record_events.list`: one page of your change feed, oldest first.
 
@@ -18904,6 +19053,7 @@ type Command = (
     | SearchMeetings
     | UpdateMeeting
     | UpdateMeetingSeries
+    | BindMeetingProvider
     | ListRecordEvents
     | GetRecordEventProvenance
     | ReadKnowledgeAssertion

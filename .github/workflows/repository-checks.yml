@@ -160,15 +160,24 @@ jobs:
   # Per-shard budget, measured on CI (ubuntu-latest). The `fast` weights in
   # `tests/ci_shard_weights.json` are CI per-file averages over the five
   # complete FAST legs of PR head 922db4ab (validate-fast 2,3;
-  # dependency-floor-fast 1,2,3); their plan puts
-  # `test_every_capability_reaching_a_memory_row_is_declared.py` alone in
-  # shard 1. That file took 934-1549 s on complete legs and >1715 s on the
-  # PR run 42623232044 leg cancelled at the old 35 minutes (job 2116 s); main
-  # 3a1bdea7 shard 1 took 1991 s. Collection adds 210-350 s per leg. The file
-  # bounds shard 1 from below, so rebalancing cannot shorten it; making the
-  # file cheaper is the remedy, a follow-up. At 55 minutes (3300 s): 1991 s
-  # is 60%, 2116 s 64%, a ~1900 s walk + 350 s collection + setup (~2285 s)
-  # 69%. Measurement headroom, not a performance SLA.
+  # dependency-floor-fast 1,2,3), with one exception below. Under those
+  # measurements `test_every_capability_reaching_a_memory_row_is_declared.py`
+  # (weight 990.9) sat alone in shard 1: it took 934-1549 s on complete legs
+  # and >1715 s on the PR run 42623232044 leg cancelled at the old 35 minutes
+  # (job 2116 s); main 3a1bdea7 shard 1 took 1991 s. Collection adds
+  # 210-350 s per leg. These are the measurements the timeouts were sized on:
+  # at 55 minutes (3300 s), 1991 s is 60%, 2116 s 64%, a ~1900 s walk + 350 s
+  # collection + setup (~2285 s) 69%. Measurement headroom, not a
+  # performance SLA.
+  #
+  # The exception: commit 1fa7b0ca5 made that file cheaper (841 s -> 41 s
+  # locally). Its weight is now 48.3, an ESTIMATE, not a CI measurement:
+  # 41 s x (990.9 / 841 = 1.18, the CI/local ratio of its old cost). With it,
+  # the plan's three shard totals are 613.7 / 613.7 / 613.8 s of weight
+  # (were 990.9 / 896.4 / 896.5), so no file bounds a shard any longer. The
+  # timeouts are deliberately unchanged until CI legs measure the new plan;
+  # regenerate the table with `python -m tests.ci_shard weigh` from those
+  # legs' JUnit XML.
   validate-static:
     # Runs on every event, docs-only PRs included, and even when `classify`
     # failed; only the partition-proof step reads the classification.
@@ -771,8 +780,10 @@ jobs:
       - classify
     runs-on: ubuntu-latest
     # Per-shard budget, as for `validate-fast` (see the comment above
-    # `validate-static`): shard 1 holds only the walk file, which bounds it
-    # from below; a ~2285 s worst case is about 69% of 55 minutes (3300 s).
+    # `validate-static`): sized when shard 1 held only the walk file, a
+    # ~2285 s worst case, about 69% of 55 minutes (3300 s). Since 1fa7b0ca5
+    # the walk file is estimated, not yet measured, at 48.3 s of weight and
+    # the plan is balanced; the timeout stays until CI measures it.
     # Measurement headroom, not an SLA.
     timeout-minutes: 55
     strategy:

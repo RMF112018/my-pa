@@ -71,7 +71,7 @@ Preserve these boundaries unless an accepted ADR supersedes them:
 - Provider-specific details do not leak into domain models.
 - Model-generated content carries provenance and must not silently overwrite authoritative evidence.
 - External API and MCP capability names remain neutral and contain no former-employer branding.
-- Destructive source actions require separate, explicit operator authorization.
+- Any mutation of an authoritative original source system, including a reversible write or destructive action, requires separate, exact operator authorization naming the source, operation and real target. Neither a routine code-work objective nor a standing release envelope grants a source write.
 
 Do not turn these boundaries into additional layers or interfaces before a concrete use requires them.
 
@@ -85,7 +85,9 @@ Use automatic security handling rather than per-task security approval. These cl
 
 Retain ordinary automatic safeguards: no live secrets in the repository/logs, bounded authenticated access, least-privilege operational identities, redaction before public disclosure, version/provenance checks, focused security tests, and adherence to applicable legal/contractual duties. Suspected secret-bearing material is handled in isolation, not used to stop unrelated authorized development. Authentication or database **code changes with synthetic fixtures are not automatically S2**.
 
-Development tests use synthetic fixtures and isolated test stores by default. Access to live personal sources, production credentials or databases, credential/grant mutation, unauthorized external disclosure, destructive source actions, or production actions outside a separately approved release envelope is not authorized by ordinary code-work scope. Reversible routine deployment may use an operator-approved standing release envelope only when repository and runtime policy also allow it. This document itself grants no such envelope.
+Before cloud or external-model processing or disclosure of S1/protected source material, verify a documented, data-specific eligibility decision covering the source/data class, processing recipient and purpose. A standing decision may cover repeated in-boundary uses, but connector availability or general provider authorization is not consent. Logs exclude message bodies, source-document contents, contact details, access tokens and sensitive queries by default; prefer redacted metadata. Record proportionate payload-free audit events for security-relevant actions and denied destructive attempts. Operational scripts require explicit verified targets, fail closed when targets or authority are ambiguous, support dry-run where meaningful, and never infer destructive intent.
+
+Development tests use synthetic fixtures and isolated test stores by default. Initial or expanded access to live personal sources, production credentials or databases, any authoritative source-system write, credential/grant mutation, unauthorized external disclosure, destructive operations, or production actions outside a separately approved release envelope are not authorized by ordinary code-work scope. Repeated S1 reads remain permissible only inside an existing, verifiable operator-approved source/data boundary. A standing release envelope covers only its exact reversible deployment target and cannot authorize live-source access or writes, protected-database access, secret/grant mutation or risk acceptance. This document itself grants no such envelope.
 
 Report confirmed critical vulnerabilities privately. Disclose failed mandatory checks and record noncritical security findings for bounded correction or tracked follow-up; do not misrepresent an unmitigated critical issue as a routine defect. Apply `SECURITY.md` when reporting vulnerabilities.
 
@@ -98,7 +100,7 @@ Report confirmed critical vulnerabilities privately. Disclose failed mandatory c
 - Migrations must be forward-safe, reviewable, and free of implicit destructive behavior. Never target an unknown or unverified existing physical database.
 - Configuration changes must document defaults, validation, secret status, and backward-compatibility impact.
 - Background jobs must be idempotent, observable, bounded, and safe to retry when implemented.
-- Release readiness requires passing the applicable test tier, documented known limitations, and either an exact operator release decision or a separately adopted standing release envelope covering the verified target. A tag or release alone does not authorize deployment.
+- Release readiness requires passing the applicable test tier, documented known limitations, a verified target, an observable release health signal, feasible rollback or containment, recorded post-release observation and explicit failure-stop/rollback criteria. It also requires either an exact operator release decision or a separately adopted standing release envelope covering that verified target and these controls. A tag, CI success or release alone does not authorize deployment.
 
 ## 7. Testing policy
 
@@ -121,7 +123,8 @@ Required pull-request gate. Target **5 minutes or less** during MCV.
 - changed schema and migration checks;
 - provider/connector conformance tests using fakes or synthetic fixtures;
 - focused isolated-database integration tests when the change affects persistence;
-- security and policy regression tests relevant to the change.
+- security and policy regression tests relevant to the change;
+- automatic, proportionate secret screening of changed code, documents and configuration and of publication candidates before public disclosure. The required check, coverage and result must be evidenced; absent or unverified coverage blocks the affected public publication/merge until qualified, rather than being inferred from unrelated web-security tests.
 
 Do not omit a critical contract merely to meet the target. Adjust the target from measured evidence rather than silently reducing coverage.
 
@@ -171,6 +174,8 @@ The operator may approve a bounded objective or an explicit standing class of ro
 - **C — controlled:** focused checks and proportionate technical review for evidenced material access/data/migration impact. Independent review is required when repository rules, the accepted objective or material risk demands it, with findings bound to the reviewed head.
 - **H — exceptional:** only the affected genuinely critical action or risk is escalated under section 8.2; unrelated authorized work can continue.
 
+A substantive change to normative repository governance is operator-only under section 8.2 and requires a distinct, blocking-capable independent review of the exact current head before merge, even if GitHub branch protection does not enforce that review. Routine R/C handling does not waive this policy-amendment gate.
+
 Use **at most two focused corrective-review cycles by default**. Consolidate open findings after that; distinguish true blockers from safely deferrable issues and track the latter in GitHub. The iteration limit never permits bypassing a failed mandatory check, unmitigated critical vulnerability, or missing required authorization. If a change invalidates a required exact-head review, re-review the affected current head before merge.
 
 No agent may widen authorization, accept material operator risk, overrule branch protection, or merge an objective that still fails applicable mandatory gates.
@@ -180,6 +185,7 @@ No agent may widen authorization, accept material operator risk, overrule branch
 Only the operator can authorize actions outside an existing and verifiable approval boundary that involve:
 
 - creation, disclosure, rotation, or mutation of live credentials, keys, authorization grants, or privileged production access;
+- initial or expanded live personal-source/data access, or any write to an authoritative original source system, even if reversible. An earlier exact operator decision may authorize only its specified source, operation, recipient and real target; a code-work class or release envelope is not a substitute;
 - external disclosure of protected/private/regulated material to a recipient or processing service not already authorized for that material;
 - irreversible destruction or corruption of canonical/production data, or migrations with materially unbounded loss risk;
 - production activation, externally consequential cutover, or deployment **outside** a separately adopted standing release envelope;
@@ -218,6 +224,8 @@ Stop the **affected action** and report an actionable blocker when:
 - an unmitigated confirmed critical security or unauthorized-disclosure exposure would be introduced;
 - an irreversible/destructive production or canonical-data action, live credential/grant mutation, or external disclosure needs authority not already supplied;
 - an applicable mandatory test/check fails and cannot be corrected within scope;
+- required secret-screening coverage for public submission/publication is absent, unsuccessful or not verifiable;
+- a proposed external-model use or live-source access/write lacks a verified, data-specific eligibility decision or exact operator authority;
 - deployment, merge or release is outside actual permission, repository rules or approved release envelope.
 
 Do not stop unrelated authorized work merely because routine findings, advisory warnings, noncritical technical debt or a missing agent-topology role exist. Track nonblocking defects for follow-up; preserve the failure evidence and state the final disposition.

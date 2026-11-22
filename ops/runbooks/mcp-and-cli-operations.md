@@ -555,7 +555,7 @@ composition and in every MCP publication that composition produces.
   family, and each Meeting capability appears in it only for an authenticated
   client whose grants, purpose, capability version and write gates admit it.
 - **Desired ChatLLM profile.** The repository's ChatLLM data profile is
-  `chatllm-data-v15` (communications intelligence WP2-W3: v14 plus `meetings.provider.bind`, `DATA_REQUIRED` on the core plane, a proposal pending operator activation: its grant and the profile activation stay operator-gated; v14, files workspace WP5: the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set). Since `chatllm-data-v3` it has classified the six
+  `chatllm-data-v15` (communications intelligence WP2-W3: v14 plus `meetings.provider.bind`, `DATA_REQUIRED` on the core plane, the profile to activate at the consolidated goal deploy (Manager ruling R-OP-4, operator delegation 2026-11-22), its grant to the operator profile only (R-OP-2); v14, files workspace WP5: the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set). Since `chatllm-data-v3` it has classified the six
   `meetings.` names as `DATA_REQUIRED`: reads under `meeting_read`, writes under
   `meeting_authoring`; `chatllm-data-v4` adds `record_events.list` under
   `record_event_read`; `chatllm-data-v5` adds `capture.archive` and

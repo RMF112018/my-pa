@@ -1,6 +1,6 @@
 # Communications corpus evidence (sanitized aggregates)
 
-**Status:** evidence for [ADR-022](../../decisions/ADR-022-communications-intelligence.md) (Proposed — accepted-candidate; not ratified) and its implementation spec [`communications-intelligence-contract.md`](../../architecture/communications-intelligence-contract.md). Aggregates only.
+**Status:** evidence for [ADR-022](../../decisions/ADR-022-communications-intelligence.md) (Accepted under operator delegation 2026-11-22, Manager ruling R-OP-1; effective on merge of WP2) and its implementation spec [`communications-intelligence-contract.md`](../../architecture/communications-intelligence-contract.md). Aggregates only.
 
 These six documents describe the real `communications_evidence_v2` corpus the communications-intelligence design was reconciled against. They hold **counts, distributions, closed-vocabulary values, file basenames and business dates only**: no subject, body, address, display name, provider id, Internet Message-ID, conversation id or mailbox reference value. The private publications themselves are never committed and are not reachable from this repository.
 

@@ -106,7 +106,7 @@ the 7 S4 reads), and `issues.close`, `issues.reopen`, the 3 `confirm` names and 
 production environment block, switch matrix, grant and companion tables, read-only recon
 and residual risks are in
 [`remote-mcp-cloudflare.md`, "Record lineage client exposure (P1)"](remote-mcp-cloudflare.md#record-lineage-client-exposure-p1).
-The current profile is `chatllm-data-v15` (communications intelligence WP2-W3: v14 plus `meetings.provider.bind`, `DATA_REQUIRED` on the core plane, a proposal pending operator activation: its grant and the profile activation stay operator-gated; v14, files workspace WP5: the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set). `chatllm-data-v13` (Schedule Scenarios S6-3) adds the 22 client-usable Schedule
+The current profile is `chatllm-data-v15` (communications intelligence WP2-W3: v14 plus `meetings.provider.bind`, `DATA_REQUIRED` on the core plane, the profile to activate at the consolidated goal deploy (Manager ruling R-OP-4, operator delegation 2026-11-22), its grant to the operator profile only (R-OP-2); v14, files workspace WP5: the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set). `chatllm-data-v13` (Schedule Scenarios S6-3) adds the 22 client-usable Schedule
 Scenarios names (6 writes under `schedule_analysis_authoring`, 16 reads under
 `schedule_analysis_read`) as `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_ENABLED` and
 `MY_PA_SCHEDULE_SCENARIOS_ENABLED` together, and keeps the 4 operator baseline decisions

@@ -2,7 +2,7 @@
 
 **Status:** planning only, under scope extension `MYPA-PULSE-INTELLIGENCE-EXTENSION-20261121` of goal `MYPA-COMMS-MEETCTX-P1P3-20261121`. Written before any PULSE code exists, as the operator required. No PULSE module, table, migration, capability, purpose, identifier kind, switch or fixture exists; nothing is persisted, exposed, granted or deployed. Every work package below needs its own PR, independent review and merge decision; items marked operator-gated need the operator.
 
-**Basis:** branch `feat/comms-intelligence` at `f586b6c97ee480d47503e450980c4768825ac808` (tree `eb1fb5fc4f7488eb3a0abf6ac406fb4bfe6805b6`) on `origin/main@092610d36b7d1493fc7fda6e352a4bd06e914f61`; Alembic single head `640aaacc78e8`. Shared lifecycle: [ADR-022](../decisions/ADR-022-communications-intelligence.md) decision 2 (Proposed) and [`communications-intelligence-contract.md`](../architecture/communications-intelligence-contract.md) ("contract"), sections 1, 9, 11, 18 and 19, with the Manager rulings of 2026-11-21 in its section 21. Evidence: [`docs/evidence/pulse/`](../evidence/pulse/README.md) ("evidence"), aggregates only. All counts are digits on purpose (spelled-count guard). Paths to files that do not exist yet are not written as links (CI relative-link check).
+**Basis:** branch `feat/comms-intelligence` at `f586b6c97ee480d47503e450980c4768825ac808` (tree `eb1fb5fc4f7488eb3a0abf6ac406fb4bfe6805b6`) on `origin/main@092610d36b7d1493fc7fda6e352a4bd06e914f61`; Alembic single head `640aaacc78e8`. Shared lifecycle: [ADR-022](../decisions/ADR-022-communications-intelligence.md) decision 2 (Accepted under operator delegation 2026-11-22, Manager ruling R-OP-1; effective on merge of WP2) and [`communications-intelligence-contract.md`](../architecture/communications-intelligence-contract.md) ("contract"), sections 1, 9, 11, 18 and 19, with the Manager rulings of 2026-11-21 in its section 21. Evidence: [`docs/evidence/pulse/`](../evidence/pulse/README.md) ("evidence"), aggregates only. All counts are digits on purpose (spelled-count guard). Paths to files that do not exist yet are not written as links (CI relative-link check).
 
 **Committable-data rule.** This plan, its fixtures and its tests name projects by **project number** only and use **synthetic** Project identifiers. The folder-to-Project crosswalk is operator runtime registry data (section 6.4) and is never committed.
 
@@ -408,7 +408,7 @@ One work package at a time (`AGENTS.md` section 8.3). Communications-only must w
 
 ### 14.3 ADR
 
-PULSE needs a decision record before WP3P merges: a new ADR (next free number after ADR-022; ADR-020 is taken by PR #368 and the number between by PR #370) or an ADR-022 amendment, recording sections 1.3, 1.4, 6.4 and 7. Operator ratification is required for it as for ADR-022.
+PULSE needs a decision record before WP3P merges: a new ADR (next free number after ADR-022; ADR-020 is taken by PR #368 and the number between by PR #370) or an ADR-022 amendment, recording sections 1.3, 1.4, 6.4 and 7. Operator ratification is required for it, as it was for ADR-022 (accepted under operator delegation 2026-11-22, R-OP-1).
 
 ## 15. Acceptance criteria
 

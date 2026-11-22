@@ -6,7 +6,8 @@
   communications domain and itself -- no database, network or framework;
 * nothing else in `src/` imports either package except the explicit
   `IMPORTERS` allowlist (Manager ruling M5): WP3a's table declarations read the
-  closed vocabularies their CHECKs constrain;
+  closed vocabularies their CHECKs constrain, the communications ingestion
+  consumer maps publications onto the tables, and bootstrap wires the parser;
 * provider vocabulary stays in the parser: the domain names no provider.
 """
 
@@ -97,6 +98,11 @@ IMPORTERS = {
     # WP3a: the communications tables derive their closed-vocabulary CHECKs
     # from the domain enums (the `_one_of` convention).
     "infrastructure/persistence/tables.py",
+    # WP3a-I2: the communications consumer of the ingestion lifecycle maps a
+    # parsed publication onto the communications tables and reads coverage.
+    "application/communications_ingest.py",
+    # WP3a-I2: the composition root injects the WP1 parser into that consumer.
+    "bootstrap/communications_ingest.py",
 }
 
 

@@ -7,8 +7,8 @@ classification and within-publication identity and lane rules (`classification.p
 items with reconciled participants (`reconciliation.py`),
 content-integrity checks (`integrity.py`), the versioned searchable-text
 derivation (`search_text.py`), the versioned technical-identifier extractor
-(`identifiers.py`), and cross-publication coverage and identity summaries
-(`corpus.py`).
+(`identifiers.py`), cross-publication coverage and identity summaries
+(`corpus.py`), and the read of persisted coverage windows (`coverage.py`).
 
 Provider field names (the producer's JSON keys and provider vocabulary) live in
 `my_pa.infrastructure.communications.evidence_v2`, the parser that maps a

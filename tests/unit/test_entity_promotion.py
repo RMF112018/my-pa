@@ -320,7 +320,10 @@ def test_every_ordinary_kind_promotes_to_exactly_one_canonical_command() -> None
     assert len(set(commands)) == 15
 
 
-@pytest.mark.parametrize("kind", IDENTITY_CORRECTION_PROPOSAL_KINDS, ids=lambda kind: kind.value)
+# Sorted: a frozenset's order varies per process; pytest-xdist needs one order.
+@pytest.mark.parametrize(
+    "kind", sorted(IDENTITY_CORRECTION_PROPOSAL_KINDS), ids=lambda kind: kind.value
+)
 def test_an_accepted_identity_correction_promotes_nothing(kind: EntityProposalKind) -> None:
     """Section 15, held on the promotion side. See the module docstring.
 

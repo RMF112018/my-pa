@@ -26,9 +26,25 @@ The one additive revision of WP2, on the sole head `4d1069a7d84f`. In order it:
    one `(principal_id, calendar_ref, ical_uid)` is bound as a single meeting or
    as occurrences, never both (D9, serialized by a transaction advisory lock);
    the series bindings are append-only; `TRUNCATE` is refused on both tables
-   (the `c8e4a1b70d35` precedent).
+   (the `c8e4a1b70d35` precedent);
+5. widens two existing vocabularies, the only statements that name a table
+   that existed before this revision (a widening cannot fail on an existing
+   row):
+   * `meeting_write_requests.a_meeting_write_request_capability_is_known`
+     admits the 3 `7d9a450dfd07` names plus exactly the public
+     `meetings.provider.bind` (contract section 12.2 rule 4, Manager ruling D10)
+     and the internal arbitration namespace `system.meeting_provider.sync` of
+     every provider sync write (never a `Capability` member, never invocable),
+     each with its own completed-shape CHECK;
+   * `audit_events.capability_is_known` is restated (the `_restate_audit`
+     precedent: `DROP CONSTRAINT` then `ADD CONSTRAINT ... CHECK`, `ACCESS
+     EXCLUSIVE` on the live `audit_events`, held to commit) with the frozen
+     sorted set of 310 names: the 309 `640aaacc78e8` left plus exactly
+     `meetings.provider.bind`. `purpose_is_known` is unchanged: the capability
+     maps to the existing `meeting_authoring`. A sync write writes no audit
+     row, so the internal namespace is not an audit name.
 
-`DELETE` of a `meeting_provider_bindings` row stays permitted: the W3 unbind of
+`DELETE` of a `meeting_provider_bindings` row stays permitted: the unbind of
 `meetings.provider.bind` deletes the occurrence binding and records a
 `meeting_history` receipt. A series binding is never deleted while an occurrence
 binding names its UID (`ON DELETE RESTRICT`), and never at all (append-only).
@@ -36,13 +52,15 @@ binding names its UID (`ON DELETE RESTRICT`), and never at all (append-only).
 Every bound is a frozen literal: the `mpbnd_` and `msbnd_` prefixes, the
 calendar reference bound 320, the UID and provider event id bound 1024, the
 SHA-256 shape and the closed vocabularies. This revision imports nothing from
-the live domain. No existing row, column, constraint or vocabulary changes: no
-capability CHECK (W3 amends this revision for `meetings.provider.bind`), no
-`GRANT`, no `REVOKE`, no backfill.
+the live domain. No `GRANT`, no `REVOKE`, no backfill.
 
-`downgrade` locks both tables `ACCESS EXCLUSIVE`, refuses with
-`restrict_violation`, deleting nothing, while any binding row exists, and
-otherwise drops exactly what `upgrade` created, in reverse order.
+`downgrade` locks both tables, `meeting_write_requests` and `audit_events`
+`ACCESS EXCLUSIVE`, refuses with `restrict_violation`, deleting nothing, while
+any binding row exists, any write request names either step-5 name, or any
+audit event names `meetings.provider.bind`; otherwise it restores the frozen
+prior texts (the `7d9a450dfd07` write-request CHECK and a byte copy of the
+`640aaacc78e8` AT audit set), drops the two completed-shape CHECKs, and drops
+exactly what `upgrade` created, in reverse order.
 
 Applying this revision to a persistent, shared or production database requires
 separate operator authority; nothing here grants it.
@@ -260,15 +278,269 @@ _TRUNCATE: Final = f"""
     END; $$
     """
 
-#: `downgrade` locks both tables before it checks them, so no binding can
-#: commit between the refusal check and the drop.
-_LOCK_TABLES: Final = (
-    "LOCK TABLE knowledge.meeting_provider_bindings, knowledge.meeting_series_provider_bindings "
-    "IN ACCESS EXCLUSIVE MODE"
+# ---- step 5: the widened vocabularies, frozen ----------------------------------
+
+_WRITE_REQUESTS: Final = "meeting_write_requests"
+_WRITE_REQUEST_CAPABILITY_CHECK: Final = "a_meeting_write_request_capability_is_known"
+
+#: Byte copy of `7d9a450dfd07`'s write-request capability CHECK (3 names).
+_WRITE_REQUEST_CAPABILITIES_BEFORE_THIS_REVISION: Final = (
+    "capability IN ('meetings.create', 'meetings.series.update', 'meetings.update')"
 )
 
-#: `downgrade` refuses while any binding exists, rather than deleting user data
-#: to make the downgrade pass (the `7d9a450dfd07` precedent).
+#: The same 3 plus the public `meetings.provider.bind` and the internal sync
+#: namespace `system.meeting_provider.sync` -- 5 names, sorted.
+_WRITE_REQUEST_CAPABILITIES_AT_THIS_REVISION: Final = (
+    "capability IN ('meetings.create', 'meetings.provider.bind', 'meetings.series.update', "
+    "'meetings.update', 'system.meeting_provider.sync')"
+)
+
+#: The completed shape of each new name: a bind or unbind names its Meeting, its
+#: one receipt and the version it left, and never a series receipt; a sync write
+#: (a create or an update) names its Meeting, its receipt and its version, and
+#: carries a series receipt exactly when it created the series.
+_COMPLETED_SHAPES: Final = (
+    (
+        "a_completed_meeting_provider_bind_names_its_result",
+        "completed_at IS NULL OR capability <> 'meetings.provider.bind' OR (meeting_id IS NOT "
+        "NULL AND meeting_history_id IS NOT NULL AND result_version IS NOT NULL AND "
+        "meeting_series_history_id IS NULL)",
+    ),
+    (
+        "a_completed_meeting_provider_sync_names_its_result",
+        "completed_at IS NULL OR capability <> 'system.meeting_provider.sync' OR (meeting_id IS "
+        "NOT NULL AND meeting_history_id IS NOT NULL AND result_version IS NOT NULL)",
+    ),
+)
+
+#: Byte copy of `640aaacc78e8`'s AT set (309 names), the latest prior
+#: restatement of `capability_is_known`.
+_CAPABILITIES_BEFORE_THIS_REVISION: Final = (
+    "capability IN ('canvas.workspace.get', 'canvas.workspace.put', 'capabilities.get', "
+    "'capture.archive', 'capture.create', 'capture.list', 'capture.read', 'capture.restore', "
+    "'capture.revise', 'capture.search', 'commitments.close', 'commitments.create', "
+    "'commitments.history', 'commitments.list', 'commitments.read', 'commitments.search', "
+    "'commitments.update', 'commitments.v2.list', 'commitments.v2.read', "
+    "'commitments.v2.search', 'commitments.v2.waiting_on', 'commitments.waiting_on', "
+    "'constraint_categories.create', 'constraint_categories.deactivate', "
+    "'constraint_categories.list', 'constraint_categories.reorder', "
+    "'constraint_categories.update', 'constraint_sync.acknowledge', 'constraint_sync.apply', "
+    "'constraint_sync.conflicts', 'constraint_sync.delta', 'constraint_sync.preview', "
+    "'constraint_sync.resolve', 'constraint_sync.state', 'constraints.close', "
+    "'constraints.close_follow_up', 'constraints.create', 'constraints.create_published', "
+    "'constraints.history', 'constraints.list', 'constraints.overview', "
+    "'constraints.portfolio_list', 'constraints.portfolio_overview', "
+    "'constraints.portfolio_search', 'constraints.publish', 'constraints.read', "
+    "'constraints.reopen', 'constraints.search', 'constraints.transition', "
+    "'constraints.update', 'constraints.void', 'context.feedback', 'context.prepare', "
+    "'continuity.projects', 'continuity.projects.close', 'continuity.projects.create', "
+    "'continuity.projects.read', 'continuity.projects.update', 'continuity.pulse', "
+    "'continuity.situations', 'continuity.situations.create', 'continuity.tasks.create', "
+    "'documents.archive', 'documents.create', 'documents.list', 'documents.read', "
+    "'documents.restore', 'documents.revise', 'entities.addresses.add', "
+    "'entities.addresses.list', 'entities.addresses.retire', 'entities.addresses.revise', "
+    "'entities.affiliations.create', 'entities.affiliations.end', "
+    "'entities.affiliations.revise', 'entities.aliases.add', 'entities.aliases.list', "
+    "'entities.aliases.retire', 'entities.aliases.supersede', 'entities.archive', "
+    "'entities.assignments.create', 'entities.assignments.end', 'entities.assignments.list', "
+    "'entities.assignments.revise', 'entities.communication.add', "
+    "'entities.communication.list', 'entities.communication.retire', "
+    "'entities.communication.revise', 'entities.context', 'entities.create', 'entities.get', "
+    "'entities.graph', 'entities.identifiers.bind', 'entities.identifiers.list', "
+    "'entities.identifiers.retire', 'entities.identifiers.supersede', "
+    "'entities.identity_history', 'entities.merge', 'entities.merge.preview', "
+    "'entities.names.add', 'entities.names.list', 'entities.names.retire', "
+    "'entities.names.supersede', 'entities.observations.list', 'entities.observe', "
+    "'entities.participations.create', 'entities.participations.end', "
+    "'entities.participations.list', 'entities.participations.revise', 'entities.profile', "
+    "'entities.proposals.create', 'entities.relationships', 'entities.relationships.create', "
+    "'entities.relationships.end', 'entities.relationships.revise', 'entities.resolve', "
+    "'entities.restore', 'entities.search', 'entities.split', 'entities.split.preview', "
+    "'entities.unresolved_mentions', 'entities.unresolved_mentions.resolve', "
+    "'entities.update', 'files.copy', 'files.download.begin', 'files.history', 'files.list', "
+    "'files.mkdir', 'files.move', 'files.preview', 'files.rename', 'files.restore', "
+    "'files.search', 'files.stat', 'files.trash', 'files.upload.abort', "
+    "'files.upload.begin', 'files.upload.finalize', 'files.workspaces.list', "
+    "'files.write_text', 'goodnotes.complete', 'goodnotes.content', 'goodnotes.correct', "
+    "'goodnotes.notebooks.list', 'goodnotes.pages.list', 'goodnotes.propose', "
+    "'goodnotes.pull', 'goodnotes.read', 'goodnotes.runs.list', 'goodnotes.search', "
+    "'goodnotes.status', 'goodnotes.work', 'gsqs.start', 'gsqs.status', 'issues.close', "
+    "'issues.closure_readiness', 'issues.create', 'issues.handoffs.correct', "
+    "'issues.handoffs.list', 'issues.handoffs.record', 'issues.history', 'issues.list', "
+    "'issues.memberships.add', 'issues.memberships.confirm', 'issues.memberships.correct', "
+    "'issues.memberships.end', 'issues.project_links.add', 'issues.project_links.confirm', "
+    "'issues.project_links.end', 'issues.read', 'issues.reopen', 'issues.timeline', "
+    "'issues.update', 'issues.work.create_commitment', 'issues.work.create_task', "
+    "'knowledge.assertions.create', 'knowledge.assertions.history', "
+    "'knowledge.assertions.list', 'knowledge.assertions.read', "
+    "'knowledge.assertions.reveal', 'knowledge.assertions.search', "
+    "'knowledge.assertions.submit', 'knowledge.coverage', 'knowledge.discovery.checkpoint', "
+    "'knowledge.read', 'knowledge.reveal', 'knowledge.search', 'meetings.create', "
+    "'meetings.list', 'meetings.notes.read_version', 'meetings.notes.versions', "
+    "'meetings.read', 'meetings.search', 'meetings.series.update', 'meetings.update', "
+    "'native_sources.backfill', 'native_sources.configure', 'native_sources.disable', "
+    "'native_sources.discover', 'native_sources.pause', 'native_sources.preflight', "
+    "'native_sources.reconcile', 'native_sources.resume', 'native_sources.retry', "
+    "'native_sources.status', 'native_sources.sync', 'programs.members.resolve', "
+    "'programs.overview', 'project_controls.configure', 'project_controls.status', "
+    "'record_events.list', 'record_events.provenance', 'records.associations.assert', "
+    "'records.associations.confirm', 'records.associations.contest', "
+    "'records.associations.correct', 'records.associations.end', "
+    "'records.associations.history', 'records.associations.reinstate', "
+    "'records.backfill.plan', 'records.backfill.report', 'records.lineage', "
+    "'records.lineage.related', 'relationship_memory.archive', 'relationship_memory.create', "
+    "'relationship_memory.get', 'relationship_memory.history', 'relationship_memory.list', "
+    "'relationship_memory.propose', 'relationship_memory.restore', "
+    "'relationship_memory.revise', 'relationship_memory.search', 'reports.archive', "
+    "'reports.begin_cycle', 'reports.commit', 'reports.delete', 'reports.history', "
+    "'reports.hold.place', 'reports.hold.release', 'reports.latest', 'reports.list', "
+    "'reports.manifest', 'reports.publish', 'reports.read', 'reports.record_run_state', "
+    "'reports.resolve_set', 'reports.restore', 'reports.retention.get', "
+    "'reports.retention.set', 'reports.search', 'reports.transfer.abort', "
+    "'reports.transfer.append', 'reports.transfer.begin', 'reports.transfer.finalize', "
+    "'reports.transfer.read_chunk', 'reports.types.create', 'reports.types.list', "
+    "'reports.update', 'review.decide', 'review.list', 'schedule_activities.history', "
+    "'schedule_activities.list', 'schedule_baselines.approve', 'schedule_baselines.compare', "
+    "'schedule_baselines.governing', 'schedule_baselines.list', "
+    "'schedule_baselines.propose', 'schedule_baselines.read', 'schedule_baselines.reject', "
+    "'schedule_baselines.revoke', 'schedule_baselines.set_governing', "
+    "'schedule_baselines.withdraw', 'schedule_changes.list', 'schedule_cpm_runs.activities', "
+    "'schedule_cpm_runs.create', 'schedule_cpm_runs.read', 'schedule_publications.import', "
+    "'schedule_publications.list', 'schedule_publications.read', "
+    "'schedule_scenario_outputs.list', 'schedule_scenario_outputs.read', "
+    "'schedule_scenario_outputs.record', 'schedule_scenario_versions.activities', "
+    "'schedule_scenario_versions.changes', 'schedule_scenario_versions.create', "
+    "'schedule_scenario_versions.read', 'schedule_scenario_versions.relationships', "
+    "'schedule_scenarios.create', 'schedule_scenarios.list', 'schedule_scenarios.read', "
+    "'schedule_series.current', 'schedule_series.list', 'schedule_series.match_decisions', "
+    "'sources.enroll', 'sources.fetch', 'sources.list', 'sources.metadata', "
+    "'sources.status', 'tasks.bulk_confirm', 'tasks.bulk_preview', 'tasks.comments.create', "
+    "'tasks.comments.list', 'tasks.create', 'tasks.history', 'tasks.list', 'tasks.read', "
+    "'tasks.search', 'tasks.transition', 'tasks.update')"
+)
+
+#: The same set plus exactly `meetings.provider.bind` -- 310 names, sorted.
+_CAPABILITIES_AT_THIS_REVISION: Final = (
+    "capability IN ('canvas.workspace.get', 'canvas.workspace.put', 'capabilities.get', "
+    "'capture.archive', 'capture.create', 'capture.list', 'capture.read', "
+    "'capture.restore', 'capture.revise', 'capture.search', 'commitments.close', "
+    "'commitments.create', 'commitments.history', 'commitments.list', 'commitments.read', "
+    "'commitments.search', 'commitments.update', 'commitments.v2.list', "
+    "'commitments.v2.read', 'commitments.v2.search', 'commitments.v2.waiting_on', "
+    "'commitments.waiting_on', 'constraint_categories.create', "
+    "'constraint_categories.deactivate', 'constraint_categories.list', "
+    "'constraint_categories.reorder', 'constraint_categories.update', "
+    "'constraint_sync.acknowledge', 'constraint_sync.apply', 'constraint_sync.conflicts', "
+    "'constraint_sync.delta', 'constraint_sync.preview', 'constraint_sync.resolve', "
+    "'constraint_sync.state', 'constraints.close', 'constraints.close_follow_up', "
+    "'constraints.create', 'constraints.create_published', 'constraints.history', "
+    "'constraints.list', 'constraints.overview', 'constraints.portfolio_list', "
+    "'constraints.portfolio_overview', 'constraints.portfolio_search', "
+    "'constraints.publish', 'constraints.read', 'constraints.reopen', "
+    "'constraints.search', 'constraints.transition', 'constraints.update', "
+    "'constraints.void', 'context.feedback', 'context.prepare', 'continuity.projects', "
+    "'continuity.projects.close', 'continuity.projects.create', "
+    "'continuity.projects.read', 'continuity.projects.update', 'continuity.pulse', "
+    "'continuity.situations', 'continuity.situations.create', 'continuity.tasks.create', "
+    "'documents.archive', 'documents.create', 'documents.list', 'documents.read', "
+    "'documents.restore', 'documents.revise', 'entities.addresses.add', "
+    "'entities.addresses.list', 'entities.addresses.retire', 'entities.addresses.revise', "
+    "'entities.affiliations.create', 'entities.affiliations.end', "
+    "'entities.affiliations.revise', 'entities.aliases.add', 'entities.aliases.list', "
+    "'entities.aliases.retire', 'entities.aliases.supersede', 'entities.archive', "
+    "'entities.assignments.create', 'entities.assignments.end', "
+    "'entities.assignments.list', 'entities.assignments.revise', "
+    "'entities.communication.add', 'entities.communication.list', "
+    "'entities.communication.retire', 'entities.communication.revise', 'entities.context', "
+    "'entities.create', 'entities.get', 'entities.graph', 'entities.identifiers.bind', "
+    "'entities.identifiers.list', 'entities.identifiers.retire', "
+    "'entities.identifiers.supersede', 'entities.identity_history', 'entities.merge', "
+    "'entities.merge.preview', 'entities.names.add', 'entities.names.list', "
+    "'entities.names.retire', 'entities.names.supersede', 'entities.observations.list', "
+    "'entities.observe', 'entities.participations.create', 'entities.participations.end', "
+    "'entities.participations.list', 'entities.participations.revise', 'entities.profile', "
+    "'entities.proposals.create', 'entities.relationships', "
+    "'entities.relationships.create', 'entities.relationships.end', "
+    "'entities.relationships.revise', 'entities.resolve', 'entities.restore', "
+    "'entities.search', 'entities.split', 'entities.split.preview', "
+    "'entities.unresolved_mentions', 'entities.unresolved_mentions.resolve', "
+    "'entities.update', 'files.copy', 'files.download.begin', 'files.history', "
+    "'files.list', 'files.mkdir', 'files.move', 'files.preview', 'files.rename', "
+    "'files.restore', 'files.search', 'files.stat', 'files.trash', 'files.upload.abort', "
+    "'files.upload.begin', 'files.upload.finalize', 'files.workspaces.list', "
+    "'files.write_text', 'goodnotes.complete', 'goodnotes.content', 'goodnotes.correct', "
+    "'goodnotes.notebooks.list', 'goodnotes.pages.list', 'goodnotes.propose', "
+    "'goodnotes.pull', 'goodnotes.read', 'goodnotes.runs.list', 'goodnotes.search', "
+    "'goodnotes.status', 'goodnotes.work', 'gsqs.start', 'gsqs.status', 'issues.close', "
+    "'issues.closure_readiness', 'issues.create', 'issues.handoffs.correct', "
+    "'issues.handoffs.list', 'issues.handoffs.record', 'issues.history', 'issues.list', "
+    "'issues.memberships.add', 'issues.memberships.confirm', 'issues.memberships.correct', "
+    "'issues.memberships.end', 'issues.project_links.add', 'issues.project_links.confirm', "
+    "'issues.project_links.end', 'issues.read', 'issues.reopen', 'issues.timeline', "
+    "'issues.update', 'issues.work.create_commitment', 'issues.work.create_task', "
+    "'knowledge.assertions.create', 'knowledge.assertions.history', "
+    "'knowledge.assertions.list', 'knowledge.assertions.read', "
+    "'knowledge.assertions.reveal', 'knowledge.assertions.search', "
+    "'knowledge.assertions.submit', 'knowledge.coverage', "
+    "'knowledge.discovery.checkpoint', 'knowledge.read', 'knowledge.reveal', "
+    "'knowledge.search', 'meetings.create', 'meetings.list', "
+    "'meetings.notes.read_version', 'meetings.notes.versions', 'meetings.provider.bind', "
+    "'meetings.read', 'meetings.search', 'meetings.series.update', 'meetings.update', "
+    "'native_sources.backfill', 'native_sources.configure', 'native_sources.disable', "
+    "'native_sources.discover', 'native_sources.pause', 'native_sources.preflight', "
+    "'native_sources.reconcile', 'native_sources.resume', 'native_sources.retry', "
+    "'native_sources.status', 'native_sources.sync', 'programs.members.resolve', "
+    "'programs.overview', 'project_controls.configure', 'project_controls.status', "
+    "'record_events.list', 'record_events.provenance', 'records.associations.assert', "
+    "'records.associations.confirm', 'records.associations.contest', "
+    "'records.associations.correct', 'records.associations.end', "
+    "'records.associations.history', 'records.associations.reinstate', "
+    "'records.backfill.plan', 'records.backfill.report', 'records.lineage', "
+    "'records.lineage.related', 'relationship_memory.archive', "
+    "'relationship_memory.create', 'relationship_memory.get', "
+    "'relationship_memory.history', 'relationship_memory.list', "
+    "'relationship_memory.propose', 'relationship_memory.restore', "
+    "'relationship_memory.revise', 'relationship_memory.search', 'reports.archive', "
+    "'reports.begin_cycle', 'reports.commit', 'reports.delete', 'reports.history', "
+    "'reports.hold.place', 'reports.hold.release', 'reports.latest', 'reports.list', "
+    "'reports.manifest', 'reports.publish', 'reports.read', 'reports.record_run_state', "
+    "'reports.resolve_set', 'reports.restore', 'reports.retention.get', "
+    "'reports.retention.set', 'reports.search', 'reports.transfer.abort', "
+    "'reports.transfer.append', 'reports.transfer.begin', 'reports.transfer.finalize', "
+    "'reports.transfer.read_chunk', 'reports.types.create', 'reports.types.list', "
+    "'reports.update', 'review.decide', 'review.list', 'schedule_activities.history', "
+    "'schedule_activities.list', 'schedule_baselines.approve', "
+    "'schedule_baselines.compare', 'schedule_baselines.governing', "
+    "'schedule_baselines.list', 'schedule_baselines.propose', 'schedule_baselines.read', "
+    "'schedule_baselines.reject', 'schedule_baselines.revoke', "
+    "'schedule_baselines.set_governing', 'schedule_baselines.withdraw', "
+    "'schedule_changes.list', 'schedule_cpm_runs.activities', 'schedule_cpm_runs.create', "
+    "'schedule_cpm_runs.read', 'schedule_publications.import', "
+    "'schedule_publications.list', 'schedule_publications.read', "
+    "'schedule_scenario_outputs.list', 'schedule_scenario_outputs.read', "
+    "'schedule_scenario_outputs.record', 'schedule_scenario_versions.activities', "
+    "'schedule_scenario_versions.changes', 'schedule_scenario_versions.create', "
+    "'schedule_scenario_versions.read', 'schedule_scenario_versions.relationships', "
+    "'schedule_scenarios.create', 'schedule_scenarios.list', 'schedule_scenarios.read', "
+    "'schedule_series.current', 'schedule_series.list', 'schedule_series.match_decisions', "
+    "'sources.enroll', 'sources.fetch', 'sources.list', 'sources.metadata', "
+    "'sources.status', 'tasks.bulk_confirm', 'tasks.bulk_preview', "
+    "'tasks.comments.create', 'tasks.comments.list', 'tasks.create', 'tasks.history', "
+    "'tasks.list', 'tasks.read', 'tasks.search', 'tasks.transition', 'tasks.update')"
+)
+
+#: `downgrade` locks both tables, the write requests and the audit table before
+#: it checks them, so no binding, bind request or audit event can commit
+#: between the refusal check and the drops.
+_LOCK_TABLES: Final = (
+    "LOCK TABLE knowledge.meeting_provider_bindings, knowledge.meeting_series_provider_bindings, "
+    "knowledge.meeting_write_requests, knowledge.audit_events IN ACCESS EXCLUSIVE MODE"
+)
+
+#: `downgrade` refuses while any binding exists, any write request names a
+#: step-5 name or any audit event names `meetings.provider.bind`, rather than
+#: deleting user data or audit history to make the downgrade pass (the
+#: `7d9a450dfd07` precedent). Each clause alone suffices.
 _REFUSE_DOWNGRADE: Final = """
     DO $$
     BEGIN
@@ -277,8 +549,25 @@ _REFUSE_DOWNGRADE: Final = """
         RAISE EXCEPTION 'meeting provider bindings exist; refusing to downgrade 6418b57081c3'
           USING ERRCODE = 'restrict_violation';
       END IF;
+      IF EXISTS (
+           SELECT 1 FROM knowledge.meeting_write_requests
+            WHERE capability IN ('meetings.provider.bind', 'system.meeting_provider.sync')) THEN
+        RAISE EXCEPTION 'meeting provider write requests exist; refusing to downgrade 6418b57081c3'
+          USING ERRCODE = 'restrict_violation';
+      END IF;
+      IF EXISTS (
+           SELECT 1 FROM knowledge.audit_events
+            WHERE capability = 'meetings.provider.bind') THEN
+        RAISE EXCEPTION 'meeting provider audit history exists; refusing to downgrade 6418b57081c3'
+          USING ERRCODE = 'restrict_violation';
+      END IF;
     END $$
     """
+
+
+def _restate(table: str, name: str, expression: str) -> None:
+    op.drop_constraint(name, table, schema=SCHEMA, type_="check")
+    op.create_check_constraint(name, table, expression, schema=SCHEMA)
 
 
 def upgrade() -> None:
@@ -299,12 +588,28 @@ def upgrade() -> None:
               FOR EACH STATEMENT EXECUTE FUNCTION {SCHEMA}.{_TRUNCATE_FUNCTION}()
             """
         )
+    _restate(
+        _WRITE_REQUESTS,
+        _WRITE_REQUEST_CAPABILITY_CHECK,
+        _WRITE_REQUEST_CAPABILITIES_AT_THIS_REVISION,
+    )
+    for name, expression in _COMPLETED_SHAPES:
+        op.create_check_constraint(name, _WRITE_REQUESTS, expression, schema=SCHEMA)
+    _restate("audit_events", "capability_is_known", _CAPABILITIES_AT_THIS_REVISION)
 
 
 def downgrade() -> None:
     op.execute(_LOCK_TIMEOUT)
     op.execute(_LOCK_TABLES)
     op.execute(_REFUSE_DOWNGRADE)
+    _restate("audit_events", "capability_is_known", _CAPABILITIES_BEFORE_THIS_REVISION)
+    for name, _expression in reversed(_COMPLETED_SHAPES):
+        op.drop_constraint(name, _WRITE_REQUESTS, schema=SCHEMA, type_="check")
+    _restate(
+        _WRITE_REQUESTS,
+        _WRITE_REQUEST_CAPABILITY_CHECK,
+        _WRITE_REQUEST_CAPABILITIES_BEFORE_THIS_REVISION,
+    )
     for trigger, table in reversed(_TRUNCATE_TRIGGERS):
         op.execute(f"DROP TRIGGER {trigger} ON {SCHEMA}.{table}")
     op.execute(f"DROP FUNCTION {SCHEMA}.{_TRUNCATE_FUNCTION}()")

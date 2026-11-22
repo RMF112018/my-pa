@@ -268,8 +268,10 @@ from my_pa.domain.meeting.model import (
     MAX_MEETING_TITLE_CHARACTERS,
     MAX_TIMEZONE_NAME_CHARACTERS,
     MAX_VIRTUAL_MEETING_URL_CHARACTERS,
-    MEETING_WRITE_CAPABILITY_NAMES,
+    MEETING_PROVIDER_SYNC_NAME,
+    MEETING_WRITE_REQUEST_NAMES,
     MEETINGS_CREATE_NAME,
+    MEETINGS_PROVIDER_BIND_NAME,
     MEETINGS_SERIES_UPDATE_NAME,
     MEETINGS_UPDATE_NAME,
     MIN_MEETING_IDEMPOTENCY_KEY_CHARACTERS,
@@ -15611,9 +15613,11 @@ meeting_write_requests = Table(
     _is_identifier("meeting_series_id", IdKind.MEETING_SERIES),
     _is_identifier("meeting_history_id", IdKind.MEETING_HISTORY),
     _is_identifier("meeting_series_history_id", IdKind.MEETING_SERIES_HISTORY),
+    # Communications intelligence WP2 (revision 6418b57081c3) widens this to the
+    # public `meetings.provider.bind` and the internal sync namespace.
     _one_of(
         "capability",
-        frozenset(MEETING_WRITE_CAPABILITY_NAMES),
+        frozenset(MEETING_WRITE_REQUEST_NAMES),
         name="a_meeting_write_request_capability_is_known",
     ),
     CheckConstraint(_MEETING_KEY_BOUND, name="a_meeting_write_request_key_is_bounded"),
@@ -15648,6 +15652,18 @@ meeting_write_requests = Table(
         "OR (meeting_series_id IS NOT NULL AND meeting_series_history_id IS NOT NULL "
         "AND result_version IS NOT NULL AND meeting_id IS NULL AND meeting_history_id IS NULL)",
         name="a_completed_meeting_series_update_names_its_result",
+    ),
+    CheckConstraint(
+        f"completed_at IS NULL OR capability <> '{MEETINGS_PROVIDER_BIND_NAME}' "
+        "OR (meeting_id IS NOT NULL AND meeting_history_id IS NOT NULL "
+        "AND result_version IS NOT NULL AND meeting_series_history_id IS NULL)",
+        name="a_completed_meeting_provider_bind_names_its_result",
+    ),
+    CheckConstraint(
+        f"completed_at IS NULL OR capability <> '{MEETING_PROVIDER_SYNC_NAME}' "
+        "OR (meeting_id IS NOT NULL AND meeting_history_id IS NOT NULL "
+        "AND result_version IS NOT NULL)",
+        name="a_completed_meeting_provider_sync_names_its_result",
     ),
     ForeignKeyConstraint(
         ["meeting_id", "principal_id"],

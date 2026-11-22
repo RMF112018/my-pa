@@ -8,6 +8,12 @@ their two partial unique indexes and four guards. This module proves:
 * **the freeze** -- the revision imports nothing from the package it migrates and
   names every column, constraint and index `tables.py` declares for both tables;
 * **offline SQL** for both directions, without a server;
+* **the widened vocabularies** (W3, `meetings.provider.bind`): the write-request
+  CHECK gains exactly the bind name and the internal sync namespace, each with a
+  completed shape; the audit `capability_is_known` is a byte copy of the
+  `640aaacc78e8` set plus exactly the bind name, equal to the live enums; the
+  downgrade refuses while either name or a bind audit event is held, and
+  otherwise restores the frozen prior texts;
 * on disposable databases: empty to head; the round trip down to
   `4d1069a7d84f` and back; the downgrade refusal while a binding exists; the
   identity-immutability, one-kind-per-UID, append-only and TRUNCATE guards; and
@@ -37,15 +43,28 @@ from sqlalchemy import Engine, Table, delete, insert, text, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
+from my_pa.domain.identity.operation import Capability, NativeSourceCapability
+from my_pa.domain.meeting.model import MEETING_WRITE_REQUEST_NAMES
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.tables import (
+    audit_events,
     meeting_provider_bindings,
     meeting_series,
     meeting_series_provider_bindings,
+    meeting_write_requests,
     meetings,
 )
 
 ROOT: Final = Path(__file__).resolve().parents[2]
+VERSIONS: Final = ROOT / "migrations" / "versions"
+LAST_AUDIT_RESTATEMENT: Final = VERSIONS / "20261113_640aaacc78e8_files_workspace.py"
+MEETING_RECORDS_MIGRATION: Final = VERSIONS / "20260927_7d9a450dfd07_meeting_records.py"
+BIND: Final = "meetings.provider.bind"
+SYNC: Final = "system.meeting_provider.sync"
+COMPLETED_SHAPES: Final = (
+    "a_completed_meeting_provider_bind_names_its_result",
+    "a_completed_meeting_provider_sync_names_its_result",
+)
 SCHEMA: Final = "knowledge"
 REVISION: Final = "6418b57081c3"
 PREVIOUS: Final = "4d1069a7d84f"
@@ -170,8 +189,14 @@ def test_the_offline_upgrade_emits_the_whole_revision(monkeypatch: pytest.Monkey
         assert f"CREATE FUNCTION knowledge.{function}()" in rendered
     for trigger in TRIGGERS:
         assert f"CREATE TRIGGER {trigger}" in rendered
-    # No existing object changes: no vocabulary restatement, no grant.
-    assert "capability_is_known" not in rendered
+    # The only existing objects it changes are the step-5 vocabularies, after
+    # every new object; no grant.
+    widened = rendered.index("DROP CONSTRAINT a_meeting_write_request_capability_is_known")
+    assert widened > rendered.index("CREATE TRIGGER meeting_provider_bindings_refuse_truncate")
+    for name in COMPLETED_SHAPES:
+        assert f"CONSTRAINT {name} CHECK" in rendered, name
+    assert rendered.index("DROP CONSTRAINT capability_is_known") > widened
+    assert "purpose_is_known" not in rendered
     assert "GRANT" not in rendered
     assert f"SET version_num='{REVISION}'" in rendered
 
@@ -194,7 +219,82 @@ def test_the_offline_downgrade_refuses_first_and_unwinds_everything(
     assert rendered.index("DROP TABLE knowledge.meeting_series_provider_bindings RESTRICT") > (
         occurrence
     )
+    restored = rendered.index("DROP CONSTRAINT capability_is_known")
+    assert restored > refusal
+    for name in COMPLETED_SHAPES:
+        assert rendered.index(f"DROP CONSTRAINT {name}") > refusal, name
+    assert rendered.index("DROP CONSTRAINT a_meeting_write_request_capability_is_known") > refusal
     assert f"SET version_num='{PREVIOUS}'" in rendered
+
+
+# ---- step 5: the widened vocabularies (W3, meetings.provider.bind) ----------
+
+
+def _namespace(path: Path = MIGRATION) -> dict[str, object]:
+    """A revision's namespace (each imports only `alembic` and `typing`)."""
+    namespace: dict[str, object] = {}
+    exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), namespace)  # noqa: S102
+    return namespace
+
+
+def _literals(block: object) -> list[str]:
+    return re.findall(r"'([^']+)'", str(block))
+
+
+def test_the_audit_before_text_is_a_byte_copy_and_at_adds_exactly_bind() -> None:
+    mine = _namespace()
+    previous = _namespace(LAST_AUDIT_RESTATEMENT)
+    assert mine["_CAPABILITIES_BEFORE_THIS_REVISION"] == previous["_CAPABILITIES_AT_THIS_REVISION"]
+    before = _literals(mine["_CAPABILITIES_BEFORE_THIS_REVISION"])
+    at = _literals(mine["_CAPABILITIES_AT_THIS_REVISION"])
+    assert at == sorted(at)
+    assert (len(before), len(at)) == (309, 310)
+    assert set(at) - set(before) == {BIND}
+    assert set(before) <= set(at)
+    # `purpose_is_known` is not restated: bind maps to the existing purpose.
+    assert "_PURPOSES_AT_THIS_REVISION" not in mine
+
+
+def test_the_audit_at_set_is_the_live_enums() -> None:
+    declared = {member.value for member in Capability} | {
+        member.value for member in NativeSourceCapability
+    }
+    assert set(_literals(_namespace()["_CAPABILITIES_AT_THIS_REVISION"])) == declared
+    # The internal sync namespace is never an audit name, never a Capability.
+    assert SYNC not in declared
+    with pytest.raises(ValueError, match="is not a valid Capability"):
+        Capability(SYNC)
+
+
+def test_the_write_request_vocabulary_is_frozen_and_widened_by_exactly_two() -> None:
+    mine = _namespace()
+    before = str(mine["_WRITE_REQUEST_CAPABILITIES_BEFORE_THIS_REVISION"])
+    meeting_records = _WHITESPACE.sub(" ", MEETING_RECORDS_MIGRATION.read_text(encoding="utf-8"))
+    assert f"a_meeting_write_request_capability_is_known CHECK ({before})" in meeting_records
+    at = _literals(mine["_WRITE_REQUEST_CAPABILITIES_AT_THIS_REVISION"])
+    assert at == sorted(at)
+    assert set(at) - set(_literals(before)) == {BIND, SYNC}
+    assert frozenset(at) == MEETING_WRITE_REQUEST_NAMES
+    shapes = dict(mine["_COMPLETED_SHAPES"])  # type: ignore[call-overload]
+    assert set(shapes) == set(COMPLETED_SHAPES)
+    assert f"capability <> '{BIND}'" in shapes["a_completed_meeting_provider_bind_names_its_result"]
+    assert f"capability <> '{SYNC}'" in shapes["a_completed_meeting_provider_sync_names_its_result"]
+
+
+def test_the_downgrade_refusal_names_exactly_the_new_names() -> None:
+    mine = _namespace()
+    refusal = str(mine["_REFUSE_DOWNGRADE"])
+    named = {
+        literal
+        for literal in _literals(refusal)
+        if literal != "restrict_violation" and "refusing to downgrade" not in literal
+    }
+    assert named == {BIND, SYNC}
+    lock = str(mine["_LOCK_TABLES"])
+    assert set(re.findall(r"knowledge\.\w+", lock)) == {
+        f"knowledge.{table}" for table in TABLES
+    } | {"knowledge.meeting_write_requests", "knowledge.audit_events"}
+    assert "ACCESS EXCLUSIVE" in lock
 
 
 # ---- disposable databases -------------------------------------------------------
@@ -651,3 +751,132 @@ def test_bound_meetings_and_series_cannot_be_deleted(
         connection.execute(
             delete(meeting_series).where(meeting_series.c.meeting_series_id == seeded["series"])
         )
+
+
+# ---- step 5 on a server ------------------------------------------------------------
+
+
+def _write_request(engine: Engine, capability: str, key: str, **values: object) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            insert(meeting_write_requests).values(
+                principal_id=PRINCIPAL,
+                capability=capability,
+                idempotency_key=key,
+                request_digest="d" * 64,
+                created_at=WHEN,
+                **values,
+            )
+        )
+
+
+def _audit(engine: Engine, capability: str, suffix: str) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            insert(audit_events).values(
+                audit_id=f"audit_{suffix}",
+                correlation_id=f"corr_{suffix}",
+                principal_id=PRINCIPAL,
+                capability=capability,
+                purpose="meeting_authoring",
+                outcome="allowed",
+                policy_version="policy-v1",
+                scope_source_id_count=0,
+                recorded_at=WHEN,
+            )
+        )
+
+
+def _checks(engine: Engine) -> dict[str, str]:
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT con.conname, pg_get_constraintdef(con.oid) FROM pg_constraint con "
+                "JOIN pg_class rel ON rel.oid = con.conrelid "
+                "JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace "
+                "WHERE nsp.nspname = :schema AND ("
+                "(rel.relname = 'audit_events' AND con.conname = 'capability_is_known') OR "
+                "(rel.relname = 'meeting_write_requests' AND con.contype = 'c'))"
+            ),
+            {"schema": SCHEMA},
+        ).all()
+    return {str(name): str(definition) for name, definition in rows}
+
+
+@pytest.mark.database
+def test_the_widened_write_request_vocabulary_admits_exactly_the_new_names(
+    disposable_database: str, engine: Engine
+) -> None:
+    del disposable_database
+    command.upgrade(_config(), "head")
+    _write_request(engine, BIND, "w3-bind-0001")
+    _write_request(engine, SYNC, "w3-sync-0001")
+    with pytest.raises(IntegrityError) as unknown, engine.begin() as connection:
+        connection.execute(
+            insert(meeting_write_requests).values(
+                principal_id=PRINCIPAL,
+                capability="meetings.provider.unbind",
+                idempotency_key="w3-unknown-0001",
+                request_digest="d" * 64,
+                created_at=WHEN,
+            )
+        )
+    assert unknown.value.orig.diag.constraint_name == (  # type: ignore[union-attr]
+        "a_meeting_write_request_capability_is_known"
+    )
+    # A completed row of either new name must name its result.
+    for capability, constraint in zip((BIND, SYNC), COMPLETED_SHAPES, strict=True):
+        with pytest.raises(IntegrityError) as shapeless:
+            _write_request(engine, capability, f"w3-{capability}-done", completed_at=WHEN)
+        diag = shapeless.value.orig.diag  # type: ignore[union-attr]
+        assert diag.constraint_name == constraint
+    _audit(engine, BIND, "w3bind0001aa")
+    with pytest.raises(IntegrityError) as sync_audit:
+        _audit(engine, SYNC, "w3sync0001aa")
+    assert sync_audit.value.orig.diag.constraint_name == "capability_is_known"  # type: ignore[union-attr]
+
+
+@pytest.mark.database
+@pytest.mark.parametrize("name", [BIND, SYNC])
+def test_a_downgrade_refuses_while_a_new_write_request_exists(
+    disposable_database: str, engine: Engine, name: str
+) -> None:
+    del disposable_database
+    command.upgrade(_config(), "head")
+    _write_request(engine, name, "w3-refuse-0001")
+    with pytest.raises(DBAPIError) as refused:
+        command.downgrade(_config(), PREVIOUS)
+    assert "write requests exist; refusing to downgrade 6418b57081c3" in str(refused.value)
+    _assert_present(engine)
+
+
+@pytest.mark.database
+def test_a_downgrade_refuses_while_a_bind_audit_event_exists(
+    disposable_database: str, engine: Engine
+) -> None:
+    del disposable_database
+    command.upgrade(_config(), "head")
+    _audit(engine, BIND, "w3bind0002aa")
+    with pytest.raises(DBAPIError) as refused:
+        command.downgrade(_config(), PREVIOUS)
+    assert "audit history exists; refusing to downgrade 6418b57081c3" in str(refused.value)
+    _assert_present(engine)
+
+
+@pytest.mark.database
+def test_a_clean_downgrade_restores_the_frozen_prior_texts(
+    disposable_database: str, engine: Engine
+) -> None:
+    del disposable_database
+    command.upgrade(_config(), PREVIOUS)
+    before = _checks(engine)
+    command.upgrade(_config(), REVISION)
+    at_head = _checks(engine)
+    assert set(at_head) - set(before) == set(COMPLETED_SHAPES)
+    assert f"'{BIND}'" in at_head["capability_is_known"]
+    assert f"'{SYNC}'" not in at_head["capability_is_known"]
+    assert f"'{SYNC}'" in at_head["a_meeting_write_request_capability_is_known"]
+    command.downgrade(_config(), PREVIOUS)
+    assert _checks(engine) == before
+    with pytest.raises(IntegrityError):
+        _write_request(engine, BIND, "w3-after-down-0001")

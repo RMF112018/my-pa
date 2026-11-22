@@ -64,10 +64,13 @@ __all__ = [
     "MAX_TIMEZONE_NAME_CHARACTERS",
     "MAX_VIRTUAL_MEETING_URL_CHARACTERS",
     "MEETINGS_CREATE_NAME",
+    "MEETINGS_PROVIDER_BIND_NAME",
     "MEETINGS_SERIES_UPDATE_NAME",
     "MEETINGS_UPDATE_NAME",
     "MEETING_NOTE_SEPARATOR",
+    "MEETING_PROVIDER_SYNC_NAME",
     "MEETING_WRITE_CAPABILITY_NAMES",
+    "MEETING_WRITE_REQUEST_NAMES",
     "MIN_MEETING_IDEMPOTENCY_KEY_CHARACTERS",
     "AttendeeResponseStatus",
     "MeetingActor",
@@ -1038,12 +1041,29 @@ class MeetingSearchRequest:
 
 # ------------------------------------------------------------ capability names
 
-#: The three Meeting write-capability names (plan D-21). WP-MTG-04 asserts each
-#: `Capability.MEETINGS_*.value` equals its constant here, and the migration's
-#: frozen `meeting_write_requests.capability` CHECK literals are these strings.
+#: The four Meeting write-capability names (plan D-21; communications
+#: intelligence WP2 adds `meetings.provider.bind`, Manager ruling D10).
+#: WP-MTG-04 asserts each `Capability.MEETINGS_*.value` equals its constant
+#: here, and the migrations' frozen `meeting_write_requests.capability` CHECK
+#: literals are these strings.
 MEETINGS_CREATE_NAME: Final = "meetings.create"
 MEETINGS_UPDATE_NAME: Final = "meetings.update"
 MEETINGS_SERIES_UPDATE_NAME: Final = "meetings.series.update"
+MEETINGS_PROVIDER_BIND_NAME: Final = "meetings.provider.bind"
 MEETING_WRITE_CAPABILITY_NAMES: Final = frozenset(
-    {MEETINGS_CREATE_NAME, MEETINGS_UPDATE_NAME, MEETINGS_SERIES_UPDATE_NAME}
+    {
+        MEETINGS_CREATE_NAME,
+        MEETINGS_UPDATE_NAME,
+        MEETINGS_SERIES_UPDATE_NAME,
+        MEETINGS_PROVIDER_BIND_NAME,
+    }
 )
+#: The internal arbitration namespace of every provider sync write (WP2): the
+#: `meeting_write_requests.capability` of a sync create or update and the Record
+#: Event `source_capability` of its event. Under `system.`, the internal-token
+#: precedent (`system.entity_reenrichment.rebind`), so it can never be mistaken
+#: for, or collide with, a `Capability`: no client invokes it, and a client's
+#: own `meetings.create`/`meetings.update` keys never share its key space.
+MEETING_PROVIDER_SYNC_NAME: Final = "system.meeting_provider.sync"
+#: Every name a `meeting_write_requests` row may carry.
+MEETING_WRITE_REQUEST_NAMES: Final = MEETING_WRITE_CAPABILITY_NAMES | {MEETING_PROVIDER_SYNC_NAME}

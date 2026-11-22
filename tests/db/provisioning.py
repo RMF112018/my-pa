@@ -55,6 +55,17 @@ LEGACY_IMPORT_VARIABLES: Final = (
 
 POSTGRESQL_IDENTIFIER_LIMIT: Final = 63
 
+#: Every test session's PostgreSQL `TimeZone`. CI's `postgres:17` service
+#: containers default to UTC; a workstation cluster inherits the host zone at
+#: `initdb`, so the same test could bucket a date differently there. libpq reads
+#: `PGTZ` as the `TimeZone` startup parameter of every connection, Alembic and
+#: pytest subprocesses inherit it, and `ALTER DATABASE ... SET timezone` on a
+#: template would not reach a `CREATE DATABASE ... TEMPLATE` clone, so the
+#: environment is the lever. Set (not defaulted) at import, because every
+#: database fixture imports this module; production settings never read it.
+TEST_SESSION_TIMEZONE: Final = "UTC"
+os.environ["PGTZ"] = TEST_SESSION_TIMEZONE
+
 
 class ProvisioningError(RuntimeError):
     """A disposable-database operation was refused or could not complete."""

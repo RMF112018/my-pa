@@ -61,7 +61,7 @@ returns a complete no-match or empty package and must not fabricate evidence.
 ChatLLM is a **full MY-PA application data manager**, not a system
 administrator. The machine-readable policy is
 `src/my_pa/domain/identity/chatllm_capability_policy.py` at profile version
-`chatllm-data-v15`. Do not grant every `Capability` enum member. v15 adds only `meetings.provider.bind` (communications intelligence WP2-W3), `DATA_REQUIRED` on the core plane, a proposal whose grant stays operator-gated. v14 adds the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set; v13 with `MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires exactly the v12 set, so a pending Reports commissioning uses v14 after this build.
+`chatllm-data-v15`. Do not grant every `Capability` enum member. v15 adds only `meetings.provider.bind` (communications intelligence WP2-W3), `DATA_REQUIRED` on the core plane, a proposal pending operator activation: its grant and the profile activation stay operator-gated. v14 adds the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set; v13 with `MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires exactly the v12 set, so a pending Reports commissioning uses v14 after this build.
 
 On the current head, the derived **effective** ChatLLM catalog is 175 names
 when documents, relationship intelligence (with writes), relationship memory,

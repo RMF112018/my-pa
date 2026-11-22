@@ -610,7 +610,7 @@ grant, purpose and write gates. A remote client reaches a lineage capability exa
 the process composes it (the switches below), the client holds its own durable grant on it,
 and — for a write — every remote write gate is open. The compact façade
 (`MY_PA_MCP_CHATLLM_GATEWAY_ENABLED` and its allowlist) changes only the tool shape, never
-what is reachable. The ChatLLM data profile is `chatllm-data-v15` (communications intelligence WP2-W3: v14 plus `meetings.provider.bind`, `DATA_REQUIRED` on the core plane, a proposal whose grant stays operator-gated; v14, files workspace WP5: the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set; the lineage classification since
+what is reachable. The ChatLLM data profile is `chatllm-data-v15` (communications intelligence WP2-W3: v14 plus `meetings.provider.bind`, `DATA_REQUIRED` on the core plane, a proposal pending operator activation: its grant and the profile activation stay operator-gated; v14, files workspace WP5: the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set; the lineage classification since
 `chatllm-data-v10`; `chatllm-data-v11` adds only the 6 CPM Workbench Schedule reads on
 `MY_PA_SCHEDULE_ENABLED`, and v12 only the 11 standalone Reports names, `reports.publish`,
 the 5 report management names and the 5 `reports.transfer.*` names, all `DATA_REQUIRED`;

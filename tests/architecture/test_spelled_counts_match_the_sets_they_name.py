@@ -649,7 +649,7 @@ _ORDINAL_UNITS = (
 )
 
 
-def _cardinals(limit: int = 1999) -> dict[str, int]:
+def _cardinals(limit: int = 999) -> dict[str, int]:
     """English cardinals, built rather than listed.
 
     Built, so that a readable but wrong figure fails on the *comparison*. A
@@ -665,12 +665,16 @@ def _cardinals(limit: int = 1999) -> dict[str, int]:
     defect every rule in this module exists to refuse. Hundreds are built the
     same way tens are, so the next boundary announces itself the same way.
 
-    **It moved again, from 999 to 1999, in communications intelligence WP2.**
+    **Thousands are built only on request** (communications intelligence WP2).
     `tests/` crossed a thousand test modules and section 3's "one thousand and
     seven" was refused as unreadable. Thousands are built over the sub-thousand
-    map: "one thousand and N" below a hundred, "one thousand N" above it. Section
-    3's reader admits at most four words, so a count past one thousand and
-    ninety-nine also needs that pattern widened.
+    map: "one thousand and N" below a hundred, "one thousand N" above it. The
+    default stays 999 because every sweep below compiles the whole map into one
+    alternation: doubling it doubled the collection cost of this module and
+    pushed the CI shard partition proof, which collects it four times at once,
+    past its job budget. Only section 3's module-count reader asks for
+    `WIDE_CARDINALS`. That reader admits at most four words, so a count past
+    one thousand and ninety-nine also needs its pattern widened.
     """
     words = {word: value for value, word in enumerate(_UNITS) if value <= limit}
     for base, tens_word in _TENS.items():
@@ -704,6 +708,8 @@ def _cardinals(limit: int = 1999) -> dict[str, int]:
 
 
 CARDINALS = _cardinals()
+#: Section 3's module counts alone pass a thousand; see `_cardinals`.
+WIDE_CARDINALS = _cardinals(1999)
 #: The inverse of `CARDINALS`: the one spelling each value is written with. Used
 #: where a test constructs the *correct* sentence to check its own reader against
 #: a derived count, so the spelling works past nineteen (a bare `_UNITS[n]` index
@@ -1608,9 +1614,11 @@ def test_section_3_states_the_module_counts_it_says_it_derives() -> None:
     )
     for key, derived in (("modules", source_modules()), ("tests", counted_test_modules())):
         word = match[key].lower()
-        assert word in CARDINALS, f"section 3 states '{match[key]}', which this test cannot read"
-        assert CARDINALS[word] == derived, (
-            f"section 3 states {CARDINALS[word]} for '{key}' and the tree holds {derived}"
+        assert word in WIDE_CARDINALS, (
+            f"section 3 states '{match[key]}', which this test cannot read"
+        )
+        assert WIDE_CARDINALS[word] == derived, (
+            f"section 3 states {WIDE_CARDINALS[word]} for '{key}' and the tree holds {derived}"
         )
 
 

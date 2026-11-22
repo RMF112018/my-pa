@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
@@ -71,6 +72,20 @@ NOW: Final = datetime(2026, 11, 21, 6, tzinfo=UTC)
 LATER: Final = NOW + timedelta(hours=1)
 SHA_A: Final = "a" * 64
 SHA_B: Final = "b" * 64
+GENERATED: Final = "2026-11-21T05:00:00Z"
+STAMP_A: Final = datetime(2026, 11, 21, 5, tzinfo=UTC)
+STAMP_B: Final = STAMP_A + timedelta(hours=1)
+#: A test's publication digest names its ordering stamp unless it states one: A,
+#: B, C in publication order (resolution rule 7).
+SHA_C: Final = "c" * 64
+STAMP_C: Final = STAMP_B + timedelta(hours=1)
+STAMPS: Final = {SHA_A: STAMP_A, SHA_B: STAMP_B, SHA_C: STAMP_C}
+
+
+def _stamped(event: MeetingSyncEvent, sha: str, stamp: datetime | None) -> MeetingSyncEvent:
+    return replace(event, generated_at_utc=STAMPS.get(sha, STAMP_A) if stamp is None else stamp)
+
+
 SERIES_UID: Final = "uid-series@example.invalid"
 SYNC: Final = MeetingProviderSync()
 APP: Final = MeetingApplication()
@@ -93,7 +108,12 @@ def _event(**overrides: object) -> MeetingSyncEvent:
     }
     record.update(overrides)
     data = json.dumps(
-        {"schema": "meeting_sync_v1", "schema_version": "1.0.0", "events": [record]}
+        {
+            "schema": "meeting_sync_v1",
+            "schema_version": "1.0.0",
+            "generated_at_utc": GENERATED,
+            "events": [record],
+        }
     ).encode()
     publication = parse_publication(data).publication
     assert publication is not None
@@ -129,9 +149,11 @@ class Harness:
         *,
         sha: str = SHA_A,
         now: datetime = NOW,
+        stamp: datetime | None = None,
     ) -> MeetingSyncOutcome:
+        stamped = _stamped(event, sha, stamp)
         return self.run(
-            lambda uow: SYNC.apply_event(uow, principal_id, event, source_sha256=sha, now=now)
+            lambda uow: SYNC.apply_event(uow, principal_id, stamped, source_sha256=sha, now=now)
         )
 
     def rows(self, table: Any, **where: object) -> list[dict[str, Any]]:  # noqa: ANN401
@@ -247,7 +269,7 @@ def test_a_cancel_keeps_the_row_and_an_unknown_cancel_writes_nothing(
     (binding,) = harness.rows(meeting_provider_bindings, meeting_id=created.meeting_id)
     assert binding["provider_state"] == ProviderBindingState.CANCELLED.value
     # Un-cancel.
-    harness.apply(principal, _event(), sha="c" * 64, now=LATER + timedelta(hours=1))
+    harness.apply(principal, _event(), sha=SHA_C, now=LATER + timedelta(hours=1))
     assert _meeting(harness, created.meeting_id)["status"] == MeetingStatus.SCHEDULED.value
     before = harness.count(meetings, principal_id=principal)
     skipped = harness.apply(principal, _event(ical_uid="uid-unknown", status="cancelled"))
@@ -272,9 +294,29 @@ def test_an_identical_replay_writes_nothing(harness: Harness, principal: str) ->
 def test_a_replay_of_an_older_record_does_not_rewind(harness: Harness, principal: str) -> None:
     created = harness.apply(principal, _event())
     harness.apply(principal, _event(title="Second"), sha=SHA_B)
-    harness.apply(principal, _event(title="Third"), sha="c" * 64)
-    # SHA_B's record again: already applied under its key, so nothing moves.
+    harness.apply(principal, _event(title="Third"), sha=SHA_C)
+    # SHA_B's record again: its stamp is older than the binding's, so nothing moves.
     replay = harness.apply(principal, _event(title="Second"), sha=SHA_B)
+    assert replay.kind is SyncOutcomeKind.SKIPPED
+    assert replay.diagnostic is ResolutionDiagnostic.STALE_RECORD_SKIPPED
+    assert _meeting(harness, created.meeting_id)["title"] == "Third"
+
+
+def test_a_replay_of_an_applied_record_under_a_newer_stamp_still_does_not_rewind(
+    harness: Harness, principal: str
+) -> None:
+    """The reserved-key guard behind rule 7 (WP2-W3), isolated from the ordering guard.
+
+    One publication digest always carries one stamp, so this case is
+    synthetic: the record's key is already reserved, and the stamp is one the
+    ordering guard cannot refuse.
+    """
+    created = harness.apply(principal, _event())
+    harness.apply(principal, _event(title="Second"), sha=SHA_B)
+    harness.apply(principal, _event(title="Third"), sha=SHA_C)
+    replay = harness.apply(
+        principal, _event(title="Second"), sha=SHA_B, stamp=STAMP_C + timedelta(hours=1)
+    )
     assert replay.kind is SyncOutcomeKind.REPLAYED
     assert _meeting(harness, created.meeting_id)["title"] == "Third"
 
@@ -309,13 +351,135 @@ def test_a_replay_of_the_creating_record_after_an_update_does_not_rewind(
     """
     created = harness.apply(principal, _event())
     harness.apply(principal, _event(title="Second"), sha=SHA_B)
-    replay = harness.apply(principal, _event())
+    # The ordering guard (rule 7) skips this as stale on its own; a stamp it
+    # cannot refuse isolates the one-namespace key guard this case is about.
+    assert harness.apply(principal, _event()).diagnostic is (
+        ResolutionDiagnostic.STALE_RECORD_SKIPPED
+    )
+    replay = harness.apply(principal, _event(), stamp=STAMP_C)
     assert replay.kind is SyncOutcomeKind.REPLAYED
     meeting = _meeting(harness, created.meeting_id)
     assert (meeting["title"], meeting["version"]) == ("Second", 2)
     requests = harness.rows(meeting_write_requests, principal_id=principal)
     assert {row["capability"] for row in requests} == {MEETING_PROVIDER_SYNC_NAME}
     assert len(requests) == 2
+
+
+# ---- rule 7: publication ordering (WP2-F1) -------------------------------------------
+
+
+def _binding(harness: Harness, meeting_id: str | None) -> dict[str, Any]:
+    (row,) = harness.rows(meeting_provider_bindings, meeting_id=meeting_id)
+    return row
+
+
+def test_an_older_publication_after_a_newer_one_rewinds_nothing(
+    harness: Harness, principal: str
+) -> None:
+    created = harness.apply(principal, _event(), sha=SHA_A)
+    assert _binding(harness, created.meeting_id)["last_applied_generated_at_utc"] == STAMP_A
+    moved = harness.apply(
+        principal,
+        _event(
+            title="Newer",
+            start_utc="2026-12-01T18:00:00Z",
+            end_utc="2026-12-01T19:00:00Z",
+            timezone_name="Europe/London",
+            location_text="Room 9",
+            virtual_meeting_url="https://meet.example.invalid/newer",
+        ),
+        sha=SHA_C,
+        now=LATER,
+    )
+    assert moved.kind is SyncOutcomeKind.UPDATED
+    meeting_before = _meeting(harness, created.meeting_id)
+    binding_before = _binding(harness, created.meeting_id)
+    assert binding_before["last_applied_generated_at_utc"] == STAMP_C
+    events_before = harness.count(record_events, record_id=created.meeting_id)
+    requests_before = harness.count(meeting_write_requests, principal_id=principal)
+    # An older publication never applied before: no key is reserved for it.
+    stale = harness.apply(principal, _event(status="cancelled"), sha=SHA_B, now=LATER)
+    assert stale.kind is SyncOutcomeKind.SKIPPED
+    assert stale.diagnostic is ResolutionDiagnostic.STALE_RECORD_SKIPPED
+    assert stale.meeting_id == created.meeting_id
+    assert _meeting(harness, created.meeting_id) == meeting_before
+    assert meeting_before["version"] == 2 and meeting_before["title"] == "Newer"
+    assert _binding(harness, created.meeting_id) == binding_before
+    assert harness.count(record_events, record_id=created.meeting_id) == events_before
+    assert harness.count(meeting_write_requests, principal_id=principal) == requests_before
+
+
+def test_a_no_change_newer_record_still_blocks_an_older_changing_one(
+    harness: Harness, principal: str
+) -> None:
+    created = harness.apply(principal, _event(), sha=SHA_A)
+    # The newer publication changes nothing: no Meeting write, no reserved key.
+    unchanged = harness.apply(principal, _event(), sha=SHA_C, now=LATER)
+    assert unchanged.kind is SyncOutcomeKind.UNCHANGED
+    binding_before = _binding(harness, created.meeting_id)
+    assert binding_before["last_applied_generated_at_utc"] == STAMP_C
+    assert binding_before["last_seen_source_sha256"] == SHA_C
+    meeting_before = _meeting(harness, created.meeting_id)
+    stale = harness.apply(
+        principal,
+        _event(title="Older", start_utc="2026-12-01T09:00:00Z", end_utc="2026-12-01T10:00:00Z"),
+        sha=SHA_B,
+        now=LATER,
+    )
+    assert stale.kind is SyncOutcomeKind.SKIPPED
+    assert stale.diagnostic is ResolutionDiagnostic.STALE_RECORD_SKIPPED
+    meeting = _meeting(harness, created.meeting_id)
+    assert meeting == meeting_before
+    assert (meeting["title"], meeting["version"]) == ("Synthetic sync", 1)
+    assert _binding(harness, created.meeting_id) == binding_before
+
+
+def test_an_equal_stamp_from_another_publication_is_an_ordering_conflict(
+    harness: Harness, principal: str
+) -> None:
+    created = harness.apply(principal, _event(), sha=SHA_A)
+    meeting_before = _meeting(harness, created.meeting_id)
+    binding_before = _binding(harness, created.meeting_id)
+    conflict = harness.apply(
+        principal, _event(title="Same stamp"), sha=SHA_B, stamp=STAMP_A, now=LATER
+    )
+    assert conflict.kind is SyncOutcomeKind.SKIPPED
+    assert conflict.diagnostic is ResolutionDiagnostic.ORDERING_CONFLICT_SKIPPED
+    assert _meeting(harness, created.meeting_id) == meeting_before
+    assert _binding(harness, created.meeting_id) == binding_before
+
+
+def test_an_identical_replay_under_ordering_is_still_a_no_op(
+    harness: Harness, principal: str
+) -> None:
+    created = harness.apply(principal, _event(title="Second"), sha=SHA_B)
+    meeting_before = _meeting(harness, created.meeting_id)
+    binding_before = _binding(harness, created.meeting_id)
+    replay = harness.apply(principal, _event(title="Second"), sha=SHA_B, now=LATER)
+    assert replay.kind is SyncOutcomeKind.REPLAYED and replay.diagnostic is None
+    assert _meeting(harness, created.meeting_id) == meeting_before
+    assert _binding(harness, created.meeting_id) == binding_before
+
+
+def test_a_bind_leaves_the_stamp_null_and_the_next_sync_applies(
+    harness: Harness, principal: str
+) -> None:
+    created = harness.apply(principal, _event(), sha=SHA_B)
+    with harness.engine.begin() as connection:
+        connection.execute(
+            meeting_provider_bindings.update()
+            .where(meeting_provider_bindings.c.meeting_id == created.meeting_id)
+            .values(
+                last_applied_generated_at_utc=None,
+                last_seen_source_sha256=None,
+                last_seen_record_ordinal=None,
+                last_seen_at=None,
+            )
+        )
+    # An unstamped binding (as an explicit bind leaves it) accepts any stamp.
+    applied = harness.apply(principal, _event(title="After bind"), sha=SHA_A, now=LATER)
+    assert applied.kind is SyncOutcomeKind.UPDATED
+    assert _binding(harness, created.meeting_id)["last_applied_generated_at_utc"] == STAMP_A
 
 
 def test_a_client_key_never_collides_with_a_sync_key(harness: Harness, principal: str) -> None:

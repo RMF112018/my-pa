@@ -11181,7 +11181,8 @@ class MeetingProviderBindingRecord:
     The identity is `(calendar_ref, ical_uid, occurrence_original_start_utc)`,
     with `series_ical_uid` present exactly for an occurrence; identity columns
     are immutable. The provider event id, its format, the provider state and
-    the `last_seen_*` observation are mutable attributes, and `version` counts
+    the `last_seen_*` observation and the `last_applied_generated_at_utc`
+    ordering stamp are mutable attributes, and `version` counts
     material attribute changes only (a new observation of identical attributes
     refreshes `last_seen_*` without a version bump).
     """
@@ -11201,6 +11202,10 @@ class MeetingProviderBindingRecord:
     version: int
     created_at: datetime
     updated_at: datetime
+    #: The `generated_at_utc` of the last publication a sync applied (WP2-F1):
+    #: the ordering stamp a later, older record is refused against. `None`
+    #: after an explicit bind, until a sync applies a record.
+    last_applied_generated_at_utc: datetime | None = None
 
 
 class MeetingRepository(ABC):

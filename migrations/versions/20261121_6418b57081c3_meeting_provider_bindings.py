@@ -18,7 +18,9 @@ The one additive revision of WP2, on the sole head `4d1069a7d84f`. In order it:
    -- the original start, never the current one -- with the provider event id,
    its format, the provider state and the last observation
    (`last_seen_source_sha256`, `last_seen_record_ordinal`, `last_seen_at`, Manager
-   ruling D8) as mutable attributes. An occurrence names its series UID exactly
+   ruling D8) and the ordering stamp of the last applied publication
+   (`last_applied_generated_at_utc`, NULL until a sync applies one; WP2-F1) as
+   mutable attributes. An occurrence names its series UID exactly
    when it names its original start, and the series UID must be bound
    (composite foreign key onto the series bindings). One binding per Meeting
    (D9). Two partial unique indexes key occurrences and single meetings;
@@ -130,6 +132,7 @@ _DDL: Final = """
       last_seen_source_sha256 TEXT,
       last_seen_record_ordinal INTEGER,
       last_seen_at TIMESTAMP WITH TIME ZONE,
+      last_applied_generated_at_utc TIMESTAMP WITH TIME ZONE,
       version INTEGER DEFAULT 1 NOT NULL,
       created_at TIMESTAMP WITH TIME ZONE NOT NULL,
       updated_at TIMESTAMP WITH TIME ZONE NOT NULL,

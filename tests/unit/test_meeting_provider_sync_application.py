@@ -8,6 +8,7 @@ synthetic, parsed through the real `meeting_sync_v1` parser.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
@@ -39,6 +40,20 @@ OTHER: Final = "prn_mpsyncfast00000002"
 NOW: Final = datetime(2026, 11, 21, 6, tzinfo=UTC)
 SHA_A: Final = "a" * 64
 SHA_B: Final = "b" * 64
+GENERATED: Final = "2026-11-21T05:00:00Z"
+STAMP_A: Final = datetime(2026, 11, 21, 5, tzinfo=UTC)
+STAMP_B: Final = STAMP_A + timedelta(hours=1)
+#: A test's publication digest names its ordering stamp unless it states one: A,
+#: B, C in publication order (resolution rule 7).
+SHA_C: Final = "c" * 64
+STAMP_C: Final = STAMP_B + timedelta(hours=1)
+STAMPS: Final = {SHA_A: STAMP_A, SHA_B: STAMP_B, SHA_C: STAMP_C}
+
+
+def _stamped(event: MeetingSyncEvent, sha: str, stamp: datetime | None) -> MeetingSyncEvent:
+    return replace(event, generated_at_utc=STAMPS.get(sha, STAMP_A) if stamp is None else stamp)
+
+
 SYNC: Final = MeetingProviderSync()
 APP: Final = MeetingApplication()
 SERIES_UID: Final = "uid-series@example.invalid"
@@ -60,7 +75,12 @@ def _event(**overrides: object) -> MeetingSyncEvent:
     }
     record.update(overrides)
     data = json.dumps(
-        {"schema": "meeting_sync_v1", "schema_version": "1.0.0", "events": [record]}
+        {
+            "schema": "meeting_sync_v1",
+            "schema_version": "1.0.0",
+            "generated_at_utc": GENERATED,
+            "events": [record],
+        }
     ).encode()
     publication = parse_publication(data).publication
     assert publication is not None
@@ -81,10 +101,16 @@ def _occurrence(original: str = "2026-12-02T14:00:00Z", **overrides: object) -> 
 
 
 def _apply(
-    world: World, event: MeetingSyncEvent, *, sha: str = SHA_A, principal: str = PRINCIPAL
+    world: World,
+    event: MeetingSyncEvent,
+    *,
+    sha: str = SHA_A,
+    principal: str = PRINCIPAL,
+    stamp: datetime | None = None,
 ) -> MeetingSyncOutcome:
+    stamped = _stamped(event, sha, stamp)
     with FakeUnitOfWork(world) as uow:
-        return SYNC.apply_event(uow, principal, event, source_sha256=sha, now=NOW)
+        return SYNC.apply_event(uow, principal, stamped, source_sha256=sha, now=NOW)
 
 
 @pytest.fixture
@@ -149,6 +175,37 @@ def test_an_identical_replay_and_an_identical_republication_change_nothing(
     assert binding.version == 1 and binding.last_seen_source_sha256 == SHA_B
     assert len(world.meeting_history) == 1
     assert len(world.record_events) == events_before
+
+
+def test_an_older_publication_rewinds_nothing_even_after_a_no_change_record(
+    world: World,
+) -> None:
+    created = _apply(world, _event())
+    assert _apply(world, _event(), sha=SHA_C).kind is SyncOutcomeKind.UNCHANGED
+    (binding,) = world.meeting_provider_bindings.values()
+    assert binding.last_applied_generated_at_utc == STAMP_C
+    history = len(world.meeting_history)
+    stale = _apply(world, _event(title="Older", status="cancelled"), sha=SHA_B)
+    assert stale.kind is SyncOutcomeKind.SKIPPED
+    assert stale.diagnostic is ResolutionDiagnostic.STALE_RECORD_SKIPPED
+    meeting = world.meetings[(PRINCIPAL, created.meeting_id)]
+    assert (meeting.title, meeting.status, meeting.version) == (
+        "Synthetic sync",
+        MeetingStatus.SCHEDULED,
+        1,
+    )
+    assert world.meeting_provider_bindings[(PRINCIPAL, binding.binding_id)] == binding
+    assert len(world.meeting_history) == history
+
+
+def test_an_equal_stamp_from_another_publication_is_skipped(world: World) -> None:
+    created = _apply(world, _event())
+    (binding,) = world.meeting_provider_bindings.values()
+    conflict = _apply(world, _event(title="Same stamp"), sha=SHA_B, stamp=STAMP_A)
+    assert conflict.kind is SyncOutcomeKind.SKIPPED
+    assert conflict.diagnostic is ResolutionDiagnostic.ORDERING_CONFLICT_SKIPPED
+    assert world.meetings[(PRINCIPAL, created.meeting_id)].title == "Synthetic sync"
+    assert world.meeting_provider_bindings[(PRINCIPAL, binding.binding_id)] == binding
 
 
 def test_a_cancel_keeps_the_meeting_and_a_cancelled_unknown_is_skipped(world: World) -> None:

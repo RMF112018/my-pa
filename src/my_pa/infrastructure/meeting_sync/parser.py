@@ -16,8 +16,11 @@ Publication validation, in order (the first failure decides), mirroring
    (`unsupported_major_version`); a newer minor is accepted and reported
    (`schema_minor_newer`);
 4. required keys `schema`, `schema_version`, `events`; `events` a list;
-   optional `generated_at_utc` (an aware timestamp) and `cycle_run_id` (a
-   non-empty string).
+5. required `generated_at_utc`, an aware timestamp (`missing_required_key` when
+   absent, `invalid_top_level_field` when not a timestamp): the publication's
+   ordering stamp, carried onto every accepted event so a re-application of an
+   older publication can never rewind a bound Meeting (WP2-F1);
+6. optional `cycle_run_id` (a non-empty string).
 
 An event record carries `calendar_ref`, `ical_uid`, `series_ical_uid` and
 `occurrence_original_start_utc` (both null for a single meeting), `start_utc`,
@@ -82,8 +85,8 @@ __all__ = [
 PARSER_VERSION: Final = "meeting_sync_v1_parser_v1"
 MAX_PUBLICATION_BYTES: Final = 16 * 1024 * 1024
 
-REQUIRED_TOP_LEVEL: Final = ("schema", "schema_version", "events")
-OPTIONAL_TOP_LEVEL: Final = frozenset({"generated_at_utc", "cycle_run_id"})
+REQUIRED_TOP_LEVEL: Final = ("schema", "schema_version", "events", "generated_at_utc")
+OPTIONAL_TOP_LEVEL: Final = frozenset({"cycle_run_id"})
 KNOWN_TOP_LEVEL: Final = frozenset(REQUIRED_TOP_LEVEL) | OPTIONAL_TOP_LEVEL
 
 REQUIRED_RECORD_KEYS: Final = (
@@ -250,13 +253,15 @@ def _parse(data: bytes, d: DiagnosticCollector) -> MeetingSyncPublication:
     if "schema_version" not in document:
         raise _reject(d, PublicationRejection.MISSING_REQUIRED_KEY, "schema_version")
     version = _schema_version(document, d)
-    for key in REQUIRED_TOP_LEVEL:
-        if key not in document:
-            raise _reject(d, PublicationRejection.MISSING_REQUIRED_KEY, key)
+    if "events" not in document:
+        raise _reject(d, PublicationRejection.MISSING_REQUIRED_KEY, "events")
     events = document["events"]
     if not isinstance(events, list):
         raise _reject(d, PublicationRejection.INVALID_TOP_LEVEL_FIELD, "events")
-    if "generated_at_utc" in document and _parse_utc(document["generated_at_utc"]) is None:
+    if "generated_at_utc" not in document:
+        raise _reject(d, PublicationRejection.MISSING_REQUIRED_KEY, "generated_at_utc")
+    generated_at_utc = _parse_utc(document["generated_at_utc"])
+    if generated_at_utc is None:
         raise _reject(d, PublicationRejection.INVALID_TOP_LEVEL_FIELD, "generated_at_utc")
     if "cycle_run_id" in document:
         run_id = document["cycle_run_id"]
@@ -269,7 +274,7 @@ def _parse(data: bytes, d: DiagnosticCollector) -> MeetingSyncPublication:
     accepted: list[MeetingSyncEvent] = []
     quarantined: list[QuarantinedEvent] = []
     for ordinal, record in enumerate(events):
-        parsed = _parse_record(ordinal, record, d)
+        parsed = _parse_record(ordinal, record, generated_at_utc, d)
         if isinstance(parsed, QuarantinedEvent):
             quarantined.append(parsed)
         else:
@@ -288,6 +293,7 @@ def _parse(data: bytes, d: DiagnosticCollector) -> MeetingSyncPublication:
             kept.append(event)
     return MeetingSyncPublication(
         schema_version=version,
+        generated_at_utc=generated_at_utc,
         record_count=len(events),
         events=tuple(kept),
         quarantined=tuple(sorted(quarantined, key=lambda entry: entry.ordinal)),
@@ -302,7 +308,7 @@ def _quarantine(ordinal: int, reasons: set[ReasonCode], d: DiagnosticCollector) 
 
 
 def _parse_record(
-    ordinal: int, record: object, d: DiagnosticCollector
+    ordinal: int, record: object, generated_at_utc: datetime, d: DiagnosticCollector
 ) -> MeetingSyncEvent | QuarantinedEvent:
     if not isinstance(record, dict):
         return _quarantine(ordinal, {ReasonCode.RECORD_NOT_AN_OBJECT}, d)
@@ -443,5 +449,6 @@ def _parse_record(
         title=title,
         location_text=location_text,
         virtual_meeting_url=virtual_meeting_url,
+        generated_at_utc=generated_at_utc,
         attendees=attendees,
     )

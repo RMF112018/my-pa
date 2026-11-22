@@ -1,6 +1,6 @@
 """WP2: the pure provider resolution rules (contract section 12.2, rulings D2, D5, D9).
 
-Rules 1-6, idempotency (an identical event changes nothing), the provider-owned
+Rules 1-7, idempotency (an identical event changes nothing), the provider-owned
 field set and the deterministic idempotency key. Synthetic values only.
 """
 
@@ -27,6 +27,7 @@ from my_pa.domain.meeting_sync.resolution import (
     ProviderFields,
     ResolutionDiagnostic,
     ResolutionKind,
+    ordering_skip,
     provider_create,
     provider_update,
     refreshed_binding,
@@ -36,6 +37,7 @@ from my_pa.domain.meeting_sync.resolution import (
 
 START: Final = datetime(2026, 12, 1, 15, tzinfo=UTC)
 SEEN: Final = datetime(2026, 11, 21, 6, tzinfo=UTC)
+GENERATED: Final = datetime(2026, 11, 21, 5, tzinfo=UTC)
 SHA: Final = "a" * 64
 MEETING: Final = "mtg_syncres0001syncres"
 SERIES: Final = "mser_syncres0001syncres"
@@ -58,6 +60,7 @@ def _single(**overrides: object) -> MeetingSyncEvent:
         "title": "Synthetic sync",
         "location_text": "Room 1",
         "virtual_meeting_url": "https://meet.example.invalid/x",
+        "generated_at_utc": GENERATED,
     }
     values.update(overrides)
     return MeetingSyncEvent(**values)  # type: ignore[arg-type]
@@ -88,13 +91,17 @@ def _fields(event: MeetingSyncEvent) -> ProviderFields:
 
 def test_rule_1_a_known_key_updates_the_bound_meeting() -> None:
     for event in (_single(), _occurrence()):
-        resolution = resolve_event(event, bound=BOUND, series_id=SERIES, other_kind_bound=False)
+        resolution = resolve_event(
+            event, bound=BOUND, series_id=SERIES, other_kind_bound=False, source_sha256=SHA
+        )
         assert resolution.kind is ResolutionKind.UPDATE_BOUND
         assert resolution.meeting_id == MEETING
 
 
 def test_rule_2_an_unknown_occurrence_of_a_known_series_joins_it() -> None:
-    resolution = resolve_event(_occurrence(), bound=None, series_id=SERIES, other_kind_bound=False)
+    resolution = resolve_event(
+        _occurrence(), bound=None, series_id=SERIES, other_kind_bound=False, source_sha256=SHA
+    )
     assert resolution.kind is ResolutionKind.CREATE_IN_SERIES
     assert resolution.meeting_series_id == SERIES
     request = provider_create(_occurrence(), meeting_series_id=SERIES)
@@ -102,7 +109,9 @@ def test_rule_2_an_unknown_occurrence_of_a_known_series_joins_it() -> None:
 
 
 def test_rule_3_an_unknown_series_creates_one_titled_by_the_event() -> None:
-    resolution = resolve_event(_occurrence(), bound=None, series_id=None, other_kind_bound=False)
+    resolution = resolve_event(
+        _occurrence(), bound=None, series_id=None, other_kind_bound=False, source_sha256=SHA
+    )
     assert resolution.kind is ResolutionKind.CREATE_SERIES
     request = provider_create(_occurrence(), new_series=True)
     assert request.series_title == "Synthetic sync"
@@ -110,7 +119,9 @@ def test_rule_3_an_unknown_series_creates_one_titled_by_the_event() -> None:
 
 
 def test_an_unknown_single_meeting_is_a_standalone_create() -> None:
-    resolution = resolve_event(_single(), bound=None, series_id=None, other_kind_bound=False)
+    resolution = resolve_event(
+        _single(), bound=None, series_id=None, other_kind_bound=False, source_sha256=SHA
+    )
     assert resolution.kind is ResolutionKind.CREATE_STANDALONE
     request = provider_create(_single())
     assert request.meeting_series_id is None and request.series_title is None
@@ -125,14 +136,18 @@ def test_rule_4_resolution_takes_no_title_or_time_input() -> None:
                     end_utc=START + timedelta(days=3, hours=1))  # fmt: skip
     for bound in (None, BOUND):
         assert resolve_event(
-            _single(), bound=bound, series_id=None, other_kind_bound=False
-        ) == resolve_event(other, bound=bound, series_id=None, other_kind_bound=False)
+            _single(), bound=bound, series_id=None, other_kind_bound=False, source_sha256=SHA
+        ) == resolve_event(
+            other, bound=bound, series_id=None, other_kind_bound=False, source_sha256=SHA
+        )
 
 
 def test_rule_5_a_known_cancelled_event_cancels_and_never_deletes() -> None:
     event = _single(status=EventStatus.CANCELLED)
     assert (
-        resolve_event(event, bound=BOUND, series_id=None, other_kind_bound=False).kind
+        resolve_event(
+            event, bound=BOUND, series_id=None, other_kind_bound=False, source_sha256=SHA
+        ).kind
         is ResolutionKind.UPDATE_BOUND
     )
     request = provider_update(MEETING, _fields(_single()), event)
@@ -147,16 +162,18 @@ def test_rule_5_a_known_cancelled_event_cancels_and_never_deletes() -> None:
 def test_d5_a_cancelled_unknown_event_is_skipped(make: object) -> None:
     event = make(status=EventStatus.CANCELLED)  # type: ignore[operator]
     for series_id in (None, SERIES):
-        resolution = resolve_event(event, bound=None, series_id=series_id, other_kind_bound=False)
+        resolution = resolve_event(
+            event, bound=None, series_id=series_id, other_kind_bound=False, source_sha256=SHA
+        )
         assert resolution.kind is ResolutionKind.SKIP
         assert resolution.diagnostic is ResolutionDiagnostic.CANCELLED_UNKNOWN_SKIPPED
 
 
 def test_rule_6_a_changed_provider_id_is_the_same_meeting() -> None:
     event = _single(provider_event_id="evt-renamed")
-    assert resolve_event(event, bound=BOUND, series_id=None, other_kind_bound=False).meeting_id == (
-        MEETING
-    )
+    assert resolve_event(
+        event, bound=BOUND, series_id=None, other_kind_bound=False, source_sha256=SHA
+    ).meeting_id == (MEETING)
     assert event.key == _single().key
     # It changes no Meeting field: only the binding attribute.
     assert provider_update(MEETING, _fields(_single()), event) is None
@@ -171,7 +188,9 @@ def test_rule_6_a_changed_provider_id_is_the_same_meeting() -> None:
 
 def test_d9_the_other_kind_bound_is_refused_not_given_a_second_identity() -> None:
     for event in (_single(), _occurrence()):
-        resolution = resolve_event(event, bound=None, series_id=None, other_kind_bound=True)
+        resolution = resolve_event(
+            event, bound=None, series_id=None, other_kind_bound=True, source_sha256=SHA
+        )
         assert resolution.kind is ResolutionKind.SKIP
         assert resolution.diagnostic is ResolutionDiagnostic.BINDING_KIND_CONFLICT
 
@@ -185,6 +204,72 @@ def test_a_moved_occurrence_keeps_its_key() -> None:
         START + timedelta(hours=2),
         START + timedelta(hours=3),
     )
+
+
+# ---- rule 7: publication ordering (WP2-F1) -------------------------------------------
+
+
+def _stamped_bound(stamp: datetime | None, sha: str | None = SHA) -> KnownOccurrence:
+    return replace(BOUND, last_applied_generated_at_utc=stamp, last_seen_source_sha256=sha)
+
+
+def test_rule_7_a_strictly_older_stamp_is_a_stale_skip() -> None:
+    bound = _stamped_bound(GENERATED + timedelta(seconds=1))
+    for event in (_single(), _occurrence(), _single(status=EventStatus.CANCELLED)):
+        resolution = resolve_event(
+            event, bound=bound, series_id=None, other_kind_bound=False, source_sha256="b" * 64
+        )
+        assert resolution.kind is ResolutionKind.SKIP
+        assert resolution.diagnostic is ResolutionDiagnostic.STALE_RECORD_SKIPPED
+        assert resolution.meeting_id == MEETING
+    # Even from the very publication the binding last recorded.
+    assert ordering_skip(_single(), bound, source_sha256=SHA) is (
+        ResolutionDiagnostic.STALE_RECORD_SKIPPED
+    )
+
+
+def test_rule_7_an_equal_stamp_from_another_publication_is_an_ordering_conflict() -> None:
+    bound = _stamped_bound(GENERATED)
+    resolution = resolve_event(
+        _single(), bound=bound, series_id=None, other_kind_bound=False, source_sha256="b" * 64
+    )
+    assert resolution.kind is ResolutionKind.SKIP
+    assert resolution.diagnostic is ResolutionDiagnostic.ORDERING_CONFLICT_SKIPPED
+    # The same publication with the same stamp is the idempotent replay path.
+    same = resolve_event(
+        _single(), bound=bound, series_id=None, other_kind_bound=False, source_sha256=SHA
+    )
+    assert same.kind is ResolutionKind.UPDATE_BOUND and same.diagnostic is None
+
+
+def test_rule_7_a_newer_stamp_or_an_unstamped_binding_applies() -> None:
+    for bound in (
+        _stamped_bound(GENERATED - timedelta(seconds=1)),
+        _stamped_bound(None, None),
+        BOUND,
+    ):
+        resolution = resolve_event(
+            _single(), bound=bound, series_id=None, other_kind_bound=False, source_sha256="b" * 64
+        )
+        assert resolution.kind is ResolutionKind.UPDATE_BOUND
+        assert resolution.diagnostic is None
+
+
+def test_rule_7_a_no_change_record_still_carries_its_stamp() -> None:
+    current = BindingAttributes(
+        "evt-0001",
+        ProviderEventIdFormat.MUTABLE,
+        ProviderBindingState.ACTIVE,
+        SHA,
+        0,
+        SEEN,
+        GENERATED - timedelta(hours=1),
+    )
+    refreshed = refreshed_binding(current, _single(), source_sha256="c" * 64, seen_at=SEEN)
+    assert refreshed is not None
+    attributes, material = refreshed
+    assert not material
+    assert attributes.last_applied_generated_at_utc == GENERATED
 
 
 # ---- provider-owned fields and idempotency ------------------------------------------

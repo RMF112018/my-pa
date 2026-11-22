@@ -542,6 +542,7 @@ def test_binding_identity_is_immutable_and_attributes_are_mutable(
                 provider_event_id="evt-renamed",
                 provider_event_id_format="immutable_verified",
                 provider_state="cancelled",
+                last_applied_generated_at_utc=WHEN + timedelta(hours=1),
                 version=2,
                 updated_at=WHEN + timedelta(hours=1),
             )

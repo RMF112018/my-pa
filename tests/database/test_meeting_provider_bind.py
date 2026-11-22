@@ -205,6 +205,8 @@ def test_a_single_meeting_bind(scene: Scene) -> None:
     (row,) = scene.rows(meeting_provider_bindings, meeting_id=meeting["meeting_id"])
     assert row["principal_id"] == scene.principal_id
     assert row["last_seen_source_sha256"] is None
+    # A bind carries no publication: no ordering stamp until a sync applies one.
+    assert row["last_applied_generated_at_utc"] is None
     assert scene.count(meeting_series_provider_bindings) == 0
     assert scene.version(meeting["meeting_id"]) == 2
 

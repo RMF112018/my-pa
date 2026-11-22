@@ -15761,6 +15761,9 @@ meeting_provider_bindings = Table(
     Column("last_seen_source_sha256", Text),
     Column("last_seen_record_ordinal", Integer),
     Column("last_seen_at", DateTime(timezone=True)),
+    # The `generated_at_utc` ordering stamp of the last publication a sync
+    # applied to this binding (WP2-F1): a mutable attribute, NULL after a bind.
+    Column("last_applied_generated_at_utc", DateTime(timezone=True)),
     Column("version", Integer, nullable=False, server_default=text("1")),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),

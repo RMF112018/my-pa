@@ -19,7 +19,12 @@ carries out the decision:
   -- standalone, in the bound series, or with a new series titled by the event --
   and inserts the series binding (for a new series) and the occurrence binding;
 * a cancelled unknown event and a UID bound as the other kind are skipped with
-  a content-free diagnostic, and nothing is written.
+  a content-free diagnostic, and nothing is written;
+* a known key's record from an older publication (`stale_record_skipped`), or
+  from a different publication with the same `generated_at_utc`
+  (`ordering_conflict_skipped`), is skipped the same way (resolution rule 7):
+  the binding's `last_applied_generated_at_utc` is the ordering stamp, written
+  with `last_seen_*` on every applied record, a no-change one included.
 
 **Writes are the system's** (ruling D12): every Meeting write records actor
 `system` and the source token `system.meeting_provider.sync`
@@ -128,6 +133,7 @@ def _attributes(binding: MeetingProviderBindingRecord) -> BindingAttributes:
         last_seen_source_sha256=binding.last_seen_source_sha256,
         last_seen_record_ordinal=binding.last_seen_record_ordinal,
         last_seen_at=binding.last_seen_at,
+        last_applied_generated_at_utc=binding.last_applied_generated_at_utc,
     )
 
 
@@ -173,14 +179,26 @@ class MeetingProviderSync:
             event,
             bound=None
             if bound is None
-            else KnownOccurrence(binding_id=bound.binding_id, meeting_id=bound.meeting_id),
+            else KnownOccurrence(
+                binding_id=bound.binding_id,
+                meeting_id=bound.meeting_id,
+                last_applied_generated_at_utc=bound.last_applied_generated_at_utc,
+                last_seen_source_sha256=bound.last_seen_source_sha256,
+            ),
             series_id=None if series_binding is None else series_binding.meeting_series_id,
             other_kind_bound=other_kind_bound,
+            source_sha256=source_sha256,
         )
 
         if resolution.kind is ResolutionKind.SKIP:
+            # A stale or ordering-conflicted record of a known key, a cancelled
+            # unknown, or a kind conflict: nothing is written, Meeting or binding.
             return MeetingSyncOutcome(
-                event.ordinal, SyncOutcomeKind.SKIPPED, diagnostic=resolution.diagnostic
+                event.ordinal,
+                SyncOutcomeKind.SKIPPED,
+                meeting_id=resolution.meeting_id,
+                binding_id=None if bound is None else bound.binding_id,
+                diagnostic=resolution.diagnostic,
             )
         if bound is not None:
             return self._update(uow, principal_id, event, bound, source_sha256, idempotency_key, at)
@@ -255,6 +273,9 @@ class MeetingProviderSync:
                 last_seen_source_sha256=attributes.last_seen_source_sha256,
                 last_seen_record_ordinal=attributes.last_seen_record_ordinal,
                 last_seen_at=attributes.last_seen_at,
+                # Stored even for a no-change record (rule 7), so a later older
+                # record of this key is recognised as stale.
+                last_applied_generated_at_utc=attributes.last_applied_generated_at_utc,
                 version=bound.version + 1 if material else bound.version,
                 updated_at=at,
             ),
@@ -338,6 +359,7 @@ class MeetingProviderSync:
             version=1,
             created_at=at,
             updated_at=at,
+            last_applied_generated_at_utc=event.generated_at_utc,
         )
         repository.insert_provider_binding(principal_id, binding)
         return MeetingSyncOutcome(

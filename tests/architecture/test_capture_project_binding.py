@@ -83,8 +83,10 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: bounds and vocabularies from `domain.meeting_sync`; `captures` is untouched.
 #: WP2-W3 moved it once more: the `meeting_write_requests` capability CHECK
 #: admits `meetings.provider.bind` and the internal sync namespace, each with a
-#: completed shape; `captures` is untouched.
-TABLES_SHA256: Final = "e567c92c3a1401089c346b96ba24eafa35d9f4a8e86d2c302b1c29e42acebb0c"
+#: completed shape; `captures` is untouched. WP2-F1 moved it again: the
+#: provider binding table gains the `last_applied_generated_at_utc` ordering
+#: stamp; `captures` is untouched.
+TABLES_SHA256: Final = "d68a66f1e41dc07cc7aa0208ea6f0e9110c745f5ba55b12510e185731f5e924b"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

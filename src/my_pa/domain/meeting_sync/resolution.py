@@ -15,7 +15,17 @@ Pure decisions over state the application has already read under lock:
    cancelled event with an unknown key creates nothing (D5,
    `cancelled_unknown_skipped`);
 6. a changed provider event id with the same key is the same Meeting: the id is
-   a binding attribute, never part of the key.
+   a binding attribute, never part of the key;
+7. a known key is applied only in publication order (WP2-F1): the event's
+   `generated_at_utc` stamp is compared with the binding's
+   `last_applied_generated_at_utc`. A strictly older stamp is skipped
+   (`stale_record_skipped`); an equal stamp from a different publication (a
+   different `last_seen_source_sha256`) is ambiguous and skipped
+   (`ordering_conflict_skipped`); either skip writes nothing. An equal stamp
+   from the same publication is the idempotent replay path, and a newer stamp,
+   or a binding with no stamp yet (an explicit bind), applies as rules 1, 5, 6.
+   A no-change record still stores its stamp, so a later older record is
+   recognised.
 
 A single meeting and occurrences of one `(calendar_ref, ical_uid)` are mutually
 exclusive in v1 (D9): an event whose UID is already bound as the other kind is
@@ -56,6 +66,7 @@ __all__ = [
     "Resolution",
     "ResolutionDiagnostic",
     "ResolutionKind",
+    "ordering_skip",
     "provider_create",
     "provider_update",
     "refreshed_binding",
@@ -81,6 +92,8 @@ class ResolutionDiagnostic(StrEnum):
 
     CANCELLED_UNKNOWN_SKIPPED = "cancelled_unknown_skipped"
     BINDING_KIND_CONFLICT = "binding_kind_conflict"
+    STALE_RECORD_SKIPPED = "stale_record_skipped"
+    ORDERING_CONFLICT_SKIPPED = "ordering_conflict_skipped"
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +102,9 @@ class KnownOccurrence:
 
     binding_id: str
     meeting_id: str
+    #: The binding's ordering stamp and last publication digest (rule 7).
+    last_applied_generated_at_utc: datetime | None = None
+    last_seen_source_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,20 +115,38 @@ class Resolution:
     diagnostic: ResolutionDiagnostic | None = None
 
 
+def ordering_skip(
+    event: MeetingSyncEvent, bound: KnownOccurrence, *, source_sha256: str
+) -> ResolutionDiagnostic | None:
+    """Rule 7: why a known key's event must not be applied, or `None` to apply it."""
+    applied = bound.last_applied_generated_at_utc
+    if applied is None:
+        return None
+    if event.generated_at_utc < applied:
+        return ResolutionDiagnostic.STALE_RECORD_SKIPPED
+    if event.generated_at_utc == applied and bound.last_seen_source_sha256 != source_sha256:
+        return ResolutionDiagnostic.ORDERING_CONFLICT_SKIPPED
+    return None
+
+
 def resolve_event(
     event: MeetingSyncEvent,
     *,
     bound: KnownOccurrence | None,
     series_id: str | None,
     other_kind_bound: bool,
+    source_sha256: str,
 ) -> Resolution:
-    """Rules 1-6 above. `series_id` is the series the event's series UID is bound to.
+    """Rules 1-7 above. `series_id` is the series the event's series UID is bound to.
 
     `other_kind_bound` is whether the event's `(calendar_ref, ical_uid)` is bound
     as the other kind (a single meeting when this is an occurrence, or the
-    reverse).
+    reverse). `source_sha256` is the digest of the event's publication (rule 7).
     """
     if bound is not None:
+        skipped = ordering_skip(event, bound, source_sha256=source_sha256)
+        if skipped is not None:
+            return Resolution(ResolutionKind.SKIP, meeting_id=bound.meeting_id, diagnostic=skipped)
         return Resolution(ResolutionKind.UPDATE_BOUND, meeting_id=bound.meeting_id)
     if event.meeting_status is MeetingStatus.CANCELLED:
         return Resolution(
@@ -213,6 +247,7 @@ class BindingAttributes:
     last_seen_source_sha256: str | None
     last_seen_record_ordinal: int | None
     last_seen_at: datetime | None
+    last_applied_generated_at_utc: datetime | None = None
 
 
 def refreshed_binding(
@@ -226,7 +261,8 @@ def refreshed_binding(
 
     `None` when the binding already records this exact observation (the same
     publication digest and ordinal, the same provider attributes): an identical
-    replay. Material means a provider attribute changed (`provider_event_id`, its
+    replay. The ordering stamp is always the event's (rule 7), so a no-change
+    record still records it. Material means a provider attribute changed (`provider_event_id`, its
     format, `provider_state`), which is what bumps the binding version; a new
     observation of identical attributes only refreshes `last_seen_*`.
     """
@@ -237,6 +273,7 @@ def refreshed_binding(
         last_seen_source_sha256=source_sha256,
         last_seen_record_ordinal=event.ordinal,
         last_seen_at=seen_at,
+        last_applied_generated_at_utc=event.generated_at_utc,
     )
     material = (
         current.provider_event_id != after.provider_event_id

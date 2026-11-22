@@ -150,6 +150,9 @@ class MeetingSyncEvent:
     title: str
     location_text: str | None
     virtual_meeting_url: str | None
+    #: The publication's `generated_at_utc` (WP2-F1): the record's ordering
+    #: stamp, compared with the binding's `last_applied_generated_at_utc`.
+    generated_at_utc: datetime
     attendees: tuple[SyncAttendee, ...] = ()
 
     @property
@@ -181,6 +184,7 @@ class QuarantinedEvent:
 @dataclass(frozen=True, slots=True)
 class MeetingSyncPublication:
     schema_version: SchemaVersion
+    generated_at_utc: datetime
     record_count: int
     events: tuple[MeetingSyncEvent, ...]
     quarantined: tuple[QuarantinedEvent, ...]

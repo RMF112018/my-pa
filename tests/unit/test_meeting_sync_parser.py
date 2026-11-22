@@ -58,6 +58,7 @@ def _publication(*events: object, **top: object) -> bytes:
     document: dict[str, Any] = {
         "schema": "meeting_sync_v1",
         "schema_version": "1.0.0",
+        "generated_at_utc": "2026-11-21T06:00:00Z",
         "events": list(events),
     }
     document.update(top)
@@ -188,12 +189,53 @@ def test_a_newer_minor_is_accepted_and_reported() -> None:
     assert parsed.diagnostics.code_counts[DiagnosticCode.SCHEMA_MINOR_NEWER.value] == 1
 
 
-@pytest.mark.parametrize(
-    "top", [{"generated_at_utc": "yesterday"}, {"cycle_run_id": ""}, {"cycle_run_id": 7}]
-)
+@pytest.mark.parametrize("top", [{"cycle_run_id": ""}, {"cycle_run_id": 7}])
 def test_invalid_optional_top_level_fields_reject(top: dict[str, object]) -> None:
     parsed = parse_publication(_publication(_event(), **top))
     assert parsed.rejection is PublicationRejection.INVALID_TOP_LEVEL_FIELD
+
+
+def test_a_missing_generated_at_utc_rejects_the_publication() -> None:
+    document = json.loads(_publication(_event()))
+    del document["generated_at_utc"]
+    parsed = parse_publication(json.dumps(document).encode("utf-8"))
+    assert parsed.status is PublicationStatus.REJECTED
+    assert parsed.rejection is PublicationRejection.MISSING_REQUIRED_KEY
+    assert parsed.publication is None
+    (diagnostic,) = parsed.diagnostics.entries
+    assert diagnostic.path == "generated_at_utc"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        "yesterday",
+        "2026-11-21T06:00:00",  # naive: no offset
+        "2026-11-21",
+        1732168800,
+        "0001-01-01T00:00:00Z",  # outside the representable range
+    ],
+)
+def test_an_invalid_generated_at_utc_rejects_the_publication(value: object) -> None:
+    parsed = parse_publication(_publication(_event(), generated_at_utc=value))
+    assert parsed.status is PublicationStatus.REJECTED
+    assert parsed.rejection is PublicationRejection.INVALID_TOP_LEVEL_FIELD
+    (diagnostic,) = parsed.diagnostics.entries
+    assert diagnostic.path == "generated_at_utc"
+    assert "yesterday" not in repr(parsed.diagnostics)
+
+
+def test_generated_at_utc_is_every_events_ordering_stamp_in_utc() -> None:
+    parsed = parse_publication(
+        _publication(
+            _event(), _event(ical_uid="uid-0002"), generated_at_utc="2026-11-21T01:00:00-05:00"
+        )
+    )
+    assert parsed.publication is not None
+    stamp = datetime(2026, 11, 21, 6, tzinfo=UTC)
+    assert parsed.publication.generated_at_utc == stamp
+    assert [event.generated_at_utc for event in parsed.publication.events] == [stamp, stamp]
 
 
 def test_unknown_keys_are_counted_never_fatal() -> None:

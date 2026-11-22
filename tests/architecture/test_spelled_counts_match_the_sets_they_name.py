@@ -649,7 +649,7 @@ _ORDINAL_UNITS = (
 )
 
 
-def _cardinals(limit: int = 999) -> dict[str, int]:
+def _cardinals(limit: int = 1999) -> dict[str, int]:
     """English cardinals, built rather than listed.
 
     Built, so that a readable but wrong figure fails on the *comparison*. A
@@ -664,6 +664,13 @@ def _cardinals(limit: int = 999) -> dict[str, int]:
     stated 3 — a wrong answer rather than a refusal, which is the shape of
     defect every rule in this module exists to refuse. Hundreds are built the
     same way tens are, so the next boundary announces itself the same way.
+
+    **It moved again, from 999 to 1999, in communications intelligence WP2.**
+    `tests/` crossed a thousand test modules and section 3's "one thousand and
+    seven" was refused as unreadable. Thousands are built over the sub-thousand
+    map: "one thousand and N" below a hundred, "one thousand N" above it. Section
+    3's reader admits at most four words, so a count past one thousand and
+    ninety-nine also needs that pattern widened.
     """
     words = {word: value for value, word in enumerate(_UNITS) if value <= limit}
     for base, tens_word in _TENS.items():
@@ -682,6 +689,17 @@ def _cardinals(limit: int = 999) -> dict[str, int]:
         for word, value in below_a_hundred.items():
             if value and hundreds * 100 + value <= limit:
                 words[f"{prefix} and {word}"] = hundreds * 100 + value
+    below_a_thousand = dict(words)
+    for thousands in range(1, 10):
+        if thousands * 1000 > limit:
+            break
+        prefix = f"{_UNITS[thousands]} thousand"
+        words[prefix] = thousands * 1000
+        for word, value in below_a_thousand.items():
+            total = thousands * 1000 + value
+            if value and total <= limit:
+                joiner = " and " if value < 100 else " "
+                words[f"{prefix}{joiner}{word}"] = total
     return words
 
 

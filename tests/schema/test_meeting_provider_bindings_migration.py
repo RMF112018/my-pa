@@ -4,7 +4,8 @@
 `knowledge.meeting_series_provider_bindings`, `knowledge.meeting_provider_bindings`,
 their two partial unique indexes and four guards. This module proves:
 
-* **the graph** -- exactly one head, this revision, directly on `4d1069a7d84f`;
+* **the graph** -- this revision, directly on `4d1069a7d84f`, is the parent of the
+  WP3a ingestion head;
 * **the freeze** -- the revision imports nothing from the package it migrates and
   names every column, constraint and index `tables.py` declares for both tables;
 * **offline SQL** for both directions, without a server;
@@ -121,9 +122,12 @@ def _offline(target: str, *, down: bool = False) -> str:
 # ---- the graph --------------------------------------------------------------
 
 
-def test_the_revision_is_the_single_head_directly_on_the_meeting_prep_head() -> None:
+def test_the_revision_is_directly_on_the_meeting_prep_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    # Communications intelligence WP3a's ingestion revision is additive on this
+    # revision, so this revision is the head's parent rather than the head.
+    assert script.get_heads() == ["52a829ef718a"]
+    assert script.get_revision("52a829ef718a").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "640aaacc78e8"
 
@@ -462,7 +466,7 @@ def _refused_by_trigger(
 def seeded(disposable_database: str, engine: Engine) -> dict[str, str]:
     """Head, the seed per Principal, one series binding and one occurrence binding."""
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     with engine.begin() as connection:
         ids = _seed(connection, principal=PRINCIPAL, suffix="0001")
         other = _seed(connection, principal=OTHER_PRINCIPAL, suffix="0002")
@@ -476,7 +480,7 @@ def test_the_revision_round_trips_from_the_meeting_prep_head(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _assert_present(engine)
     declared = {
         str(constraint.name)
@@ -487,7 +491,7 @@ def test_the_revision_round_trips_from_the_meeting_prep_head(
     assert declared - {"meeting_provider_bindings_pkey"} <= _catalog(engine)["constraints"]
     command.downgrade(_config(), PREVIOUS)
     _assert_absent(engine)
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _assert_present(engine)
 
 
@@ -505,7 +509,7 @@ def test_a_downgrade_refuses_while_only_a_series_binding_exists(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     with engine.begin() as connection:
         ids = _seed(connection, principal=PRINCIPAL, suffix="0001")
         connection.execute(insert(meeting_series_provider_bindings).values(**_series_row(ids)))
@@ -809,7 +813,7 @@ def test_the_widened_write_request_vocabulary_admits_exactly_the_new_names(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _write_request(engine, BIND, "w3-bind-0001")
     _write_request(engine, SYNC, "w3-sync-0001")
     with pytest.raises(IntegrityError) as unknown, engine.begin() as connection:
@@ -843,7 +847,7 @@ def test_a_downgrade_refuses_while_a_new_write_request_exists(
     disposable_database: str, engine: Engine, name: str
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _write_request(engine, name, "w3-refuse-0001")
     with pytest.raises(DBAPIError) as refused:
         command.downgrade(_config(), PREVIOUS)
@@ -856,7 +860,7 @@ def test_a_downgrade_refuses_while_a_bind_audit_event_exists(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _audit(engine, BIND, "w3bind0002aa")
     with pytest.raises(DBAPIError) as refused:
         command.downgrade(_config(), PREVIOUS)

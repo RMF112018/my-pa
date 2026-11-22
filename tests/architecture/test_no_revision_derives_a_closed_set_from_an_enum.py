@@ -841,9 +841,10 @@ def test_the_chain_is_readable_and_non_empty() -> None:
     # the files workspace WP4 revision (the files plane) as 129, and
     # the ADR-020 revision (the Meeting prep version chain) as 130, and
     # the communications intelligence WP2 revision (the Meeting provider
-    # bindings) as 131.
-    assert len(revisions) == 131
-    assert len({revision for revision, _ in revisions}) == 131
+    # bindings) as 131, and the communications intelligence WP3a revision (the
+    # ingestion lifecycle and the communications tables) as 132.
+    assert len(revisions) == 132
+    assert len({revision for revision, _ in revisions}) == 132
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

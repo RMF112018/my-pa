@@ -614,6 +614,23 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "4d1069a7d84f": frozenset({"meeting_prep_versions"}),
     # Communications intelligence WP2: the Meeting provider bindings.
     "6418b57081c3": frozenset({"meeting_series_provider_bindings", "meeting_provider_bindings"}),
+    # Communications intelligence WP3a: the ingestion lifecycle and the communications tables.
+    "52a829ef718a": frozenset(
+        {
+            "ingest_sources",
+            "ingest_snapshots",
+            "ingest_snapshot_paths",
+            "ingest_runs",
+            "ingest_run_snapshots",
+            "ingest_coverage_windows",
+            "communication_messages",
+            "communication_mailbox_items",
+            "communication_observations",
+            "communication_participants",
+            "communication_identifiers",
+            "communication_quarantine",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

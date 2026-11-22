@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "6418b57081c3"
+CURRENT_HEAD: Final = "52a829ef718a"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -156,6 +156,11 @@ MEETING_PREP_MIGRATION: Final = MIGRATIONS / "20261120_4d1069a7d84f_meeting_prep
 #: provider bindings), on the same precedent.
 MEETING_PROVIDER_BINDINGS_MIGRATION: Final = (
     MIGRATIONS / "20261121_6418b57081c3_meeting_provider_bindings.py"
+)
+#: Communications intelligence WP3a's additive head (the ingestion lifecycle and
+#: the communications tables), on the same precedent.
+COMMUNICATIONS_INGESTION_MIGRATION: Final = (
+    MIGRATIONS / "20261122_52a829ef718a_communications_ingestion.py"
 )
 #: The one sanctioned edit to a historical revision (operator ruling
 #: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
@@ -301,9 +306,11 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_files_workspace_migration.py",
     # ADR-020's revision module names the head now on it.
     "tests/schema/test_meeting_prep_versions_migration.py",
-    # Communications intelligence WP2's own revision module names the head as
-    # the revision it tests.
+    # Communications intelligence WP2's revision module names the head now on it.
     "tests/schema/test_meeting_provider_bindings_migration.py",
+    # Communications intelligence WP3a's own revision module names the head as
+    # the revision it tests.
+    "tests/schema/test_communications_ingestion_migration.py",
     # The extraction suite's table registry names the files workspace revision.
     "tests/schema/test_extraction_schema_migration.py",
 )
@@ -383,7 +390,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "4d1069a7d84f"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "6418b57081c3"
+    assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
     assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
     assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
     assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
@@ -418,7 +426,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 131
+    assert len(list(MIGRATIONS.glob("*.py"))) == 132
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -583,6 +591,7 @@ def test_no_historical_revision_was_edited() -> None:
         FILES_WORKSPACE_MIGRATION.relative_to(ROOT).as_posix(),
         MEETING_PREP_MIGRATION.relative_to(ROOT).as_posix(),
         MEETING_PROVIDER_BINDINGS_MIGRATION.relative_to(ROOT).as_posix(),
+        COMMUNICATIONS_INGESTION_MIGRATION.relative_to(ROOT).as_posix(),
         # Not an additive head: the one sanctioned historical edit (see
         # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).
         SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix(),

@@ -299,6 +299,17 @@ def test_contract_prefixes_are_stable() -> None:
         # provider bindings.
         "mpbnd",
         "msbnd",
+        # Communications intelligence WP3a: the ingestion lifecycle (source,
+        # snapshot, run, coverage window) and the communications rows (message,
+        # mailbox item, observation, quarantine).
+        "isrc",
+        "isnp",
+        "irun",
+        "icov",
+        "cmsg",
+        "cmitm",
+        "cobs",
+        "cqrn",
     }
 
 

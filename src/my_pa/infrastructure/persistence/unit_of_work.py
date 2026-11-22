@@ -68,6 +68,7 @@ from my_pa.contracts.ports import (
     CaptureSearchRequest,
     CaptureSummary,
     CommitmentManagementRepository,
+    CommunicationsRepository,
     ContextPreferenceRepository,
     ContextRunRepository,
     ContinuityAuthoringRepository,
@@ -76,6 +77,7 @@ from my_pa.contracts.ports import (
     EntitiesRepository,
     EvidenceUnavailableError,
     GoodNotesSemanticRepository,
+    IngestionRepository,
     IssueHandoffRepository,
     IssueRepository,
     IssueTimelineRepository,
@@ -169,6 +171,7 @@ from my_pa.infrastructure.persistence.capture_lifecycle import (
 )
 from my_pa.infrastructure.persistence.capture_search import search_captures
 from my_pa.infrastructure.persistence.commitment_management import SqlCommitmentManagementRepository
+from my_pa.infrastructure.persistence.communications import SqlCommunicationsRepository
 from my_pa.infrastructure.persistence.context_preferences import (
     SqlContextPreferenceRepository,
 )
@@ -207,6 +210,7 @@ from my_pa.infrastructure.persistence.goodnotes import (
 from my_pa.infrastructure.persistence.goodnotes_durable_note import PostgresDurableNoteStore
 from my_pa.infrastructure.persistence.goodnotes_pull import SqlGoodNotesPullRepository
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
+from my_pa.infrastructure.persistence.ingestion import SqlIngestionRepository
 from my_pa.infrastructure.persistence.intelligence import SqlIntelligenceStore
 from my_pa.infrastructure.persistence.issue_handoffs import SqlIssueHandoffRepository
 from my_pa.infrastructure.persistence.issue_timeline import SqlIssueTimelineRepository
@@ -1524,6 +1528,16 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def meetings(self) -> MeetingRepository:
         """The Meeting records rows, on this transaction's connection (WP-MTG-02)."""
         return SqlMeetingRepository(self._open)
+
+    @property
+    def ingestion(self) -> IngestionRepository:
+        """The ingestion lifecycle rows, on this transaction's connection (WP3a)."""
+        return SqlIngestionRepository(self._open)
+
+    @property
+    def communications(self) -> CommunicationsRepository:
+        """The communications rows, on this transaction's connection (WP3a)."""
+        return SqlCommunicationsRepository(self._open)
 
     @property
     def issues(self) -> IssueRepository:

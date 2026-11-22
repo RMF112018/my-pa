@@ -88,6 +88,13 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.types import UserDefinedType
 
+from my_pa.contracts.ports import (
+    IngestConsumer,
+    IngestRunOutcome,
+    IngestRunSnapshotOutcome,
+    IngestRunTrigger,
+    IngestSnapshotStatus,
+)
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.contracts.v1.native_sources import NATIVE_SOURCE_MAX_PAGE_SIZE
 from my_pa.domain.audit.events import AuditOutcome
@@ -148,6 +155,27 @@ from my_pa.domain.capture.version import (
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import TrustLevel
+from my_pa.domain.communications.diagnostics import QUARANTINE_REASONS, ReasonCode
+from my_pa.domain.communications.identifiers import IdentifierKind
+from my_pa.domain.communications.model import (
+    BodyState,
+    ContentType,
+    CoverageState,
+    FolderRole,
+    IdentityState,
+    LaneVerification,
+    MessageTimeBasis,
+    ProviderIdFormat,
+    RecordClassification,
+    TimestampField,
+    TimestampState,
+)
+from my_pa.domain.communications.reconciliation import PARTICIPANT_ORDER
+from my_pa.domain.communications.search_text import (
+    MAX_SEARCH_TEXT_CHARS,
+    SearchTextBasis,
+    SearchTextFlag,
+)
 from my_pa.domain.context.preference import (
     MAX_CONTEXT_ALIAS_CHARACTERS,
     ContextPreferenceAction,
@@ -15846,6 +15874,810 @@ meeting_provider_bindings = Table(
         unique=True,
         postgresql_where=text("occurrence_original_start_utc IS NULL"),
     ),
+)
+
+# --- Communications intelligence WP3a: the ingestion lifecycle and the --------
+# --- communications tables ----------------------------------------------------
+#
+# Contract sections 1.2, 1.3, 5.1 and 5.2 as amended by the WP3a Manager rulings
+# (M3, M4, M6, M7, m1-m4, m8, m9), and revision `52a829ef718a`, which also
+# creates what a `Table` cannot declare: the named-mutable-column guards
+# (`ingest_sources` changes only `enabled`; a snapshot is finalized once from
+# `pending`; a path is superseded once from NULL; a run finishes once from NULL;
+# a message changes only its projection), the append-only refusal on the other
+# seven tables and TRUNCATE refusal on all twelve. Every foreign key is composite
+# with `principal_id` and `ON DELETE RESTRICT`. No column holds a raw body, raw
+# HTML or a display name; `search_text` is the bounded derived projection.
+
+#: A relative path under a workspace: bounded, never absolute, never `..` (text holds no NUL).
+_INGEST_RELATIVE_PATH: Final = "NOT LIKE '/%' AND {column} !~ '(^|/)\\.\\.(/|$)'"
+MAX_INGEST_PATH_CHARACTERS: Final = 1024
+MAX_INGEST_FILE_PATTERN_CHARACTERS: Final = 256
+MAX_INGEST_VERSION_TOKEN_CHARACTERS: Final = 256
+#: A content-free code or version token: lower-case, bounded.
+_INGEST_CODE_SHAPE: Final = "^[a-z][a-z0-9_]{0,63}$"
+_INGEST_PARSER_VERSION: Final = "^[a-z0-9][a-z0-9_.-]{0,63}$"
+_INGEST_SHA256: Final = "^[0-9a-f]{64}$"
+#: The files workspace alias shape (`_FILE_WORKSPACE_ALIAS`, declared later in this module).
+_INGEST_WORKSPACE_ALIAS: Final = "^[a-z][a-z0-9_]{0,63}$"
+MAX_COMMUNICATION_MAILBOX_REF_CHARACTERS: Final = 320
+MAX_COMMUNICATION_KEY_CHARACTERS: Final = 2048
+MAX_COMMUNICATION_SUBJECT_CHARACTERS: Final = 16384
+MAX_COMMUNICATION_ADDRESS_CHARACTERS: Final = 320
+MAX_COMMUNICATION_IDENTIFIER_CHARACTERS: Final = 256
+
+#: An observation is a usable record: every classification but `quarantined`.
+COMMUNICATION_OBSERVATION_CLASSIFICATIONS: Final = frozenset(
+    member.value
+    for member in RecordClassification
+    if member is not RecordClassification.QUARANTINED
+)
+#: An observation carries degradations only; a quarantine reason sends the record
+#: to `communication_quarantine`.
+COMMUNICATION_DEGRADATION_REASONS: Final = frozenset(
+    member.value for member in ReasonCode if member not in QUARANTINE_REASONS
+)
+COMMUNICATION_PARTICIPANT_FIELDS: Final = frozenset(PARTICIPANT_ORDER)
+
+#: The generated English search document (FTS ruling): subject `A`, search text `B`.
+COMMUNICATION_SEARCH_DOCUMENT: Final = (
+    "setweight(to_tsvector('english'::regconfig, coalesce(subject, '')), 'A') || "
+    "setweight(to_tsvector('english'::regconfig, coalesce(search_text, '')), 'B')"
+)
+
+
+def _ingest_relative(column: str, *, maximum: int, minimum: int, name: str) -> CheckConstraint:
+    bound = (
+        f"length({column}) <= {maximum}"
+        if minimum == 0
+        else f"length({column}) BETWEEN {minimum} AND {maximum}"
+    )
+    return CheckConstraint(
+        f"{bound} AND {column} " + _INGEST_RELATIVE_PATH.format(column=column), name=name
+    )
+
+
+def _normalized_address(column: str, *, name: str, nullable: bool) -> CheckConstraint:
+    rule = (
+        f"length({column}) BETWEEN 1 AND {MAX_COMMUNICATION_ADDRESS_CHARACTERS} "
+        f"AND {column} = lower({column})"
+    )
+    return CheckConstraint(f"{column} IS NULL OR ({rule})" if nullable else rule, name=name)
+
+
+ingest_sources = Table(
+    "ingest_sources",
+    METADATA,
+    Column("ingest_source_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("consumer", Text, nullable=False),
+    Column("workspace_id", Text, nullable=False),
+    Column("path_prefix", Text, nullable=False),
+    Column("file_pattern", Text, nullable=False),
+    Column("enabled", Boolean, nullable=False),
+    Column("admitted_at", DateTime(timezone=True), nullable=False),
+    Column("admitted_by", Text, nullable=False),
+    _is_identifier("ingest_source_id", IdKind.INGEST_SOURCE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("consumer", IngestConsumer, name="an_ingest_source_consumer_is_known"),
+    CheckConstraint(
+        f"workspace_id ~ '{_INGEST_WORKSPACE_ALIAS}'",
+        name="an_ingest_source_workspace_is_an_alias",
+    ),
+    _ingest_relative(
+        "path_prefix",
+        maximum=MAX_INGEST_PATH_CHARACTERS,
+        minimum=0,
+        name="an_ingest_source_path_prefix_is_relative_and_bounded",
+    ),
+    CheckConstraint(
+        f"length(file_pattern) BETWEEN 1 AND {MAX_INGEST_FILE_PATTERN_CHARACTERS} "
+        "AND strpos(file_pattern, '/') = 0",
+        name="an_ingest_source_file_pattern_is_one_bounded_name",
+    ),
+    CheckConstraint(
+        "admitted_by = 'operator_cli'", name="an_ingest_source_is_admitted_by_the_operator_cli"
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "consumer",
+        "workspace_id",
+        "path_prefix",
+        "file_pattern",
+        name="one_ingest_source_per_location",
+    ),
+    UniqueConstraint(
+        "ingest_source_id",
+        "principal_id",
+        name="an_ingest_source_is_identified_within_its_principal",
+    ),
+)
+
+ingest_snapshots = Table(
+    "ingest_snapshots",
+    METADATA,
+    Column("snapshot_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("ingest_source_id", Text, nullable=False),
+    Column("file_sha256", Text, nullable=False),
+    Column("byte_count", BigInteger, nullable=False),
+    Column("observed_version_token", Text),
+    Column("first_seen_at", DateTime(timezone=True), nullable=False),
+    Column("status", Text, nullable=False),
+    Column("rejection_code", Text),
+    Column("parser_version", Text),
+    _is_identifier("snapshot_id", IdKind.INGEST_SNAPSHOT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("ingest_source_id", IdKind.INGEST_SOURCE),
+    CheckConstraint(
+        f"file_sha256 ~ '{_INGEST_SHA256}'", name="an_ingest_snapshot_digest_is_sha256"
+    ),
+    CheckConstraint("byte_count >= 0", name="an_ingest_snapshot_byte_count_is_non_negative"),
+    CheckConstraint(
+        "observed_version_token IS NULL OR length(observed_version_token) BETWEEN 1 AND "
+        f"{MAX_INGEST_VERSION_TOKEN_CHARACTERS}",
+        name="an_ingest_snapshot_version_token_is_bounded",
+    ),
+    _one_of("status", IngestSnapshotStatus, name="an_ingest_snapshot_status_is_known"),
+    CheckConstraint(
+        f"rejection_code IS NULL OR rejection_code ~ '{_INGEST_CODE_SHAPE}'",
+        name="an_ingest_snapshot_rejection_code_is_a_token",
+    ),
+    CheckConstraint(
+        f"parser_version IS NULL OR parser_version ~ '{_INGEST_PARSER_VERSION}'",
+        name="an_ingest_snapshot_parser_version_is_a_token",
+    ),
+    CheckConstraint(
+        "(status = 'rejected') = (rejection_code IS NOT NULL)",
+        name="a_rejected_ingest_snapshot_names_its_code",
+    ),
+    CheckConstraint(
+        "status <> 'pending' OR parser_version IS NULL",
+        name="a_pending_ingest_snapshot_names_no_parser",
+    ),
+    CheckConstraint(
+        "status <> 'ingested' OR parser_version IS NOT NULL",
+        name="an_ingested_snapshot_names_its_parser",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "ingest_source_id",
+        "file_sha256",
+        name="one_ingest_snapshot_per_source_content",
+    ),
+    UniqueConstraint(
+        "snapshot_id", "principal_id", name="an_ingest_snapshot_is_identified_within_its_principal"
+    ),
+    UniqueConstraint(
+        "snapshot_id",
+        "principal_id",
+        "ingest_source_id",
+        name="an_ingest_snapshot_is_identified_within_its_source",
+    ),
+    ForeignKeyConstraint(
+        ["ingest_source_id", "principal_id"],
+        [f"{SCHEMA}.ingest_sources.ingest_source_id", f"{SCHEMA}.ingest_sources.principal_id"],
+        ondelete="RESTRICT",
+        name="an_ingest_snapshot_names_a_source_of_its_principal",
+    ),
+)
+
+_SNAPSHOT_OF_SOURCE: Final = (
+    f"{SCHEMA}.ingest_snapshots.snapshot_id",
+    f"{SCHEMA}.ingest_snapshots.principal_id",
+    f"{SCHEMA}.ingest_snapshots.ingest_source_id",
+)
+_SNAPSHOT_OF_PRINCIPAL: Final = (
+    f"{SCHEMA}.ingest_snapshots.snapshot_id",
+    f"{SCHEMA}.ingest_snapshots.principal_id",
+)
+
+ingest_snapshot_paths = Table(
+    "ingest_snapshot_paths",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("snapshot_id", Text, nullable=False),
+    Column("ingest_source_id", Text, nullable=False),
+    Column("relative_path", Text, nullable=False),
+    Column("first_seen_at", DateTime(timezone=True), nullable=False),
+    Column("superseded_by_snapshot_id", Text),
+    Column("superseded_at", DateTime(timezone=True)),
+    PrimaryKeyConstraint(
+        "principal_id", "snapshot_id", "relative_path", name="ingest_snapshot_paths_pkey"
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("snapshot_id", IdKind.INGEST_SNAPSHOT),
+    _is_identifier("ingest_source_id", IdKind.INGEST_SOURCE),
+    _is_identifier("superseded_by_snapshot_id", IdKind.INGEST_SNAPSHOT),
+    _ingest_relative(
+        "relative_path",
+        maximum=MAX_INGEST_PATH_CHARACTERS,
+        minimum=1,
+        name="an_ingest_snapshot_path_is_relative_and_bounded",
+    ),
+    CheckConstraint(
+        "(superseded_by_snapshot_id IS NULL) = (superseded_at IS NULL)",
+        name="an_ingest_snapshot_path_supersession_is_whole",
+    ),
+    CheckConstraint(
+        "superseded_by_snapshot_id IS NULL OR superseded_by_snapshot_id <> snapshot_id",
+        name="an_ingest_snapshot_path_is_not_superseded_by_itself",
+    ),
+    ForeignKeyConstraint(
+        ["snapshot_id", "principal_id", "ingest_source_id"],
+        list(_SNAPSHOT_OF_SOURCE),
+        ondelete="RESTRICT",
+        name="an_ingest_snapshot_path_names_a_snapshot_of_its_source",
+    ),
+    ForeignKeyConstraint(
+        ["superseded_by_snapshot_id", "principal_id", "ingest_source_id"],
+        list(_SNAPSHOT_OF_SOURCE),
+        ondelete="RESTRICT",
+        name="an_ingest_snapshot_path_is_superseded_by_its_sources_snapshot",
+    ),
+    Index(
+        "one_current_ingest_snapshot_per_path",
+        "principal_id",
+        "ingest_source_id",
+        "relative_path",
+        unique=True,
+        postgresql_where=text("superseded_by_snapshot_id IS NULL"),
+    ),
+    Index("ingest_snapshot_paths_by_source", "principal_id", "ingest_source_id", "relative_path"),
+)
+
+ingest_runs = Table(
+    "ingest_runs",
+    METADATA,
+    Column("run_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("ingest_source_id", Text, nullable=False),
+    Column("trigger", Text, nullable=False),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("finished_at", DateTime(timezone=True)),
+    Column("outcome", Text),
+    # Bare JSONB (the `structured_content` rule): an unfinished run omits it.
+    Column("counts", JSONB),
+    _is_identifier("run_id", IdKind.INGEST_RUN),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("ingest_source_id", IdKind.INGEST_SOURCE),
+    _one_of("trigger", IngestRunTrigger, name="an_ingest_run_trigger_is_known"),
+    CheckConstraint(
+        f"outcome IS NULL OR outcome IN ({_literals(IngestRunOutcome)})",
+        name="an_ingest_run_outcome_is_known",
+    ),
+    CheckConstraint(
+        "(finished_at IS NULL) = (outcome IS NULL) AND (outcome IS NULL) = (counts IS NULL)",
+        name="an_ingest_run_finish_is_whole",
+    ),
+    CheckConstraint(
+        "finished_at IS NULL OR finished_at >= started_at",
+        name="an_ingest_run_finishes_after_it_starts",
+    ),
+    CheckConstraint(
+        "counts IS NULL OR jsonb_typeof(counts) = 'object'",
+        name="an_ingest_run_counts_is_an_object",
+    ),
+    UniqueConstraint(
+        "run_id",
+        "principal_id",
+        "ingest_source_id",
+        name="an_ingest_run_is_identified_within_its_source",
+    ),
+    ForeignKeyConstraint(
+        ["ingest_source_id", "principal_id"],
+        [f"{SCHEMA}.ingest_sources.ingest_source_id", f"{SCHEMA}.ingest_sources.principal_id"],
+        ondelete="RESTRICT",
+        name="an_ingest_run_names_a_source_of_its_principal",
+    ),
+    Index("ingest_runs_by_source", "principal_id", "ingest_source_id", text("started_at DESC")),
+)
+
+ingest_run_snapshots = Table(
+    "ingest_run_snapshots",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("run_id", Text, nullable=False),
+    Column("snapshot_id", Text, nullable=False),
+    Column("ingest_source_id", Text, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("principal_id", "run_id", "snapshot_id", name="ingest_run_snapshots_pkey"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("run_id", IdKind.INGEST_RUN),
+    _is_identifier("snapshot_id", IdKind.INGEST_SNAPSHOT),
+    _is_identifier("ingest_source_id", IdKind.INGEST_SOURCE),
+    _one_of("outcome", IngestRunSnapshotOutcome, name="an_ingest_run_snapshot_outcome_is_known"),
+    ForeignKeyConstraint(
+        ["run_id", "principal_id", "ingest_source_id"],
+        [
+            f"{SCHEMA}.ingest_runs.run_id",
+            f"{SCHEMA}.ingest_runs.principal_id",
+            f"{SCHEMA}.ingest_runs.ingest_source_id",
+        ],
+        ondelete="RESTRICT",
+        name="an_ingest_run_snapshot_names_a_run_of_its_source",
+    ),
+    ForeignKeyConstraint(
+        ["snapshot_id", "principal_id", "ingest_source_id"],
+        list(_SNAPSHOT_OF_SOURCE),
+        ondelete="RESTRICT",
+        name="an_ingest_run_snapshot_names_a_snapshot_of_its_source",
+    ),
+    Index("ingest_run_snapshots_by_snapshot", "principal_id", "snapshot_id"),
+)
+
+ingest_coverage_windows = Table(
+    "ingest_coverage_windows",
+    METADATA,
+    Column("coverage_window_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("ingest_source_id", Text, nullable=False),
+    Column("snapshot_id", Text, nullable=False),
+    Column("start_utc", DateTime(timezone=True), nullable=False),
+    Column("end_utc", DateTime(timezone=True), nullable=False),
+    Column("coverage_state", Text, nullable=False),
+    Column("lane_states", JSONB, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("coverage_window_id", IdKind.INGEST_COVERAGE_WINDOW),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("ingest_source_id", IdKind.INGEST_SOURCE),
+    _is_identifier("snapshot_id", IdKind.INGEST_SNAPSHOT),
+    CheckConstraint(
+        "end_utc >= start_utc", name="an_ingest_coverage_window_ends_at_or_after_its_start"
+    ),
+    _one_of("coverage_state", CoverageState, name="an_ingest_coverage_state_is_known"),
+    CheckConstraint(
+        "jsonb_typeof(lane_states) = 'array'", name="an_ingest_coverage_lane_states_is_an_array"
+    ),
+    UniqueConstraint("principal_id", "snapshot_id", name="one_ingest_coverage_window_per_snapshot"),
+    ForeignKeyConstraint(
+        ["snapshot_id", "principal_id", "ingest_source_id"],
+        list(_SNAPSHOT_OF_SOURCE),
+        ondelete="RESTRICT",
+        name="an_ingest_coverage_window_names_a_snapshot_of_its_source",
+    ),
+    Index("ingest_coverage_windows_by_source", "principal_id", "ingest_source_id", "start_utc"),
+)
+
+communication_messages = Table(
+    "communication_messages",
+    METADATA,
+    Column("message_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("mailbox_ref", Text, nullable=False),
+    Column("identity_kind", Text, nullable=False),
+    Column("identity_value", Text, nullable=False),
+    Column("conversation_id", Text),
+    Column("subject", Text),
+    Column("sender_address", Text),
+    Column("message_time", DateTime(timezone=True), nullable=False),
+    Column("message_time_basis", Text, nullable=False),
+    Column("has_attachments", Boolean),
+    Column("body_state", Text, nullable=False),
+    Column("body_sha256", Text, nullable=False),
+    Column("body_utf8_bytes", BigInteger, nullable=False),
+    Column("content_type", Text, nullable=False),
+    Column("search_text", Text),
+    Column("search_text_sha256", Text),
+    Column("search_text_version", Text, nullable=False),
+    Column("search_text_basis", Text, nullable=False),
+    Column("search_text_flags", ARRAY(Text), nullable=False),
+    Column("text_snapshot_id", Text, nullable=False),
+    Column("text_record_ordinal", Integer, nullable=False),
+    Column("first_snapshot_id", Text, nullable=False),
+    Column("latest_snapshot_id", Text, nullable=False),
+    Column("identity_conflict", Boolean, nullable=False, server_default=text("false")),
+    Column("participants_reconciled", Boolean, nullable=False, server_default=text("false")),
+    Column("participants_disagreed", Boolean, nullable=False, server_default=text("false")),
+    Column(
+        "search_document",
+        TSVECTOR,
+        Computed(COMMUNICATION_SEARCH_DOCUMENT, persisted=True),
+    ),
+    _is_identifier("message_id", IdKind.COMMUNICATION_MESSAGE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("text_snapshot_id", IdKind.INGEST_SNAPSHOT),
+    _is_identifier("first_snapshot_id", IdKind.INGEST_SNAPSHOT),
+    _is_identifier("latest_snapshot_id", IdKind.INGEST_SNAPSHOT),
+    CheckConstraint(
+        f"length(mailbox_ref) BETWEEN 1 AND {MAX_COMMUNICATION_MAILBOX_REF_CHARACTERS}",
+        name="a_communication_mailbox_ref_is_bounded",
+    ),
+    _one_of("identity_kind", IdentityState, name="a_communication_identity_kind_is_known"),
+    CheckConstraint(
+        f"length(identity_value) BETWEEN 1 AND {MAX_COMMUNICATION_KEY_CHARACTERS}",
+        name="a_communication_identity_value_is_bounded",
+    ),
+    CheckConstraint(
+        "conversation_id IS NULL OR length(conversation_id) BETWEEN 1 AND "
+        f"{MAX_COMMUNICATION_KEY_CHARACTERS}",
+        name="a_communication_conversation_id_is_bounded",
+    ),
+    CheckConstraint(
+        f"subject IS NULL OR length(subject) <= {MAX_COMMUNICATION_SUBJECT_CHARACTERS}",
+        name="a_communication_subject_is_bounded",
+    ),
+    _normalized_address(
+        "sender_address", name="a_communication_sender_is_a_normalized_address", nullable=True
+    ),
+    _one_of(
+        "message_time_basis", MessageTimeBasis, name="a_communication_message_time_basis_is_known"
+    ),
+    _one_of("body_state", BodyState, name="a_communication_body_state_is_known"),
+    CheckConstraint(
+        f"body_sha256 ~ '{_INGEST_SHA256}'", name="a_communication_body_digest_is_sha256"
+    ),
+    CheckConstraint("body_utf8_bytes >= 0", name="a_communication_body_byte_count_is_non_negative"),
+    _one_of("content_type", ContentType, name="a_communication_content_type_is_known"),
+    CheckConstraint(
+        f"search_text IS NULL OR length(search_text) <= {MAX_SEARCH_TEXT_CHARS}",
+        name="a_communication_search_text_is_bounded",
+    ),
+    CheckConstraint(
+        f"search_text_sha256 IS NULL OR search_text_sha256 ~ '{_INGEST_SHA256}'",
+        name="a_communication_search_text_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "(search_text IS NULL) = (search_text_sha256 IS NULL)",
+        name="a_communication_search_text_has_its_digest",
+    ),
+    CheckConstraint(
+        f"search_text_version ~ '{_INGEST_CODE_SHAPE}'",
+        name="a_communication_search_text_version_is_a_token",
+    ),
+    _one_of(
+        "search_text_basis", SearchTextBasis, name="a_communication_search_text_basis_is_known"
+    ),
+    CheckConstraint(
+        "(search_text_basis = 'none') = (search_text IS NULL)",
+        name="a_communication_search_text_without_basis_is_null",
+    ),
+    _each_one_of(
+        "search_text_flags", SearchTextFlag, name="a_communication_search_text_flag_is_known"
+    ),
+    CheckConstraint(
+        "search_text IS NULL OR body_state NOT IN ('truncated', 'withheld')",
+        name="a_withheld_or_truncated_body_has_no_search_text",
+    ),
+    CheckConstraint(
+        "text_record_ordinal >= 0", name="a_communication_text_ordinal_is_non_negative"
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "mailbox_ref",
+        "identity_kind",
+        "identity_value",
+        name="one_communication_message_per_identity",
+    ),
+    UniqueConstraint(
+        "message_id",
+        "principal_id",
+        name="a_communication_message_is_identified_within_its_principal",
+    ),
+    UniqueConstraint(
+        "message_id",
+        "principal_id",
+        "mailbox_ref",
+        name="a_communication_message_is_identified_within_its_mailbox",
+    ),
+    ForeignKeyConstraint(
+        ["text_snapshot_id", "principal_id"],
+        list(_SNAPSHOT_OF_PRINCIPAL),
+        ondelete="RESTRICT",
+        name="a_communication_text_names_a_snapshot_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["first_snapshot_id", "principal_id"],
+        list(_SNAPSHOT_OF_PRINCIPAL),
+        ondelete="RESTRICT",
+        name="a_communication_first_snapshot_is_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["latest_snapshot_id", "principal_id"],
+        list(_SNAPSHOT_OF_PRINCIPAL),
+        ondelete="RESTRICT",
+        name="a_communication_latest_snapshot_is_of_its_principal",
+    ),
+    Index("communication_messages_search_document", "search_document", postgresql_using="gin"),
+    Index(
+        "communication_messages_by_time",
+        "principal_id",
+        text("message_time DESC"),
+        "message_id",
+    ),
+    Index(
+        "communication_messages_by_conversation",
+        "principal_id",
+        "conversation_id",
+        "message_time",
+    ),
+)
+
+communication_mailbox_items = Table(
+    "communication_mailbox_items",
+    METADATA,
+    Column("item_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("message_id", Text, nullable=False),
+    Column("mailbox_ref", Text, nullable=False),
+    Column("provider_id", Text, nullable=False),
+    Column("provider_id_format", Text, nullable=False),
+    Column("first_snapshot_id", Text, nullable=False),
+    _is_identifier("item_id", IdKind.COMMUNICATION_MAILBOX_ITEM),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("message_id", IdKind.COMMUNICATION_MESSAGE),
+    _is_identifier("first_snapshot_id", IdKind.INGEST_SNAPSHOT),
+    CheckConstraint(
+        f"length(mailbox_ref) BETWEEN 1 AND {MAX_COMMUNICATION_MAILBOX_REF_CHARACTERS}",
+        name="a_mailbox_item_mailbox_ref_is_bounded",
+    ),
+    CheckConstraint(
+        f"length(provider_id) BETWEEN 1 AND {MAX_COMMUNICATION_KEY_CHARACTERS}",
+        name="a_mailbox_item_provider_id_is_bounded",
+    ),
+    _one_of(
+        "provider_id_format", ProviderIdFormat, name="a_mailbox_item_provider_id_format_is_known"
+    ),
+    UniqueConstraint(
+        "principal_id", "mailbox_ref", "provider_id", name="one_mailbox_item_per_provider_id"
+    ),
+    UniqueConstraint(
+        "item_id", "principal_id", name="a_mailbox_item_is_identified_within_its_principal"
+    ),
+    ForeignKeyConstraint(
+        ["message_id", "principal_id", "mailbox_ref"],
+        [
+            f"{SCHEMA}.communication_messages.message_id",
+            f"{SCHEMA}.communication_messages.principal_id",
+            f"{SCHEMA}.communication_messages.mailbox_ref",
+        ],
+        ondelete="RESTRICT",
+        name="a_mailbox_item_names_a_message_of_its_mailbox",
+    ),
+    ForeignKeyConstraint(
+        ["first_snapshot_id", "principal_id"],
+        list(_SNAPSHOT_OF_PRINCIPAL),
+        ondelete="RESTRICT",
+        name="a_mailbox_item_first_snapshot_is_of_its_principal",
+    ),
+    Index("communication_mailbox_items_by_message", "principal_id", "message_id"),
+)
+
+communication_observations = Table(
+    "communication_observations",
+    METADATA,
+    Column("observation_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("item_id", Text, nullable=False),
+    Column("snapshot_id", Text, nullable=False),
+    Column("record_ordinal", Integer, nullable=False),
+    Column("classification", Text, nullable=False),
+    Column("reasons", ARRAY(Text), nullable=False),
+    Column("folder_role", Text, nullable=False),
+    Column("lane_verification", Text, nullable=False),
+    Column("selected_field", Text, nullable=False),
+    Column("selected_utc", DateTime(timezone=True), nullable=False),
+    Column("received_utc", DateTime(timezone=True)),
+    Column("received_state", Text, nullable=False),
+    Column("sent_utc", DateTime(timezone=True)),
+    Column("sent_state", Text, nullable=False),
+    Column("body_sha256", Text, nullable=False),
+    Column("unique_body_sha256", Text),
+    Column("participants", JSONB, nullable=False),
+    _is_identifier("observation_id", IdKind.COMMUNICATION_OBSERVATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("item_id", IdKind.COMMUNICATION_MAILBOX_ITEM),
+    _is_identifier("snapshot_id", IdKind.INGEST_SNAPSHOT),
+    CheckConstraint(
+        "record_ordinal >= 0", name="a_communication_observation_ordinal_is_non_negative"
+    ),
+    _one_of(
+        "classification",
+        COMMUNICATION_OBSERVATION_CLASSIFICATIONS,
+        name="a_communication_observation_classification_is_known",
+    ),
+    _each_one_of(
+        "reasons",
+        COMMUNICATION_DEGRADATION_REASONS,
+        name="a_communication_observation_reason_is_a_degradation",
+    ),
+    _one_of("folder_role", FolderRole, name="a_communication_observation_folder_role_is_known"),
+    _one_of(
+        "lane_verification",
+        LaneVerification,
+        name="a_communication_observation_lane_verification_is_known",
+    ),
+    _one_of(
+        "selected_field",
+        TimestampField,
+        name="a_communication_observation_selected_field_is_known",
+    ),
+    _one_of(
+        "received_state",
+        TimestampState,
+        name="a_communication_observation_received_state_is_known",
+    ),
+    _one_of("sent_state", TimestampState, name="a_communication_observation_sent_state_is_known"),
+    CheckConstraint(
+        "(received_state = 'present') = (received_utc IS NOT NULL)",
+        name="a_communication_observation_received_time_matches_its_state",
+    ),
+    CheckConstraint(
+        "(sent_state = 'present') = (sent_utc IS NOT NULL)",
+        name="a_communication_observation_sent_time_matches_its_state",
+    ),
+    CheckConstraint(
+        f"body_sha256 ~ '{_INGEST_SHA256}'",
+        name="a_communication_observation_body_digest_is_sha256",
+    ),
+    CheckConstraint(
+        f"unique_body_sha256 IS NULL OR unique_body_sha256 ~ '{_INGEST_SHA256}'",
+        name="a_communication_observation_unique_body_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(participants) = 'object'",
+        name="a_communication_observation_participants_is_an_object",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "snapshot_id",
+        "record_ordinal",
+        name="one_communication_observation_per_record",
+    ),
+    UniqueConstraint(
+        "observation_id",
+        "principal_id",
+        name="a_communication_observation_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["item_id", "principal_id"],
+        [
+            f"{SCHEMA}.communication_mailbox_items.item_id",
+            f"{SCHEMA}.communication_mailbox_items.principal_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_communication_observation_names_an_item_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["snapshot_id", "principal_id"],
+        list(_SNAPSHOT_OF_PRINCIPAL),
+        ondelete="RESTRICT",
+        name="a_communication_observation_names_a_snapshot_of_its_principal",
+    ),
+    Index("communication_observations_by_item", "principal_id", "item_id"),
+)
+
+communication_participants = Table(
+    "communication_participants",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("message_id", Text, nullable=False),
+    Column("field", Text, nullable=False),
+    Column("address", Text, nullable=False),
+    Column("first_observation_id", Text, nullable=False),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "message_id",
+        "field",
+        "address",
+        name="communication_participants_pkey",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("message_id", IdKind.COMMUNICATION_MESSAGE),
+    _is_identifier("first_observation_id", IdKind.COMMUNICATION_OBSERVATION),
+    _one_of(
+        "field",
+        COMMUNICATION_PARTICIPANT_FIELDS,
+        name="a_communication_participant_field_is_known",
+    ),
+    _normalized_address(
+        "address", name="a_communication_participant_is_a_normalized_address", nullable=False
+    ),
+    ForeignKeyConstraint(
+        ["message_id", "principal_id"],
+        [
+            f"{SCHEMA}.communication_messages.message_id",
+            f"{SCHEMA}.communication_messages.principal_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_communication_participant_names_a_message_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["first_observation_id", "principal_id"],
+        [
+            f"{SCHEMA}.communication_observations.observation_id",
+            f"{SCHEMA}.communication_observations.principal_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_communication_participant_names_an_observation_of_its_owner",
+    ),
+    Index("communication_participants_by_address", "principal_id", "address", "message_id"),
+)
+
+communication_identifiers = Table(
+    "communication_identifiers",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("message_id", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("value", Text, nullable=False),
+    Column("extractor_version", Text, nullable=False),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "message_id",
+        "kind",
+        "value",
+        "extractor_version",
+        name="communication_identifiers_pkey",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("message_id", IdKind.COMMUNICATION_MESSAGE),
+    _one_of("kind", IdentifierKind, name="a_communication_identifier_kind_is_known"),
+    CheckConstraint(
+        f"length(value) BETWEEN 1 AND {MAX_COMMUNICATION_IDENTIFIER_CHARACTERS}",
+        name="a_communication_identifier_value_is_bounded",
+    ),
+    CheckConstraint(
+        f"extractor_version ~ '{_INGEST_CODE_SHAPE}'",
+        name="a_communication_identifier_extractor_version_is_a_token",
+    ),
+    ForeignKeyConstraint(
+        ["message_id", "principal_id"],
+        [
+            f"{SCHEMA}.communication_messages.message_id",
+            f"{SCHEMA}.communication_messages.principal_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_communication_identifier_names_a_message_of_its_principal",
+    ),
+    Index("communication_identifiers_by_value", "principal_id", "kind", "value"),
+)
+
+communication_quarantine = Table(
+    "communication_quarantine",
+    METADATA,
+    Column("quarantine_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("snapshot_id", Text, nullable=False),
+    Column("record_ordinal", Integer, nullable=False),
+    Column("reasons", ARRAY(Text), nullable=False),
+    _is_identifier("quarantine_id", IdKind.COMMUNICATION_QUARANTINE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("snapshot_id", IdKind.INGEST_SNAPSHOT),
+    CheckConstraint(
+        "record_ordinal >= 0", name="a_communication_quarantine_ordinal_is_non_negative"
+    ),
+    CheckConstraint("cardinality(reasons) >= 1", name="a_communication_quarantine_names_a_reason"),
+    _each_one_of("reasons", ReasonCode, name="a_communication_quarantine_reason_is_known"),
+    UniqueConstraint(
+        "principal_id",
+        "snapshot_id",
+        "record_ordinal",
+        name="one_communication_quarantine_per_record",
+    ),
+    ForeignKeyConstraint(
+        ["snapshot_id", "principal_id"],
+        list(_SNAPSHOT_OF_PRINCIPAL),
+        ondelete="RESTRICT",
+        name="a_communication_quarantine_names_a_snapshot_of_its_principal",
+    ),
+)
+
+#: The twelve WP3a tables, parent before child (the revision's creation order).
+COMMUNICATIONS_INGESTION_TABLES: Final = (
+    ingest_sources,
+    ingest_snapshots,
+    ingest_snapshot_paths,
+    ingest_runs,
+    ingest_run_snapshots,
+    ingest_coverage_windows,
+    communication_messages,
+    communication_mailbox_items,
+    communication_observations,
+    communication_participants,
+    communication_identifiers,
+    communication_quarantine,
 )
 
 # --- WP-RE-01: the Record Event feed -----------------------------------------

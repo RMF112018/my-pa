@@ -617,6 +617,27 @@ class IdKind(StrEnum):
     #: `tests/unit/test_identifiers.py`): neither collides.
     MEETING_PROVIDER_BINDING = "mpbnd"
     MEETING_SERIES_PROVIDER_BINDING = "msbnd"
+    #: Communications intelligence WP3a (contract sections 1.2 and 5, Manager
+    #: ruling m3): the consumer-neutral ingestion lifecycle -- an admitted source
+    #: (`knowledge.ingest_sources`), one distinct file content of it
+    #: (`ingest_snapshots`), one run (`ingest_runs`) and one ingested
+    #: snapshot's declared coverage window (`ingest_coverage_windows`) -- and the
+    #: communications rows: a canonical message (`communication_messages`), a
+    #: provider mailbox item (`communication_mailbox_items`), one observation of
+    #: a record (`communication_observations`) and one quarantined record
+    #: (`communication_quarantine`). `src` and `cov` were taken, hence the `i`
+    #: and `c` stems. Checked against every prior member (a grep of each prefix
+    #: over `src`, `tests`, `web/src` and `migrations`, and the uniqueness
+    #: assertion in `tests/unit/test_identifiers.py`): none collides, none is a
+    #: prefix of a prior member and no prior member is a prefix of one.
+    INGEST_SOURCE = "isrc"
+    INGEST_SNAPSHOT = "isnp"
+    INGEST_RUN = "irun"
+    INGEST_COVERAGE_WINDOW = "icov"
+    COMMUNICATION_MESSAGE = "cmsg"
+    COMMUNICATION_MAILBOX_ITEM = "cmitm"
+    COMMUNICATION_OBSERVATION = "cobs"
+    COMMUNICATION_QUARANTINE = "cqrn"
 
 
 class InvalidIdentifierError(ValueError):

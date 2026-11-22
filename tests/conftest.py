@@ -85,6 +85,7 @@ from my_pa.contracts.ports import (
     CaptureSummary,
     CommitmentManagementRepository,
     CommitmentManagementUnitOfWork,
+    CommunicationsRepository,
     ConstraintManagementRepository,
     ConstraintManagementUnitOfWork,
     ContextPreferenceRepository,
@@ -104,6 +105,7 @@ from my_pa.contracts.ports import (
     GoodNotesProposalAdmission,
     GoodNotesProposalConflictError,
     GoodNotesSemanticRepository,
+    IngestionRepository,
     IssueHandoffRepository,
     IssueRepository,
     IssueTimelineRepository,
@@ -11590,6 +11592,16 @@ class FakeUnitOfWork(UnitOfWork):
     def meetings(self) -> MeetingRepository:
         """The Meeting records plane over this `World` (WP-MTG-04, plan D-31)."""
         return cast("MeetingRepository", _Meetings(self._world))
+
+    @property
+    def ingestion(self) -> IngestionRepository:
+        """The WP3a ingestion lifecycle: not modelled in FAST worlds, as `issues`."""
+        return cast("IngestionRepository", _UnmodelledPlane("ingestion"))
+
+    @property
+    def communications(self) -> CommunicationsRepository:
+        """The WP3a communications rows: not modelled in FAST worlds, as `issues`."""
+        return cast("CommunicationsRepository", _UnmodelledPlane("communications"))
 
     @property
     def issues(self) -> IssueRepository:

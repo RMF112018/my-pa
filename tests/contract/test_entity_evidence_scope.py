@@ -270,7 +270,10 @@ def test_an_identifier_or_alias_write_cites_a_span_and_refuses_the_other_two(
         _with_span_evidence(capability, (reference,))
 
 
-@pytest.mark.parametrize(("kind", "reference"), tuple(CITED_KINDS.items()))
+# `ids=` names each case by its kind: the references are freshly issued
+# identifiers, so default ids differed per process and pytest-xdist refused
+# the collection ("Different tests were collected").
+@pytest.mark.parametrize(("kind", "reference"), tuple(CITED_KINDS.items()), ids=tuple(CITED_KINDS))
 def test_the_proposal_producer_admits_each_typed_evidence_source(kind: str, reference: str) -> None:
     assert _with_proposal_evidence(kind, reference) is not None
 

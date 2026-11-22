@@ -605,7 +605,8 @@ jobs:
     # that names one must be listed here or exempted with a reason. The
     # selection is FAST's, so a database-marked test in a listed module does
     # not run here; the static sweep found no database-only documentation
-    # reader.
+    # reader. Added since: `test_adr_numbers_are_unique_and_indexed.py`
+    # (reads `docs/decisions/` and every `docs/**/*.md`).
     needs:
       - classify
     if: github.event_name == 'pull_request' && needs.classify.result == 'success' && needs.classify.outputs.docs_only == 'true'
@@ -654,6 +655,7 @@ jobs:
         shell: bash
         run: |
           python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery" --durations=20 \
+            tests/architecture/test_adr_numbers_are_unique_and_indexed.py \
             tests/architecture/test_auth_runtime_evidence.py \
             tests/architecture/test_canonical_claims_are_supported.py \
             tests/architecture/test_canonical_mirror_is_byte_faithful.py \

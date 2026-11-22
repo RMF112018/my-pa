@@ -674,6 +674,8 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.MEETINGS_CREATE,
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
+        # WP2-W3: the provider reconciliation write.
+        Capability.MEETINGS_PROVIDER_BIND,
     }
     destructive_writes = {
         Capability.REPORTS_UPDATE,
@@ -781,6 +783,8 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         # additive write and is deliberately absent here.
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
+        # WP2-W3: a bind or unbind versions an existing Meeting.
+        Capability.MEETINGS_PROVIDER_BIND,
     }
     for capability in Capability:
         tool = tools.get(capability.value)

@@ -122,8 +122,10 @@ from my_pa.contracts.ports import (
     MeetingNoteRecord,
     MeetingPrepRecord,
     MeetingPrepVersionRecord,
+    MeetingProviderBindingRecord,
     MeetingRecord,
     MeetingRepository,
+    MeetingSeriesProviderBindingRecord,
     MeetingWriteRequestRecord,
     MemoryDetail,
     MemoryListingFacts,
@@ -1237,6 +1239,14 @@ class World:
     )
     meeting_write_requests: dict[tuple[str, str, str], MeetingWriteRequestRecord] = field(
         default_factory=dict
+    )
+    #: Communications intelligence WP2 provider bindings, keyed
+    #: `(principal_id, binding_id)` and `(principal_id, series_binding_id)`.
+    meeting_provider_bindings: dict[tuple[str, str], MeetingProviderBindingRecord] = field(
+        default_factory=dict
+    )
+    meeting_series_provider_bindings: dict[tuple[str, str], MeetingSeriesProviderBindingRecord] = (
+        field(default_factory=dict)
     )
     commits: int = 0
     rollbacks: int = 0
@@ -9560,6 +9570,98 @@ class _Meetings:
         raise MeetingCursorError()
 
     # --- helpers -------------------------------------------------------------------
+
+    # --- provider bindings (communications intelligence WP2) ------------------
+
+    def _bindings(self, principal_id: str) -> list[MeetingProviderBindingRecord]:
+        return [
+            binding
+            for (owner, _), binding in self._world.meeting_provider_bindings.items()
+            if owner == principal_id
+        ]
+
+    def lock_provider_binding(
+        self,
+        principal_id: str,
+        calendar_ref: str,
+        ical_uid: str,
+        occurrence_original_start_utc: datetime | None,
+    ) -> MeetingProviderBindingRecord | None:
+        for binding in self._bindings(principal_id):
+            if (
+                binding.calendar_ref == calendar_ref
+                and binding.ical_uid == ical_uid
+                and binding.occurrence_original_start_utc == occurrence_original_start_utc
+            ):
+                return binding
+        return None
+
+    def provider_uid_bound_as_other_kind(
+        self, principal_id: str, calendar_ref: str, ical_uid: str, *, occurrence: bool
+    ) -> bool:
+        return any(
+            binding.calendar_ref == calendar_ref
+            and binding.ical_uid == ical_uid
+            and (binding.occurrence_original_start_utc is None) is occurrence
+            for binding in self._bindings(principal_id)
+        )
+
+    def read_series_provider_binding(
+        self, principal_id: str, calendar_ref: str, series_ical_uid: str
+    ) -> MeetingSeriesProviderBindingRecord | None:
+        for (owner, _), series in self._world.meeting_series_provider_bindings.items():
+            if (
+                owner == principal_id
+                and series.calendar_ref == calendar_ref
+                and series.series_ical_uid == series_ical_uid
+            ):
+                return series
+        return None
+
+    def read_provider_binding_for_meeting(
+        self, principal_id: str, meeting_id: str
+    ) -> MeetingProviderBindingRecord | None:
+        for binding in self._bindings(principal_id):
+            if binding.meeting_id == meeting_id:
+                return binding
+        return None
+
+    def lock_provider_binding_for_meeting(
+        self, principal_id: str, meeting_id: str
+    ) -> MeetingProviderBindingRecord | None:
+        return self.read_provider_binding_for_meeting(principal_id, meeting_id)
+
+    def read_series_provider_binding_for_series(
+        self, principal_id: str, meeting_series_id: str
+    ) -> MeetingSeriesProviderBindingRecord | None:
+        for (owner, _), series in self._world.meeting_series_provider_bindings.items():
+            if owner == principal_id and series.meeting_series_id == meeting_series_id:
+                return series
+        return None
+
+    def delete_provider_binding(self, principal_id: str, binding_id: str) -> None:
+        if self._world.meeting_provider_bindings.pop((principal_id, binding_id), None) is None:
+            raise RepositoryFailureError("no provider binding to delete in this partition")
+
+    def insert_series_provider_binding(
+        self, principal_id: str, binding: MeetingSeriesProviderBindingRecord
+    ) -> None:
+        self._world.meeting_series_provider_bindings[(principal_id, binding.series_binding_id)] = (
+            binding
+        )
+
+    def insert_provider_binding(
+        self, principal_id: str, binding: MeetingProviderBindingRecord
+    ) -> None:
+        self._world.meeting_provider_bindings[(principal_id, binding.binding_id)] = binding
+
+    def update_provider_binding(
+        self, principal_id: str, binding: MeetingProviderBindingRecord
+    ) -> None:
+        key = (principal_id, binding.binding_id)
+        if key not in self._world.meeting_provider_bindings:
+            raise RepositoryFailureError("no provider binding to update in this partition")
+        self._world.meeting_provider_bindings[key] = binding
 
     def _series_title(self, principal_id: str, meeting_series_id: str | None) -> str | None:
         if meeting_series_id is None:

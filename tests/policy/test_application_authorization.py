@@ -74,6 +74,7 @@ from my_pa.application.commands import (
     BeginIntelligenceCycle,
     BeginReportTransfer,
     BindEntityIdentifier,
+    BindMeetingProvider,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CheckpointKnowledgeDiscovery,
@@ -1320,6 +1321,14 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             idempotency_key="policy-meetings-series-update",
             title="A policy meeting series, retitled",
         ),
+        Capability.MEETINGS_PROVIDER_BIND: BindMeetingProvider(
+            action="bind",
+            meeting_id=scene.meeting_id,
+            expected_version=1,
+            idempotency_key="policy-meetings-provider-bind",
+            calendar_ref="cal-synthetic",
+            ical_uid="uid-policy@example.invalid",
+        ),
         Capability.RECORD_EVENTS_LIST: ListRecordEvents(),
         # KLP-WP-03: the six Knowledge Assertion names.
         Capability.KNOWLEDGE_ASSERTIONS_READ: ReadKnowledgeAssertion(
@@ -2090,6 +2099,8 @@ SCOPED_CAPABILITIES = [
         Capability.MEETINGS_SEARCH,
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
+        # WP2-W3: `meetings.provider.bind`, in `_SCOPELESS` too.
+        Capability.MEETINGS_PROVIDER_BIND,
         # WP-RE-06: the change feed, also in `_SCOPELESS`.
         Capability.RECORD_EVENTS_LIST,
         # KLP-WP-03: the six Knowledge Assertion names, in `_SCOPELESS`.
@@ -2452,6 +2463,8 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.MEETINGS_SEARCH,
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
+        # WP2-W3: `meetings.provider.bind`, in `_SCOPELESS` too.
+        Capability.MEETINGS_PROVIDER_BIND,
         # WP-RE-06: the change feed carries no source scope either.
         Capability.RECORD_EVENTS_LIST,
         # KLP-WP-03: the six Knowledge Assertion names, in `_SCOPELESS`.

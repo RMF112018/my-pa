@@ -86,7 +86,7 @@ PREVIOUS: Final = "0641c354ca85"
 #: on `REVISION`, `cc373834a485` (Continuity Project sixteen-field admission) is
 #: additive on it, and `a591b81f10a2` (Intelligence report type registry) is
 #: additive on that, so a database upgraded to head stands there.
-HEAD: Final = "4d1069a7d84f"
+HEAD: Final = "6418b57081c3"
 MIGRATION: Final = VERSIONS / "20261004_6734f039f7a6_knowledge_assertion_layer.py"
 RESTRICT_VIOLATION: Final = "23001"
 FOREIGN_KEY_VIOLATION: Final = "23503"
@@ -200,7 +200,8 @@ def test_the_revision_is_directly_on_0641c354ca85_under_one_later_head() -> None
     """AC-076: one current head; the revision was generated from the sole head."""
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "640aaacc78e8"
+    assert script.get_revision(HEAD).down_revision == "4d1069a7d84f"
+    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
     assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
     assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
     assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
@@ -226,7 +227,7 @@ def test_the_revision_is_directly_on_0641c354ca85_under_one_later_head() -> None
     # R6 counted 112 files at this revision; `93f3aa113f58`, `cc373834a485`,
     # `a591b81f10a2`, `c8f7ae406d47` and `HEAD` are the five files added since.
     assert migration_contract["expected_post_r6_revision_file_count"] == 112
-    assert len(files) == 130
+    assert len(files) == 131
     assert [path.name for path in VERSIONS.glob("*_knowledge_assertion_layer.py")] == [
         MIGRATION.name
     ]
@@ -2123,6 +2124,8 @@ _ADMITTED_AFTER_THIS_REVISION: Final = (
     | S63_CAPABILITIES
     # Files workspace WP4: admitted by its revision (the head).
     | FILES_CAPABILITIES
+    # Communications intelligence WP2-W3: admitted by the WP2 provider-binding revision.
+    | frozenset({"meetings.provider.bind"})
     # And the Reports Modernization general report plane head (`4c37731671fc`).
     | frozenset(
         {

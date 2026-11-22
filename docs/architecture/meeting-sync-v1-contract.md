@@ -1,0 +1,229 @@
+# `meeting_sync_v1` — ChatLLM meeting-sync publication contract
+
+**Status:** producer contract under [ADR-022](../decisions/ADR-022-communications-intelligence.md) (Accepted under operator delegation 2026-11-22, Manager ruling R-OP-1; effective on merge of WP2) and [spec section 12](communications-intelligence-contract.md). **WP2 implements the parser and the resolution service** on branch `feat/comms-meeting-identity` (not merged). Ingestion of these publications is **WP3** (the third consumer of the shared lifecycle, spec section 1.2); nothing reads them today. **The ChatLLM collector change that would produce them** is applied once by the operator from the [collector implementation notes](#8-collector-implementation-notes) (Manager ruling R-OP-8) and has not been made yet. Nothing is admitted, scheduled, granted or deployed.
+
+**Code:** the parser `my_pa.infrastructure.meeting_sync.parser` (`parse_publication`, `PARSER_VERSION` = `meeting_sync_v1_parser_v1`); the vocabularies in `my_pa.domain.meeting_sync.model` and `my_pa.domain.meeting_sync.diagnostics`; the resolution rules in `my_pa.domain.meeting_sync.resolution`. Synthetic fixtures are under `tests/fixtures/meeting_sync/`. Where this document and the code disagree, the code is the contract and this document is the defect.
+
+This document is for the producer (the ChatLLM collector) and for reviewers. It is the calendar counterpart of the `communications_evidence_v2` contract in [spec section 2](communications-intelligence-contract.md).
+
+## 1. Publication envelope
+
+One publication is one UTF-8 JSON object, at most 16 MiB (`MAX_PUBLICATION_BYTES`). Duplicate object keys, `NaN` and `Infinity` are refused.
+
+| Key | Required | Type | Rule |
+| --- | --- | --- | --- |
+| `schema` | yes | string | exactly `meeting_sync_v1` |
+| `schema_version` | yes | string | `MAJOR.MINOR.PATCH`; major `1` only; a newer minor is accepted with diagnostic `schema_minor_newer` |
+| `events` | yes | array | the event records (section 2); may be empty |
+| `generated_at_utc` | yes | string | an aware ISO-8601 timestamp (section 3): the publication's ordering stamp (section 5) |
+| `cycle_run_id` | no | string | non-empty; producer run reference, informational |
+
+Any other top-level key is counted (`unknown_top_level_keys`) and ignored, never fatal.
+
+## 2. Event record
+
+One record per calendar event: a single meeting, or one occurrence of a recurring series. A recurring **master with no instances is not sent** and would create nothing (Manager ruling D7); a series exists in my-pa once its first occurrence arrives.
+
+| Field | Required | Type | Rule |
+| --- | --- | --- | --- |
+| `calendar_ref` | yes | string | neutral calendar reference (like `mailbox_ref`), 1–320 characters, not blank |
+| `ical_uid` | yes | string | the iCalendar UID, 1–1024 characters, not blank |
+| `series_ical_uid` | no | string or null | the recurrence master's UID; present exactly when `occurrence_original_start_utc` is |
+| `occurrence_original_start_utc` | no | timestamp or null | the occurrence's **original** start, never its current start, so a moved occurrence keeps its identity |
+| `start_utc`, `end_utc` | yes | timestamp | the current schedule; `end_utc` not before `start_utc` |
+| `timezone_name` | yes | string | an IANA zone name (1–64 characters) known to the installed zone database |
+| `status` | yes | string | `confirmed`, `tentative` or `cancelled` |
+| `all_day` | yes | boolean | must be `false`: all-day events are not supported in v1 |
+| `title` | yes | string | 1–200 characters, at least one non-whitespace character |
+| `location_text` | no | string or null | at most 500 characters |
+| `virtual_meeting_url` | no | string or null | an `https` URL with a host, 1–2048 characters, no whitespace, control characters or credentials |
+| `provider_event_id` | no | string or null | 1–1024 characters; a mutable attribute, never identity |
+| `provider_event_id_format` | no | string or null | `immutable_verified`, `mutable` or `unknown` (default `unknown`) |
+| `attendees` | no | array of objects | at most 100; each `{email, display_name?, is_organizer?, response_status?}`; `email` required; no two attendees with one normalized address; at most one organizer |
+
+`response_status` is one of `unknown` (default), `needs_action`, `accepted`, `declined`, `tentative`. Attendees are parsed and validated only: **WP2 never applies them to a Meeting** (Manager ruling D2), but a record whose attendee set is invalid is quarantined, so a producer must send a valid set now.
+
+**Identity.** An event's key is `(calendar_ref, ical_uid, occurrence_original_start_utc)`: a single meeting has a null original start, an occurrence has one. One `(calendar_ref, ical_uid)` is either a single meeting or a set of occurrences, never both (Manager ruling D9). Provider event ids, titles and times are never identity.
+
+**No bodies.** A record carries no body, preview, description or notes. If a record carries `body`, `body_preview`, `description` or `notes`, the value is never read: the parser drops it and reports `content_field_ignored`. Any other unknown record key is counted (`unknown_record_keys`) and ignored.
+
+## 3. Normalization rules
+
+- **Time.** Every timestamp is `YYYY-MM-DDTHH:MM:SS`, optional fraction of 1–6 digits, then `Z` or `±HH:MM`; a naive timestamp is refused. The parser converts it to UTC; the producer should emit UTC (`Z`) throughout. A timestamp within one day of either end of the representable range is refused.
+- **Time zone.** `timezone_name` is an IANA name (`America/New_York`), never a Windows zone name, an abbreviation or an offset (`timezone_not_iana`).
+- **Addresses.** Attendee addresses are normalized by the Meeting attendee rule (the Relationship Intelligence EMAIL rule, local part and domain `casefold`ed). The producer may send any case; two addresses that normalize alike are duplicates.
+- **Links.** `virtual_meeting_url` is stored exactly as sent and must be `https`; anything else is quarantined, never rewritten.
+- **Nothing is truncated or coerced** (Manager ruling D3): a value the Meeting plane cannot hold exactly quarantines the record under the reason code that names it.
+
+## 4. Rejection and quarantine codes
+
+**Publication rejection** (the whole publication is refused with one code; the first failure decides). The checks run in this order: size (`file_too_large`); strict UTF-8 (`invalid_encoding`); JSON (`duplicate_json_key`, `malformed_json`, which carries line, column and offset only); an object (`not_an_object`); `schema` present (`missing_required_key`) and equal to `meeting_sync_v1` (`unknown_schema`); `schema_version` present (`missing_required_key`), well formed (`invalid_schema_version`) and major `1` (`unsupported_major_version`); `events` present (`missing_required_key`) and an array (`invalid_top_level_field`); `generated_at_utc` present (`missing_required_key`) and a valid timestamp (`invalid_top_level_field`); `cycle_run_id`, when present, a non-empty string (`invalid_top_level_field`).
+
+**Record quarantine** (one record is refused; the rest of the publication is accepted; every reason quarantines, there is no degraded-but-usable event):
+
+| Group | Codes |
+| --- | --- |
+| structural | `record_not_an_object`, `missing_required_field`, `invalid_field_type`, `invalid_field_value`, `unparseable_timestamp` |
+| representability | `identifier_unrepresentable`, `title_unrepresentable`, `timezone_not_iana`, `url_unrepresentable`, `location_unrepresentable`, `attendees_unrepresentable`, `all_day_unsupported`, `series_key_incomplete`, `end_before_start` |
+| within one publication | `duplicate_occurrence_key` (two records with one key: both are quarantined) |
+
+**Diagnostics** (informational, change no outcome): `schema_minor_newer`, `unknown_top_level_keys`, `unknown_record_keys`, `content_field_ignored`. A publication keeps at most 200 diagnostics and counts the rest. No diagnostic carries a title, location, link, address, name, calendar reference, UID or provider event id.
+
+**Resolution skips** (my-pa side, after parsing; the record is valid but nothing is written): `cancelled_unknown_skipped` (a cancelled event my-pa never bound), `binding_kind_conflict` (the UID is bound as the other kind), `stale_record_skipped` and `ordering_conflict_skipped` (section 5). Each is returned in that record's `MeetingSyncOutcome` (kind `skipped`, the code in `diagnostic`), not in the parser's diagnostics.
+
+## 5. Ordering
+
+**The producer must emit a strictly increasing `generated_at_utc`** across publications for one calendar. my-pa applies a record of a known key only in publication order (resolution rule 7, WP2-F1): each binding stores the stamp of the last record applied to it (`last_applied_generated_at_utc`, also stored for a record that changed nothing).
+
+- a record whose stamp is strictly older than the binding's is skipped (`stale_record_skipped`);
+- a record whose stamp equals the binding's but comes from a different publication (different file SHA-256) is ambiguous and skipped (`ordering_conflict_skipped`);
+- a replay of the same publication is idempotent; a newer stamp, or a binding with no stamp yet (just made by `meetings.provider.bind`), applies.
+
+**Known risk.** A producer clock regression makes every record of a known key skip until a publication with a newer stamp than the last applied one arrives. Nothing fails loudly: each skip is returned only as a `skipped` `MeetingSyncOutcome` carrying its resolution code (`diagnostic`), which the caller must surface; the parser's diagnostics do not list resolution skips.
+
+## 6. What my-pa does with an event (summary)
+
+Spec section 12.2 rules 1–7: a known key updates only the provider-owned fields of its Meeting (`start_at`, `end_at`, `timezone_name`, `status`, `title`, `location_text`, `virtual_meeting_url`); an unknown occurrence of a known series creates a Meeting in that series; an unknown series is created with its first occurrence, titled by the event; an unknown single event creates a standalone Meeting; a cancelled known event cancels its Meeting and never deletes it. An existing hand-made Meeting is never matched by title or time: it is bound only through `meetings.provider.bind`. Sync writes as actor `system`.
+
+**Unbind (known limitation).** A `meetings.provider.bind` unbind orphans the Meeting from its provider key: the next publication carrying that key creates a duplicate Meeting, and after a series move a rebind is refused (`provider_series_binding_conflict`), because series bindings are append-only; WP3 must ship a rebind or unbind-tombstone path before sync auto-enables (spec sections 12.6 and 12.7).
+
+## 7. Synthetic example
+
+Synthetic values only; `example.invalid` addresses, no real calendar, person or provider identifier.
+
+```json
+{
+  "schema": "meeting_sync_v1",
+  "schema_version": "1.0.0",
+  "generated_at_utc": "2030-01-06T06:00:00Z",
+  "cycle_run_id": "synthetic-run-0001",
+  "events": [
+    {
+      "calendar_ref": "cal-synthetic-primary",
+      "ical_uid": "uid-single-0001@example.invalid",
+      "series_ical_uid": null,
+      "occurrence_original_start_utc": null,
+      "start_utc": "2030-01-07T15:00:00Z",
+      "end_utc": "2030-01-07T16:00:00Z",
+      "timezone_name": "America/New_York",
+      "status": "confirmed",
+      "all_day": false,
+      "provider_event_id": "evt-synthetic-0001",
+      "provider_event_id_format": "mutable",
+      "title": "Synthetic kickoff",
+      "location_text": "Room 1",
+      "virtual_meeting_url": "https://meet.example.invalid/kickoff",
+      "attendees": [
+        {"email": "organizer@example.invalid", "display_name": "Synthetic Organizer", "is_organizer": true, "response_status": "accepted"},
+        {"email": "guest@example.invalid", "display_name": null, "is_organizer": false, "response_status": "needs_action"}
+      ]
+    },
+    {
+      "calendar_ref": "cal-synthetic-primary",
+      "ical_uid": "uid-series-0001@example.invalid",
+      "series_ical_uid": "uid-series-0001@example.invalid",
+      "occurrence_original_start_utc": "2030-01-08T14:00:00Z",
+      "start_utc": "2030-01-08T15:00:00Z",
+      "end_utc": "2030-01-08T15:30:00Z",
+      "timezone_name": "Europe/London",
+      "status": "confirmed",
+      "all_day": false,
+      "title": "Synthetic weekly",
+      "attendees": []
+    }
+  ]
+}
+```
+
+The second record is an occurrence moved one hour later: its key keeps the original start `2030-01-08T14:00:00Z`.
+
+## 8. Collector implementation notes
+
+A ready-to-apply checklist for the external ChatLLM calendar collector (Manager ruling R-OP-8, operator delegation 2026-11-22). The collector is outside this repository; the operator applies these notes to it once. Sections 1–5 above are the contract; where this checklist and those sections disagree, those sections win. All values below are synthetic.
+
+### 8.1 Which events to send
+
+- [ ] Send every timed event of the calendar in the collector's window: single meetings and each **occurrence** of a recurring series (expanded instances, including moved and cancelled ones).
+- [ ] **Exclude all-day events.** Do not send them at all. (If one is sent it must carry `all_day: true` and is quarantined as `all_day_unsupported`, ruling D4; omitting it is the clean path.)
+- [ ] Do not send a recurrence master by itself (ruling D7); send its occurrences.
+- [ ] Send a cancelled event or occurrence with `status` `cancelled`. Do not drop it: a cancelled known event cancels its Meeting; a cancelled unknown one is skipped harmlessly (`cancelled_unknown_skipped`).
+- [ ] **No bodies.** Never send a body, body preview, description, notes or attachment. Do not add `body`, `body_preview`, `description` or `notes` keys, even empty: the parser drops them (`content_field_ignored`), but the collector must not read or ship them.
+
+### 8.2 Field by field
+
+| Field | Required | Derive it from the calendar event |
+| --- | --- | --- |
+| `calendar_ref` | yes | A neutral, stable label the operator configures once per calendar (for example `cal-synthetic-primary`), like `mailbox_ref` for mail. Never an address. Never change it: it is part of every event's identity. |
+| `ical_uid` | yes | The iCalendar `UID` property. For an occurrence, the UID the whole series shares (the master's UID), not a per-instance id. With Microsoft Graph that is the series-wide `uid`, not the per-instance `iCalUId`. |
+| `series_ical_uid` | occurrences only | The recurrence master's `UID`. Send it exactly when `occurrence_original_start_utc` is sent; `null` (or absent) for a single meeting. |
+| `occurrence_original_start_utc` | occurrences only | The occurrence's **original** start: the iCalendar `RECURRENCE-ID` (Graph `originalStart`), or for an unmodified instance its scheduled start in the series pattern. Never its current start, so a moved occurrence keeps its identity. UTC with `Z`. |
+| `start_utc`, `end_utc` | yes | The current start and end, converted to UTC, `YYYY-MM-DDTHH:MM:SSZ`. `end_utc` is not before `start_utc`. |
+| `timezone_name` | yes | The event's IANA zone (`America/New_York`). A Windows zone name (`Eastern Standard Time`) must be mapped to IANA with the CLDR `windowsZones` table. Never send an abbreviation or an offset. If a zone has no mapping, send the record unchanged so it is quarantined visibly (`timezone_not_iana`); do not guess. |
+| `status` | yes | `cancelled` for a cancelled event or occurrence; otherwise the event's own status (iCalendar `STATUS`): `tentative` or `confirmed` (the default). Free/busy show-as and attendee responses are not status. |
+| `all_day` | yes | Always `false` (all-day events are excluded, section 8.1). |
+| `title` | yes | The subject, 1–200 characters, not only whitespace. Never truncate: a longer subject quarantines the record (`title_unrepresentable`). |
+| `location_text` | no | The display location, at most 500 characters; `null` when none. |
+| `virtual_meeting_url` | no | The online-meeting **join URL** only, exactly as the provider gives it, when it is `https` with a host, at most 2048 characters, with no whitespace, control characters or credentials. Otherwise send `null`. Never rewrite a URL (for example `http` to `https`); never take a URL out of the body. |
+| `provider_event_id` | no | The provider's event id, 1–1024 characters. It is an attribute, never identity. |
+| `provider_event_id_format` | no | `immutable_verified` only when the collector requests immutable ids and has verified it; `mutable` when the id is known to change; otherwise `unknown`. |
+| `attendees` | no | At most 100 entries `{email, display_name, is_organizer, response_status}`. See the address rules below. |
+
+Top level: `schema` = `meeting_sync_v1`, `schema_version` = `1.0.0`, `generated_at_utc` (section 8.3), `events`, and optionally `cycle_run_id` (the collector's run reference).
+
+**Addresses.** my-pa normalizes each attendee address with `casefold` on the local part and the domain. Before sending:
+
+- [ ] drop attendees with no address (an entry without `email` quarantines the record);
+- [ ] merge entries whose addresses are equal after `casefold` (`Organizer@Example.invalid` and `organizer@example.invalid` are one attendee; keep `is_organizer` if either has it);
+- [ ] mark at most one organizer;
+- [ ] map response states to `unknown`, `needs_action`, `accepted`, `declined` or `tentative`.
+
+An event with more than 100 distinct attendees cannot be held and is quarantined (`attendees_unrepresentable`); do not truncate the list. WP2 validates attendees but never applies them to a Meeting (ruling D2).
+
+### 8.3 `generated_at_utc`: strictly increasing
+
+- [ ] Set `generated_at_utc` to the publication time in UTC (`YYYY-MM-DDTHH:MM:SSZ`), **strictly greater** than the stamp of every earlier publication for the same calendar.
+- [ ] Persist the last stamp the collector published. If the clock reads a time at or before it (clock step, retry within one second), use the last stamp plus 1 second instead.
+- [ ] Never re-use a stamp for different bytes. Re-uploading the exact same file is safe (idempotent).
+
+**Why.** my-pa applies records for a known event only in publication order (resolution rule 7, section 5). Each binding remembers the stamp of the last record applied to it. A publication with an older stamp is skipped (`stale_record_skipped`) and one with an equal stamp but different bytes is skipped as ambiguous (`ordering_conflict_skipped`). Both skips are reported only in each record's `MeetingSyncOutcome` and fail nothing, so a stamp that goes backwards freezes every known Meeting until a newer stamp arrives.
+
+### 8.4 File naming and placement (**proposal**)
+
+No meeting-sync placement is defined yet; WP3 fixes it when it registers the source (spec section 1.2). This proposal mirrors the WP1 communications convention (spec section 1.1: the `mcp` file workspace, canonical folder `My PA/Daily Intelligence/communications/`, one `YYYYMMDD-comms.json` per business date):
+
+- **Folder:** `My PA/Daily Intelligence/meetings/` in the `mcp` file workspace, a sibling of the communications folder.
+- **Name:** `YYYYMMDD-meetings.json`, the UTC date of `generated_at_utc`, one file per date.
+- **Re-publication:** a later run on the same date overwrites that file with new bytes and a newer `generated_at_utc`. my-pa keys files by SHA-256, so the new bytes are a new snapshot and the earlier one is superseded for that path (spec section 1.3).
+- **Atomic write:** write to a name outside the pattern (for example `.YYYYMMDD-meetings.json.partial`) and rename it into place when complete. The stability rule (spec section 11) tolerates a slow writer, but a partial file must never carry the final name.
+- my-pa only reads this folder; it never renames, moves or deletes the collector's files.
+
+### 8.5 Verify a publication before upload
+
+- [ ] Size at most 16 MiB; strict UTF-8; no duplicate keys, `NaN` or `Infinity`.
+- [ ] `generated_at_utc` is later than the last uploaded stamp (section 8.3).
+- [ ] No all-day event, no body or description key, no non-`https` join URL.
+- [ ] Run the repository parser over the file from a my-pa source checkout. It prints counts, closed-vocabulary codes and the stamp only, never event content:
+
+  ```
+  PYTHONPATH=src python - FILE <<'PY'
+  import sys
+  from pathlib import Path
+  from my_pa.infrastructure.meeting_sync.parser import parse_publication
+
+  result = parse_publication(Path(sys.argv[1]).read_bytes())
+  print("status", result.status.value, "rejection", result.rejection)
+  publication = result.publication
+  if publication is not None:
+      print("generated_at_utc", publication.generated_at_utc.isoformat())
+      print("records", publication.record_count, "accepted", len(publication.events),
+            "quarantined", len(publication.quarantined))
+  print("codes", dict(result.diagnostics.code_counts))
+  sys.exit(0 if publication is not None and not publication.quarantined else 1)
+  PY
+  ```
+
+  Upload only on exit 0 (accepted, 0 quarantined). Also expect no `content_field_ignored` or `unknown_record_keys` code. On the synthetic fixture `tests/fixtures/meeting_sync/sync_publication.json`, which carries deliberate faults, it prints `accepted`, 5 records, 4 accepted, 1 quarantined, with the codes `all_day_unsupported`, `content_field_ignored` and `timezone_not_iana`, and exits 1.
+
+### 8.6 Synthetic values only
+
+Test the collector change with synthetic calendars only: `example.invalid` addresses and hosts, `uid-…@example.invalid` UIDs, `cal-synthetic-…` references and `evt-synthetic-…` ids, as in section 7. Never put a real calendar, address, UID, provider id or join URL in a fixture, a log line, a ticket or this document.

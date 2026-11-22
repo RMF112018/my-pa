@@ -608,6 +608,15 @@ class IdKind(StrEnum):
     #: `web/src` and `migrations`, and the uniqueness assertion in
     #: `tests/unit/test_identifiers.py`): none collides (nearest `mprop`).
     MEETING_PREP_VERSION = "mprep"
+    #: Communications intelligence WP2 (contract section 12.1): one Meeting's
+    #: provider binding (`knowledge.meeting_provider_bindings`) and one
+    #: MeetingSeries' provider series binding
+    #: (`knowledge.meeting_series_provider_bindings`). Checked against every
+    #: prior member (a grep of `mpbnd` and `msbnd` over `src`, `tests`,
+    #: `web/src` and `migrations`, and the uniqueness assertion in
+    #: `tests/unit/test_identifiers.py`): neither collides.
+    MEETING_PROVIDER_BINDING = "mpbnd"
+    MEETING_SERIES_PROVIDER_BINDING = "msbnd"
 
 
 class InvalidIdentifierError(ValueError):

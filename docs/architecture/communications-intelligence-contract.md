@@ -1,6 +1,6 @@
 # Communications intelligence — implementation contract
 
-**Status:** proposed implementation contract under [ADR-022](../decisions/ADR-022-communications-intelligence.md) (Proposed — accepted-candidate; not ratified). **WP1 is implemented** on branch `feat/comms-intelligence` (the pure source contract, this spec, the ADR and the corpus evidence); every other section is design for WP2–WP5, which each need their own PR, review and, where marked, operator decision. Nothing is persisted, migrated, exposed, granted or deployed.
+**Status:** implementation contract under [ADR-022](../decisions/ADR-022-communications-intelligence.md) (Accepted under operator delegation 2026-11-22, Manager ruling R-OP-1; effective on merge of WP2). **WP1 is implemented** (the pure source contract, this spec, the ADR and the corpus evidence; merged to `main` in #371). **WP2 is implemented on branch `feat/comms-meeting-identity` (not merged)**: section 12 and the [`meeting_sync_v1` producer contract](meeting-sync-v1-contract.md). Every other section is design for WP3–WP5, which each need their own PR, review and, where marked, operator decision. Nothing is granted, activated or deployed: migrations, grants, the ChatLLM profile and schedulers are applied in one consolidated activation at the end of the goal (section 20.6); WP2's migration `6418b57081c3` exists on its branch only and has been applied to disposable databases only.
 
 **Basis:** contract head measured: branch `feat/comms-intelligence` at `80208caabe92de03be676a93fae8984d31d2b8c1` (tree `057703650c1f7b8976a86ccebc3da0a62f70d1a6`), the WP1 head after fix F2, on `origin/main@092610d36b7d1493fc7fda6e352a4bd06e914f61`; Alembic single head `640aaacc78e8` (129 revision files); 298 `Capability` members and 70 `Purpose` members. PR #368 (ADR-020, meeting prep, migration on `640aaacc78e8`) is open and not on this branch: WP2's migration must chain after whichever head is current when it is written. All counts here are digits on purpose (spelled-count guard). Paths to files that do not exist yet are not written as links (CI relative-link check).
 
@@ -10,9 +10,9 @@
 
 | WP | Content | State |
 | --- | --- | --- |
-| WP1 | ADR-022, this spec, 6 corpus deliverables; pure `communications_evidence_v2` contract (parse/validate/normalize both dialects, classification, lane reconciliation, integrity, `comms_search_text_v1`, `comms_identifiers_v1`, corpus coverage summary), aggregate-only CLI, synthetic fixtures, FAST tests | **implemented** (branch, not merged); no migration |
-| WP2 | Meeting provider identity and recurrence resolution (section 12): migration, persistence, application, MCP surface, reconciliation, ChatLLM meeting-sync contract | planned |
-| WP3 | Shared ingestion lifecycle (section 1) + communications persistence (section 5), ingestion (sections 10–11), coverage (section 9), backfill, scheduled ingestion on the cycles plane, monitoring, runbook | planned |
+| WP1 | ADR-022, this spec, 6 corpus deliverables; pure `communications_evidence_v2` contract (parse/validate/normalize both dialects, classification, lane reconciliation, integrity, `comms_search_text_v1`, `comms_identifiers_v1`, corpus coverage summary), aggregate-only CLI, synthetic fixtures, FAST tests | **implemented**, merged to `main` (#371); no migration |
+| WP2 | Meeting provider identity and recurrence resolution (section 12): migration `6418b57081c3`, persistence, the `meeting_sync_v1` contract and parser, the resolution service, `meetings.provider.bind`, ChatLLM profile `chatllm-data-v15` (activated at the consolidated goal activation, R-OP-4), the [meeting-sync producer contract](meeting-sync-v1-contract.md) | **implemented** on branch `feat/comms-meeting-identity` (not merged); nothing granted, activated or deployed |
+| WP3 | Shared ingestion lifecycle (section 1) + communications persistence (section 5), ingestion (sections 10–11), coverage (section 9), backfill, scheduled ingestion on the cycles plane, monitoring, runbook; the batch Meeting bind/review path that gates calendar sync (section 12.7, R-OP-6) | planned |
 | WP3P | Procore PULSE persistence and ingestion on the WP3 lifecycle (designed separately by a later docs package) | planned |
 | WP4 | Communications search service + MCP reads (sections 6, 7, 13, 14, 16) | planned |
 | WP4P | PULSE retrieval MCP | planned |
@@ -152,9 +152,9 @@ Constraints: `UNIQUE (principal_id, mailbox_ref, identity_kind, identity_value)`
 
 No raw HTML, body content or display names are stored (ADR-022 decision 10). Display names are deliberately not carried by the WP1 normalized model; resolving a person by name goes through Entities and the address, not through mail text.
 
-### 5.4 Meeting provider bindings (WP2)
+### 5.4 Meeting provider bindings (WP2, implemented on branch)
 
-Section 12.
+Section 12.1.
 
 ## 6. Full-text search (WP4; text derivation WP1)
 
@@ -228,31 +228,96 @@ Corpus: one interval 2026-10-17T04:00:00Z → 2026-11-20T14:12:05Z, no gaps (`su
 - **Re-publication.** New bytes at a known path → new snapshot; observations of existing messages are added, a newer search-text basis may replace the projection (e.g. a body that was empty), and the earlier snapshot is `superseded` for that path. Coverage keeps both windows; they merge.
 - **Overlap.** Overlapping windows (rich vs canonical, weekend vs weekday) produce repeat observations of the same items — counted, never new messages (corpus: 191 provider ids recur, all identical).
 - **Ordering.** Within a run, snapshots are processed oldest window first; the message projection always reflects a deterministic rule (latest snapshot with a usable text basis wins), independent of arrival order.
+- **Meeting sync (third consumer, section 12).** Scheduled calendar sync must not run before the operator has reconciled existing Meetings in WP3's batch bind/review pass (section 12.7, Manager ruling R-OP-6). Binding stays explicit and is never inferred from title or time. Once that pass is complete, calendar sync enables itself with no further operator switch; until then it stays off.
 
-## 12. Meeting provider identity and recurrence resolution (designed here; WP2 implements)
+## 12. Meeting provider identity and recurrence resolution (WP2, implemented on branch)
 
-Meetings today: `meetings` with nullable `meeting_series_id`, no provider columns; capabilities `meetings.create`, `meetings.list`, `meetings.read`, `meetings.search`, `meetings.update`, `meetings.series.update`, `meetings.notes.versions`, `meetings.notes.read_version`.
+**State.** Implemented on branch `feat/comms-meeting-identity` (not merged): migration `6418b57081c3` (on `4d1069a7d84f`), persistence, the pure `meeting_sync_v1` contract and parser, the resolution service, and the `meetings.provider.bind` capability. Nothing is ingested: the sync source is registered as a lifecycle consumer in WP3, and the operator applies the ChatLLM collector change once from the producer contract's collector implementation notes (R-OP-8). The producer-facing contract is [`meeting-sync-v1-contract.md`](meeting-sync-v1-contract.md).
 
-### 12.1 Binding table (WP2)
+Meetings before WP2: `meetings` with nullable `meeting_series_id`, no provider columns; capabilities `meetings.create`, `meetings.list`, `meetings.read`, `meetings.search`, `meetings.update`, `meetings.series.update`, `meetings.notes.versions`, `meetings.notes.read_version`. WP2 adds no column to `meetings`: provider identity lives in two new tables.
 
-`meeting_provider_bindings`: `binding_id`, `principal_id`, `meeting_id` (FK), `calendar_ref` (neutral calendar reference, like `mailbox_ref`), `ical_uid`, `occurrence_original_start_utc` (null for a single meeting), `provider_event_id` and its format (mutable, attribute only), `series_ical_uid` (the master's UID for an occurrence), `last_seen_snapshot_id`, `provider_state` (`active`, `cancelled`, `not_seen`).
+### 12.1 Binding tables (WP2, implemented)
 
-- **Occurrence identity:** `UNIQUE (principal_id, calendar_ref, ical_uid, occurrence_original_start_utc)` — the original start, never the current start, so a moved occurrence keeps its identity.
-- **Single meeting:** `UNIQUE (principal_id, calendar_ref, ical_uid)` where `occurrence_original_start_utc IS NULL`.
-- **Series:** `meeting_series_provider_bindings (principal_id, meeting_series_id, calendar_ref, series_ical_uid)` unique per Principal; every occurrence binding of that UID resolves to that `meeting_series_id`.
+Both tables are in schema `knowledge`, Principal-partitioned, with composite foreign keys `(…, principal_id)` `ON DELETE RESTRICT` and `TRUNCATE` refused (the `c8e4a1b70d35` precedent).
 
-### 12.2 Resolution rules
+`meeting_series_provider_bindings` (identifier prefix `msbnd`, `IdKind.MEETING_SERIES_PROVIDER_BINDING`): `series_binding_id`, `principal_id`, `meeting_series_id` (FK onto `meeting_series`), `calendar_ref`, `series_ical_uid`, `created_at`. Unique per Principal both ways: `(principal_id, calendar_ref, series_ical_uid)` and `(principal_id, meeting_series_id)`. **Append-only**: an update or delete is refused by trigger, so an unbind leaves the series binding in place.
 
-1. A provider event with a known occurrence key updates the bound Meeting (through the existing `meetings.update` path and its CAS); it never creates a second Meeting.
+`meeting_provider_bindings` (identifier prefix `mpbnd`, `IdKind.MEETING_PROVIDER_BINDING`): `binding_id`, `principal_id`, `meeting_id` (FK onto `meetings`), `calendar_ref` (neutral calendar reference, like `mailbox_ref`, 1–320 characters), `ical_uid` (1–1024), `occurrence_original_start_utc` (null for a single meeting), `series_ical_uid` (the master's UID for an occurrence; composite FK onto the series bindings, so an occurrence's series must be bound), `provider_event_id` and `provider_event_id_format` (`immutable_verified`, `mutable`, `unknown`; mutable attributes only), `provider_state` (CHECK: `active`, `cancelled`, `not_seen`), `last_seen_source_sha256`, `last_seen_record_ordinal`, `last_seen_at` (all null or all set; ruling D8), `last_applied_generated_at_utc` (nullable, mutable attribute; null after an explicit bind until a sync applies a record; rule 7), `version`, `created_at`, `updated_at`.
+
+- **Occurrence identity:** partial unique index `one_provider_binding_per_occurrence` on `(principal_id, calendar_ref, ical_uid, occurrence_original_start_utc)` where the original start is not null — the original start, never the current start, so a moved occurrence keeps its identity.
+- **Single meeting:** partial unique index `one_provider_binding_per_single_meeting` on `(principal_id, calendar_ref, ical_uid)` where `occurrence_original_start_utc IS NULL`.
+- **One binding per Meeting:** `UNIQUE (principal_id, meeting_id)` (ruling D9).
+- **An occurrence names both its series UID and its original start, a single meeting neither** (CHECK).
+- **Guards:** the identity columns are immutable (trigger); one `(principal_id, calendar_ref, ical_uid)` is bound as a single meeting or as occurrences, never both (trigger serialized by a transaction advisory lock; ruling D9). `DELETE` of a binding row is permitted: it is the unbind.
+- **Vocabularies:** the migration widens `meeting_write_requests`' capability CHECK to admit `meetings.provider.bind` and the internal namespace `system.meeting_provider.sync`, and restates `audit_events.capability_is_known` to 310 names (309 plus `meetings.provider.bind`). The internal namespace is never an audit name: a sync write writes no audit row.
+
+### 12.2 Resolution rules (WP2, implemented)
+
+`my_pa.domain.meeting_sync.resolution` decides; `my_pa.application.meeting_provider_sync.MeetingProviderSync.apply_event` carries the decision out inside the caller's unit of work.
+
+1. A provider event with a known occurrence key updates the bound Meeting through `MeetingApplication.update_meeting` and its CAS, naming only the provider-owned fields (ruling D2); it never creates a second Meeting. A field that became absent (location, link) is an explicit clear.
 2. An unknown occurrence of a known series creates a Meeting in that series.
-3. An unknown series creates a series binding and a series.
-4. An existing unbound Meeting is bound only by an explicit operator or client reconciliation call naming both (`meetings.provider.bind` proposed), never by title or time matching.
-5. A cancelled occurrence sets the Meeting status to cancelled; it is never deleted.
+3. An unknown series creates the series (`series_title` = the event title) with its first occurrence, and both bindings (ruling D7).
+4. An existing unbound Meeting is bound only by the explicit `meetings.provider.bind` call naming both the Meeting and the full provider key, never by title or time matching (ruling D10).
+5. A cancelled occurrence with a known key sets the Meeting status to cancelled; it is never deleted. A cancelled event with an unknown key creates nothing (`cancelled_unknown_skipped`; ruling D5).
 6. Provider event ids are mutable attributes; a changed id with the same occurrence key is the same Meeting.
+7. **Publication ordering (WP2-F1).** A known key's record is applied only in publication order: its publication's `generated_at_utc` is compared with the binding's `last_applied_generated_at_utc`. A strictly older stamp is skipped (`stale_record_skipped`); an equal stamp from a different publication (a different `last_seen_source_sha256`) is skipped (`ordering_conflict_skipped`); either skip writes nothing. An equal stamp from the same publication is the idempotent replay; a newer stamp, or a binding with no stamp yet, applies. The stamp is stored even for a record that changed nothing.
 
-### 12.3 Source
+A UID already bound as the other kind is skipped (`binding_kind_conflict`; ruling D9). Re-applying an identical event writes no Meeting change and bumps no version. Each applied record has a deterministic idempotency key (`mpsync_` + SHA-256 of the binding key, publication SHA-256 and record ordinal), reserved in `meeting_write_requests` under the namespace `system.meeting_provider.sync`, so a sync key can never collide with a client key.
 
-A ChatLLM meeting-sync publication (calendar events with UID, recurrence master UID, original start, attendees with normalized addresses) defined in WP2, ingested on the shared lifecycle as a third consumer, or written by a client through the reconciliation capability — the WP2 decision. **Manager ruling 2026-11-21 (section 21):** this source choice is deferred to WP2's investigation. No calendar data is in the WP1 corpus; WP2 fixtures are synthetic.
+**Series change refusal (ruling D6).** `meetings.update` refuses a series move or detach of a provider-bound Meeting with `meeting_series_change_refused_provider_bound`; the path is to unbind first (`meetings.provider.bind` with `action` = `unbind`).
+
+### 12.3 Source (WP2, implemented as contract; ingestion WP3)
+
+The source is (a) the `meeting_sync_v1` publication contract ([producer contract](meeting-sync-v1-contract.md); parser `my_pa.infrastructure.meeting_sync.parser`, `meeting_sync_v1_parser_v1`) and (b) the resolution service of section 12.2, in a separate `meeting_sync` slice with its own scope guard (`tests/architecture/test_meeting_sync_source_scope.py`; the communications and meeting-sync slices do not import each other). WP3 registers it as the **third** lifecycle consumer (section 1.2). Ruling D1 below. No calendar data is in the WP1 corpus; WP2 fixtures (`tests/fixtures/meeting_sync/`) are synthetic.
+
+Required top-level keys: `schema` (`meeting_sync_v1`), `schema_version` (major `1`), `events`, `generated_at_utc`; optional `cycle_run_id`. A missing `generated_at_utc` rejects the publication with `missing_required_key`, an invalid one with `invalid_top_level_field`. Records carry no body or description (`content_field_ignored`). A record the Meeting plane cannot hold exactly is quarantined under a closed reason code, never truncated (ruling D3): IANA zones only (`timezone_not_iana`), `https` links only (`url_unrepresentable`), all-day events unsupported (`all_day_unsupported`, ruling D4). The full code lists are in the producer contract.
+
+### 12.4 `meetings.provider.bind` (WP2-W3, implemented)
+
+One capability with a closed `action` (`bind` or `unbind`), purpose `meeting_authoring`, arbitrated (`expected_version` CAS and an idempotency key in `meeting_write_requests`), bumping the Meeting version and writing one `meeting_history` `update` receipt and one Record Event naming `provider_binding` (ruling D10). A bind names `meeting_id`, `calendar_ref`, `ical_uid`, and for an occurrence both `occurrence_original_start_utc` and `series_ical_uid`, plus an optional `provider_event_id` and `provider_event_id_format`; an unbind names the Meeting only. Binding an occurrence of an unbound provider series creates the series binding to the Meeting's current series. The answer carries its own `MeetingProviderBindingView`; `meetings.read` and `MeetingView` are unchanged (ruling D11).
+
+Refusal tokens (each names a field or a rule, never a key value or another Meeting): the field tokens `action`, `meeting_id`, `calendar_ref`, `ical_uid`, `occurrence_original_start_utc`, `series_ical_uid`, `provider_event_id`, `provider_event_id_format`; then, in order, `meeting_already_provider_bound`, `provider_key_bound_to_another_meeting`, `provider_binding_kind_conflict`, `provider_binding_requires_series`, `provider_series_binding_conflict`; and for an unbind `meeting_not_provider_bound`.
+
+Counts: `Capability` grows 298 → 299; the audit capability set 309 → 310; `Purpose` is unchanged (70). The ChatLLM profile `chatllm-data-v15` classifies `meetings.provider.bind` `DATA_REQUIRED` (as `meetings.update` is). **v15 is the profile activated at deploy** (Manager ruling R-OP-4, under operator delegation 2026-11-22): it is applied, with the operator-profile grants (R-OP-2), in the consolidated goal activation (section 20.6). Until then no client holds the capability.
+
+### 12.5 Manager rulings 2026-11-21 for WP2 (ratified under operator delegation 2026-11-22)
+
+D1–D12 and rule 7 below were Manager rulings, previously not operator-ratified. They are **ratified under operator delegation 2026-11-22** (with ADR-022's acceptance, Manager ruling R-OP-1; effective on merge of WP2).
+
+- **D1 — source.** The source is (a) the `meeting_sync_v1` contract plus (b) the resolution service, in a separate `meeting_sync` slice with its own scope guard. WP3 registers it as the third lifecycle consumer. The ChatLLM collector change is operator-applied (once, from the [collector implementation notes](meeting-sync-v1-contract.md#8-collector-implementation-notes), R-OP-8). Rejected alternatives: a client-written sync capability as the primary source; the native Apple calendar plane; Graph/Outlook; title/time matching; deferring the contract to WP3.
+- **D2 — provider-owned fields.** The provider owns `start_at`, `end_at`, `timezone_name`, `status`, `title`, `location_text` and `virtual_meeting_url`. Sync never touches attendees in WP2 (nor description, notes, prep, Project or attachments). **Deferred attendee merge design:** merge by normalized email; add new attendees; update response status and organizer; retire only email-only rows previously supplied by the provider; **never retire Entity-linked rows**.
+- **D3 — no truncation.** A value the Meeting plane cannot hold exactly quarantines the record; IANA zones only.
+- **D4 — all-day.** All-day events are quarantined (`all_day_unsupported`).
+- **D5 — cancelled unknown.** A cancelled event with an unknown key creates nothing (`cancelled_unknown_skipped`).
+- **D6 — series ownership.** A series change on a provider-bound Meeting is refused (`meeting_series_change_refused_provider_bound`); unbind is the "unbind first" path.
+- **D7 — series birth.** A series is born with its first occurrence, titled by `series_title` = the event title. A master with no instances creates nothing.
+- **D8 — deviation from section 12.1 as first designed.** `last_seen_snapshot_id` is replaced by `last_seen_source_sha256`, `last_seen_record_ordinal` and `last_seen_at`, all with no foreign key (the lifecycle snapshot table does not exist yet). WP3 may add a snapshot foreign key.
+- **D9 — one binding per Meeting.** Single and occurrence bindings for one UID are mutually exclusive in v1.
+- **D10 — bind ships in WP2.** `meetings.provider.bind`: purpose `meeting_authoring`, arbitrated, version bump, history receipt, `bind`/`unbind` actions. Rationale: without bind, a future sync would duplicate every hand-made Meeting. WP3 adds the batch bind/review path over it (section 12.7, R-OP-6).
+- **D11 — read surface deferred.** `provider_binding` on `meetings.read` / `MeetingView` is deferred to WP5; the bind answer returns its own binding view.
+- **D12 — system writes.** Sync writes as actor `system`, under the internal namespace `system.meeting_provider.sync` (also the Record Event `source_capability` of every sync write; never a `Capability` member or audit name), by a direct call inside the caller's unit of work, with a deterministic idempotency key. WP3 decides the audit routing.
+- **Rule 7 — publication ordering (F1).** Section 12.2 rule 7; `generated_at_utc` is required.
+
+### 12.6 Open items, limitations and risks
+
+- **C9 — address normalization risk for WP5.** Communications normalizes addresses with `.lower()` (`evidence_v2`); Meetings and meeting sync use `casefold` (the Relationship Intelligence EMAIL rule). The two agree for ASCII but not for every address; WP5's attendee join (section 15) must reconcile them.
+- **C10 — `not_seen`.** `provider_state` `not_seen` is defined (and admitted by the CHECK) but never written in WP2. It needs WP3 coverage (an event absent from a complete publication).
+- **Known limitation.** Two concurrent binds can surface as `internal_error` rather than a closed refusal token. Accepted for now.
+- **Lock order (R1-2, fixed).** Every binding writer takes the binding row lock before the Meeting lock, the provider sync's order: sync locks the key's binding `FOR UPDATE`, then its Meeting; an unbind locks the Meeting's own binding `FOR UPDATE`, then the Meeting; a bind locks the requested key's binding `FOR UPDATE` (when one exists), then the Meeting. So a bind or unbind racing sync on one binding waits rather than deadlocks. Guarded by the database-tier lock-order tests in `tests/database/test_meeting_provider_bind.py`. A bind of a key with no binding yet locks no binding row; a concurrent sync insert of that key meets it only at the unique index and holds no lock on the bind's Meeting.
+- **Known limitation — unbind orphans the Meeting (R1-1).** An unbind deletes the Meeting's binding, but the series binding is append-only and stays. Consequences: (a) the next sync publication carrying that key no longer resolves to the Meeting and creates a duplicate Meeting (rule 2 or 3); (b) after a series move (D6) of the unbound Meeting, binding it again is refused with `provider_series_binding_conflict`, because its provider series UID stays bound to the old MeetingSeries. Accepted for WP2, where no sync runs; WP3 must close it (section 12.7).
+- **Residual risk — producer clock regression (F1).** A producer whose `generated_at_utc` goes backwards makes every record of a known key skip (`stale_record_skipped`) until a publication with a newer stamp arrives. The skips are visible only through diagnostics. The producer contract requires a strictly increasing `generated_at_utc`.
+
+### 12.7 Constraint for WP3: reconcile before scheduled sync
+
+**Scheduled calendar sync must NOT run until the operator has reconciled existing Meetings.** Otherwise every hand-made Meeting that matches a provider event is duplicated by rule 3 or rule 2 (resolution never matches by title or time).
+
+**Batch bind plan (Manager ruling R-OP-6, operator delegation 2026-11-22).** This refines the earlier default-off constraint; the "not before reconciliation" rule stands.
+
+- **One pass.** WP3 adds a batch bind/review path, so the operator reconciles every existing Meeting in one pass instead of one `meetings.provider.bind` call per Meeting. Each binding it writes goes through the same rules as `meetings.provider.bind` (section 12.4: CAS, idempotency, history receipt, Record Event, refusal tokens).
+- **Explicit, never inferred.** The operator names each Meeting and its full provider key, or marks it as having no provider event. The path may list candidates for review, but it never binds on title or time similarity, and nothing is bound without the operator's choice.
+- **Auto-enable condition.** Calendar sync enables itself once the pass is complete (every existing Meeting is bound or marked unbound by the operator), with no extra operator switch. Before that it does not run. WP3 defines the recorded completion state that the scheduler checks.
+- **Unbind precondition (R1-1).** Before calendar sync auto-enables, WP3 must deliver a rebind or suppression path for an unbound Meeting (an unbind tombstone recording that the key must not create or re-match a Meeting, or a rebind that re-points the series binding), so that an unbind cannot produce a duplicate Meeting or an unbindable one (section 12.6).
 
 ## 13. Retrieval (WP4)
 
@@ -301,7 +366,7 @@ Cursors are opaque, grant-bound and keyed on the section 14 order (precedent: S3
 - Principal is server-derived (authentication only); no request names a Principal or mailbox.
 - Every table is Principal-partitioned and reached through the partition guard (`tests/architecture/test_user_owned_tables_are_partitioned.py` and `tests/architecture/test_principal_partition_is_reached_through_the_guard.py` will cover the new tables).
 - The remote principal is always the operator (ADR-013), so client separation is per-client grant and profile prerequisite, not Principal.
-- **External-model eligibility (operator decision, `AGENTS.md` section 5):** returning mail text to a connected client sends it to that client's model. No grant is issued until the operator records that decision.
+- **External-model eligibility (operator decision, `AGENTS.md` section 5):** returning mail text to a connected client sends it to that client's model. No grant is issued until the operator records that decision. It was recorded under operator delegation 2026-11-22 (Manager ruling R-OP-3): derived text (excerpts, search text, derived fields) is eligible for the operator's own connected clients; raw bodies stay withheld.
 - Withheld bodies are never returned; addresses are returned only to granted clients; logs and audit rows carry capability, purpose, outcome and counts only.
 
 ## 18. Error handling and recovery
@@ -319,7 +384,7 @@ Cursors are opaque, grant-bound and keyed on the section 14 order (precedent: S3
 - Switches, all default off: `MY_PA_COMMUNICATIONS_ENABLED` (reads), `MY_PA_COMMUNICATIONS_INGEST_ENABLED` (the poll step).
 - **Scheduler:** the poll step runs inside `apps/worker.py run --plane cycles` (#367: `run_cycle_scheduler` loop, `pg_try_advisory_lock` single flight) with its own lock key and interval (default 15 minutes), not a new plane, process or cron.
 - **Monitoring:** per run, counts by outcome; per source, freshness seconds, open gaps, rejected snapshots, quarantined records, identity conflicts; log lines carry codes and counts only. A runbook under `ops/runbooks/` is written in WP3.
-- Deployment, production migration, grants and source admission stay operator actions.
+- Deployment, production migration, grants and source admission stay operator actions. They are bundled into the one consolidated activation of section 20.6 (R-OP-7).
 
 ## 20. Testing and acceptance
 
@@ -338,7 +403,7 @@ Cursors are opaque, grant-bound and keyed on the section 14 order (precedent: S3
 
 ### 20.2 WP2
 
-Migration from empty and from the preceding head; binding uniqueness; moved occurrence keeps identity; cancelled occurrence; series resolution; no title/time matching; reconciliation call CAS and idempotency; synthetic calendar fixtures only.
+Implemented on branch with these tests (FAST unit, contract and database tiers). Migration from empty and from the preceding head; binding uniqueness; moved occurrence keeps identity; cancelled occurrence; series resolution; no title/time matching; reconciliation call CAS and idempotency; synthetic calendar fixtures only.
 
 ### 20.3 WP3
 
@@ -352,16 +417,29 @@ FTS and identifier query correctness (`RFI 17` ≠ `RFI 174`), ranking total ord
 
 Batch context over synthetic Meetings with and without bindings, attendee joins, coverage gaps stated, PULSE absent → `unavailable` with communications intact, response bounds, measured latency for 10 Meetings on the real-corpus-sized isolated database.
 
+### 20.6 Consolidated activation (goal acceptance; Manager ruling R-OP-7)
+
+There is **one** consolidated activation, at the end of the goal, not one per WP. One runbook and **one operator command** apply, in order:
+
+1. the migrations of every merged WP (WP2's `6418b57081c3` and the later heads);
+2. the grants: every comms and meeting-context capability (`meetings.provider.bind`, `communications.*`, the meetings context batch, `project_reports.*`) to the **operator profile only**, with purpose defaults, so the connected client needs no per-call grant prompts (R-OP-2); nothing goes to a non-operator principal;
+3. the ChatLLM profile `chatllm-data-v15` (or the version current at that time; R-OP-4);
+4. the schedulers (the cycles-plane poll steps of section 19; calendar sync still waits for the batch reconciliation of section 12.7).
+
+The classifier blocks an agent's compose up, so the operator runs that command (or the Manager, where it is permitted). Goal acceptance includes a successful run of it. WP3 onward writes the runbook under `ops/runbooks/`.
+
 ## 21. Manager rulings 2026-11-21
 
-The Manager ruled on the open items of this spec and ADR-022 after WP1. These are Manager rulings, not operator ratification: ADR-022 stays **Proposed**, and every operator gate in ADR-022 "Implementation status" and section 17 stands.
+The Manager ruled on the open items of this spec and ADR-022 after WP1. They were Manager rulings, not operator ratification, while ADR-022 was Proposed. ADR-022 is now accepted under operator delegation 2026-11-22 (R-OP-1, effective on merge of WP2); the operator gates in ADR-022 "Implementation status" and section 17 are settled as recorded there and in section 20.6.
 
 | ID | Item | Ruling | Where |
 | --- | --- | --- | --- |
 | R1 | The worker reads the `mcp` workspace through the files store as an ingestion source | Ratified by the Manager, subject to the ADR-019 decision 7 preflight in WP3 | section 1.1 |
 | R2 | The 2 rich publications outside the canonical folder | Admitted to backfill as explicitly registered sources; overlap deduplicates by identity | sections 10, 11 |
 | R3 | Text-search configuration | `english` FTS plus the exact-identifier index plus `strpos` confirmation accepted for now; WP4 must measure `english` against `simple` on synthetic and aggregate data and may switch | section 6 |
-| R4 | Capability names, the `communications_read` purpose, the default-off switches | Accepted as proposals. Grants, external-model eligibility and ADR-022 acceptance remain operator-gated | sections 16, 17, 19 |
+| R4 | Capability names, the `communications_read` purpose, the default-off switches | Accepted as proposals. Grants, external-model eligibility and ADR-022 acceptance were then settled under operator delegation 2026-11-22 (R-OP-1 to R-OP-3) | sections 16, 17, 19 |
 | R5 | `comms_identifiers_v1` recall (change orders 0 against 104, `fpl` 134 against 263, `submittal` 28 against 128 as ruled; `submittal` 31 measured at `184ac6ca`) | Recorded as an **open WP4 defect**, to be fixed with tests; does not block WP1 | sections 7, 20.4 |
-| — | WP2 meeting-sync source | Deferred to WP2's investigation | section 12.3 |
+| — | WP2 meeting-sync source | Deferred to WP2's investigation; then ruled by the Manager during WP2 as D1 | sections 12.3, 12.5 |
 | — | The `Disclaimer` and "received this … in error" disclaimer markers are still unanchored | **Open WP4 item**; not fixed in WP1 | section 6 |
+
+**WP2 rulings.** The Manager's WP2 rulings of 2026-11-21 — D1 to D12 and resolution rule 7 (publication ordering, fix F1) — are recorded in [section 12.5](#125-manager-rulings-2026-11-21-for-wp2-ratified-under-operator-delegation-2026-11-22), with the WP2 open items, limitation and residual risk in section 12.6 and the WP3 reconcile-before-sync constraint in section 12.7. They are ratified under operator delegation 2026-11-22.

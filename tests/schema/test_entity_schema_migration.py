@@ -443,6 +443,8 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         "file_workspace_trash",
         "file_workspace_receipts",
         "meeting_prep_versions",
+        "meeting_series_provider_bindings",
+        "meeting_provider_bindings",
     }
 )
 

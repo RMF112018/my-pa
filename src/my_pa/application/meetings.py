@@ -74,8 +74,10 @@ from my_pa.contracts.ports import (
     MeetingNoteRecord,
     MeetingPrepRecord,
     MeetingPrepVersionRecord,
+    MeetingProviderBindingRecord,
     MeetingRecord,
     MeetingRepository,
+    MeetingSeriesProviderBindingRecord,
     MeetingWriteRequestRecord,
     RecordEventStager,
     RepositoryFailureError,
@@ -85,6 +87,7 @@ from my_pa.contracts.v1.meetings import (
     MeetingAttendeeView,
     MeetingHistoryView,
     MeetingPrepView,
+    MeetingProviderBindingView,
     MeetingSeriesHistoryView,
     MeetingSeriesView,
     MeetingView,
@@ -96,6 +99,7 @@ from my_pa.domain.meeting.model import (
     MAX_MEETING_ATTACHMENTS,
     MAX_MEETING_IDEMPOTENCY_KEY_CHARACTERS,
     MEETINGS_CREATE_NAME,
+    MEETINGS_PROVIDER_BIND_NAME,
     MEETINGS_SERIES_UPDATE_NAME,
     MEETINGS_UPDATE_NAME,
     MIN_MEETING_IDEMPOTENCY_KEY_CHARACTERS,
@@ -123,6 +127,13 @@ from my_pa.domain.meeting.model import (
     validate_meeting_prep_markdown,
     validate_meeting_time_range,
 )
+from my_pa.domain.meeting_sync.binding import (
+    BoundSeries,
+    MeetingProviderBindRequest,
+    ProviderBindAction,
+    bind_decision,
+)
+from my_pa.domain.meeting_sync.model import ProviderBindingState
 from my_pa.domain.record_events import (
     MEETING_ACTOR_CLASSES,
     NON_MEMORY_CLASSIFICATION,
@@ -136,13 +147,22 @@ from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
     "MeetingApplication",
+    "MeetingProviderBindResult",
     "MeetingSeriesWriteResult",
     "MeetingWriteResult",
     "meeting_request_digest",
 ]
 
-#: The receipt actor every v1 write records (readiness F020).
-_ACTOR: Final = MeetingActor.PRINCIPAL
+#: `request_capability` (create and update) is the `meeting_write_requests`
+#: namespace the write is arbitrated in and digested under: the client
+#: capability by default, and `MEETING_PROVIDER_SYNC_NAME` for every provider
+#: sync write (WP2-W3), so a sync key never shares a client's key space.
+#:
+#: The receipt actor a write records unless its caller names another (readiness
+#: F020). Client writes always take this default; the provider sync
+#: (`application.meeting_provider_sync`, communications intelligence WP2 ruling
+#: D12) is the one caller that passes `MeetingActor.SYSTEM`.
+_DEFAULT_ACTOR: Final = MeetingActor.PRINCIPAL
 
 
 # ------------------------------------------------------------------- results
@@ -170,6 +190,24 @@ class MeetingSeriesWriteResult:
 
     series: MeetingSeriesView
     receipt: MeetingSeriesHistoryView
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingProviderBindResult:
+    """What `meetings.provider.bind` answers (WP2-W3).
+
+    `version` is the Meeting version the original write left (on a replay, the
+    stored `result_version`). `binding` is the Meeting's binding now: the one a
+    bind created, `None` after an unbind -- on a replay, a fresh read beside the
+    original receipt (section 35.7).
+    """
+
+    meeting_id: str
+    version: int
+    action: ProviderBindAction
+    binding: MeetingProviderBindingView | None
+    receipt: MeetingHistoryView
     replayed: bool
 
 
@@ -292,10 +330,39 @@ def _series_update_document(
     }
 
 
+def _bind_document(
+    request: MeetingProviderBindRequest, expected_version: int | None
+) -> dict[str, _DigestValue]:
+    """The bind/unbind request: the action, the Meeting and every key part sent."""
+    document: dict[str, _DigestValue] = {
+        "action": request.action.value,
+        "meeting_id": request.meeting_id,
+        "expected_version": expected_version,
+    }
+    _present(document, "calendar_ref", request.calendar_ref)
+    _present(document, "ical_uid", request.ical_uid)
+    original = request.occurrence_original_start_utc
+    _present(
+        document, "occurrence_original_start_utc", None if original is None else _instant(original)
+    )
+    _present(document, "series_ical_uid", request.series_ical_uid)
+    _present(document, "provider_event_id", request.provider_event_id)
+    event_id_format = request.provider_event_id_format
+    _present(
+        document,
+        "provider_event_id_format",
+        None if event_id_format is None else event_id_format.value,
+    )
+    return document
+
+
 def meeting_request_digest(
     capability_name: str,
     principal_id: str,
-    normalized_request: MeetingCreateRequest | MeetingUpdateRequest | MeetingSeriesUpdateRequest,
+    normalized_request: MeetingCreateRequest
+    | MeetingUpdateRequest
+    | MeetingSeriesUpdateRequest
+    | MeetingProviderBindRequest,
     *,
     expected_version: int | None = None,
 ) -> str:
@@ -320,6 +387,8 @@ def meeting_request_digest(
         request = _create_document(normalized_request)
     elif isinstance(normalized_request, MeetingUpdateRequest):
         request = _update_document(normalized_request, expected_version)
+    elif isinstance(normalized_request, MeetingProviderBindRequest):
+        request = _bind_document(normalized_request, expected_version)
     else:
         request = _series_update_document(normalized_request, expected_version)
     document: dict[str, _DigestValue] = {
@@ -522,6 +591,7 @@ def _stage_meeting_event(
     correlation_id: str | None,
     source_receipt_id: str,
     occurred_at: datetime,
+    actor: MeetingActor,
     causation_event_id: str | None = None,
 ) -> RecordEventDraft:
     """Build one Meeting-plane draft, stage it, and return it (for causation).
@@ -537,7 +607,7 @@ def _stage_meeting_event(
         record_version=record_version,
         changed_fields=changed_fields,
         source_capability=source_capability,
-        actor_class=MEETING_ACTOR_CLASSES[_ACTOR],
+        actor_class=MEETING_ACTOR_CLASSES[actor],
         classification=NON_MEMORY_CLASSIFICATION,
         occurred_at=occurred_at,
         source_receipt_id=source_receipt_id,
@@ -590,6 +660,8 @@ class MeetingApplication:
         *,
         source_capability: str = Capability.MEETINGS_CREATE.value,
         correlation_id: str | None = None,
+        actor: MeetingActor = _DEFAULT_ACTOR,
+        request_capability: str = MEETINGS_CREATE_NAME,
     ) -> MeetingWriteResult:
         """Create a standalone Meeting, a new series and its first occurrence, or
         an occurrence of an existing series, as one request identity (AC-022).
@@ -599,11 +671,11 @@ class MeetingApplication:
         """
         key = _checked_idempotency_key(idempotency_key)
         at = ensure_utc(now)
-        digest = meeting_request_digest(MEETINGS_CREATE_NAME, principal_id, request)
+        digest = meeting_request_digest(request_capability, principal_id, request)
         meetings = uow.meetings
 
         prior = meetings.reserve_write_request(
-            principal_id, MEETINGS_CREATE_NAME, key, digest, created_at=at
+            principal_id, request_capability, key, digest, created_at=at
         )
         if prior is not None:
             return self._replayed_meeting(meetings, principal_id, prior)
@@ -634,7 +706,7 @@ class MeetingApplication:
                 series_history_id=issue_identifier(IdKind.MEETING_SERIES_HISTORY),
                 meeting_series_id=series.meeting_series_id,
                 action=MeetingHistoryAction.CREATE,
-                actor=_ACTOR,
+                actor=actor,
                 outcome=MeetingOutcome.APPLIED,
                 before_version=0,
                 after_version=1,
@@ -681,7 +753,7 @@ class MeetingApplication:
             history_id=issue_identifier(IdKind.MEETING_HISTORY),
             meeting_id=meeting_id,
             action=MeetingHistoryAction.CREATE,
-            actor=_ACTOR,
+            actor=actor,
             outcome=MeetingOutcome.APPLIED,
             before_version=0,
             after_version=1,
@@ -732,7 +804,7 @@ class MeetingApplication:
         )
         meetings.complete_write_request(
             principal_id,
-            MEETINGS_CREATE_NAME,
+            request_capability,
             key,
             request_digest=digest,
             meeting_id=meeting_id,
@@ -756,6 +828,7 @@ class MeetingApplication:
                 correlation_id=correlation_id,
                 source_receipt_id=series_receipt.series_history_id,
                 occurred_at=at,
+                actor=actor,
             ).event_id
         _stage_meeting_event(
             uow.record_events,
@@ -769,6 +842,7 @@ class MeetingApplication:
             correlation_id=correlation_id,
             source_receipt_id=receipt.history_id,
             occurred_at=at,
+            actor=actor,
             causation_event_id=series_event_id,
         )
         return MeetingWriteResult(
@@ -833,6 +907,8 @@ class MeetingApplication:
         *,
         source_capability: str = Capability.MEETINGS_UPDATE.value,
         correlation_id: str | None = None,
+        actor: MeetingActor = _DEFAULT_ACTOR,
+        request_capability: str = MEETINGS_UPDATE_NAME,
     ) -> MeetingWriteResult:
         """Patch one Meeting's scalars, attendees, attachments, note and prep atomically.
 
@@ -846,12 +922,12 @@ class MeetingApplication:
         version = _checked_expected_version(expected_version)
         at = ensure_utc(now)
         digest = meeting_request_digest(
-            MEETINGS_UPDATE_NAME, principal_id, request, expected_version=version
+            request_capability, principal_id, request, expected_version=version
         )
         meetings = uow.meetings
 
         prior = meetings.reserve_write_request(
-            principal_id, MEETINGS_UPDATE_NAME, key, digest, created_at=at
+            principal_id, request_capability, key, digest, created_at=at
         )
         if prior is not None:
             return self._replayed_meeting(meetings, principal_id, prior)
@@ -880,6 +956,15 @@ class MeetingApplication:
             raise MeetingNotFoundError(MeetingErrorField.MEETING_SERIES_ID)
 
         record, scalar_fields = _updated_record(current, request, at)
+        # Ruling D6 (communications intelligence WP2): a provider-bound Meeting's
+        # series is the provider's, so a move or detach is refused. Checked after
+        # the version gate and the reference reads, before anything is written.
+        if record.meeting_series_id != current.meeting_series_id and (
+            meetings.read_provider_binding_for_meeting(principal_id, current.meeting_id) is not None
+        ):
+            raise MeetingInvalidRequestError(
+                MeetingErrorField.MEETING_SERIES_CHANGE_REFUSED_PROVIDER_BOUND
+            )
 
         attendees_retired: tuple[str, ...] = ()
         attendees_added: tuple[MeetingAttendeeRecord, ...] = ()
@@ -929,7 +1014,7 @@ class MeetingApplication:
             history_id=issue_identifier(IdKind.MEETING_HISTORY),
             meeting_id=current.meeting_id,
             action=MeetingHistoryAction.UPDATE,
-            actor=_ACTOR,
+            actor=actor,
             outcome=MeetingOutcome.APPLIED if material else MeetingOutcome.NO_OP,
             before_version=current.version,
             after_version=after_version,
@@ -984,7 +1069,7 @@ class MeetingApplication:
             raise RepositoryFailureError
         meetings.complete_write_request(
             principal_id,
-            MEETINGS_UPDATE_NAME,
+            request_capability,
             key,
             request_digest=digest,
             meeting_id=current.meeting_id,
@@ -1015,6 +1100,7 @@ class MeetingApplication:
                 correlation_id=correlation_id,
                 source_receipt_id=receipt.history_id,
                 occurred_at=at,
+                actor=actor,
             )
         return MeetingWriteResult(meeting=view, receipt=receipt, replayed=False)
 
@@ -1031,6 +1117,7 @@ class MeetingApplication:
         *,
         source_capability: str = Capability.MEETINGS_SERIES_UPDATE.value,
         correlation_id: str | None = None,
+        actor: MeetingActor = _DEFAULT_ACTOR,
     ) -> MeetingSeriesWriteResult:
         """Retitle one MeetingSeries. No occurrence is locked or rewritten (AC-027).
 
@@ -1077,7 +1164,7 @@ class MeetingApplication:
             series_history_id=issue_identifier(IdKind.MEETING_SERIES_HISTORY),
             meeting_series_id=current.meeting_series_id,
             action=MeetingHistoryAction.UPDATE,
-            actor=_ACTOR,
+            actor=actor,
             outcome=MeetingOutcome.APPLIED if material else MeetingOutcome.NO_OP,
             before_version=current.version,
             after_version=after_version,
@@ -1112,11 +1199,230 @@ class MeetingApplication:
                 correlation_id=correlation_id,
                 source_receipt_id=receipt.series_history_id,
                 occurred_at=at,
+                actor=actor,
             )
         series = meetings.read_owned_series(principal_id, current.meeting_series_id)
         if series is None:
             raise RepositoryFailureError
         return MeetingSeriesWriteResult(series=series, receipt=receipt, replayed=False)
+
+    # --- meetings.provider.bind (communications intelligence WP2-W3) --------
+
+    def bind_meeting_provider(
+        self,
+        uow: UnitOfWork,
+        principal_id: str,
+        request: MeetingProviderBindRequest,
+        expected_version: int,
+        idempotency_key: str,
+        now: datetime,
+        *,
+        source_capability: str = MEETINGS_PROVIDER_BIND_NAME,
+        correlation_id: str | None = None,
+    ) -> MeetingProviderBindResult:
+        """Bind an existing Meeting to a provider key, or unbind it (rule 4, D10).
+
+        The Meeting write order: digest, reserve, the binding row `FOR UPDATE`
+        (the Meeting's own binding for an unbind, the requested key's binding
+        for a bind), Meeting `FOR UPDATE`, version gate, then the binding reads
+        -- the Meeting's binding, whether the UID is bound as the other kind,
+        and for an occurrence both series bindings -- the closed `bind_decision`, the
+        binding insert (and, for an occurrence of an unbound provider series,
+        the series binding to the Meeting's current series) or the binding
+        delete, the Meeting version bump, one `update` receipt, completion, and
+        one Meeting `updated` event naming `provider_binding`. The series
+        binding is append-only: an unbind leaves it. The receipt actor is always
+        the Principal: only a client calls this.
+        """
+        key = _checked_idempotency_key(idempotency_key)
+        version = _checked_expected_version(expected_version)
+        at = ensure_utc(now)
+        digest = meeting_request_digest(
+            MEETINGS_PROVIDER_BIND_NAME, principal_id, request, expected_version=version
+        )
+        meetings = uow.meetings
+
+        prior = meetings.reserve_write_request(
+            principal_id, MEETINGS_PROVIDER_BIND_NAME, key, digest, created_at=at
+        )
+        if prior is not None:
+            if (
+                prior.meeting_id is None
+                or prior.meeting_receipt is None
+                or prior.result_version is None
+            ):
+                raise RepositoryFailureError
+            return MeetingProviderBindResult(
+                meeting_id=prior.meeting_id,
+                version=prior.result_version,
+                action=request.action,
+                binding=_binding_view(meetings, principal_id, prior.meeting_id),
+                receipt=prior.meeting_receipt,
+                replayed=True,
+            )
+
+        # The binding row lock comes first, then the Meeting lock: the provider
+        # sync locks a key's binding and then its Meeting, so the opposite order
+        # here could deadlock against it (R1-2). An unbind locks the Meeting's
+        # own binding; a bind locks the requested key's binding.
+        if request.action is ProviderBindAction.UNBIND:
+            locked = meetings.lock_provider_binding_for_meeting(principal_id, request.meeting_id)
+        else:
+            locked = meetings.lock_provider_binding(
+                principal_id,
+                request.key.calendar_ref,
+                request.key.ical_uid,
+                request.key.original_start_utc,
+            )
+        current = meetings.lock_meeting_for_update(principal_id, request.meeting_id)
+        if current is None:
+            raise MeetingNotFoundError(MeetingErrorField.MEETING_ID)
+        if current.version != version:
+            raise MeetingStaleVersionError()
+
+        if request.action is ProviderBindAction.UNBIND:
+            if locked is None:
+                raise MeetingInvalidRequestError(MeetingErrorField.MEETING_NOT_PROVIDER_BOUND)
+            meetings.delete_provider_binding(principal_id, locked.binding_id)
+        else:
+            existing = meetings.read_provider_binding_for_meeting(principal_id, current.meeting_id)
+            self._bind(meetings, principal_id, request, current, existing is not None, locked, at)
+
+        after_version = current.version + 1
+        meetings.update_meeting(
+            principal_id, replace(_unchanged_record(current), version=after_version, updated_at=at)
+        )
+        receipt = MeetingHistoryView(
+            history_id=issue_identifier(IdKind.MEETING_HISTORY),
+            meeting_id=current.meeting_id,
+            action=MeetingHistoryAction.UPDATE,
+            actor=_DEFAULT_ACTOR,
+            outcome=MeetingOutcome.APPLIED,
+            before_version=current.version,
+            after_version=after_version,
+            occurred_at=at,
+            recorded_at=at,
+        )
+        meetings.insert_meeting_history(
+            principal_id,
+            receipt,
+            meeting_series_id=current.meeting_series_id,
+            idempotency_key=key,
+            request_digest=digest,
+        )
+        meetings.complete_write_request(
+            principal_id,
+            MEETINGS_PROVIDER_BIND_NAME,
+            key,
+            request_digest=digest,
+            meeting_id=current.meeting_id,
+            meeting_series_id=current.meeting_series_id,
+            meeting_history_id=receipt.history_id,
+            meeting_series_history_id=None,
+            result_version=after_version,
+            completed_at=at,
+        )
+        _stage_meeting_event(
+            uow.record_events,
+            principal_id=principal_id,
+            record_family=RecordEventFamily.MEETING,
+            record_id=current.meeting_id,
+            event_kind=RecordEventKind.UPDATED,
+            record_version=after_version,
+            changed_fields=_PROVIDER_BINDING_FIELDS,
+            source_capability=source_capability,
+            correlation_id=correlation_id,
+            source_receipt_id=receipt.history_id,
+            occurred_at=at,
+            actor=_DEFAULT_ACTOR,
+        )
+        return MeetingProviderBindResult(
+            meeting_id=current.meeting_id,
+            version=after_version,
+            action=request.action,
+            binding=_binding_view(meetings, principal_id, current.meeting_id),
+            receipt=receipt,
+            replayed=False,
+        )
+
+    @staticmethod
+    def _bind(
+        meetings: MeetingRepository,
+        principal_id: str,
+        request: MeetingProviderBindRequest,
+        current: MeetingView,
+        meeting_is_bound: bool,
+        key_bound: MeetingProviderBindingRecord | None,
+        at: datetime,
+    ) -> None:
+        """Decide one bind over the state read under both locks, then write it.
+
+        `key_bound` is the requested key's binding, locked `FOR UPDATE` before
+        the Meeting lock by the caller.
+        """
+        key = request.key
+        other_kind_bound = meetings.provider_uid_bound_as_other_kind(
+            principal_id, key.calendar_ref, key.ical_uid, occurrence=key.is_occurrence
+        )
+        uid_series = (
+            None
+            if request.series_ical_uid is None
+            else meetings.read_series_provider_binding(
+                principal_id, key.calendar_ref, request.series_ical_uid
+            )
+        )
+        series_binding = (
+            None
+            if current.meeting_series_id is None or request.series_ical_uid is None
+            else meetings.read_series_provider_binding_for_series(
+                principal_id, current.meeting_series_id
+            )
+        )
+        decision = bind_decision(
+            request,
+            meeting_id=current.meeting_id,
+            meeting_series_id=current.meeting_series_id,
+            meeting_is_bound=meeting_is_bound,
+            key_bound_meeting_id=None if key_bound is None else key_bound.meeting_id,
+            other_kind_bound=other_kind_bound,
+            uid_series=_bound_series(uid_series),
+            meeting_series_binding=_bound_series(series_binding),
+        )
+        if decision.create_series_binding:
+            if current.meeting_series_id is None or request.series_ical_uid is None:
+                raise RepositoryFailureError
+            meetings.insert_series_provider_binding(
+                principal_id,
+                MeetingSeriesProviderBindingRecord(
+                    series_binding_id=issue_identifier(IdKind.MEETING_SERIES_PROVIDER_BINDING),
+                    meeting_series_id=current.meeting_series_id,
+                    calendar_ref=key.calendar_ref,
+                    series_ical_uid=request.series_ical_uid,
+                    created_at=at,
+                ),
+            )
+        meetings.insert_provider_binding(
+            principal_id,
+            MeetingProviderBindingRecord(
+                binding_id=issue_identifier(IdKind.MEETING_PROVIDER_BINDING),
+                meeting_id=current.meeting_id,
+                calendar_ref=key.calendar_ref,
+                ical_uid=key.ical_uid,
+                occurrence_original_start_utc=key.original_start_utc,
+                series_ical_uid=request.series_ical_uid,
+                provider_event_id=request.provider_event_id,
+                provider_event_id_format=request.event_id_format,
+                # A reconciliation is not an observation: no `last_seen_*` until
+                # the provider sync next sees the event.
+                provider_state=ProviderBindingState.ACTIVE,
+                last_seen_source_sha256=None,
+                last_seen_record_ordinal=None,
+                last_seen_at=None,
+                version=1,
+                created_at=at,
+                updated_at=at,
+            ),
+        )
 
     # --- replay -------------------------------------------------------------
 
@@ -1133,6 +1439,79 @@ class MeetingApplication:
             replayed=True,
             series_receipt=prior.series_receipt,
         )
+
+
+# ------------------------------------------------------ provider binding
+
+
+#: The one changed-field token every bind and unbind event names (WP2-W3).
+_PROVIDER_BINDING_FIELDS: Final = ("provider_binding",)
+
+
+def _bound_series(record: MeetingSeriesProviderBindingRecord | None) -> BoundSeries | None:
+    if record is None:
+        return None
+    return BoundSeries(
+        meeting_series_id=record.meeting_series_id,
+        calendar_ref=record.calendar_ref,
+        series_ical_uid=record.series_ical_uid,
+    )
+
+
+def _binding_view(
+    meetings: MeetingRepository, principal_id: str, meeting_id: str
+) -> MeetingProviderBindingView | None:
+    """The Meeting's binding now, with the series its UID is bound to, or `None`."""
+    binding = meetings.read_provider_binding_for_meeting(principal_id, meeting_id)
+    if binding is None:
+        return None
+    series = (
+        None
+        if binding.series_ical_uid is None
+        else meetings.read_series_provider_binding(
+            principal_id, binding.calendar_ref, binding.series_ical_uid
+        )
+    )
+    if binding.series_ical_uid is not None and series is None:
+        # The composite foreign key keeps an occurrence's series bound.
+        raise RepositoryFailureError
+    return MeetingProviderBindingView(
+        binding_id=binding.binding_id,
+        meeting_id=binding.meeting_id,
+        calendar_ref=binding.calendar_ref,
+        ical_uid=binding.ical_uid,
+        occurrence_original_start_utc=binding.occurrence_original_start_utc,
+        series_ical_uid=binding.series_ical_uid,
+        meeting_series_id=None if series is None else series.meeting_series_id,
+        provider_event_id=binding.provider_event_id,
+        provider_event_id_format=binding.provider_event_id_format,
+        provider_state=binding.provider_state,
+        last_seen_at=binding.last_seen_at,
+        version=binding.version,
+        created_at=binding.created_at,
+        updated_at=binding.updated_at,
+    )
+
+
+def _unchanged_record(current: MeetingView) -> MeetingRecord:
+    """The locked Meeting's scalar state exactly as stored (a bind changes none)."""
+    return MeetingRecord(
+        meeting_id=current.meeting_id,
+        meeting_series_id=current.meeting_series_id,
+        title=current.title,
+        start_at=current.start_at,
+        end_at=current.end_at,
+        timezone_name=current.timezone_name,
+        status=current.status,
+        cancelled_at=current.cancelled_at,
+        location_text=current.location_text,
+        virtual_meeting_url=current.virtual_meeting_url,
+        description=current.description,
+        project_id=current.project_id,
+        version=current.version,
+        created_at=current.created_at,
+        updated_at=current.updated_at,
+    )
 
 
 # ------------------------------------------------------------ update deltas

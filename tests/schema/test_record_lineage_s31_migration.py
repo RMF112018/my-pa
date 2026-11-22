@@ -69,7 +69,7 @@ SCHEMA: Final = "knowledge"
 REVISION: Final = "023f8f7eb499"
 PREVIOUS: Final = "c5260943d933"
 #: CPM Workbench S5b-1 (`6c2306330ceb`) is additive on this revision.
-HEAD: Final = "4d1069a7d84f"
+HEAD: Final = "6418b57081c3"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261025_023f8f7eb499_record_lineage_s31.py"
 EARLIER: Final = (
@@ -262,7 +262,8 @@ def _left_function_body(name: str) -> str:
 def test_the_revision_is_the_single_head_on_c5260943d933() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "640aaacc78e8"
+    assert script.get_revision(HEAD).down_revision == "4d1069a7d84f"
+    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
     assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
     assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
     assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
@@ -273,7 +274,7 @@ def test_the_revision_is_the_single_head_on_c5260943d933() -> None:
     assert script.get_revision(PREVIOUS).down_revision == "6f1476b8da52"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert MIGRATION.name.endswith("_record_lineage_s31.py")
-    assert len(list(MIGRATIONS.glob("*.py"))) == 130
+    assert len(list(MIGRATIONS.glob("*.py"))) == 131
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -426,6 +427,9 @@ def test_at_vocabulary_adds_exactly_the_s31_names() -> None:
             "reports.transfer.read_chunk",
         }
     )
+    # Communications intelligence WP2-W3: its provider-binding revision admits
+    # `meetings.provider.bind` after this revision.
+    declared -= {"meetings.provider.bind"}
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s31_admitted_ahead("capability")
     assert S31_CAPABILITIES & declared == gap.S31_CAPABILITIES_DECLARED_BY_DOMAIN

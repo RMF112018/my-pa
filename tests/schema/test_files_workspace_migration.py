@@ -127,13 +127,15 @@ def _contract_section(heading: str) -> str:
 def test_the_revision_is_the_single_head_on_b77334135653() -> None:
     script = ScriptDirectory.from_config(_config())
     # ADR-020's `4d1069a7d84f` (Meeting prep versions) is additive on this
-    # revision, so this revision is the head's parent rather than the head.
-    assert script.get_heads() == ["4d1069a7d84f"]
+    # revision, and communications intelligence WP2's `6418b57081c3` (Meeting
+    # provider bindings) on that, so this revision is the head's grandparent.
+    assert script.get_heads() == ["6418b57081c3"]
+    assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
     assert script.get_revision("4d1069a7d84f").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "4c37731671fc"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 130
+    assert len(list(MIGRATIONS.glob("*.py"))) == 131
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -186,6 +188,9 @@ def test_at_sets_are_the_live_enums_plus_the_files_names() -> None:
         member.value for member in NativeSourceCapability
     }
     at = set(_literals(mine["_CAPABILITIES_AT_THIS_REVISION"]))
+    # Communications intelligence WP2-W3: its provider-binding revision admits
+    # `meetings.provider.bind` after this revision.
+    declared -= {"meetings.provider.bind"}
     assert at == declared | FILES_CAPABILITIES
     purposes = set(_literals(mine["_PURPOSES_AT_THIS_REVISION"]))
     assert purposes == {member.value for member in Purpose} | FILES_PURPOSES
@@ -593,7 +598,10 @@ def test_runtime_metadata_matches_the_revision(disposable_database: str, engine:
         head, runtime = _checks(engine), _checks(engine, parity)
         assert (
             set(_literals(head["capability_is_known"]))
-            == set(_literals(runtime["capability_is_known"])) | FILES_CAPABILITIES
+            # Communications intelligence WP2-W3: the runtime declares
+            # `meetings.provider.bind`, which the WP2 revision admits after this one.
+            == (set(_literals(runtime["capability_is_known"])) - {"meetings.provider.bind"})
+            | FILES_CAPABILITIES
         )
         assert (
             set(_literals(head["purpose_is_known"]))

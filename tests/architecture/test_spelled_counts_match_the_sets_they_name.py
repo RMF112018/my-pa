@@ -643,6 +643,9 @@ _ORDINAL_UNITS = (
     "two-hundred-ninety-seventh",
     "two-hundred-ninety-eighth",
     "two-hundred-ninety-ninth",
+    # Communications intelligence WP2-W3 takes it to two hundred and ninety-nine;
+    # dense through the three-hundredth.
+    "three-hundredth",
 )
 
 
@@ -661,6 +664,17 @@ def _cardinals(limit: int = 999) -> dict[str, int]:
     stated 3 — a wrong answer rather than a refusal, which is the shape of
     defect every rule in this module exists to refuse. Hundreds are built the
     same way tens are, so the next boundary announces itself the same way.
+
+    **Thousands are built only on request** (communications intelligence WP2).
+    `tests/` crossed a thousand test modules and section 3's "one thousand and
+    seven" was refused as unreadable. Thousands are built over the sub-thousand
+    map: "one thousand and N" below a hundred, "one thousand N" above it. The
+    default stays 999 because every sweep below compiles the whole map into one
+    alternation: doubling it doubled the collection cost of this module and
+    pushed the CI shard partition proof, which collects it four times at once,
+    past its job budget. Only section 3's module-count reader asks for
+    `WIDE_CARDINALS`. That reader admits at most four words, so a count past
+    one thousand and ninety-nine also needs its pattern widened.
     """
     words = {word: value for value, word in enumerate(_UNITS) if value <= limit}
     for base, tens_word in _TENS.items():
@@ -679,10 +693,23 @@ def _cardinals(limit: int = 999) -> dict[str, int]:
         for word, value in below_a_hundred.items():
             if value and hundreds * 100 + value <= limit:
                 words[f"{prefix} and {word}"] = hundreds * 100 + value
+    below_a_thousand = dict(words)
+    for thousands in range(1, 10):
+        if thousands * 1000 > limit:
+            break
+        prefix = f"{_UNITS[thousands]} thousand"
+        words[prefix] = thousands * 1000
+        for word, value in below_a_thousand.items():
+            total = thousands * 1000 + value
+            if value and total <= limit:
+                joiner = " and " if value < 100 else " "
+                words[f"{prefix}{joiner}{word}"] = total
     return words
 
 
 CARDINALS = _cardinals()
+#: Section 3's module counts alone pass a thousand; see `_cardinals`.
+WIDE_CARDINALS = _cardinals(1999)
 #: The inverse of `CARDINALS`: the one spelling each value is written with. Used
 #: where a test constructs the *correct* sentence to check its own reader against
 #: a derived count, so the spelling works past nineteen (a bare `_UNITS[n]` index
@@ -1587,9 +1614,11 @@ def test_section_3_states_the_module_counts_it_says_it_derives() -> None:
     )
     for key, derived in (("modules", source_modules()), ("tests", counted_test_modules())):
         word = match[key].lower()
-        assert word in CARDINALS, f"section 3 states '{match[key]}', which this test cannot read"
-        assert CARDINALS[word] == derived, (
-            f"section 3 states {CARDINALS[word]} for '{key}' and the tree holds {derived}"
+        assert word in WIDE_CARDINALS, (
+            f"section 3 states '{match[key]}', which this test cannot read"
+        )
+        assert WIDE_CARDINALS[word] == derived, (
+            f"section 3 states {WIDE_CARDINALS[word]} for '{key}' and the tree holds {derived}"
         )
 
 

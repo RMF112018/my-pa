@@ -93,6 +93,7 @@ from my_pa.application.commands import (
     BeginIntelligenceCycle,
     BeginReportTransfer,
     BindEntityIdentifier,
+    BindMeetingProvider,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CheckpointKnowledgeDiscovery,
@@ -2728,6 +2729,8 @@ _MEETING_INSTANTS: Final[tuple[str, ...]] = (
     "end_at",
     "start_at_from",
     "start_at_before",
+    # WP2-W3 `meetings.provider.bind`.
+    "occurrence_original_start_utc",
 )
 
 #: The arrays a Meeting request carries, converted to the tuples the commands
@@ -2873,6 +2876,12 @@ def _update_meeting(payload: Mapping[str, Any]) -> Command:
 
 def _update_meeting_series(payload: Mapping[str, Any]) -> Command:
     return UpdateMeetingSeries(**_meeting_shapes(payload))
+
+
+def _bind_meeting_provider(payload: Mapping[str, Any]) -> Command:
+    """`meetings.provider.bind`: the original start becomes an instant; the command
+    converts `action` and `provider_event_id_format` itself (its docstring)."""
+    return BindMeetingProvider(**_meeting_shapes(payload))
 
 
 def _update_issue(payload: Mapping[str, Any]) -> Command:
@@ -3129,6 +3138,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.MEETINGS_SEARCH: _search_meetings,
         Capability.MEETINGS_UPDATE: _update_meeting,
         Capability.MEETINGS_SERIES_UPDATE: _update_meeting_series,
+        Capability.MEETINGS_PROVIDER_BIND: _bind_meeting_provider,
         Capability.RECORD_EVENTS_LIST: _list_record_events,
         Capability.RECORD_EVENTS_PROVENANCE: lambda payload: GetRecordEventProvenance(**payload),
         Capability.KNOWLEDGE_ASSERTIONS_READ: lambda payload: ReadKnowledgeAssertion(**payload),

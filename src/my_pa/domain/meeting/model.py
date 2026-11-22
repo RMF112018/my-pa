@@ -64,10 +64,13 @@ __all__ = [
     "MAX_TIMEZONE_NAME_CHARACTERS",
     "MAX_VIRTUAL_MEETING_URL_CHARACTERS",
     "MEETINGS_CREATE_NAME",
+    "MEETINGS_PROVIDER_BIND_NAME",
     "MEETINGS_SERIES_UPDATE_NAME",
     "MEETINGS_UPDATE_NAME",
     "MEETING_NOTE_SEPARATOR",
+    "MEETING_PROVIDER_SYNC_NAME",
     "MEETING_WRITE_CAPABILITY_NAMES",
+    "MEETING_WRITE_REQUEST_NAMES",
     "MIN_MEETING_IDEMPOTENCY_KEY_CHARACTERS",
     "AttendeeResponseStatus",
     "MeetingActor",
@@ -104,6 +107,7 @@ __all__ = [
     "validate_aware_instant",
     "validate_cancellation_pairing",
     "validate_meeting_description",
+    "validate_meeting_id",
     "validate_meeting_location_text",
     "validate_meeting_notes_markdown",
     "validate_meeting_prep_markdown",
@@ -281,7 +285,26 @@ class MeetingErrorField(StrEnum):
     CLEAR_FIELDS = "clear_fields"
     # ADR-020 C2 addition.
     PREP = "prep"
+    # Communications intelligence WP2 (Manager ruling D6): a series move or
+    # detach of a provider-bound Meeting is refused; the binding owns it.
+    MEETING_SERIES_CHANGE_REFUSED_PROVIDER_BOUND = "meeting_series_change_refused_provider_bound"
+    # Communications intelligence WP2-W3 (`meetings.provider.bind`, ruling D10):
+    # the provider key's fields, then the closed bind/unbind refusals. Each names
+    # a field or a rule, never a key value or the binding it collided with.
+    CALENDAR_REF = "calendar_ref"
+    ICAL_UID = "ical_uid"
+    OCCURRENCE_ORIGINAL_START_UTC = "occurrence_original_start_utc"
+    SERIES_ICAL_UID = "series_ical_uid"
+    PROVIDER_EVENT_ID = "provider_event_id"
+    PROVIDER_EVENT_ID_FORMAT = "provider_event_id_format"
+    MEETING_ALREADY_PROVIDER_BOUND = "meeting_already_provider_bound"
+    MEETING_NOT_PROVIDER_BOUND = "meeting_not_provider_bound"
+    PROVIDER_KEY_BOUND_TO_ANOTHER_MEETING = "provider_key_bound_to_another_meeting"
+    PROVIDER_BINDING_KIND_CONFLICT = "provider_binding_kind_conflict"
+    PROVIDER_BINDING_REQUIRES_SERIES = "provider_binding_requires_series"
+    PROVIDER_SERIES_BINDING_CONFLICT = "provider_series_binding_conflict"
     # Existing `SafeDetail` members, reused.
+    ACTION = "action"
     TITLE = "title"
     STATUS = "status"
     DOCUMENT_ID = "document_id"
@@ -378,6 +401,15 @@ def _identifier(value: object, kind: IdKind, token: MeetingErrorField) -> str:
 
 def _optional_identifier(value: object, kind: IdKind, token: MeetingErrorField) -> str | None:
     return None if value is None else _identifier(value, kind, token)
+
+
+def validate_meeting_id(value: object) -> str:
+    """A Meeting identifier (`mtg_`), or a refusal naming `meeting_id` only.
+
+    Public for the provider-binding request (`domain.meeting_sync.binding`),
+    which may import the Meeting domain and not the identifier registry.
+    """
+    return _identifier(value, IdKind.MEETING, MeetingErrorField.MEETING_ID)
 
 
 def validate_meeting_title(
@@ -1035,12 +1067,29 @@ class MeetingSearchRequest:
 
 # ------------------------------------------------------------ capability names
 
-#: The three Meeting write-capability names (plan D-21). WP-MTG-04 asserts each
-#: `Capability.MEETINGS_*.value` equals its constant here, and the migration's
-#: frozen `meeting_write_requests.capability` CHECK literals are these strings.
+#: The four Meeting write-capability names (plan D-21; communications
+#: intelligence WP2 adds `meetings.provider.bind`, Manager ruling D10).
+#: WP-MTG-04 asserts each `Capability.MEETINGS_*.value` equals its constant
+#: here, and the migrations' frozen `meeting_write_requests.capability` CHECK
+#: literals are these strings.
 MEETINGS_CREATE_NAME: Final = "meetings.create"
 MEETINGS_UPDATE_NAME: Final = "meetings.update"
 MEETINGS_SERIES_UPDATE_NAME: Final = "meetings.series.update"
+MEETINGS_PROVIDER_BIND_NAME: Final = "meetings.provider.bind"
 MEETING_WRITE_CAPABILITY_NAMES: Final = frozenset(
-    {MEETINGS_CREATE_NAME, MEETINGS_UPDATE_NAME, MEETINGS_SERIES_UPDATE_NAME}
+    {
+        MEETINGS_CREATE_NAME,
+        MEETINGS_UPDATE_NAME,
+        MEETINGS_SERIES_UPDATE_NAME,
+        MEETINGS_PROVIDER_BIND_NAME,
+    }
 )
+#: The internal arbitration namespace of every provider sync write (WP2): the
+#: `meeting_write_requests.capability` of a sync create or update and the Record
+#: Event `source_capability` of its event. Under `system.`, the internal-token
+#: precedent (`system.entity_reenrichment.rebind`), so it can never be mistaken
+#: for, or collide with, a `Capability`: no client invokes it, and a client's
+#: own `meetings.create`/`meetings.update` keys never share its key space.
+MEETING_PROVIDER_SYNC_NAME: Final = "system.meeting_provider.sync"
+#: Every name a `meeting_write_requests` row may carry.
+MEETING_WRITE_REQUEST_NAMES: Final = MEETING_WRITE_CAPABILITY_NAMES | {MEETING_PROVIDER_SYNC_NAME}

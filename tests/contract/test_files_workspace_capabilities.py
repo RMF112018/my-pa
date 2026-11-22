@@ -86,7 +86,8 @@ def test_the_inventory_is_the_17_appended_names_and_the_2_purposes() -> None:
     assert list(Purpose)[-2:] == [_R, _W]
     # ADR-019 Amendment 2 (contract section 18.3): one more IdKind, `fwpnd`.
     # ADR-020 C1: one more, `mprep` (a Meeting prep version).
-    assert (len(Capability), len(Purpose), len(IdKind)) == (298, 70, 181)
+    # Communications intelligence WP2: two more, `mpbnd` and `msbnd`.
+    assert (len(Capability), len(Purpose), len(IdKind)) == (299, 70, 183)
     assert frozenset(members[-17:]) == FILE_WORKSPACE_CAPABILITIES
     assert set(FILES_WORKSPACE_COMMAND_TYPES) == FILE_WORKSPACE_CAPABILITIES
     # WP4's frozen audit vocabulary names exactly these (contract section 13).
@@ -95,9 +96,14 @@ def test_the_inventory_is_the_17_appended_names_and_the_2_purposes() -> None:
 
 
 def test_the_id_kinds_are_the_contract_prefixes() -> None:
-    # ADR-020 C1 appended one Meeting kind (`mprep`) after the files kinds.
-    assert list(IdKind)[-1] is IdKind.MEETING_PREP_VERSION
-    assert [kind.value for kind in list(IdKind)[-7:-1]] == [
+    # ADR-020 C1 appended one Meeting kind (`mprep`) after the files kinds, and
+    # communications intelligence WP2 the two provider binding kinds after it.
+    assert list(IdKind)[-3:] == [
+        IdKind.MEETING_PREP_VERSION,
+        IdKind.MEETING_PROVIDER_BINDING,
+        IdKind.MEETING_SERIES_PROVIDER_BINDING,
+    ]
+    assert [kind.value for kind in list(IdKind)[-9:-3]] == [
         "fwupl",
         "fwdnl",
         "fwver",
@@ -140,7 +146,7 @@ def test_the_tool_hints_follow_the_classification() -> None:
 
 
 def test_chatllm_classifies_the_17_data_conditional_on_the_workspace_at_v14() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
     assert FILES_WORKSPACE_DATA_NAMES == FILE_WORKSPACE_CAPABILITIES
     for capability in FILE_WORKSPACE_CAPABILITIES:
         policy = CHATLLM_CAPABILITY_POLICY[capability]

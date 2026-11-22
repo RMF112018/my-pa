@@ -145,7 +145,8 @@ def test_the_revision_is_the_single_head_directly_on_the_project_fields_revision
     no longer the head; the chain holds one head two links above it.
     """
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == ["4d1069a7d84f"]
+    assert script.get_heads() == ["6418b57081c3"]
+    assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
     assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
     assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
     assert script.get_revision("b77334135653").down_revision == "4c37731671fc"

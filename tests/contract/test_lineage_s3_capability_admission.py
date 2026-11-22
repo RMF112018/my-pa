@@ -238,7 +238,7 @@ def test_s3_capabilities_are_operator_decision_required() -> None:
         assert policy.exclusion_rationale is None
         assert not is_operator_only(capability)
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
 
 
 def test_backfill_capabilities_are_operator_only_and_control_plane_excluded() -> None:
@@ -414,6 +414,8 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     }
     # ADR-020: see `_ADR_020_EXTENDED_TOOLS`.
     lineage |= _ADR_020_EXTENDED_TOOLS
+    # Communications intelligence WP2-W3: `meetings.provider.bind` is new.
+    lineage |= {"meetings.provider.bind"}
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS
@@ -434,6 +436,8 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     # ADR-020: see `_ADR_020_EXTENDED_VIEWS`.
     for extended in _ADR_020_EXTENDED_VIEWS:
         views.pop(extended)
+    # Communications intelligence WP2-W3: one new view, no existing one changed.
+    views.pop("meetings.MeetingProviderBindingView")
     assert len(views) == 37
     assert _canonical_sha256(views) == _V1_VIEW_FIELDS_SHA256_WITHOUT_MEETING_VIEW
     # The envelope's `purpose` enum is the one v1 schema S3 widens, and only by

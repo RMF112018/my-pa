@@ -160,6 +160,9 @@ def test_the_six_capabilities_are_declared_dispatched_built_and_published() -> N
         for capability in Capability
         if capability.value.startswith("meetings.")
         and not capability.value.startswith("meetings.notes.")
+        # WP2-W3: the provider reconciliation is its own capability
+        # (`tests/contract/test_meeting_provider_bind_mcp.py`).
+        and capability is not Capability.MEETINGS_PROVIDER_BIND
     }
     assert declared == MEETING_CAPABILITIES
     assert set(_HANDLERS) >= MEETING_CAPABILITIES

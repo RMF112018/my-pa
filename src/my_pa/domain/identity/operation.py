@@ -979,6 +979,15 @@ class Capability(StrEnum):
     MEETINGS_SEARCH = "meetings.search"
     MEETINGS_UPDATE = "meetings.update"
     MEETINGS_SERIES_UPDATE = "meetings.series.update"
+    #: Communications intelligence WP2-W3 (contract section 12.2 rule 4, Manager
+    #: ruling D10; the name is ratified, ADR-022 Accepted -- v15 is activated at
+    #: the consolidated deploy, with operator-profile grants only): the explicit
+    #: reconciliation that binds an existing Meeting to a provider key, or
+    #: unbinds it. A write under `Purpose.MEETING_AUTHORING` and nothing else;
+    #: destructive (it versions an existing Meeting and an unbind deletes its
+    #: binding), so not additive; not operator-only (ordinary Principal work in
+    #: the Principal's own partition). Equals `MEETINGS_PROVIDER_BIND_NAME`.
+    MEETINGS_PROVIDER_BIND = "meetings.provider.bind"
     #: The Record Event change feed (WP-RE-06): one read over the Principal's own
     #: invalidation feed -- which canonical record changed, to which version,
     #: through which operation, and nothing else. A read, never a write and
@@ -1753,6 +1762,7 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.MEETINGS_CREATE: frozenset({Purpose.MEETING_AUTHORING}),
         Capability.MEETINGS_UPDATE: frozenset({Purpose.MEETING_AUTHORING}),
         Capability.MEETINGS_SERIES_UPDATE: frozenset({Purpose.MEETING_AUTHORING}),
+        Capability.MEETINGS_PROVIDER_BIND: frozenset({Purpose.MEETING_AUTHORING}),
         # The Record Event feed (WP-RE-06): exactly one purpose of its own.
         Capability.RECORD_EVENTS_LIST: frozenset({Purpose.RECORD_EVENT_READ}),
         # The Knowledge Assertion plane (KLP-WP-03): each name maps to exactly
@@ -2076,6 +2086,8 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.MEETINGS_CREATE,
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
+        # WP2-W3: a bind or unbind versions an existing Meeting.
+        Capability.MEETINGS_PROVIDER_BIND,
         # KLP-WP-03. The explicit Knowledge Assertion create persists a
         # submission ledger row and, when admitted, an assertion, its mutation
         # receipt and evidence links. The five Knowledge reads stay out, which

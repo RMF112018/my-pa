@@ -28,7 +28,7 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with two hundred and ninety-eight capabilities and
+emits what it emitted on the day it merged, with two hundred and ninety-nine capabilities and
 seventy purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
@@ -736,6 +736,8 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         *S63_CAPABILITIES,
         # Files workspace WP4, admitted by its revision ahead of the domain (WP5).
         *FILES_CAPABILITIES,
+        # Communications intelligence WP2-W3, admitted by the WP2 provider-binding revision.
+        "meetings.provider.bind",
     }
 )
 
@@ -1617,6 +1619,15 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             # ADR-020. The Meeting prep revision installs the same append-only
             # guard over its own function.
             "meeting_prep_versions_are_append_only",
+            # Communications intelligence WP2. The provider binding revision
+            # installs identity immutability and the one-kind-per-UID guard on
+            # the occurrence bindings, append-only on the series bindings, and a
+            # TRUNCATE refusal on each, over its own functions.
+            "meeting_provider_binding_identity_is_immutable",
+            "meeting_provider_binding_kind_is_exclusive",
+            "meeting_series_provider_bindings_are_append_only",
+            "meeting_series_provider_bindings_refuse_truncate",
+            "meeting_provider_bindings_refuse_truncate",
             "meeting_series_history_rows_are_append_only",
             "meeting_write_requests_complete_once",
             # WP-RE-01. The Record Event revision installs the feed's append-only

@@ -204,8 +204,8 @@ def test_s4_capabilities_are_operator_decision_required_reads() -> None:
     # since S3.1 adds its 4) never holds an S4 name.
     assert not declared & _LINEAGE_CAPABILITIES
     assert len(_LINEAGE_CAPABILITIES) == 34
-    # Schedule Scenarios S6-3: 255 -> 281. Files workspace WP5: 281 -> 298.
-    assert len(list(Capability)) == 298
+    # Schedule Scenarios S6-3: 255 -> 281. Files workspace WP5: 281 -> 298. WP2-W3: 298 -> 299.
+    assert len(list(Capability)) == 299
     for capability in declared:
         name = capability.value
         assert capability in _SCOPELESS
@@ -230,7 +230,7 @@ def test_s4_registers_no_report_type_and_issues_no_grant() -> None:
     # P1 client exposure (operator directive 2026-10-26): every S4 name is in
     # `DATA_CONDITIONAL`, so the profile planner -- never a bootstrap source --
     # plans its grant; the data profile moved to v10 with it.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
     assert all(
         CHATLLM_CAPABILITY_POLICY[capability].classification
         is ChatLLMCapabilityClass.DATA_CONDITIONAL

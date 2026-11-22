@@ -201,7 +201,14 @@ def test_non_lineage_tool_annotations_are_unchanged() -> None:
     # Files workspace WP5: its 17 `files.*` names are new.
     files = {name for name in _tools() if name.startswith("files.")}
     others = (
-        frozenset(_tools()) - plane - schedule - {Capability.REPORTS_PUBLISH.value} - wp03 - files
+        frozenset(_tools())
+        - plane
+        - schedule
+        - {Capability.REPORTS_PUBLISH.value}
+        - wp03
+        - files
+        # Communications intelligence WP2-W3: `meetings.provider.bind` is new.
+        - {Capability.MEETINGS_PROVIDER_BIND.value}
     )
     assert len(others) == 192
     for name in sorted(others):

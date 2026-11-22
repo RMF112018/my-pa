@@ -87,6 +87,10 @@ UNCALLED_ENTRIES: Final = frozenset(
             "src/my_pa/infrastructure/persistence/knowledge_assertions.py",
             "record_evidence_availability",
         ),
+        # Communications intelligence WP2: the provider sync entry. Its production
+        # caller (the shared ingestion lifecycle's meeting-sync consumer) lands in
+        # WP3, which removes this entry; until then only tests call it.
+        ("src/my_pa/application/meeting_provider_sync.py", "apply_event"),
     }
 )
 

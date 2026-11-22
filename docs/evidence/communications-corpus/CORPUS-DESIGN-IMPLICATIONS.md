@@ -43,6 +43,6 @@ Each row maps a measured finding to the design decision it forces and to where t
 ## Not decided by the corpus
 
 - Whether the collector should return folder ids in the lean dialect (would turn 3,944 lane claims into verified roles) — an operator request to the collector, WP5 directive.
-- External-model eligibility of mail text returned to connected clients — operator decision (spec §17).
-- Manager rulings 2026-11-21 on the spec's open items (R1–R5 and the WP2 meeting-sync deferral) are in spec §21; ADR-022 stays Proposed.
+- External-model eligibility of mail text returned to connected clients — operator decision (spec §17), made under operator delegation 2026-11-22 (R-OP-3): derived text is eligible for the operator's own connected clients; raw bodies stay withheld.
+- Manager rulings 2026-11-21 on the spec's open items (R1–R5 and the WP2 meeting-sync deferral) are in spec §21; ADR-022 was then accepted under operator delegation 2026-11-22 (R-OP-1), effective on merge of WP2.
 - Spring-forward DST, a schema major bump, record-level faults and identity conflicts do not occur in the corpus; they are covered by synthetic fixtures only.

@@ -86,7 +86,7 @@ PREVIOUS: Final = "6f6ead27d122"
 #: The chain head these tests run against. `1d9b248e7f83` (WP-RE-01, Record
 #: Events) is additive on `REVISION`, and `0641c354ca85` (CRL-WP-03, Capture
 #: lifecycle) is additive on that, so `REVISION` is no longer the head.
-HEAD: Final = "4d1069a7d84f"
+HEAD: Final = "6418b57081c3"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`,
 #: and therefore the only correct source for this revision's BEFORE literals.
 VOCABULARY_PREDECESSOR: Final = "e6a4c2f91b73"
@@ -118,7 +118,12 @@ OWNER_UNIQUE: Final = "a_managed_document_is_identified_within_its_owner"
 #: this one's frozen text: `264310e0416a` (record lineage S1) adds the note
 #: digest unique the evidence-anchor foreign key targets.
 ADDED_BY_LATER_REVISIONS: Final = frozenset(
-    {"a_meeting_note_digest_is_identified_within_its_meeting"}
+    {
+        "a_meeting_note_digest_is_identified_within_its_meeting",
+        # Communications intelligence WP2-W3: the provider-binding revision.
+        "a_completed_meeting_provider_bind_names_its_result",
+        "a_completed_meeting_provider_sync_names_its_result",
+    }
 )
 ADMITTED_CAPABILITIES: Final = frozenset(
     {
@@ -170,7 +175,8 @@ def _offline(target: str, *, down: bool = False) -> str:
 def test_the_revision_is_the_single_head_directly_on_the_previous_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "640aaacc78e8"
+    assert script.get_revision(HEAD).down_revision == "4d1069a7d84f"
+    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
     assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
     assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
     assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
@@ -196,7 +202,7 @@ def test_the_revision_is_the_single_head_directly_on_the_previous_head() -> None
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 130
+    assert len(list(MIGRATIONS.glob("*.py"))) == 131
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -326,6 +332,8 @@ ADMITTED_LATER_CAPABILITIES: Final = (
     | S63_CAPABILITIES
     # Files workspace WP4: admitted by its revision (the head).
     | FILES_CAPABILITIES
+    # Communications intelligence WP2-W3: admitted by the WP2 provider-binding revision.
+    | frozenset({"meetings.provider.bind"})
     # Reports Modernization WP02 and WP03: admitted by `4c37731671fc` and declared with it.
     | frozenset(
         {

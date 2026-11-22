@@ -69,6 +69,8 @@ _MEETING_WRITES = frozenset(
         Capability.MEETINGS_CREATE,
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
+        # WP2-W3 (chatllm-data-v15, a proposal): classified as `meetings.update`.
+        Capability.MEETINGS_PROVIDER_BIND,
     }
 )
 _MEETINGS = _MEETING_READS | _MEETING_WRITES
@@ -78,8 +80,9 @@ def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
     # Schedule Scenarios S6-3 package I10-A: the 26 plane names, held at v12.
     # Files workspace WP5 (chatllm-data-v14): the 17 `files.*` names.
-    assert len(CHATLLM_CAPABILITY_POLICY) == 298
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v14"
+    # Communications intelligence WP2-W3 (chatllm-data-v15): `meetings.provider.bind`.
+    assert len(CHATLLM_CAPABILITY_POLICY) == 299
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
@@ -90,7 +93,9 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # Reports Modernization (chatllm-data-v12): `reports.publish`, the 5
     # management names (`reports.update`, `.history`, `.archive`, `.delete`,
     # `.restore`) and the 5 `reports.transfer.*` names, 74 -> 85.
-    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 85
+    # Communications intelligence WP2-W3 (chatllm-data-v15): `meetings.provider.bind`,
+    # 85 -> 86.
+    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 86
     # KLP-WP-03 (chatllm-data-v6): the six Knowledge Assertion names, 90 -> 96.
     # KLP-WP-05 (chatllm-data-v8): `record_events.provenance`, 96 -> 97.
     # Record lineage P1 (chatllm-data-v10, operator directive 2026-10-26): the
@@ -177,8 +182,8 @@ def test_report_authoring_writes_are_data_required() -> None:
         assert policy.exclusion_rationale is None
 
 
-def test_the_six_meeting_capabilities_are_data_required_on_the_core_plane() -> None:
-    assert len(_MEETINGS) == 6
+def test_the_seven_meeting_capabilities_are_data_required_on_the_core_plane() -> None:
+    assert len(_MEETINGS) == 7
     # Record lineage S1's `meetings.notes.*` reads share the family but are an
     # operator decision (ADR-015, OD-07), not core-plane data.
     named = {

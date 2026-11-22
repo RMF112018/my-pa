@@ -238,6 +238,8 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
     # ADR-020 (meeting prep briefs): the extended `meetings.create`,
     # `meetings.update` (`prep_markdown`) and `meetings.read` (`prep_version_number`).
     excluded |= {"meetings.create", "meetings.update", "meetings.read"}
+    # Communications intelligence WP2-W3: `meetings.provider.bind` is new.
+    excluded |= {"meetings.provider.bind"}
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS

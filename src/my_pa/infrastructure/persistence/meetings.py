@@ -1,9 +1,11 @@
 """The Meeting records tables, behind `contracts.ports.MeetingRepository` (WP-MTG-02).
 
-Nine tables are reached here and nowhere else: `meeting_series`, `meetings`,
+Eleven tables are reached here and nowhere else: `meeting_series`, `meetings`,
 `meeting_attendees`, `meeting_attachments`, `meeting_history`,
 `meeting_note_versions`, `meeting_prep_versions` (ADR-020),
-`meeting_series_history` and `meeting_write_requests`.
+`meeting_series_history`, `meeting_write_requests`, and the communications
+intelligence WP2 provider bindings `meeting_provider_bindings` and
+`meeting_series_provider_bindings`.
 Three tables of other planes are read and never written: `entities` (the
 attendee Person references, share-locked), `projects` (ownership only) and the
 managed-document tables (ownership, state and the safe title/media projection of
@@ -19,7 +21,10 @@ There is no hand-written partition comparison, and the Principal is only ever a
 parameter: nothing here reads it back from a row or a record.
 
 **Lock order is the package section 35.10 order, and it is structural.** The
-only row locks this module takes are the Meeting or MeetingSeries parent `FOR
+only row locks this module takes are, first, a Meeting provider binding row `FOR
+UPDATE` when the write is a provider bind, unbind or sync (communications
+intelligence WP2: binding before Meeting, the one order every provider path
+uses), then the Meeting or MeetingSeries parent `FOR
 UPDATE` and the attendee Person Entities `FOR SHARE`, the latter sorted by
 `entity_id` in SQL so two writers naming the same Entities lock them in the same
 order. Children are read under the parent lock without locks of their own, and
@@ -54,6 +59,7 @@ from sqlalchemy import (
     Table,
     Text,
     and_,
+    delete,
     func,
     insert,
     literal,
@@ -78,8 +84,10 @@ from my_pa.contracts.ports import (
     MeetingNoteVersionRecord,
     MeetingPrepRecord,
     MeetingPrepVersionRecord,
+    MeetingProviderBindingRecord,
     MeetingRecord,
     MeetingRepository,
+    MeetingSeriesProviderBindingRecord,
     MeetingWriteRequestRecord,
     RepositoryFailureError,
 )
@@ -108,6 +116,7 @@ from my_pa.domain.meeting.model import (
     MeetingStatus,
     MeetingTimeScope,
 )
+from my_pa.domain.meeting_sync.model import ProviderBindingState, ProviderEventIdFormat
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     matching_partition_criterion,
@@ -125,8 +134,10 @@ from my_pa.infrastructure.persistence.tables import (
     meeting_history,
     meeting_note_versions,
     meeting_prep_versions,
+    meeting_provider_bindings,
     meeting_series,
     meeting_series_history,
+    meeting_series_provider_bindings,
     meeting_write_requests,
     meetings,
     projects,
@@ -1243,6 +1254,200 @@ class SqlMeetingRepository(MeetingRepository):
 
     # --- internals ---------------------------------------------------------
 
+    # --- provider bindings (communications intelligence WP2) -----------------
+
+    def lock_provider_binding(
+        self,
+        principal_id: str,
+        calendar_ref: str,
+        ical_uid: str,
+        occurrence_original_start_utc: datetime | None,
+    ) -> MeetingProviderBindingRecord | None:
+        binding = meeting_provider_bindings
+        original = (
+            binding.c.occurrence_original_start_utc.is_(None)
+            if occurrence_original_start_utc is None
+            else binding.c.occurrence_original_start_utc == occurrence_original_start_utc
+        )
+        row = self._connection.execute(
+            principal_scoped(select(*_BINDING_COLUMNS), binding, capture_context(principal_id))
+            .where(
+                binding.c.calendar_ref == calendar_ref,
+                binding.c.ical_uid == ical_uid,
+                original,
+            )
+            .with_for_update()
+        ).one_or_none()
+        return None if row is None else _to_binding(row)
+
+    def provider_uid_bound_as_other_kind(
+        self,
+        principal_id: str,
+        calendar_ref: str,
+        ical_uid: str,
+        *,
+        occurrence: bool,
+    ) -> bool:
+        binding = meeting_provider_bindings
+        other = (
+            binding.c.occurrence_original_start_utc.is_(None)
+            if occurrence
+            else binding.c.occurrence_original_start_utc.is_not(None)
+        )
+        row = self._connection.execute(
+            principal_scoped(select(binding.c.binding_id), binding, capture_context(principal_id))
+            .where(binding.c.calendar_ref == calendar_ref, binding.c.ical_uid == ical_uid, other)
+            .limit(1)
+        ).first()
+        return row is not None
+
+    def read_series_provider_binding(
+        self, principal_id: str, calendar_ref: str, series_ical_uid: str
+    ) -> MeetingSeriesProviderBindingRecord | None:
+        series = meeting_series_provider_bindings
+        row = self._connection.execute(
+            principal_scoped(
+                select(
+                    series.c.series_binding_id,
+                    series.c.meeting_series_id,
+                    series.c.calendar_ref,
+                    series.c.series_ical_uid,
+                    series.c.created_at,
+                ),
+                series,
+                capture_context(principal_id),
+            ).where(
+                series.c.calendar_ref == calendar_ref,
+                series.c.series_ical_uid == series_ical_uid,
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return MeetingSeriesProviderBindingRecord(
+            series_binding_id=row.series_binding_id,
+            meeting_series_id=row.meeting_series_id,
+            calendar_ref=row.calendar_ref,
+            series_ical_uid=row.series_ical_uid,
+            created_at=row.created_at,
+        )
+
+    def read_provider_binding_for_meeting(
+        self, principal_id: str, meeting_id: str
+    ) -> MeetingProviderBindingRecord | None:
+        binding = meeting_provider_bindings
+        row = self._connection.execute(
+            principal_scoped(
+                select(*_BINDING_COLUMNS), binding, capture_context(principal_id)
+            ).where(binding.c.meeting_id == meeting_id)
+        ).one_or_none()
+        return None if row is None else _to_binding(row)
+
+    def lock_provider_binding_for_meeting(
+        self, principal_id: str, meeting_id: str
+    ) -> MeetingProviderBindingRecord | None:
+        binding = meeting_provider_bindings
+        row = self._connection.execute(
+            principal_scoped(select(*_BINDING_COLUMNS), binding, capture_context(principal_id))
+            .where(binding.c.meeting_id == meeting_id)
+            .with_for_update()
+        ).one_or_none()
+        return None if row is None else _to_binding(row)
+
+    def read_series_provider_binding_for_series(
+        self, principal_id: str, meeting_series_id: str
+    ) -> MeetingSeriesProviderBindingRecord | None:
+        series = meeting_series_provider_bindings
+        row = self._connection.execute(
+            principal_scoped(
+                select(
+                    series.c.series_binding_id,
+                    series.c.meeting_series_id,
+                    series.c.calendar_ref,
+                    series.c.series_ical_uid,
+                    series.c.created_at,
+                ),
+                series,
+                capture_context(principal_id),
+            ).where(series.c.meeting_series_id == meeting_series_id)
+        ).one_or_none()
+        if row is None:
+            return None
+        return MeetingSeriesProviderBindingRecord(
+            series_binding_id=row.series_binding_id,
+            meeting_series_id=row.meeting_series_id,
+            calendar_ref=row.calendar_ref,
+            series_ical_uid=row.series_ical_uid,
+            created_at=row.created_at,
+        )
+
+    def delete_provider_binding(self, principal_id: str, binding_id: str) -> None:
+        deleted = self._connection.execute(
+            delete(meeting_provider_bindings)
+            .where(
+                _mine(meeting_provider_bindings, principal_id),
+                meeting_provider_bindings.c.binding_id == binding_id,
+            )
+            .returning(meeting_provider_bindings.c.binding_id)
+        ).first()
+        if deleted is None:
+            raise RepositoryFailureError
+
+    def insert_series_provider_binding(
+        self, principal_id: str, binding: MeetingSeriesProviderBindingRecord
+    ) -> None:
+        self._connection.execute(
+            insert(meeting_series_provider_bindings).values(
+                _bound(
+                    meeting_series_provider_bindings,
+                    principal_id,
+                    {
+                        "series_binding_id": binding.series_binding_id,
+                        "meeting_series_id": binding.meeting_series_id,
+                        "calendar_ref": binding.calendar_ref,
+                        "series_ical_uid": binding.series_ical_uid,
+                        "created_at": binding.created_at,
+                    },
+                )
+            )
+        )
+
+    def insert_provider_binding(
+        self, principal_id: str, binding: MeetingProviderBindingRecord
+    ) -> None:
+        self._connection.execute(
+            insert(meeting_provider_bindings).values(
+                _bound(
+                    meeting_provider_bindings,
+                    principal_id,
+                    {
+                        "binding_id": binding.binding_id,
+                        "meeting_id": binding.meeting_id,
+                        "calendar_ref": binding.calendar_ref,
+                        "ical_uid": binding.ical_uid,
+                        "occurrence_original_start_utc": binding.occurrence_original_start_utc,
+                        "series_ical_uid": binding.series_ical_uid,
+                        "created_at": binding.created_at,
+                        **_mutable_binding_values(binding),
+                    },
+                )
+            )
+        )
+
+    def update_provider_binding(
+        self, principal_id: str, binding: MeetingProviderBindingRecord
+    ) -> None:
+        changed = self._connection.execute(
+            update(meeting_provider_bindings)
+            .where(
+                _mine(meeting_provider_bindings, principal_id),
+                meeting_provider_bindings.c.binding_id == binding.binding_id,
+            )
+            .values(**_mutable_binding_values(binding))
+            .returning(meeting_provider_bindings.c.binding_id)
+        ).first()
+        if changed is None:
+            raise RepositoryFailureError
+
     def _series_statement(self, principal_id: str, meeting_series_id: str) -> Select[Any]:
         return principal_scoped(
             select(*_SERIES_COLUMNS),
@@ -1446,4 +1651,60 @@ def _mutable_meeting_values(meeting: MeetingRecord) -> dict[str, object]:
         "project_id": meeting.project_id,
         "version": meeting.version,
         "updated_at": meeting.updated_at,
+    }
+
+
+_BINDING_COLUMNS: Final = (
+    meeting_provider_bindings.c.binding_id,
+    meeting_provider_bindings.c.meeting_id,
+    meeting_provider_bindings.c.calendar_ref,
+    meeting_provider_bindings.c.ical_uid,
+    meeting_provider_bindings.c.occurrence_original_start_utc,
+    meeting_provider_bindings.c.series_ical_uid,
+    meeting_provider_bindings.c.provider_event_id,
+    meeting_provider_bindings.c.provider_event_id_format,
+    meeting_provider_bindings.c.provider_state,
+    meeting_provider_bindings.c.last_seen_source_sha256,
+    meeting_provider_bindings.c.last_seen_record_ordinal,
+    meeting_provider_bindings.c.last_seen_at,
+    meeting_provider_bindings.c.last_applied_generated_at_utc,
+    meeting_provider_bindings.c.version,
+    meeting_provider_bindings.c.created_at,
+    meeting_provider_bindings.c.updated_at,
+)
+
+
+def _to_binding(row: Row[Any]) -> MeetingProviderBindingRecord:
+    return MeetingProviderBindingRecord(
+        binding_id=row.binding_id,
+        meeting_id=row.meeting_id,
+        calendar_ref=row.calendar_ref,
+        ical_uid=row.ical_uid,
+        occurrence_original_start_utc=row.occurrence_original_start_utc,
+        series_ical_uid=row.series_ical_uid,
+        provider_event_id=row.provider_event_id,
+        provider_event_id_format=ProviderEventIdFormat(row.provider_event_id_format),
+        provider_state=ProviderBindingState(row.provider_state),
+        last_seen_source_sha256=row.last_seen_source_sha256,
+        last_seen_record_ordinal=row.last_seen_record_ordinal,
+        last_seen_at=row.last_seen_at,
+        last_applied_generated_at_utc=row.last_applied_generated_at_utc,
+        version=row.version,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _mutable_binding_values(binding: MeetingProviderBindingRecord) -> dict[str, object]:
+    """The attributes a binding write sets; never an identity column."""
+    return {
+        "provider_event_id": binding.provider_event_id,
+        "provider_event_id_format": binding.provider_event_id_format.value,
+        "provider_state": binding.provider_state.value,
+        "last_seen_source_sha256": binding.last_seen_source_sha256,
+        "last_seen_record_ordinal": binding.last_seen_record_ordinal,
+        "last_seen_at": binding.last_seen_at,
+        "last_applied_generated_at_utc": binding.last_applied_generated_at_utc,
+        "version": binding.version,
+        "updated_at": binding.updated_at,
     }

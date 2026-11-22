@@ -2011,6 +2011,15 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "idempotency_key": "parity-meetings-series-update-0001",
             "title": "A parity meeting series, retitled",
         },
+        # WP2-W3: a single-meeting provider bind of the staged Meeting.
+        Capability.MEETINGS_PROVIDER_BIND: {
+            "action": "bind",
+            "meeting_id": scene.meeting_id,
+            "expected_version": 1,
+            "idempotency_key": "parity-meetings-provider-bind-0001",
+            "calendar_ref": "cal-synthetic",
+            "ical_uid": "uid-parity@example.invalid",
+        },
         Capability.RECORD_EVENTS_LIST: {"page_size": 10},
         Capability.KNOWLEDGE_ASSERTIONS_READ: {"assertion_id": "kasr_parityknowledge0001"},
         Capability.KNOWLEDGE_ASSERTIONS_LIST: {"page_size": 10, "lifecycle": "active"},
@@ -2452,8 +2461,9 @@ def test_there_are_three_transports_to_compare() -> None:
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
     # Schedule Scenarios S6-3: 26 plane commands, 256 -> 282. Files workspace
-    # WP5: 17 `files.*` commands, 282 -> 299.
-    assert len(REQUEST_VALUES) == 299, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # WP5: 17 `files.*` commands, 282 -> 299. Communications intelligence
+    # WP2-W3: `BindMeetingProvider`, 299 -> 300.
+    assert len(REQUEST_VALUES) == 300, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -3562,7 +3572,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 298
+    assert len(IMPLEMENTED_CAPABILITIES) == 299
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

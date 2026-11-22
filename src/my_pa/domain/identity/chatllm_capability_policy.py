@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v14"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v15"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -112,6 +112,10 @@ _DATA_REQUIRED: Final[frozenset[Capability]] = frozenset(
         Capability.MEETINGS_SEARCH,
         Capability.MEETINGS_SERIES_UPDATE,
         Capability.MEETINGS_UPDATE,
+        # chatllm-data-v15 (communications intelligence WP2-W3; ADR-022 Accepted:
+        # v15 is activated at the consolidated deploy, with operator-profile
+        # grants only): classified as `meetings.update` is.
+        Capability.MEETINGS_PROVIDER_BIND,
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_COMMIT,
         Capability.REPORTS_LATEST,

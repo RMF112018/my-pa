@@ -72,6 +72,7 @@ from my_pa.application.commands import (
     BeginIntelligenceCycle,
     BeginReportTransfer,
     BindEntityIdentifier,
+    BindMeetingProvider,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CheckpointKnowledgeDiscovery,
@@ -785,6 +786,9 @@ def _requested_scope(
             | SearchMeetings()
             | UpdateMeeting()
             | UpdateMeetingSeries()
+            # WP2-W3: a provider key names the caller's own Meeting and an
+            # external calendar identity it asserts, never a configured source.
+            | BindMeetingProvider()
             # `record_events.list` (WP-RE-06) names only the acting Principal's
             # own change feed, never a configured source (G1-RD-011).
             | ListRecordEvents()

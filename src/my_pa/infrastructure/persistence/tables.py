@@ -268,8 +268,10 @@ from my_pa.domain.meeting.model import (
     MAX_MEETING_TITLE_CHARACTERS,
     MAX_TIMEZONE_NAME_CHARACTERS,
     MAX_VIRTUAL_MEETING_URL_CHARACTERS,
-    MEETING_WRITE_CAPABILITY_NAMES,
+    MEETING_PROVIDER_SYNC_NAME,
+    MEETING_WRITE_REQUEST_NAMES,
     MEETINGS_CREATE_NAME,
+    MEETINGS_PROVIDER_BIND_NAME,
     MEETINGS_SERIES_UPDATE_NAME,
     MEETINGS_UPDATE_NAME,
     MIN_MEETING_IDEMPOTENCY_KEY_CHARACTERS,
@@ -278,6 +280,13 @@ from my_pa.domain.meeting.model import (
     MeetingHistoryAction,
     MeetingOutcome,
     MeetingStatus,
+)
+from my_pa.domain.meeting_sync.model import (
+    MAX_CALENDAR_REF_CHARACTERS,
+    MAX_ICAL_UID_CHARACTERS,
+    MAX_PROVIDER_EVENT_ID_CHARACTERS,
+    ProviderBindingState,
+    ProviderEventIdFormat,
 )
 from my_pa.domain.native_sources import (
     LiveActivationGateState,
@@ -15604,9 +15613,11 @@ meeting_write_requests = Table(
     _is_identifier("meeting_series_id", IdKind.MEETING_SERIES),
     _is_identifier("meeting_history_id", IdKind.MEETING_HISTORY),
     _is_identifier("meeting_series_history_id", IdKind.MEETING_SERIES_HISTORY),
+    # Communications intelligence WP2 (revision 6418b57081c3) widens this to the
+    # public `meetings.provider.bind` and the internal sync namespace.
     _one_of(
         "capability",
-        frozenset(MEETING_WRITE_CAPABILITY_NAMES),
+        frozenset(MEETING_WRITE_REQUEST_NAMES),
         name="a_meeting_write_request_capability_is_known",
     ),
     CheckConstraint(_MEETING_KEY_BOUND, name="a_meeting_write_request_key_is_bounded"),
@@ -15642,6 +15653,18 @@ meeting_write_requests = Table(
         "AND result_version IS NOT NULL AND meeting_id IS NULL AND meeting_history_id IS NULL)",
         name="a_completed_meeting_series_update_names_its_result",
     ),
+    CheckConstraint(
+        f"completed_at IS NULL OR capability <> '{MEETINGS_PROVIDER_BIND_NAME}' "
+        "OR (meeting_id IS NOT NULL AND meeting_history_id IS NOT NULL "
+        "AND result_version IS NOT NULL AND meeting_series_history_id IS NULL)",
+        name="a_completed_meeting_provider_bind_names_its_result",
+    ),
+    CheckConstraint(
+        f"completed_at IS NULL OR capability <> '{MEETING_PROVIDER_SYNC_NAME}' "
+        "OR (meeting_id IS NOT NULL AND meeting_history_id IS NOT NULL "
+        "AND result_version IS NOT NULL)",
+        name="a_completed_meeting_provider_sync_names_its_result",
+    ),
     ForeignKeyConstraint(
         ["meeting_id", "principal_id"],
         [f"{SCHEMA}.meetings.meeting_id", f"{SCHEMA}.meetings.principal_id"],
@@ -15672,6 +15695,158 @@ meeting_write_requests = Table(
     ),
 )
 
+
+# --- Communications intelligence WP2: Meeting provider bindings ----------------
+#
+# Contract section 12.1 and revision `6418b57081c3`, which also creates the
+# triggers a `Table` cannot declare: identity immutability and the one-kind-per-
+# UID guard (D9) on `meeting_provider_bindings`, append-only on the series
+# bindings, and TRUNCATE refusal on both.
+
+meeting_series_provider_bindings = Table(
+    "meeting_series_provider_bindings",
+    METADATA,
+    Column("series_binding_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("meeting_series_id", Text, nullable=False),
+    Column("calendar_ref", Text, nullable=False),
+    Column("series_ical_uid", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("series_binding_id", IdKind.MEETING_SERIES_PROVIDER_BINDING),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("meeting_series_id", IdKind.MEETING_SERIES),
+    CheckConstraint(
+        f"length(calendar_ref) BETWEEN 1 AND {MAX_CALENDAR_REF_CHARACTERS}",
+        name="a_series_provider_binding_calendar_ref_is_bounded",
+    ),
+    CheckConstraint(
+        f"length(series_ical_uid) BETWEEN 1 AND {MAX_ICAL_UID_CHARACTERS}",
+        name="a_series_provider_binding_uid_is_bounded",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "calendar_ref",
+        "series_ical_uid",
+        name="one_series_provider_binding_per_provider_series",
+    ),
+    UniqueConstraint(
+        "principal_id", "meeting_series_id", name="one_provider_binding_per_meeting_series"
+    ),
+    UniqueConstraint(
+        "series_binding_id",
+        "principal_id",
+        name="a_series_provider_binding_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_series_id", "principal_id"],
+        [f"{SCHEMA}.meeting_series.meeting_series_id", f"{SCHEMA}.meeting_series.principal_id"],
+        ondelete="RESTRICT",
+        name="a_series_provider_binding_names_a_series_of_its_principal",
+    ),
+)
+
+meeting_provider_bindings = Table(
+    "meeting_provider_bindings",
+    METADATA,
+    Column("binding_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("meeting_id", Text, nullable=False),
+    Column("calendar_ref", Text, nullable=False),
+    Column("ical_uid", Text, nullable=False),
+    Column("occurrence_original_start_utc", DateTime(timezone=True)),
+    Column("series_ical_uid", Text),
+    Column("provider_event_id", Text),
+    Column("provider_event_id_format", Text, nullable=False),
+    Column("provider_state", Text, nullable=False, server_default=text("'active'")),
+    Column("last_seen_source_sha256", Text),
+    Column("last_seen_record_ordinal", Integer),
+    Column("last_seen_at", DateTime(timezone=True)),
+    # The `generated_at_utc` ordering stamp of the last publication a sync
+    # applied to this binding (WP2-F1): a mutable attribute, NULL after a bind.
+    Column("last_applied_generated_at_utc", DateTime(timezone=True)),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("binding_id", IdKind.MEETING_PROVIDER_BINDING),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("meeting_id", IdKind.MEETING),
+    CheckConstraint(
+        f"length(calendar_ref) BETWEEN 1 AND {MAX_CALENDAR_REF_CHARACTERS}",
+        name="a_provider_binding_calendar_ref_is_bounded",
+    ),
+    CheckConstraint(
+        f"length(ical_uid) BETWEEN 1 AND {MAX_ICAL_UID_CHARACTERS}",
+        name="a_provider_binding_uid_is_bounded",
+    ),
+    CheckConstraint(
+        f"series_ical_uid IS NULL OR length(series_ical_uid) BETWEEN 1 AND "
+        f"{MAX_ICAL_UID_CHARACTERS}",
+        name="a_provider_binding_series_uid_is_bounded",
+    ),
+    CheckConstraint(
+        f"provider_event_id IS NULL OR length(provider_event_id) BETWEEN 1 AND "
+        f"{MAX_PROVIDER_EVENT_ID_CHARACTERS}",
+        name="a_provider_event_id_is_bounded",
+    ),
+    _one_of(
+        "provider_event_id_format",
+        ProviderEventIdFormat,
+        name="a_provider_event_id_format_is_known",
+    ),
+    _one_of("provider_state", ProviderBindingState, name="a_provider_binding_state_is_known"),
+    CheckConstraint(
+        "(series_ical_uid IS NULL) = (occurrence_original_start_utc IS NULL)",
+        name="an_occurrence_binding_names_its_series_and_original_start",
+    ),
+    CheckConstraint(
+        "(last_seen_source_sha256 IS NULL) = (last_seen_record_ordinal IS NULL) "
+        "AND (last_seen_source_sha256 IS NULL) = (last_seen_at IS NULL)",
+        name="a_provider_binding_last_seen_is_whole",
+    ),
+    CheckConstraint(
+        f"last_seen_source_sha256 IS NULL OR last_seen_source_sha256 ~ '{_MEETING_DIGEST}'",
+        name="a_provider_binding_last_seen_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "last_seen_record_ordinal IS NULL OR last_seen_record_ordinal >= 0",
+        name="a_provider_binding_last_seen_ordinal_is_non_negative",
+    ),
+    CheckConstraint("version >= 1", name="a_provider_binding_version_is_positive"),
+    UniqueConstraint("principal_id", "meeting_id", name="one_provider_binding_per_meeting"),
+    ForeignKeyConstraint(
+        ["meeting_id", "principal_id"],
+        [f"{SCHEMA}.meetings.meeting_id", f"{SCHEMA}.meetings.principal_id"],
+        ondelete="RESTRICT",
+        name="a_provider_binding_names_a_meeting_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "calendar_ref", "series_ical_uid"],
+        [
+            f"{SCHEMA}.meeting_series_provider_bindings.principal_id",
+            f"{SCHEMA}.meeting_series_provider_bindings.calendar_ref",
+            f"{SCHEMA}.meeting_series_provider_bindings.series_ical_uid",
+        ],
+        ondelete="RESTRICT",
+        name="an_occurrence_binding_names_a_bound_series",
+    ),
+    Index(
+        "one_provider_binding_per_occurrence",
+        "principal_id",
+        "calendar_ref",
+        "ical_uid",
+        "occurrence_original_start_utc",
+        unique=True,
+        postgresql_where=text("occurrence_original_start_utc IS NOT NULL"),
+    ),
+    Index(
+        "one_provider_binding_per_single_meeting",
+        "principal_id",
+        "calendar_ref",
+        "ical_uid",
+        unique=True,
+        postgresql_where=text("occurrence_original_start_utc IS NULL"),
+    ),
+)
 
 # --- WP-RE-01: the Record Event feed -----------------------------------------
 #

@@ -427,6 +427,9 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "file_workspace_receipts",
         # ADR-020 stacks the Meeting prep brief version chain.
         "meeting_prep_versions",
+        # Communications intelligence WP2 stacks the Meeting provider bindings.
+        "meeting_series_provider_bindings",
+        "meeting_provider_bindings",
     }
 )
 

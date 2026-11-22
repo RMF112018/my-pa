@@ -295,6 +295,10 @@ def test_contract_prefixes_are_stable() -> None:
         "fwpnd",
         # ADR-020 C1: one immutable Meeting prep-brief version.
         "mprep",
+        # Communications intelligence WP2: the Meeting and MeetingSeries
+        # provider bindings.
+        "mpbnd",
+        "msbnd",
     }
 
 

@@ -612,6 +612,8 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     ),
     # ADR-020: the Meeting prep brief version chain.
     "4d1069a7d84f": frozenset({"meeting_prep_versions"}),
+    # Communications intelligence WP2: the Meeting provider bindings.
+    "6418b57081c3": frozenset({"meeting_series_provider_bindings", "meeting_provider_bindings"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

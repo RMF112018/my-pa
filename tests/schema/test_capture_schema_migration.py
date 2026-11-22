@@ -1617,6 +1617,15 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             # ADR-020. The Meeting prep revision installs the same append-only
             # guard over its own function.
             "meeting_prep_versions_are_append_only",
+            # Communications intelligence WP2. The provider binding revision
+            # installs identity immutability and the one-kind-per-UID guard on
+            # the occurrence bindings, append-only on the series bindings, and a
+            # TRUNCATE refusal on each, over its own functions.
+            "meeting_provider_binding_identity_is_immutable",
+            "meeting_provider_binding_kind_is_exclusive",
+            "meeting_series_provider_bindings_are_append_only",
+            "meeting_series_provider_bindings_refuse_truncate",
+            "meeting_provider_bindings_refuse_truncate",
             "meeting_series_history_rows_are_append_only",
             "meeting_write_requests_complete_once",
             # WP-RE-01. The Record Event revision installs the feed's append-only

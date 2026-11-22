@@ -99,7 +99,8 @@ def test_the_eight_prefixes_are_s61s_patterns() -> None:
     # WP5 five more (`fwupl`, `fwdnl`, `fwver`, `fwtrs`, `fwrcp`).
     # ADR-019 Amendment 2: one more (`fwpnd`, a pending change).
     # ADR-020 C1: one more (`mprep`, a Meeting prep version).
-    assert len(IdKind) == 181
+    # Communications intelligence WP2: two more (`mpbnd`, `msbnd`).
+    assert len(IdKind) == 183
     new = [
         IdKind.SCHEDULE_SCENARIO,
         IdKind.SCHEDULE_SCENARIO_VERSION,

@@ -210,7 +210,9 @@ def test_the_six_plane_cursor_orders_and_the_37_details_exist() -> None:
     # ADR-010 amendment of 2026-11-20 (daily cycle scheduler): the `cycle_id`
     # field detail and the `cycle_closed` reason, 423 -> 425.
     # ADR-020 C2: the Meeting `prep` field detail, 425 -> 426.
-    assert len(SafeDetail) == 426
+    # Communications intelligence WP2 ruling D6: the provider-bound series
+    # refusal, 426 -> 427.
+    assert len(SafeDetail) == 427
     for error in ChangeOpError:
         assert SafeDetail(f"change_set_{error.value}").name == f"CHANGE_SET_{error.name}"
 

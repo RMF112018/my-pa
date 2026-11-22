@@ -336,6 +336,8 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "file_workspace_trash",
         "file_workspace_receipts",
         "meeting_prep_versions",
+        "meeting_series_provider_bindings",
+        "meeting_provider_bindings",
     }
     assert {
         "entities",

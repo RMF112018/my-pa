@@ -86,9 +86,13 @@ def _offline(target: str, *, down: bool = False) -> str:
 # ---- the graph --------------------------------------------------------------
 
 
-def test_the_revision_is_the_single_head_directly_on_the_files_workspace_head() -> None:
+def test_the_revision_is_directly_on_the_files_workspace_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    # Communications intelligence WP2's `6418b57081c3` (Meeting provider
+    # bindings) is additive on this revision, so this revision is the head's
+    # parent rather than the head.
+    assert script.get_heads() == ["6418b57081c3"]
+    assert script.get_revision("6418b57081c3").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "b77334135653"
 
@@ -308,7 +312,7 @@ def _refused_by_trigger(engine: Engine, statement: Callable[[Connection], Any]) 
 def seeded(disposable_database: str, engine: Engine) -> dict[str, str]:
     """Head, one Meeting per Principal, and the first prep version of the first."""
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     with engine.begin() as connection:
         ids = _seed_meeting(connection, principal=PRINCIPAL, suffix="0001")
         other = _seed_meeting(connection, principal=OTHER_PRINCIPAL, suffix="0002")
@@ -321,11 +325,11 @@ def test_the_revision_round_trips_from_the_files_workspace_head(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _assert_present(engine)
     command.downgrade(_config(), PREVIOUS)
     _assert_absent(engine)
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _assert_present(engine)
 
 

@@ -111,6 +111,9 @@ MEETING_TABLES: Final = (
     "meeting_prep_versions",
     "meeting_series_history",
     "meeting_write_requests",
+    # Communications intelligence WP2: the provider bindings.
+    "meeting_provider_bindings",
+    "meeting_series_provider_bindings",
 )
 
 

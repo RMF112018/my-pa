@@ -404,6 +404,8 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "file_workspace_trash",
         "file_workspace_receipts",
         "meeting_prep_versions",
+        "meeting_series_provider_bindings",
+        "meeting_provider_bindings",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

@@ -1016,8 +1016,10 @@ def test_error_tokens_are_safe_detail_values() -> None:
     existing_safe_detail = {"page_size", "mutations"}
     # ADR-020 C2 adds exactly one token, with its `SafeDetail` twin.
     adr_020 = {"prep"}
+    # Communications intelligence WP2 ruling D6 adds one, with its twin.
+    wp2 = {"meeting_series_change_refused_provider_bound"}
     assert {token.value for token in MeetingErrorField} == (
-        section_35_16 | existing_safe_detail | adr_020
+        section_35_16 | existing_safe_detail | adr_020 | wp2
     )
 
 

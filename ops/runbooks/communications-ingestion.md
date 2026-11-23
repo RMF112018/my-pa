@@ -147,6 +147,8 @@ python apps/cli/communications_ingest.py <assertions> aggregate \
   `start`/`end` when nothing is covered. Read `freshness_seconds` for staleness (no new
   publication since `latest_covered`) and `rolling_30d` for holes inside the covered span; the
   rolling read never turns `partial` just because the newest publication is late.
+  A source with less than 30 days of covered history reads `partial`, with one leading gap,
+  until 30 days are covered; that is expected after a first admission or a short backfill.
   `--from`/`--to` reads one range the same way, over exactly the instants given.
 - `aggregate`: snapshots by status, rejection codes, superseded paths, runs by trigger and
   outcome; observations by classification, folder role and lane verification; quarantined
@@ -194,6 +196,14 @@ them, and known bytes link `already_known` without a write.
   or another operator run holds it, the command refuses `lock_held` (exit 1) at once and writes
   nothing; run it again when that run has finished (a poll logs `comms_ingest.run`). A poll that
   finds the lock held by an operator run logs `comms_ingest.skipped` and retries next interval.
+- **`identity_kind_mismatch` quarantine.** A record whose provider id is already stored under
+  the other identity kind is quarantined, for example an item first seen without a Message-ID
+  (`provider_id_only`) and later published with one. The two key spaces never merge (ADR-022
+  decision 4). This is expected, not a fault. The quarantine recurs, one row per snapshot that
+  carries that provider id, and `records_identity_kind_mismatch` rises with each, until WP3b adds
+  the explicit join. Nothing already stored is changed or lost: the earlier message keeps its
+  observations, and the Message-ID message is built from the other provider ids that carry it.
+  The quarantined records stay out of the communications rows until then. No operator action.
 - **Restart.** Stability memory lives in the process. After a restart the first poll observes
   and the second reads; already-ingested digests are only linked.
 - **Too large or unreadable.** Over the consumer's byte limit is `skipped_too_large`; an

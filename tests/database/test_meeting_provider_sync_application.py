@@ -40,7 +40,12 @@ from my_pa.application.meeting_provider_sync import (
     SyncOutcomeKind,
 )
 from my_pa.application.meetings import MeetingApplication
-from my_pa.contracts.ports import UnitOfWork
+from my_pa.contracts.ports import (
+    IngestConsumer,
+    IngestSnapshotRecord,
+    IngestSourceRecord,
+    UnitOfWork,
+)
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.meeting.model import (
     MEETING_PROVIDER_SYNC_NAME,
@@ -137,6 +142,47 @@ class Harness:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
         self.audit = SqlAlchemyAuditSink(engine)
+        self._snapshots: dict[tuple[str, str], str] = {}
+
+    def snapshot(self, principal_id: str, sha: str) -> str:
+        """The ingest snapshot of `sha` for this Principal, created on first use.
+
+        A binding's `last_seen_*` names a real snapshot of its digest (WP3b,
+        Manager ruling D10), so every applied publication is one.
+        """
+        key = (principal_id, sha)
+        if key not in self._snapshots:
+            source_id = issue_identifier(IdKind.INGEST_SOURCE)
+            snapshot_id = issue_identifier(IdKind.INGEST_SNAPSHOT)
+
+            def plant(uow: UnitOfWork) -> None:
+                uow.ingestion.insert_source(
+                    principal_id,
+                    IngestSourceRecord(
+                        ingest_source_id=source_id,
+                        consumer=IngestConsumer.MEETING_SYNC_V1,
+                        workspace_id="sync_fixture",
+                        path_prefix=f"meetings/{sha[:12]}",
+                        file_pattern="*.json",
+                        enabled=True,
+                        admitted_at=NOW,
+                    ),
+                )
+                uow.ingestion.insert_snapshot(
+                    principal_id,
+                    IngestSnapshotRecord(
+                        snapshot_id=snapshot_id,
+                        ingest_source_id=source_id,
+                        file_sha256=sha,
+                        byte_count=1,
+                        observed_version_token=None,
+                        first_seen_at=NOW,
+                    ),
+                )
+
+            self.run(plant)
+            self._snapshots[key] = snapshot_id
+        return self._snapshots[key]
 
     def run[ResultT](self, work: Callable[[UnitOfWork], ResultT]) -> ResultT:
         with SqlAlchemyUnitOfWork(self.engine, audit=self.audit) as uow:
@@ -152,8 +198,16 @@ class Harness:
         stamp: datetime | None = None,
     ) -> MeetingSyncOutcome:
         stamped = _stamped(event, sha, stamp)
+        snapshot_id = self.snapshot(principal_id, sha)
         return self.run(
-            lambda uow: SYNC.apply_event(uow, principal_id, stamped, source_sha256=sha, now=now)
+            lambda uow: SYNC.apply_event(
+                uow,
+                principal_id,
+                stamped,
+                source_sha256=sha,
+                source_snapshot_id=snapshot_id,
+                now=now,
+            )
         )
 
     def rows(self, table: Any, **where: object) -> list[dict[str, Any]]:  # noqa: ANN401
@@ -247,6 +301,27 @@ def test_a_known_occurrence_moves_through_the_cas_and_keeps_its_identity(
     assert binding["last_seen_source_sha256"] == SHA_B
     assert binding["version"] == 1
     assert harness.count(meetings, principal_id=principal) == 1
+
+
+def test_a_binding_names_its_origin_and_last_seen_snapshots(
+    harness: Harness, principal: str
+) -> None:
+    """WP3b (Manager ruling D10): a created binding records the snapshot it came
+    from as its immutable origin; each observation records its own snapshot."""
+    created = harness.apply(principal, _occurrence())
+    first = harness.snapshot(principal, SHA_A)
+    (binding,) = harness.rows(meeting_provider_bindings, meeting_id=created.meeting_id)
+    assert (binding["origin_snapshot_id"], binding["last_seen_snapshot_id"]) == (first, first)
+    harness.apply(
+        principal,
+        _occurrence(start_utc="2026-12-02T18:00:00Z", end_utc="2026-12-02T19:00:00Z"),
+        sha=SHA_B,
+        now=LATER,
+    )
+    (binding,) = harness.rows(meeting_provider_bindings, meeting_id=created.meeting_id)
+    assert binding["origin_snapshot_id"] == first
+    assert binding["last_seen_snapshot_id"] == harness.snapshot(principal, SHA_B)
+    assert binding["last_seen_source_sha256"] == SHA_B
 
 
 def test_a_changed_provider_id_is_the_same_meeting(harness: Harness, principal: str) -> None:
@@ -474,6 +549,8 @@ def test_a_bind_leaves_the_stamp_null_and_the_next_sync_applies(
                 last_seen_source_sha256=None,
                 last_seen_record_ordinal=None,
                 last_seen_at=None,
+                # WP3b (D10): the observation's snapshot goes with it.
+                last_seen_snapshot_id=None,
             )
         )
     # An unstamped binding (as an explicit bind leaves it) accepts any stamp.

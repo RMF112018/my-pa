@@ -94,6 +94,7 @@ from my_pa.contracts.ports import (
     IngestRunSnapshotOutcome,
     IngestRunTrigger,
     IngestSnapshotStatus,
+    MeetingSyncApplyOutcome,
 )
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.contracts.v1.native_sources import NATIVE_SOURCE_MAX_PAGE_SIZE
@@ -313,6 +314,7 @@ from my_pa.domain.meeting_sync.model import (
     MAX_CALENDAR_REF_CHARACTERS,
     MAX_ICAL_UID_CHARACTERS,
     MAX_PROVIDER_EVENT_ID_CHARACTERS,
+    EventStatus,
     ProviderBindingState,
     ProviderEventIdFormat,
 )
@@ -15795,6 +15797,11 @@ meeting_provider_bindings = Table(
     Column("version", Integer, nullable=False, server_default=text("1")),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    # WP3b (Manager ruling D10), added by the WP3b revision: the snapshot whose
+    # record created the binding (immutable; NULL after an explicit bind) and
+    # the snapshot of the `last_seen_*` observation.
+    Column("origin_snapshot_id", Text),
+    Column("last_seen_snapshot_id", Text),
     _is_identifier("binding_id", IdKind.MEETING_PROVIDER_BINDING),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("meeting_id", IdKind.MEETING),
@@ -15840,6 +15847,28 @@ meeting_provider_bindings = Table(
         name="a_provider_binding_last_seen_ordinal_is_non_negative",
     ),
     CheckConstraint("version >= 1", name="a_provider_binding_version_is_positive"),
+    _is_identifier("origin_snapshot_id", IdKind.INGEST_SNAPSHOT),
+    _is_identifier("last_seen_snapshot_id", IdKind.INGEST_SNAPSHOT),
+    CheckConstraint(
+        "(last_seen_snapshot_id IS NULL) = (last_seen_source_sha256 IS NULL)",
+        name="a_provider_binding_last_seen_names_its_snapshot",
+    ),
+    ForeignKeyConstraint(
+        ["last_seen_snapshot_id", "principal_id", "last_seen_source_sha256"],
+        [
+            f"{SCHEMA}.ingest_snapshots.snapshot_id",
+            f"{SCHEMA}.ingest_snapshots.principal_id",
+            f"{SCHEMA}.ingest_snapshots.file_sha256",
+        ],
+        ondelete="RESTRICT",
+        name="a_provider_binding_last_seen_names_a_snapshot_of_its_digest",
+    ),
+    ForeignKeyConstraint(
+        ["origin_snapshot_id", "principal_id"],
+        [f"{SCHEMA}.ingest_snapshots.snapshot_id", f"{SCHEMA}.ingest_snapshots.principal_id"],
+        ondelete="RESTRICT",
+        name="a_provider_binding_origin_names_a_snapshot_of_its_principal",
+    ),
     UniqueConstraint("principal_id", "meeting_id", name="one_provider_binding_per_meeting"),
     ForeignKeyConstraint(
         ["meeting_id", "principal_id"],
@@ -16053,6 +16082,15 @@ ingest_snapshots = Table(
         "principal_id",
         "ingest_source_id",
         name="an_ingest_snapshot_is_identified_within_its_source",
+    ),
+    # WP3b (Manager ruling D10), added by the WP3b revision: the target of a
+    # provider binding's `last_seen_*` foreign key, so the digest a binding
+    # records is the digest of the snapshot it names.
+    UniqueConstraint(
+        "snapshot_id",
+        "principal_id",
+        "file_sha256",
+        name="an_ingest_snapshot_is_identified_with_its_digest",
     ),
     ForeignKeyConstraint(
         ["ingest_source_id", "principal_id"],
@@ -16678,6 +16716,279 @@ COMMUNICATIONS_INGESTION_TABLES: Final = (
     communication_participants,
     communication_identifiers,
     communication_quarantine,
+)
+
+# --- Communications intelligence WP3b: meeting sync staging and reconciliation ---
+#
+# Manager rulings D1, D3, D4, D5, D8 and D10, and the WP3b revision on
+# `52a829ef718a`, which also creates what a `Table` cannot declare: a staged
+# publication changes only its apply columns, together and once from NULL; the
+# events, review marks, the reconciliation latch and the key tombstones are
+# append-only; TRUNCATE is refused on all five; a binding's `origin_snapshot_id`
+# is immutable. Every foreign key is composite with `principal_id` and
+# `ON DELETE RESTRICT`. No column holds an attendee, a body or a description.
+
+#: At most this many calendars in one publication's declared coverage (D7).
+MAX_MEETING_SYNC_COVERAGE_CALENDARS: Final = 100
+
+meeting_sync_publications = Table(
+    "meeting_sync_publications",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("snapshot_id", Text, nullable=False),
+    Column("ingest_source_id", Text, nullable=False),
+    Column("generated_at_utc", DateTime(timezone=True), nullable=False),
+    Column("coverage_start_utc", DateTime(timezone=True)),
+    Column("coverage_end_utc", DateTime(timezone=True)),
+    Column("coverage_calendar_refs", ARRAY(Text)),
+    Column("record_count", Integer, nullable=False),
+    Column("accepted_count", Integer, nullable=False),
+    Column("quarantined_count", Integer, nullable=False),
+    Column("staged_at", DateTime(timezone=True), nullable=False),
+    Column("applied_at", DateTime(timezone=True)),
+    Column("apply_outcome", Text),
+    Column("apply_counts", JSONB),
+    PrimaryKeyConstraint("principal_id", "snapshot_id", name="meeting_sync_publications_pkey"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("snapshot_id", IdKind.INGEST_SNAPSHOT),
+    _is_identifier("ingest_source_id", IdKind.INGEST_SOURCE),
+    CheckConstraint(
+        "(coverage_start_utc IS NULL) = (coverage_end_utc IS NULL) "
+        "AND (coverage_start_utc IS NULL) = (coverage_calendar_refs IS NULL)",
+        name="a_meeting_sync_publication_coverage_is_whole",
+    ),
+    CheckConstraint(
+        "coverage_end_utc IS NULL OR coverage_end_utc >= coverage_start_utc",
+        name="a_meeting_sync_publication_coverage_ends_after_it_starts",
+    ),
+    CheckConstraint(
+        "coverage_calendar_refs IS NULL OR (cardinality(coverage_calendar_refs) BETWEEN 1 "
+        f"AND {MAX_MEETING_SYNC_COVERAGE_CALENDARS} "
+        "AND array_position(coverage_calendar_refs, NULL) IS NULL)",
+        name="a_meeting_sync_publication_coverage_names_its_calendars",
+    ),
+    CheckConstraint(
+        "record_count >= 0 AND accepted_count >= 0 AND quarantined_count >= 0",
+        name="a_meeting_sync_publication_count_is_non_negative",
+    ),
+    CheckConstraint(
+        "accepted_count + quarantined_count = record_count",
+        name="a_meeting_sync_publication_counts_reconcile",
+    ),
+    CheckConstraint(
+        "(applied_at IS NULL) = (apply_outcome IS NULL) "
+        "AND (apply_outcome IS NULL) = (apply_counts IS NULL)",
+        name="a_meeting_sync_publication_apply_is_whole",
+    ),
+    CheckConstraint(
+        f"apply_outcome IS NULL OR apply_outcome IN ({_literals(MeetingSyncApplyOutcome)})",
+        name="a_meeting_sync_publication_apply_outcome_is_known",
+    ),
+    CheckConstraint(
+        "apply_counts IS NULL OR jsonb_typeof(apply_counts) = 'object'",
+        name="a_meeting_sync_publication_apply_counts_is_an_object",
+    ),
+    ForeignKeyConstraint(
+        ["snapshot_id", "principal_id", "ingest_source_id"],
+        list(_SNAPSHOT_OF_SOURCE),
+        ondelete="RESTRICT",
+        name="a_meeting_sync_publication_names_a_snapshot_of_its_source",
+    ),
+    Index(
+        "meeting_sync_publications_by_source",
+        "principal_id",
+        "ingest_source_id",
+        "generated_at_utc",
+    ),
+)
+
+meeting_sync_events = Table(
+    "meeting_sync_events",
+    METADATA,
+    Column("event_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("snapshot_id", Text, nullable=False),
+    Column("record_ordinal", Integer, nullable=False),
+    Column("calendar_ref", Text, nullable=False),
+    Column("ical_uid", Text, nullable=False),
+    Column("series_ical_uid", Text),
+    Column("occurrence_original_start_utc", DateTime(timezone=True)),
+    Column("start_utc", DateTime(timezone=True), nullable=False),
+    Column("end_utc", DateTime(timezone=True), nullable=False),
+    Column("timezone_name", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("location_text", Text),
+    Column("virtual_meeting_url", Text),
+    Column("provider_event_id", Text),
+    Column("provider_event_id_format", Text, nullable=False),
+    Column("staged_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("event_id", IdKind.MEETING_SYNC_EVENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("snapshot_id", IdKind.INGEST_SNAPSHOT),
+    CheckConstraint("record_ordinal >= 0", name="a_meeting_sync_event_ordinal_is_non_negative"),
+    CheckConstraint(
+        f"length(calendar_ref) BETWEEN 1 AND {MAX_CALENDAR_REF_CHARACTERS}",
+        name="a_meeting_sync_event_calendar_ref_is_bounded",
+    ),
+    CheckConstraint(
+        f"length(ical_uid) BETWEEN 1 AND {MAX_ICAL_UID_CHARACTERS}",
+        name="a_meeting_sync_event_uid_is_bounded",
+    ),
+    CheckConstraint(
+        f"series_ical_uid IS NULL OR length(series_ical_uid) BETWEEN 1 AND "
+        f"{MAX_ICAL_UID_CHARACTERS}",
+        name="a_meeting_sync_event_series_uid_is_bounded",
+    ),
+    CheckConstraint(
+        "(series_ical_uid IS NULL) = (occurrence_original_start_utc IS NULL)",
+        name="a_meeting_sync_event_names_its_series_and_original_start",
+    ),
+    CheckConstraint(
+        "end_utc >= start_utc", name="a_meeting_sync_event_does_not_end_before_it_starts"
+    ),
+    CheckConstraint(
+        f"length(timezone_name) BETWEEN 1 AND {MAX_TIMEZONE_NAME_CHARACTERS} "
+        "AND length(trim(timezone_name)) > 0",
+        name="a_meeting_sync_event_timezone_name_is_bounded",
+    ),
+    _one_of("status", EventStatus, name="a_meeting_sync_event_status_is_known"),
+    _meeting_title_bound("title", name="a_meeting_sync_event_title_is_bounded"),
+    CheckConstraint(
+        f"location_text IS NULL OR length(location_text) <= {MAX_MEETING_LOCATION_CHARACTERS}",
+        name="a_meeting_sync_event_location_is_bounded",
+    ),
+    CheckConstraint(
+        "virtual_meeting_url IS NULL OR length(virtual_meeting_url) "
+        f"BETWEEN 1 AND {MAX_VIRTUAL_MEETING_URL_CHARACTERS}",
+        name="a_meeting_sync_event_virtual_url_is_bounded",
+    ),
+    CheckConstraint(
+        f"provider_event_id IS NULL OR length(provider_event_id) BETWEEN 1 AND "
+        f"{MAX_PROVIDER_EVENT_ID_CHARACTERS}",
+        name="a_meeting_sync_event_provider_event_id_is_bounded",
+    ),
+    _one_of(
+        "provider_event_id_format",
+        ProviderEventIdFormat,
+        name="a_meeting_sync_event_provider_event_id_format_is_known",
+    ),
+    UniqueConstraint(
+        "principal_id", "snapshot_id", "record_ordinal", name="one_meeting_sync_event_per_record"
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "snapshot_id"],
+        [
+            f"{SCHEMA}.meeting_sync_publications.principal_id",
+            f"{SCHEMA}.meeting_sync_publications.snapshot_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_meeting_sync_event_names_a_publication_of_its_principal",
+    ),
+    Index(
+        "meeting_sync_events_by_key",
+        "principal_id",
+        "calendar_ref",
+        "ical_uid",
+        "occurrence_original_start_utc",
+    ),
+)
+
+meeting_provider_review_marks = Table(
+    "meeting_provider_review_marks",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("meeting_id", Text, nullable=False),
+    Column("marked_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("principal_id", "meeting_id", name="meeting_provider_review_marks_pkey"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("meeting_id", IdKind.MEETING),
+    ForeignKeyConstraint(
+        ["meeting_id", "principal_id"],
+        [f"{SCHEMA}.meetings.meeting_id", f"{SCHEMA}.meetings.principal_id"],
+        ondelete="RESTRICT",
+        name="a_review_mark_names_a_meeting_of_its_principal",
+    ),
+)
+
+meeting_provider_reconciliation_passes = Table(
+    "meeting_provider_reconciliation_passes",
+    METADATA,
+    Column("principal_id", Text, primary_key=True),
+    Column("completed_at", DateTime(timezone=True), nullable=False),
+    Column("reviewed_meetings", Integer, nullable=False),
+    Column("reconcile_correlation_id", Text, nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("reconcile_correlation_id", IdKind.CORRELATION),
+    CheckConstraint("reviewed_meetings >= 0", name="a_reconciliation_pass_count_is_non_negative"),
+)
+
+meeting_provider_key_tombstones = Table(
+    "meeting_provider_key_tombstones",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("binding_id", Text, nullable=False),
+    Column("meeting_id", Text, nullable=False),
+    Column("calendar_ref", Text, nullable=False),
+    Column("ical_uid", Text, nullable=False),
+    Column("occurrence_original_start_utc", DateTime(timezone=True)),
+    Column("series_ical_uid", Text),
+    Column("unbound_at", DateTime(timezone=True), nullable=False),
+    Column("meeting_history_id", Text, nullable=False),
+    PrimaryKeyConstraint("principal_id", "binding_id", name="meeting_provider_key_tombstones_pkey"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("binding_id", IdKind.MEETING_PROVIDER_BINDING),
+    _is_identifier("meeting_id", IdKind.MEETING),
+    _is_identifier("meeting_history_id", IdKind.MEETING_HISTORY),
+    CheckConstraint(
+        f"length(calendar_ref) BETWEEN 1 AND {MAX_CALENDAR_REF_CHARACTERS}",
+        name="a_key_tombstone_calendar_ref_is_bounded",
+    ),
+    CheckConstraint(
+        f"length(ical_uid) BETWEEN 1 AND {MAX_ICAL_UID_CHARACTERS}",
+        name="a_key_tombstone_uid_is_bounded",
+    ),
+    CheckConstraint(
+        f"series_ical_uid IS NULL OR length(series_ical_uid) BETWEEN 1 AND "
+        f"{MAX_ICAL_UID_CHARACTERS}",
+        name="a_key_tombstone_series_uid_is_bounded",
+    ),
+    CheckConstraint(
+        "(series_ical_uid IS NULL) = (occurrence_original_start_utc IS NULL)",
+        name="a_key_tombstone_names_its_series_and_original_start",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_id", "principal_id"],
+        [f"{SCHEMA}.meetings.meeting_id", f"{SCHEMA}.meetings.principal_id"],
+        ondelete="RESTRICT",
+        name="a_key_tombstone_names_a_meeting_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_history_id", "meeting_id", "principal_id"],
+        [
+            f"{SCHEMA}.meeting_history.history_id",
+            f"{SCHEMA}.meeting_history.meeting_id",
+            f"{SCHEMA}.meeting_history.principal_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_key_tombstone_names_a_receipt_of_its_meeting",
+    ),
+    Index(
+        "meeting_provider_key_tombstones_by_key",
+        "principal_id",
+        "calendar_ref",
+        "ical_uid",
+        "occurrence_original_start_utc",
+    ),
+)
+
+#: The five WP3b tables, parent before child (the revision's creation order).
+MEETING_SYNC_TABLES: Final = (
+    meeting_sync_publications,
+    meeting_sync_events,
+    meeting_provider_review_marks,
+    meeting_provider_reconciliation_passes,
+    meeting_provider_key_tombstones,
 )
 
 # --- WP-RE-01: the Record Event feed -----------------------------------------

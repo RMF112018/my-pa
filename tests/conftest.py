@@ -128,6 +128,7 @@ from my_pa.contracts.ports import (
     MeetingRecord,
     MeetingRepository,
     MeetingSeriesProviderBindingRecord,
+    MeetingSyncRepository,
     MeetingWriteRequestRecord,
     MemoryDetail,
     MemoryListingFacts,
@@ -11602,6 +11603,11 @@ class FakeUnitOfWork(UnitOfWork):
     def communications(self) -> CommunicationsRepository:
         """The WP3a communications rows: not modelled in FAST worlds, as `issues`."""
         return cast("CommunicationsRepository", _UnmodelledPlane("communications"))
+
+    @property
+    def meeting_sync(self) -> MeetingSyncRepository:
+        """The WP3b meeting sync staging: not modelled in FAST worlds, as `issues`."""
+        return cast("MeetingSyncRepository", _UnmodelledPlane("meeting_sync"))
 
     @property
     def issues(self) -> IssueRepository:

@@ -638,6 +638,14 @@ class IdKind(StrEnum):
     COMMUNICATION_MAILBOX_ITEM = "cmitm"
     COMMUNICATION_OBSERVATION = "cobs"
     COMMUNICATION_QUARANTINE = "cqrn"
+    #: Communications intelligence WP3b (Manager rulings D1, D2): one staged
+    #: `meeting_sync_v1` event record (`knowledge.meeting_sync_events`), the
+    #: opaque `provider_event_ref` the review and reconcile capabilities name.
+    #: Checked against every prior member (a grep of `msevt` over `src`,
+    #: `tests`, `web/src` and `migrations`, and the uniqueness assertion in
+    #: `tests/unit/test_identifiers.py`): none collides, none is a prefix of a
+    #: prior member and no prior member is a prefix of it.
+    MEETING_SYNC_EVENT = "msevt"
 
 
 class InvalidIdentifierError(ValueError):

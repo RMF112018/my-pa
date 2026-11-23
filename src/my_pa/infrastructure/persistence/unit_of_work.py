@@ -87,6 +87,7 @@ from my_pa.contracts.ports import (
     LineageBackfillRepository,
     ManagedDocumentRepository,
     MeetingRepository,
+    MeetingSyncRepository,
     Operation,
     OperationQueue,
     ProjectRepository,
@@ -228,6 +229,7 @@ from my_pa.infrastructure.persistence.knowledge_assertions import (
 )
 from my_pa.infrastructure.persistence.lineage_backfill import SqlLineageBackfillRepository
 from my_pa.infrastructure.persistence.managed_documents import SqlManagedDocumentRepository
+from my_pa.infrastructure.persistence.meeting_sync import SqlMeetingSyncRepository
 from my_pa.infrastructure.persistence.meetings import SqlMeetingRepository
 from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.record_events import (
@@ -1538,6 +1540,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def communications(self) -> CommunicationsRepository:
         """The communications rows, on this transaction's connection (WP3a)."""
         return SqlCommunicationsRepository(self._open)
+
+    @property
+    def meeting_sync(self) -> MeetingSyncRepository:
+        """The meeting sync staging and reconciliation rows, on this connection (WP3b)."""
+        return SqlMeetingSyncRepository(self._open)
 
     @property
     def issues(self) -> IssueRepository:

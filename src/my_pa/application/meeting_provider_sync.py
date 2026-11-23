@@ -150,9 +150,16 @@ class MeetingProviderSync:
         event: MeetingSyncEvent,
         *,
         source_sha256: str,
+        source_snapshot_id: str,
         now: datetime,
     ) -> MeetingSyncOutcome:
-        """Resolve and apply one event (module docstring)."""
+        """Resolve and apply one event (module docstring).
+
+        `source_snapshot_id` is the ingest snapshot whose bytes have digest
+        `source_sha256` (WP3b, Manager ruling D10): a binding records it with
+        every observation, and a created binding as its immutable origin. The
+        database refuses a snapshot of any other digest or Principal.
+        """
         if _SHA256.fullmatch(source_sha256) is None:
             raise ValueError("source_sha256 must be lowercase SHA-256 hex")
         at = ensure_utc(now)
@@ -201,7 +208,16 @@ class MeetingProviderSync:
                 diagnostic=resolution.diagnostic,
             )
         if bound is not None:
-            return self._update(uow, principal_id, event, bound, source_sha256, idempotency_key, at)
+            return self._update(
+                uow,
+                principal_id,
+                event,
+                bound,
+                source_sha256,
+                source_snapshot_id,
+                idempotency_key,
+                at,
+            )
         return self._create(
             uow,
             principal_id,
@@ -209,6 +225,7 @@ class MeetingProviderSync:
             resolution.kind,
             resolution.meeting_series_id,
             source_sha256,
+            source_snapshot_id,
             idempotency_key,
             at,
         )
@@ -220,6 +237,7 @@ class MeetingProviderSync:
         event: MeetingSyncEvent,
         bound: MeetingProviderBindingRecord,
         source_sha256: str,
+        source_snapshot_id: str,
         idempotency_key: str,
         at: datetime,
     ) -> MeetingSyncOutcome:
@@ -273,6 +291,7 @@ class MeetingProviderSync:
                 last_seen_source_sha256=attributes.last_seen_source_sha256,
                 last_seen_record_ordinal=attributes.last_seen_record_ordinal,
                 last_seen_at=attributes.last_seen_at,
+                last_seen_snapshot_id=source_snapshot_id,
                 # Stored even for a no-change record (rule 7), so a later older
                 # record of this key is recognised as stale.
                 last_applied_generated_at_utc=attributes.last_applied_generated_at_utc,
@@ -297,6 +316,7 @@ class MeetingProviderSync:
         kind: ResolutionKind,
         meeting_series_id: str | None,
         source_sha256: str,
+        source_snapshot_id: str,
         idempotency_key: str,
         at: datetime,
     ) -> MeetingSyncOutcome:
@@ -356,6 +376,8 @@ class MeetingProviderSync:
             last_seen_source_sha256=source_sha256,
             last_seen_record_ordinal=event.ordinal,
             last_seen_at=at,
+            last_seen_snapshot_id=source_snapshot_id,
+            origin_snapshot_id=source_snapshot_id,
             version=1,
             created_at=at,
             updated_at=at,

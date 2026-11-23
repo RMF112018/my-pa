@@ -20,8 +20,9 @@ INVOKE_LOG: Final = "ApplicationService.invoke"
 def test_repository_checks_pin_checkout_and_record_package_identity() -> None:
     """The provenance the frozen audit required, as workflow text.
 
-    Eleven jobs check out this repository: classify, validate-static,
-    validate-fast, validate-docs, web-security, dependency-floor-fast, and the
+    Twelve jobs check out this repository: classify, validate-static,
+    validate-fast, the advisory validate-fast-xdist, validate-docs,
+    web-security, dependency-floor-fast, and the
     five database-tier lanes (migration-edge as migration-edge-shard). A matrix
     job's checkout is one occurrence in the text and pins every leg. The validate, dependency-floor,
     migration-edge and database-tier aggregators do not check out. Each
@@ -32,7 +33,7 @@ def test_repository_checks_pin_checkout_and_record_package_identity() -> None:
     """
     text = WORKFLOW.read_text(encoding="utf-8")
     checkouts = text.count("uses: actions/checkout@")
-    assert checkouts == 11, checkouts
+    assert checkouts == 12, checkouts
     assert text.count(CHECKOUT_PIN) >= checkouts, (
         f"each checkout must set ref to `{CHECKOUT_PIN}`; found "
         f"{text.count(CHECKOUT_PIN)} pins for {checkouts} checkouts"

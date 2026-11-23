@@ -320,7 +320,9 @@ def _illegal_pairs() -> list[tuple[RemoteEvalSessionState, RemoteEvalSessionStat
 def _legal_pairs() -> list[tuple[RemoteEvalSessionState, RemoteEvalSessionState]]:
     pairs: list[tuple[RemoteEvalSessionState, RemoteEvalSessionState]] = []
     for source, targets in LEGAL_TRANSITIONS.items():
-        for target in targets:
+        # Sorted: `targets` is a frozenset, whose order varies per process, and
+        # pytest-xdist requires every worker to collect the same ordered ids.
+        for target in sorted(targets):
             pairs.append((source, target))
     return pairs
 

@@ -63,8 +63,10 @@ PYTEST_JOBS: Final = frozenset(
 #: to: `validate-docs` runs only on a docs-only PR (`tests/ci_classify.py`),
 #: over an explicit list of documentation-reading modules, in place of the
 #: `validate` shards it does not replace on any other run. No module's lane is
-#: decided by it, and it aggregates nothing.
-NOT_LANES: Final = frozenset({"validate-docs"})
+#: decided by it, and it aggregates nothing. `validate-fast-xdist` is the
+#: advisory parallel run of the FAST selection (operator decision O4): no
+#: required check needs it, so no module's lane is decided by it either.
+NOT_LANES: Final = frozenset({"validate-docs", "validate-fast-xdist"})
 _NARROW: Final = frozenset(
     {
         "database_clone",

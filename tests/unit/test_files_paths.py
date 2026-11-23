@@ -100,7 +100,9 @@ def test_c1_controls_are_not_c0_and_stay_ordinary() -> None:
     [
         (spelling, prefix)
         for reserved in RESERVED
-        for spelling in {reserved, reserved.upper(), reserved.lower(), reserved.swapcase()}
+        # Sorted: a set's order varies per process, and pytest-xdist requires
+        # every worker to collect the same ordered ids.
+        for spelling in sorted({reserved, reserved.upper(), reserved.lower(), reserved.swapcase()})
         for prefix in ("", "a/", "a/b/c/")
     ],
 )

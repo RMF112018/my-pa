@@ -446,7 +446,9 @@ def test_declared_dev_dependencies_are_the_agreed_set() -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dev = data["project"]["optional-dependencies"]["dev"]
     roots = {re.split(r"[><=!\[]", item)[0].strip() for item in dev}
-    assert roots == {"pytest", "ruff", "mypy"}
+    # `pytest-xdist` joined by operator decision O4 (2026-11-22) for the advisory
+    # parallel FAST lane. Still the exact set, never a subset.
+    assert roots == {"pytest", "pytest-xdist", "ruff", "mypy"}
 
 
 def test_no_declared_dependency_is_prohibited() -> None:

@@ -369,6 +369,11 @@ SKIPPABLE: Final = frozenset(
     }
 )
 
+#: Advisory jobs (operator decision O4, 2026-11-22): skipped on a docs-only PR
+#: like `SKIPPABLE`, but needed by no job, so no aggregator -- and therefore no
+#: required check -- can read their result.
+ADVISORY: Final = frozenset({"validate-fast-xdist"})
+
 #: Aggregator -> {need: role}. `always`: exactly `success`. `full`: `success`,
 #: or `skipped` on a docs-only PR. `docs`: `success` on a docs-only PR,
 #: `skipped` otherwise. Every aggregator also needs `classify` == `success`.
@@ -556,18 +561,50 @@ def test_classify_uses_the_events_immutable_shas_and_fails_closed() -> None:
 
 def test_every_skippable_job_carries_exactly_the_docs_only_condition() -> None:
     conditioned = {job for job, body in _jobs().items() if body.get("if") == DOCS_SKIP}
-    assert conditioned == SKIPPABLE
-    for job in SKIPPABLE:
+    assert conditioned == SKIPPABLE | ADVISORY
+    for job in SKIPPABLE | ADVISORY:
         assert _needs(job) == {"classify"}, job
 
 
 def test_every_job_is_accounted_for() -> None:
     """A new job must be placed: skippable, always-run, or an aggregator."""
-    assert set(_jobs()) == SKIPPABLE | set(ROLES) | {"classify", "validate-static", "validate-docs"}
+    assert set(_jobs()) == (
+        SKIPPABLE | ADVISORY | set(ROLES) | {"classify", "validate-static", "validate-docs"}
+    )
     assert _jobs()["validate-static"].get("if") == "${{ !cancelled() }}"
     assert _needs("validate-static") == {"classify"}
     assert _jobs()["validate-docs"].get("if") == DOCS_RUN
     assert _needs("validate-docs") == {"classify"}
+
+
+def test_no_job_needs_an_advisory_job() -> None:
+    """An advisory lane cannot pass or fail an aggregator, or anything else."""
+    for job in _jobs():
+        needs = _jobs()[job].get("needs")
+        named = frozenset(str(need) for need in needs) if isinstance(needs, list) else frozenset()
+        assert not named & ADVISORY, f"{job} needs advisory {sorted(named & ADVISORY)}"
+    for job in ADVISORY:
+        assert "continue-on-error" not in _jobs()[job], f"{job}: a failure must stay visible"
+
+
+def test_the_xdist_lane_runs_the_whole_fast_selection_by_file() -> None:
+    """`-n auto --dist loadfile` over FAST's exact expression, unsharded, in one step."""
+    job = "validate-fast-xdist"
+    assert _matrix_shards(job) is None
+    runs = [step for step in _steps(job) if "python -m pytest" in str(step.get("run", ""))]
+    assert len(runs) == 1, f"{job}: exactly one pytest step"
+    (run,) = runs
+    assert run.get("if") == "steps.fast.outputs.applicable == 'true'"
+    flat = " ".join(str(run["run"]).split())
+    assert flat == f'python -m pytest -m "{FAST}" -n auto --dist loadfile --durations=50', flat
+    install = [s for s in _steps(job) if s.get("name") == "Install Python FAST dependencies"]
+    assert len(install) == 1
+    assert 'python -m pip install -e ".[dev]"' in str(install[0].get("run"))
+    # The required lanes stay serial.
+    for other in set(_jobs()) - ADVISORY:
+        for step in _steps(other):
+            script = " ".join(str(step.get("run", "")).split())
+            assert "-n auto" not in script and "--dist" not in script, f"{other} runs xdist"
 
 
 def _classified_aggregator(job: str) -> tuple[dict[str, str], str]:

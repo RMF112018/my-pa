@@ -1,16 +1,23 @@
 # CPM Workbench — schedule evidence plane
 
 **UNEXECUTED / OPERATOR-GATED.** This is a commissioned pre-execution procedure. No command
-in a code block below was run against any shared, NAS or production database, and nothing
-here is deployed: the two CPM revisions (`6c2306330ceb`, `621ef6786c64`) exist only on the
-branch `feat/cpm-s5b-worker`, production runs the database at `023f8f7eb499`, and the
-`MY_PA_SCHEDULE_ENABLED` switch is off by default. What **was** executed: the pre-deploy
-checks of section 3 ran only against disposable per-test clones on an isolated scratch
-PostgreSQL 15 cluster (`tests/database/test_cpm_workbench_predeploy.py`), and every behaviour
-cited below ran in the repository's test tiers on synthetic PDFs. The current-state
-description is [`docs/architecture/cpm-workbench.md`](../../docs/architecture/cpm-workbench.md);
-the decision record is
-[`ADR-016`](../../docs/decisions/ADR-016-cpm-workbench-schedule-evidence.md).
+in a code block below was run against any shared, NAS or production database by this work,
+and nothing here is switched on in production. The CPM revisions (`6c2306330ceb`,
+`621ef6786c64`) and the code of slices S5a, S5b-1 and S5b-2 are merged on `main` (#344, #345,
+#347), as are the Schedule Scenarios slices S6-1, S6-2 and S6-3 (#348, #349, #354; sections 8
+and 9). Whether a given database has these revisions applied is read with the existing
+Alembic control plane, never assumed from this runbook; the `MY_PA_SCHEDULE_ENABLED` switch is
+off by default. What **was** executed: the pre-deploy checks of section 3 ran only against
+disposable per-test clones on an isolated scratch PostgreSQL 15 cluster
+(`tests/database/test_cpm_workbench_predeploy.py`), and every behaviour cited below ran in the
+repository's test tiers on synthetic PDFs. The current-state description is
+[`docs/architecture/cpm-workbench.md`](../../docs/architecture/cpm-workbench.md); the decision
+record is [`ADR-016`](../../docs/decisions/ADR-016-cpm-workbench-schedule-evidence.md). The
+proposed P6 XER/XML import (design only, not implemented) is
+[`docs/architecture/schedule-xer-import-contract.md`](../../docs/architecture/schedule-xer-import-contract.md)
+under [`ADR-023`](../../docs/decisions/ADR-023-p6-xer-xml-schedule-import.md); its operator
+gates are section 15 of that contract, and no procedure for it exists here until its S7-5
+slice adds one.
 
 ## 1. What the plane does
 
@@ -141,12 +148,12 @@ MY_PA_SCHEDULE_ENABLED=true .venv/bin/python apps/worker.py run --plane schedule
 MY_PA_SCHEDULE_ENABLED=true .venv/bin/python apps/cli/invoke.py schedule_publications.import [options]
 ```
 
-**Import roles from Schedule Scenarios S6-2 until S6-3** (schedule scenarios contract
-S6-2-D04, sections 12.2 and 14.9): `schedule_publications.import` refuses role `baseline` with
-`invalid_request(PUBLICATION_ROLE)` whatever the switches (a baseline import needs the
-section 12.3 approval fields, which arrive with S6-3); role `reference` and baseline kind
+**Import roles since Schedule Scenarios S6-2 and S6-3** (schedule scenarios contract
+sections 12.2, 14.9 and 15; S6-3 is merged, #354): role `reference` and baseline kind
 `working` are retired and refused; `schedule_publications.list` refuses the filter
-`publication_role=reference` with `invalid_request(PUBLICATION_ROLE)`. Import role `update`.
+`publication_role=reference` with `invalid_request(PUBLICATION_ROLE)`; a role-`baseline`
+import needs the section 12.3 approval fields and is refused while the scenario plane is not
+effective, so with only `MY_PA_SCHEDULE_ENABLED` on, import role `update`.
 
 `capabilities.get` then reports the `schedule` plane's backlog, dead-lettered count and
 heartbeat, which degrade readiness exactly as the other planes do.
@@ -194,8 +201,8 @@ deployment.
 [section 14](../../docs/architecture/schedule-scenarios-contract.md), revision A) adds the 11
 plane tables, retires the `reference` publication role and the `working` baseline kind,
 widens the 6 `record_links` CHECKs from the lineage storage vocabulary and adds trigger G10 on
-`schedule_publications`. Nothing in it is public: no capability, command, switch, grant or
-ChatLLM surface exists for the plane until S6-3, so after this step the plane is **inert**.
+`schedule_publications`. Nothing in it is public: the capabilities, switch and ChatLLM surface are S6-3's (merged,
+#354; section 9), so with revision A alone and the S6-3 switch off the plane is **inert**.
 Its pre-deploy checks ran only against disposable per-test clones on an isolated scratch
 PostgreSQL 15 cluster (`tests/database/test_schedule_scenarios_predeploy.py`); nothing here
 was run against a persistent database.

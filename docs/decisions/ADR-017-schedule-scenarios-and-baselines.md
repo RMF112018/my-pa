@@ -129,3 +129,12 @@ S6-1 (the pure domain and the CPM engine, contract section 9.1) is implemented a
 (#348; contract section 9.1.1 records what was executed). S6-2 (persistence) is designed in
 contract section 14 and not implemented; S6-3 (capabilities) is not implemented. Nothing is
 deployed, migrated or granted, and no switch exists yet.
+
+## Amended by ADR-023 (2026-11-23)
+
+[ADR-023](ADR-023-p6-xer-xml-schedule-import.md) ("Amendment to ADR-017") adds start and
+finish milestone kinds, a fixed lag calendar and the MY-PA standard calendar, running on a new
+engine id `my-pa-cpm-v2`; `my-pa-cpm-v1` and every v1 document and output stay
+byte-identical. Proposed, design only (slice S7-0 of
+[`schedule-xer-import-contract.md`](../architecture/schedule-xer-import-contract.md)); the
+status and decision lines above are left as written.

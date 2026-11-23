@@ -1,10 +1,11 @@
 # CPM Workbench — current state
 
-**Status:** current-state description of the CPM Workbench schedule-evidence plane on the
-local branch `feat/cpm-s5b-worker` (slices S5a, S5b-1 and S5b-2 of CPM Workbench R2
-work packages WP-00 to WP-04). Nothing described here is merged to `main`, deployed, or
-applied to any persistent database. The plane is **off by default** and no real schedule
-PDF exists anywhere in the repository. The decision record is
+**Status:** current-state description of the CPM Workbench schedule-evidence plane on
+`main`. Slices S5a, S5b-1 and S5b-2 of CPM Workbench R2 work packages WP-00 to WP-04 are
+merged (#344, #345, #347), and so are the Schedule Scenarios slices S6-1, S6-2 and S6-3 (#348,
+#349, #354). Nothing described here is deployed or switched on in production, and no
+revision named here was applied to any persistent database by this work. The plane is **off
+by default** and no real schedule file exists anywhere in the repository. The decision record is
 [`ADR-016`](../decisions/ADR-016-cpm-workbench-schedule-evidence.md); the operator
 procedure, pre-deploy gates and residuals are in
 [`ops/runbooks/cpm-workbench.md`](../../ops/runbooks/cpm-workbench.md).
@@ -19,24 +20,23 @@ The three implementation contracts control the detail and are not repeated here:
 
 Successor work: the Schedule Scenarios slices S6-1 to S6-3 are
 specified in [`schedule-scenarios-contract.md`](schedule-scenarios-contract.md) under
-[`ADR-017`](../decisions/ADR-017-schedule-scenarios-and-baselines.md). S6-1 (the pure domain
-and engine) is implemented and merged (#348); S6-2 (contract section 14) is merged (#349);
-S6-3 (contract section 15: the 26 plane capabilities behind `MY_PA_SCHEDULE_SCENARIOS_ENABLED`,
-revision B `b77334135653`, the lineage families and read shapes, ChatLLM `chatllm-data-v13`)
-is implemented on the branch `feat/schedule-scenarios-capabilities` and not merged; nothing
-is deployed. Its operator procedure (switch order, grant and profile commissioning, read-only
-checks, rollback) is section 9 of
-[`ops/runbooks/cpm-workbench.md`](../../ops/runbooks/cpm-workbench.md). This document describes the merged S5 behaviour and changes when they
-land. **S6-2 change (implemented on that branch, not merged):** the `reference` role and kind
-`working` are retired, every role-`baseline` import is refused
-`invalid_request(PUBLICATION_ROLE)` until S6-3 adds the approval fields, and
-`schedule_publications.list` refuses the filter `publication_role=reference` (contract section
-12.2, S6-2-D04). Revision `2a90f91dd786` adds the 11 plane tables; the S5 admission writes an
-import-time approval under the Project lock and admits an automatic import into its own intake
-Series (both reachable only from tests until S6-3), and the worker's H8 and fail paths run the
-series-match hook in the same transaction with the effective-plane bit off (sections 14.8.5 to
-14.8.7). The revision-A pre-deploy checks Q0-Q9 and the operator procedure are section 8 of
-[`ops/runbooks/cpm-workbench.md`](../../ops/runbooks/cpm-workbench.md).
+[`ADR-017`](../decisions/ADR-017-schedule-scenarios-and-baselines.md) and are merged: S6-1
+(the pure domain and engine, #348), S6-2 (contract section 14, revision `2a90f91dd786`, #349)
+and S6-3 (contract section 15: the 26 plane capabilities behind
+`MY_PA_SCHEDULE_SCENARIOS_ENABLED`, revision B `b77334135653`, the lineage families and read
+shapes, #354). Nothing is deployed or switched on. Their operator procedure (switch order,
+grant and profile commissioning, read-only checks, rollback) is sections 8 and 9 of
+[`ops/runbooks/cpm-workbench.md`](../../ops/runbooks/cpm-workbench.md). Since S6-2 the
+`reference` role and kind `working` are retired; a role-`baseline` import needs the S6-3
+approval fields and is refused while the scenario plane is not effective (contract sections
+12.2 and 15). Sections 1 to 10 below describe the S5 behaviour; where S6 changed it, the
+scenarios contract governs.
+
+Proposed next: P6 XER (and later XML) import, a client-usable grant-gated import from a
+files-workspace file with a generic captured-field store, is specified in
+[`schedule-xer-import-contract.md`](schedule-xer-import-contract.md) under
+[`ADR-023`](../decisions/ADR-023-p6-xer-xml-schedule-import.md). It is design only: nothing
+of it is implemented.
 
 ## 1. What it is
 
@@ -177,8 +177,8 @@ filesystem and no write access to any source root.
 - Generic text extraction is unchanged: `application/pdf` stays decision-gated on
   `P00-OD-003` in `capabilities.get` and absent from `SUPPORTED_MEDIA_TYPES`; the schedule
   path is a separate capability-specific one (R2 section 8.4).
-- Only `p6_full_v1` Full-Schedule PDFs. XER and XML (lineage WP-05B) are **not
-  implemented**; supplemental, narrative and adjustment evidence (R2 sections 26–28),
+- Only `p6_full_v1` Full-Schedule PDFs. XER and XML are **not implemented** (proposed in
+  [`schedule-xer-import-contract.md`](schedule-xer-import-contract.md), ADR-023); supplemental, narrative and adjustment evidence (R2 sections 26–28),
   cross-domain links (R2 section 33), frontend UI and AI are out of scope.
 - No logging or metrics emitter exists in the job plane (contract E-05). Observable,
   content-free: publication status and counts, issue counts by code, job state, attempts and

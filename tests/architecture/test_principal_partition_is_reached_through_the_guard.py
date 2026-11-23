@@ -161,6 +161,12 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # hand-written partition comparison.
         "infrastructure/persistence/ingestion.py",
         "infrastructure/persistence/communications.py",
+        # Communications intelligence WP3b's meeting sync staging and
+        # reconciliation rows, in the same shape: every SELECT and UPDATE
+        # composes `_mine`, every INSERT (the idempotent review mark included)
+        # `_bound`, and the publication-to-snapshot join
+        # `matching_partition_criterion`.
+        "infrastructure/persistence/meeting_sync.py",
         # Record lineage S1's Issue plane, in the same shape: every SELECT and
         # UPDATE composes `_mine` or `principal_scoped`, every INSERT `_bound`,
         # and every correlated predicate `matching_partition_criterion`.
@@ -600,6 +606,12 @@ PER_MODULE_ONLY: Final = {
         "communications intelligence WP3a: every SELECT/UPDATE composes `_mine` over "
         "`partition_criterion`, every INSERT (the set-like ON CONFLICT ones included) "
         "`_bound` over `principal_bound_values`, the item and observation joins "
+        "`matching_partition_criterion`; not yet in a dedicated statement-level scanner."
+    ),
+    "infrastructure/persistence/meeting_sync.py": (
+        "communications intelligence WP3b: every SELECT/UPDATE composes `_mine` over "
+        "`partition_criterion`, every INSERT (the ON CONFLICT review mark included) "
+        "`_bound` over `principal_bound_values`, the publication-to-snapshot join "
         "`matching_partition_criterion`; not yet in a dedicated statement-level scanner."
     ),
     "infrastructure/persistence/issue_handoffs.py": (

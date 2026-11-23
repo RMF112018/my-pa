@@ -9,7 +9,8 @@
 * only the named consumers import either package: the application resolution
   service, the Meeting port and its persistence (the binding vocabularies), and
   the `meetings.provider.bind` path (WP2-W3): its command, the Meeting
-  application that arbitrates it and the binding view it answers with;
+  application that arbitrates it and the binding view it answers with; and
+  the WP3b staging persistence (the staged event's closed vocabularies);
 * the communications and meeting-sync slices do not import each other;
 * provider vocabulary stays out of the domain.
 """
@@ -39,6 +40,9 @@ CONSUMERS = frozenset(
         "contracts/ports.py",
         "contracts/v1/meetings.py",
         "infrastructure/persistence/meetings.py",
+        # WP3b-S1: the staged event rows carry `EventStatus` and
+        # `ProviderEventIdFormat`.
+        "infrastructure/persistence/meeting_sync.py",
         "infrastructure/persistence/tables.py",
     }
 )

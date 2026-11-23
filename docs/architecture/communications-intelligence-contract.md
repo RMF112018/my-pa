@@ -1,8 +1,8 @@
 # Communications intelligence — implementation contract
 
-**Status:** implementation contract under [ADR-022](../decisions/ADR-022-communications-intelligence.md) (Accepted under operator delegation 2026-11-22, Manager ruling R-OP-1; effective on merge of WP2). **WP1 is implemented** (the pure source contract, this spec, the ADR and the corpus evidence; merged to `main` in #371). **WP2 is implemented on branch `feat/comms-meeting-identity` (not merged)**: section 12 and the [`meeting_sync_v1` producer contract](meeting-sync-v1-contract.md). Every other section is design for WP3–WP5, which each need their own PR, review and, where marked, operator decision. Nothing is granted, activated or deployed: migrations, grants, the ChatLLM profile and schedulers are applied in one consolidated activation at the end of the goal (section 20.6); WP2's migration `6418b57081c3` exists on its branch only and has been applied to disposable databases only.
+**Status:** implementation contract under [ADR-022](../decisions/ADR-022-communications-intelligence.md) (Accepted under operator delegation 2026-11-22, Manager ruling R-OP-1; effective on merge of WP2). **WP1 is implemented** (the pure source contract, this spec, the ADR and the corpus evidence; merged to `main` in #371). **WP2 is implemented and merged** (#373): section 12 and the [`meeting_sync_v1` producer contract](meeting-sync-v1-contract.md). **WP3a is implemented on branch `feat/comms-ingestion` (not merged)**: the shared ingestion lifecycle, the communications tables, ingestion, backfill, coverage, the cycles-plane poll step, the operator command and the runbook (section 0.2); its migration `52a829ef718a` (on `6418b57081c3`) has been applied to disposable databases only. Every other section is design for WP3b–WP5, which each need their own PR, review and, where marked, operator decision. Nothing is granted, activated or deployed: migrations, grants, the ChatLLM profile and schedulers are applied in one consolidated activation at the end of the goal (section 20.6).
 
-**Basis:** contract head measured: branch `feat/comms-intelligence` at `80208caabe92de03be676a93fae8984d31d2b8c1` (tree `057703650c1f7b8976a86ccebc3da0a62f70d1a6`), the WP1 head after fix F2, on `origin/main@092610d36b7d1493fc7fda6e352a4bd06e914f61`; Alembic single head `640aaacc78e8` (129 revision files); 298 `Capability` members and 70 `Purpose` members. PR #368 (ADR-020, meeting prep, migration on `640aaacc78e8`) is open and not on this branch: WP2's migration must chain after whichever head is current when it is written. All counts here are digits on purpose (spelled-count guard). Paths to files that do not exist yet are not written as links (CI relative-link check).
+**Basis:** contract head measured: branch `feat/comms-intelligence` at `80208caabe92de03be676a93fae8984d31d2b8c1` (tree `057703650c1f7b8976a86ccebc3da0a62f70d1a6`), the WP1 head after fix F2, on `origin/main@092610d36b7d1493fc7fda6e352a4bd06e914f61`; Alembic single head `640aaacc78e8` (129 revision files); 298 `Capability` members and 70 `Purpose` members. PR #368 (ADR-020, meeting prep, migration on `640aaacc78e8`) is open and not on this branch: WP2's migration must chain after whichever head is current when it is written. WP3a basis: branch `feat/comms-ingestion` on `origin/main@354cdebae60723f2f315578b494d2d6f9f32214c` (the WP2 merge), Alembic single head `52a829ef718a`. All counts here are digits on purpose (spelled-count guard). Paths to files that do not exist yet are not written as links (CI relative-link check).
 
 **Corpus evidence:** [`docs/evidence/communications-corpus/`](../evidence/communications-corpus/README.md) (aggregates only, from the sanitized v2 analysis, SHA-256 `82edeee885125a6552a00f7046adbefe0337d5e035905fc08dcceb2261a7945d`). Section numbers below are what [`CORPUS-DESIGN-IMPLICATIONS.md`](../evidence/communications-corpus/CORPUS-DESIGN-IMPLICATIONS.md) cites.
 
@@ -11,8 +11,9 @@
 | WP | Content | State |
 | --- | --- | --- |
 | WP1 | ADR-022, this spec, 6 corpus deliverables; pure `communications_evidence_v2` contract (parse/validate/normalize both dialects, classification, lane reconciliation, integrity, `comms_search_text_v1`, `comms_identifiers_v1`, corpus coverage summary), aggregate-only CLI, synthetic fixtures, FAST tests | **implemented**, merged to `main` (#371); no migration |
-| WP2 | Meeting provider identity and recurrence resolution (section 12): migration `6418b57081c3`, persistence, the `meeting_sync_v1` contract and parser, the resolution service, `meetings.provider.bind`, ChatLLM profile `chatllm-data-v15` (activated at the consolidated goal activation, R-OP-4), the [meeting-sync producer contract](meeting-sync-v1-contract.md) | **implemented** on branch `feat/comms-meeting-identity` (not merged); nothing granted, activated or deployed |
-| WP3 | Shared ingestion lifecycle (section 1) + communications persistence (section 5), ingestion (sections 10–11), coverage (section 9), backfill, scheduled ingestion on the cycles plane, monitoring, runbook; the batch Meeting bind/review path that gates calendar sync (section 12.7, R-OP-6) | planned |
+| WP2 | Meeting provider identity and recurrence resolution (section 12): migration `6418b57081c3`, persistence, the `meeting_sync_v1` contract and parser, the resolution service, `meetings.provider.bind`, ChatLLM profile `chatllm-data-v15` (activated at the consolidated goal activation, R-OP-4), the [meeting-sync producer contract](meeting-sync-v1-contract.md) | **implemented**, merged to `main` (#373); nothing granted, activated or deployed |
+| WP3a | Shared ingestion lifecycle (section 1) + communications persistence (section 5), ingestion (sections 10–11), coverage (section 9), backfill, scheduled ingestion on the cycles plane, monitoring, operator command, runbook (section 0.2) | **implemented** on branch `feat/comms-ingestion` (not merged): migration `52a829ef718a`; nothing granted, activated or deployed; the poll switch is off |
+| WP3b | `meeting_sync_v1` as a lifecycle consumer; the batch Meeting bind/review path that gates calendar sync (section 12.7, R-OP-6); the R1-1 unbind tombstone or rebind; `not_seen` (C10); the deterministic sync apply order; sync auto-enable and audit routing; a snapshot foreign key on the binding (D8); the `provider_id_only` / Message-ID join (section 3, check (e)) | planned |
 | WP3P | Procore PULSE persistence and ingestion on the WP3 lifecycle (designed separately by a later docs package) | planned |
 | WP4 | Communications search service + MCP reads (sections 6, 7, 13, 14, 16) | planned |
 | WP4P | PULSE retrieval MCP | planned |
@@ -37,13 +38,60 @@ After each WP the Manager runs the aggregate validation against the real corpus 
 
 `tests/architecture/test_communications_source_scope.py` pins the slice: the domain imports only the standard library and itself and does no IO; the infrastructure package imports only the standard library and the domain; nothing else in `src/` imports either package in WP1; the domain names no provider. Fixtures under `tests/fixtures/communications_evidence/` are synthetic.
 
+### 0.2 What WP3a contains (branch `feat/comms-ingestion`, not merged)
+
+| Module or file | Responsibility |
+| --- | --- |
+| `migrations/versions/20261122_52a829ef718a_communications_ingestion.py` | revision `52a829ef718a` (down `6418b57081c3`): 12 Principal-partitioned tables in `knowledge` — `ingest_sources`, `ingest_snapshots`, `ingest_snapshot_paths`, `ingest_runs`, `ingest_run_snapshots`, `ingest_coverage_windows`, `communication_messages`, `communication_mailbox_items`, `communication_observations`, `communication_participants`, `communication_identifiers`, `communication_quarantine` — with composite `ON DELETE RESTRICT` foreign keys, named-mutable-column, append-only and `TRUNCATE` refusal triggers, the generated English `search_document` with its GIN index, no trigram index; the downgrade refuses while any row exists |
+| `src/my_pa/domain/common/identifiers.py` | 8 new identifier kinds: `isrc`, `isnp`, `irun`, `icov` (lifecycle) and `cmsg`, `cmitm`, `cobs`, `cqrn` (communications) |
+| `src/my_pa/contracts/ports.py` | the lifecycle and communications ports and closed vocabularies (`IngestConsumer`, `IngestSnapshotStatus`, `IngestRunTrigger`, `IngestRunOutcome`, `IngestRunSnapshotOutcome`, `IngestConsumerHandler`) |
+| `src/my_pa/infrastructure/persistence/ingestion.py`, `communications.py` | `SqlIngestionRepository`, `SqlCommunicationsRepository`, the operator aggregate read |
+| `src/my_pa/application/ingestion.py` | `IngestionLifecycle`: consumer-neutral admission, enable/disable, scheduled poll, operator run, backfill and dry run (sections 1, 10, 11); closed `IngestRefusalCode` |
+| `src/my_pa/application/communications_ingest.py` | `CommunicationsEvidenceHandler` (the `communications_evidence_v2` consumer: identity, dedup, observations, participants, identifiers, quarantine, projection) and `CommunicationsCoverageReader` (range summary and rolling 30 days) |
+| `src/my_pa/domain/communications/coverage.py` | pure coverage: merged intervals, gaps, per-lane states, freshness (section 9) |
+| `src/my_pa/bootstrap/communications_ingest.py` | the one composition of the lifecycle, the read-only workspace stores and the coverage reader, shared by the operator command and the cycles plane; the injected parser; an audit sink that raises (the lifecycle writes no audit row) |
+| `src/my_pa/infrastructure/jobs/cycle_scheduler.py`, `apps/worker.py` | the cycles plane as a tuple of steps, each with its own switch, lock and due rule; the ingestion poll step (section 19) |
+| `apps/cli/communications_ingest.py` | the operator command (sections 10, 11): `admit`, `enable`, `disable`, `run-once`, `backfill`, `coverage`, `aggregate` |
+| `ops/nas/remote/compose.comms-ingest.remote.example.yml` | the read-only workspace overlay for the cycles service (ruling M8); applying it is part of the consolidated activation (section 20.6) |
+| `ops/runbooks/communications-ingestion.md` | admission, backfill, dry run, monitoring, failure recovery and disabling, written for the consolidated activation |
+
+Guards added or amended: `tests/architecture/test_communications_source_scope.py` is an explicit importer allowlist (ruling M5); `tests/architecture/test_ingestion_lifecycle_is_consumer_neutral.py` (the lifecycle imports no consumer slice and calls only `list_directory`, `stat` and `open_download`); `tests/architecture/test_communications_tables_hold_no_content_columns.py` (no body, HTML or display-name column); the partition-guard and operator-command maps register the new tables and the command.
+
+### 0.3 WP3a rulings and deviations from this spec as first designed
+
+The Manager ruled on the WP3a investigation on 2026-11-22 (rulings M1–M8 and m1–m14). Each changes the design where noted; the sections below are amended in place.
+
+| Ruling | Deviation or decision | Section |
+| --- | --- | --- |
+| M4 | The consumer closed set already admits `communications_evidence_v2`, `meeting_sync_v1` and `pulse_csv_export`, so WP3b and WP3P add no vocabulary migration; admission refuses a consumer with no registered handler (`consumer_not_registered`) | 1.2 |
+| M3 | `superseded` is not a snapshot status: snapshots are `pending`, `ingested` or `rejected`; paths and aliases live in `ingest_snapshot_paths`, whose `superseded_by_snapshot_id` and `superseded_at` change once, together, from NULL | 1.2, 1.3 |
+| M6 | A later observation of a known provider id is matched by provider id and never rekeys its item; it attaches only when sender and body digest agree, else it is quarantined `identity_conflict` and the message is flagged | 3 |
+| M7 | `communication_participants` is append-only with `first_observation_id`; full provenance is derived at read time from `communication_observations.participants` | 5.2 |
+| M1 | No trigram subject index in WP3a; it is deferred to WP4, which must amend `tests/architecture/test_no_vector_retrieval_exists.py` (it bans `gin_trgm_ops` today) when it adds one | 5.3 |
+| FTS | `search_document` is built now with the `english` configuration (R3); `comms_search_text_v1` is frozen unchanged and is the stored `search_text_version`; identifiers are stored as `comms_identifiers_v1` | 5.1, 6, 7 |
+| m6 | Stability exceptions: an operator run and a backfill read on first sight; an unchanged file (same size and version token as this process last finished with) is skipped without a read | 11 |
+| — | Path revert: bytes reappearing at a path whose row for them is already superseded write nothing (supersession is one-way) | 1.3 |
+| — | A failed snapshot (its transaction rolled back) has no run link; the run counts it | 1.2, 18 |
+| — | Backfill is allowed on a disabled source | 10 |
+| M2 | The poll is a step of the cycles plane with its own switch, lock and interval; `MY_PA_COMMUNICATIONS_ENABLED` is not added in WP3a (it gates reads, which are WP4) | 19 |
+| M8 | The cycles service reads the `mcp` workspace through a read-only overlay | 1.1, 19 |
+| m7 | The operator command takes the DSN only from `MY_PA_DATABASE_URL` and asserts `--expected-database` and `--expected-alembic-head` | 10, 19 |
+
+**Known residuals (WP3a).**
+
+- The poll stops at the first enabled source whose workspace is unavailable; the run is logged failed and retried after the interval.
+- A backfill holds each new file's bytes (at most `MAX_PUBLICATION_BYTES`, 64 MiB) in memory until it is applied.
+- A `provider_id_only` message and a Message-ID message of the same provider id stay two messages (section 3, check (e)); the join is WP3b.
+- The `comms_identifiers_v1` recall gaps (change orders, `fpl`, submittals; section 7, R5) are unchanged and stay WP4's.
+- Path revert cannot make an older snapshot current again for its path.
+
 ## 1. Source acquisition and version control (shared ingestion lifecycle)
 
 ### 1.1 Where publications come from
 
 The ChatLLM collector writes `communications_evidence_v2` publications into the `mcp` file workspace (ADR-019), canonical folder `My PA/Daily Intelligence/communications/`, one file per business date (`YYYYMMDD-comms.json`). Two rich-dialect publications sit elsewhere under `My PA/Daily Intelligence/`. my-pa **reads** them through the files workspace store's read path (list, stat with fingerprint version token, streamed read); it never writes, renames or trashes them. No new mount, source root or connector is introduced. Confirming that the worker can compose a read-only view of the `mcp` workspace (ADR-019 decision 7 keeps workspace and source roots disjoint; this is a workspace read, not a source root) is a WP3 preflight item. **Manager ruling 2026-11-21 (R1, section 21):** reading the `mcp` workspace through the files store as an ingestion source is ratified by the Manager, subject to that ADR-019 decision 7 preflight in WP3.
 
-### 1.2 Shared lifecycle (WP3; consumers: communications first, PULSE second)
+### 1.2 Shared lifecycle (WP3a, implemented on branch; consumers: communications first, PULSE second)
 
 One lifecycle, content-free, with domain-specific storage behind it:
 
@@ -53,10 +101,20 @@ One lifecycle, content-free, with domain-specific storage behind it:
 - **Quarantine** — the consumer stores quarantined *records* (section 4.3); the lifecycle stores rejected *snapshots*. Neither stores content.
 - **Coverage** — `ingest_coverage_windows`: one row per ingested snapshot with declared `[start_utc, end_utc]` (inclusive end), coverage state and per-lane states; merged intervals are computed at read time (section 9).
 
+**As built in WP3a (deviations from the list above).**
+
+- The consumer closed set is `communications_evidence_v2`, `meeting_sync_v1` and `pulse_csv_export` (ruling M4): it already admits WP3b's and WP3P's consumers, so neither needs a vocabulary migration. Admitting a source whose consumer has no registered handler is refused `consumer_not_registered`; in WP3a only `communications_evidence_v2` has a handler.
+- The source column is `ingest_source_id` everywhere (identifier kind `isrc`); `admitted_by` is always `operator_cli` and no audit row is written (ruling m8); only `enabled` is mutable; one source per `(principal_id, consumer, workspace_id, path_prefix, file_pattern)`.
+- `ingest_snapshots.status` is `pending`, `ingested` or `rejected` only (ruling M3): a pending snapshot is finalized once and is then immutable. `superseded` is derived per path from `ingest_snapshot_paths` (section 1.3).
+- `ingest_run_snapshots` carries `principal_id` and an outcome from `already_known`, `ingested`, `rejected`, `failed`. A snapshot whose transaction rolled back leaves no row at all, so it has no run link; the run counts it in `snapshots_failed` and its outcome is `partial` or `failed`. The `failed` link outcome is reserved and unused.
+- The run `counts` object holds closed count keys only (snapshots seen, new, ingested, rejected, already known, failed, path-reverted, skipped by reason; records per classification).
+
 ### 1.3 Version control
 
 - A file is identified by its SHA-256, not its path or modification time. The same path with new bytes is a new snapshot; the earlier snapshot stays and is marked `superseded` for that path when the new one is ingested.
 - The same bytes at another path (a copy) are the same snapshot: the second path is recorded as an alias on the snapshot and nothing is re-ingested.
+- **As built (ruling M3).** Every path a snapshot was seen at is a row of `ingest_snapshot_paths` (`principal_id`, `snapshot_id`, `ingest_source_id`, `relative_path`, `first_seen_at`, `superseded_by_snapshot_id`, `superseded_at`); only the two superseded columns are mutable, together and only from NULL (trigger), and at most one row per `(source, relative_path)` is current. New bytes at a path, or known bytes recorded as an alias at a path, supersede that path's current row in the same transaction.
+- **Path revert.** Bytes reappearing at a path whose row for them is already superseded write nothing: supersession is one-way, the newer snapshot stays current for that path, and the run counts `snapshots_path_reverted` with an `already_known` link.
 - The workspace version token is recorded but never trusted as identity (ADR-019 decision 3: external writers exist).
 - A source pointer is `(snapshot file_sha256, record ordinal)`. It is how stored text is rebuilt (section 18.4) and how a client can be told exactly which publication a fact came from.
 
@@ -90,6 +148,7 @@ Corpus result: 31 of 31 accepted, 0 quarantined, 0 unknown keys.
 - **Identity conflict** — one canonical key whose distinct mailbox items disagree on sender address or body digest: every observation of those items, merged lane siblings and exact repeats included, is quarantined (`identity_conflict`) and never merged, so none of them counts as usable.
 - **Two items, one message** — Inbox and Sent (or 2 Inbox) items under one Internet Message-ID are expected; their selected times legitimately differ.
 - **Across publications (WP3).** A new snapshot's observation of an existing canonical key is checked against the stored message (sender, body digest). Agreement adds an observation; disagreement quarantines the new observation (`identity_conflict`), sets `identity_conflict = true` on the message, and counts it in the run. The stored message is not rewritten. Corpus: 0 conflicts.
+- **As built in WP3a (ruling M6).** A later observation is matched to its mailbox item by provider id first, then by canonical key; an item is never rekeyed. It attaches when sender and body digest agree with the stored message; otherwise it is quarantined `identity_conflict`, the message's `identity_conflict` flag is set, the stored message is not rewritten, and the run counts it. Checks (c) and (d) below are implemented with tests; (e) is not: a `provider_id_only` message and a Message-ID message of the same provider id stay two messages, and the join is WP3b.
 - **WP3 cross-publication checks (review R1, findings 6c and 6d; not WP1 code).** WP1 checks identity within one publication only. WP3 must add, with tests: (c) one provider id observed with two different Internet Message-IDs across publications is detected and quarantined, never merged (today that fact comes from the Manager's corpus analysis only); (d) the `in_window` disagreement check runs on every observation, `lane_observation_merged` siblings included, not on primaries only; (e) one provider id keyed `provider_id_only` in one publication (no lane carried the Internet Message-ID) and `provider_returned` in another (review R3, finding R3-2: today these are two identities) — WP3 decides whether to join them by provider id, with tests.
 - **Mutable provider ids.** A provider id is item identity at collection time only. An item moved between folders may reappear under a new provider id; it becomes a new mailbox item under the same canonical message, which is correct.
 - **Never identity:** producer `dedup_key`, body SHA-256, subject (ADR-022 decision 8).
@@ -110,7 +169,7 @@ Every record ordinal of every ingested snapshot leaves exactly one row: an obser
 
 `out_of_window` observations are stored but do not contribute to the message's in-coverage claim.
 
-## 5. PostgreSQL schema (design only; WP3 builds; WP2 for section 5.4)
+## 5. PostgreSQL schema (WP3a built sections 5.1–5.3 on branch; WP2 for section 5.4)
 
 All tables Principal-partitioned (`principal_id` NOT NULL, composite foreign keys `(…, principal_id)`, `ON DELETE RESTRICT`), reached through the partition guard, with identifier kinds of their own prefixes. Snapshot-derived rows are append-only (refusal triggers for UPDATE/DELETE and TRUNCATE, precedent `7d9a450dfd07` and `c8e4a1b70d35`), except the explicitly mutable projection columns named below. Lifecycle tables: section 1.2.
 
@@ -134,25 +193,28 @@ All tables Principal-partitioned (`principal_id` NOT NULL, composite foreign key
 
 Constraints: `UNIQUE (principal_id, mailbox_ref, identity_kind, identity_value)`; `body_sha256` lowercase hex; `search_text` length at most 262,144; `search_text IS NULL` when `body_state` is `withheld` or `truncated`. Mutable columns (projection only): the `search_text*` group, `latest_snapshot_id`, the 3 flags; each change is versioned by `search_text_version` or recorded by an ingest run.
 
+**As built (rulings m1, m2).** The source pointer of the text is `(text_snapshot_id, text_record_ordinal)` instead of `source_ordinal`; the `body_*` columns are taken from that same observation, so they move with the text and are mutable with it (`has_attachments` is immutable). The projection key is deterministic: an observation with a usable text basis, then the later declared window end, window start, file SHA-256 and the lowest ordinal. `search_text_version` is `comms_search_text_v1`, frozen unchanged.
+
 ### 5.2 Items, observations, participants, identifiers, quarantine
 
 - `communication_mailbox_items`: `item_id`, `principal_id`, `message_id`, `mailbox_ref`, `provider_id`, `provider_id_format`; `UNIQUE (principal_id, mailbox_ref, provider_id)`.
 - `communication_observations`: `observation_id`, `principal_id`, `item_id`, `snapshot_id`, `record_ordinal`, `classification`, `folder_role`, `lane_verification`, `selected_field`, `selected_utc`, `received_utc`, `sent_utc` (with states), `body_sha256`, `unique_body_sha256`, `participants` (JSON of normalized address sets per field, no display names); `UNIQUE (snapshot_id, record_ordinal)`.
-- `communication_participants`: canonical participants per message: `principal_id`, `message_id`, `field` (`from`, `sender`, `to`, `cc`, `bcc`, `reply_to`), `address`, provenance (`observation_ids`, lanes); PK `(principal_id, message_id, field, address)`; index `(principal_id, address, message_id)` for attendee joins (section 15).
+- `communication_participants`: canonical participants per message: `principal_id`, `message_id`, `field` (`from`, `sender`, `to`, `cc`, `bcc`, `reply_to`), `address`, provenance (`observation_ids`, lanes; **as built, ruling M7:** the row is append-only and holds only `first_observation_id`, and the full provenance is derived at read time from `communication_observations.participants`); PK `(principal_id, message_id, field, address)`; index `(principal_id, address, message_id)` for attendee joins (section 15).
 - `communication_identifiers`: `principal_id`, `message_id`, `kind`, `value`, `extractor_version`; PK `(principal_id, message_id, kind, value, extractor_version)`; index `(principal_id, kind, value)`.
 - `communication_quarantine`: `principal_id`, `snapshot_id`, `record_ordinal`, `reasons` (closed `ReasonCode` text array); `UNIQUE (snapshot_id, record_ordinal)`.
+- **As built.** Every per-snapshot unique includes `principal_id`; observations carry `reasons` (the closed degradation codes); mailbox items carry `first_snapshot_id`; identifier kinds `cmsg`, `cmitm`, `cobs`, `cqrn`. There is no binding-snapshot foreign key on the meeting bindings (D8 stays; WP3b may add it).
 
 ### 5.3 Indexes
 
 - GIN on `search_document`;
-- GIN `gin_trgm_ops` on `subject` (near-miss subject lookup);
+- GIN `gin_trgm_ops` on `subject` (near-miss subject lookup) — **deferred to WP4 (ruling M1):** WP3a builds no trigram index, because `tests/architecture/test_no_vector_retrieval_exists.py` bans `gin_trgm_ops`; WP4 adds the index together with the guard amendment that admits it;
 - B-tree `(principal_id, message_time DESC, message_id)` (time-ordered keyset pages);
 - B-tree `(principal_id, conversation_id, message_time)` (thread collapse and reads);
 - the participant and identifier indexes above.
 
 No raw HTML, body content or display names are stored (ADR-022 decision 10). Display names are deliberately not carried by the WP1 normalized model; resolving a person by name goes through Entities and the address, not through mail text.
 
-### 5.4 Meeting provider bindings (WP2, implemented on branch)
+### 5.4 Meeting provider bindings (WP2, implemented)
 
 Section 12.1.
 
@@ -175,6 +237,8 @@ Corpus derivation result, measured at `184ac6ca` (Manager real-corpus run, 2026-
 
 **Open WP4 item (Manager ruling 2026-11-21: not fixed in WP1).** Two disclaimer markers are still unanchored: a line starting `Disclaimer` and the "if you have received this … in error" phrase match on any line anywhere in the text, not only on a paragraph-start line in the trailing region as the other markers do, and the "received this … in error" phrase matches anywhere within its line. WP4 must anchor them, with tests; until then they can cut body text that merely mentions a disclaimer.
 
+**Built in WP3a.** `search_document` is the generated column above, with the `english` configuration and a GIN index (R3); WP4 still measures `english` against `simple`. The read side is WP4.
+
 **Version decision (F1, F2).** The narrowed markers change output for some valid inputs, but the identifier stays `comms_search_text_v1`: nothing has been persisted or published under it, WP1 is unmerged, and the corrected rules are the first `v1` that will be stored. Any change after WP3 persists searchable text is a new version.
 
 ## 7. Exact technical-identifier indexing (extractor WP1; index WP3/WP4)
@@ -194,7 +258,7 @@ Every match is token-bounded: `RFI 17` never matches `RFI 174`, `RFI 1740` or `R
 
 **Six-digit noise policy.** A bare six-digit number is never a spec section by default (1,713 corpus records hold one). `include_uncued_spec_sections=True` admits only the bare *spaced* form and is off in every stored index; turning it on is a new extractor version.
 
-**Indexing.** Extraction runs over `subject + "\n" + search_text` (never over quoted chains), stored in `communication_identifiers` with the extractor version. A new version is written beside the old and switched atomically by a read setting; old rows are removed only after the switch. Result over corpus v2 with extractor `comms_identifiers_v1`, measured at `184ac6ca` (Manager real-corpus run, 2026-11-21) (records): `gmp` 458, `fpl` 134, `rfi` 75, `submittal` 31, `cb` 10, `spec` 5, `co` 0 (at `ac0d06ae`, before fix F1: `rfi` 51, `submittal` 28, `spec` 1). WP4 measures recall on a labelled synthetic set and decides whether `pco`/`cor` kinds are added. **Open WP4 defect (Manager ruling 2026-11-21, R5, section 21):** `comms_identifiers_v1` recall is low against the analysis counts ([search characteristics](../evidence/communications-corpus/COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)): change orders 0 against 104 records, `fpl` 134 against 263, `submittal` 31 against 128 (measured at `184ac6ca`; 28 when the ruling was made at `ac0d06ae`). WP4 must fix it with tests; it does not block WP1.
+**Indexing.** Extraction runs over `subject + "\n" + search_text` (never over quoted chains), stored in `communication_identifiers` with the extractor version. A new version is written beside the old and switched atomically by a read setting; old rows are removed only after the switch. WP3a stores the rows with extractor version `comms_identifiers_v1`, unchanged; the recall gaps below are not fixed in WP3a and stay WP4's. Result over corpus v2 with extractor `comms_identifiers_v1`, measured at `184ac6ca` (Manager real-corpus run, 2026-11-21) (records): `gmp` 458, `fpl` 134, `rfi` 75, `submittal` 31, `cb` 10, `spec` 5, `co` 0 (at `ac0d06ae`, before fix F1: `rfi` 51, `submittal` 28, `spec` 1). WP4 measures recall on a labelled synthetic set and decides whether `pco`/`cor` kinds are added. **Open WP4 defect (Manager ruling 2026-11-21, R5, section 21):** `comms_identifiers_v1` recall is low against the analysis counts ([search characteristics](../evidence/communications-corpus/COMMUNICATIONS-SEARCH-CHARACTERISTICS.md)): change orders 0 against 104 records, `fpl` 134 against 263, `submittal` 31 against 128 (measured at `184ac6ca`; 28 when the ruling was made at `ac0d06ae`). WP4 must fix it with tests; it does not block WP1.
 
 ## 8. Lineage
 
@@ -202,7 +266,7 @@ Every match is token-bounded: `RFI 17` never matches `RFI 174`, `RFI 1740` or `R
 - **Ingestion lineage is provenance, not record lineage.** Every message row names the snapshot and record ordinal it came from; every snapshot names its source and file SHA-256; every run names the snapshots it touched. That chain answers "where did this come from" without the lineage plane.
 - **Later amendment (not designed further here).** Admitting a `communication` family would anchor passages as code-point slices of the stored `search_text` with `search_text_sha256` as the source digest (ADR-015 decision 5's shape), and would need an ADR-015 decision 6 amendment, a CHECK widening migration and tests. A search-text version change would then have to preserve the anchored version.
 
-## 9. Coverage and freshness (summary WP1; persistence WP3; read WP4)
+## 9. Coverage and freshness (summary WP1; persistence WP3a; read WP4)
 
 - A publication contributes coverage only when accepted and overall coverage is `complete`; it contributes its declared `[start_utc, end_utc]` with the **end inclusive**.
 - Intervals are merged when the next start is at most 1 s (`WINDOW_RESOLUTION`) after the previous end; anything wider is a **gap**. A gap is inclusive like a window: it runs from 1 s after the earlier end to 1 s before the next start, and its `seconds` counts both ends (`(end − start) + 1`). Covered through 03:59:59 and again from 04:00:00 the next day is a gap of exactly 86,400 s. Bounds are whole seconds because the parser floors a sub-second bound (section 2, `window_bound_floored`), so a gap's start is never after its end.
@@ -213,26 +277,30 @@ Every match is token-bounded: `RFI 17` never matches `RFI 174`, `RFI 1740` or `R
 
 Corpus: one interval 2026-10-17T04:00:00Z → 2026-11-20T14:12:05Z, no gaps (`summarize_corpus`).
 
-## 10. Backfill (WP3)
+**As built in WP3a.** One `ingest_coverage_windows` row per ingested snapshot (append-only), with per-lane states as a JSONB array (`key_kind` `inbox`, `sent`, `procore_rfis` or `other`, plus role, lane, authorized and state; ruling m4). `my_pa.domain.communications.coverage` is the pure merge, gap, lane and freshness computation; `CommunicationsCoverageReader` answers a range (`complete`, `partial` or `none`, gaps, freshness seconds, snapshot count) and the rolling 30-day monitoring read. The operator command prints both; the client read is WP4.
+
+## 10. Backfill (WP3a, implemented on branch)
 
 - Backfill is an operator CLI action naming a source and an explicit file list or path glob; it creates one run with trigger `backfill`.
 - Files are ingested in ascending `window.start_utc` order, each snapshot in its own transaction, so a stop leaves a consistent prefix and a rerun skips ingested SHA-256 values.
 - The 29 canonical publications are the initial backfill. Admitting the 2 rich publications outside the canonical folder was an open decision (they overlap canonical windows and add only verified lanes and privacy classes). **Manager ruling 2026-11-21 (R2, section 21):** both are admitted to backfill as explicitly registered sources; their overlap with canonical windows deduplicates by identity (sections 3 and 11).
 - A dry-run mode parses, classifies and reports aggregate counts (the WP1 CLI output) without writing.
+- **As built.** `apps/cli/communications_ingest.py backfill --source ID` with repeated `--file` names, one `--glob` name pattern, or neither for every candidate; `--dry-run` lists, reads, hashes, prepares and counts and writes nothing at all. A backfill reads on first sight (no two-poll wait: the files are at rest) and is allowed on a disabled source, so the operator can backfill before enabling the poll. The lifecycle orders by window start, then window end, then file SHA-256. The operator command builds a bounded engine (`statement_timeout` 60 s), reads the DSN only from `MY_PA_DATABASE_URL` (never argv, never printed) and refuses unless `--expected-database` and `--expected-alembic-head` match the live connection (ruling m7). Exit status is closed: `0` done (a run `completed`), `1` refused with one closed code, `2` usage, `3` a run finished `partial` or `failed`. Output is one JSON object of ids, closed codes, counts and UTC timestamps only.
 
-## 11. Incremental ingestion (WP3)
+## 11. Incremental ingestion (WP3a, implemented on branch)
 
 - **Trigger.** A poll step on the cycles worker plane (section 19) lists each enabled source; an operator CLI command can run the same step once.
 - **Idempotency** by `(principal_id, source_id, file_sha256)`: a known SHA-256 is skipped with no write except the run link. A crash mid-snapshot rolls back that snapshot only.
 - **Stability.** A file is ingested only when its size and version token are unchanged across 2 consecutive polls (the collector may still be writing); a file that fails JSON parsing while still changing is retried, a stable one is rejected.
+  **As built (ruling m6), with two exceptions.** Stability is remembered in the poll's process (one long-lived lifecycle), so a restart waits two polls again. (1) An operator run (`run-once`) and a backfill read on first sight; every read is still bound to the observed version token and size, and a file refused while it moved is `skipped_changing` and retried, never rejected. (2) A path whose size and version token equal those this process last finished with is `skipped_unchanged` without a read; the token is a change detector, never identity.
 - **Re-publication.** New bytes at a known path → new snapshot; observations of existing messages are added, a newer search-text basis may replace the projection (e.g. a body that was empty), and the earlier snapshot is `superseded` for that path. Coverage keeps both windows; they merge.
 - **Overlap.** Overlapping windows (rich vs canonical, weekend vs weekday) produce repeat observations of the same items — counted, never new messages (corpus: 191 provider ids recur, all identical).
 - **Ordering.** Within a run, snapshots are processed oldest window first; the message projection always reflects a deterministic rule (latest snapshot with a usable text basis wins), independent of arrival order.
 - **Meeting sync (third consumer, section 12).** Scheduled calendar sync must not run before the operator has reconciled existing Meetings in WP3's batch bind/review pass (section 12.7, Manager ruling R-OP-6). Binding stays explicit and is never inferred from title or time. Once that pass is complete, calendar sync enables itself with no further operator switch; until then it stays off.
 
-## 12. Meeting provider identity and recurrence resolution (WP2, implemented on branch)
+## 12. Meeting provider identity and recurrence resolution (WP2, implemented)
 
-**State.** Implemented on branch `feat/comms-meeting-identity` (not merged): migration `6418b57081c3` (on `4d1069a7d84f`), persistence, the pure `meeting_sync_v1` contract and parser, the resolution service, and the `meetings.provider.bind` capability. Nothing is ingested: the sync source is registered as a lifecycle consumer in WP3, and the operator applies the ChatLLM collector change once from the producer contract's collector implementation notes (R-OP-8). The producer-facing contract is [`meeting-sync-v1-contract.md`](meeting-sync-v1-contract.md).
+**State.** Implemented and merged to `main` (#373): migration `6418b57081c3` (on `4d1069a7d84f`), persistence, the pure `meeting_sync_v1` contract and parser, the resolution service, and the `meetings.provider.bind` capability. Nothing is ingested: the sync source is registered as a lifecycle consumer in WP3, and the operator applies the ChatLLM collector change once from the producer contract's collector implementation notes (R-OP-8). The producer-facing contract is [`meeting-sync-v1-contract.md`](meeting-sync-v1-contract.md).
 
 Meetings before WP2: `meetings` with nullable `meeting_series_id`, no provider columns; capabilities `meetings.create`, `meetings.list`, `meetings.read`, `meetings.search`, `meetings.update`, `meetings.series.update`, `meetings.notes.versions`, `meetings.notes.read_version`. WP2 adds no column to `meetings`: provider identity lives in two new tables.
 
@@ -310,7 +378,7 @@ D1–D12 and rule 7 below were Manager rulings, previously not operator-ratified
 
 ### 12.7 Constraint for WP3: reconcile before scheduled sync
 
-**Scheduled calendar sync must NOT run until the operator has reconciled existing Meetings.** Otherwise every hand-made Meeting that matches a provider event is duplicated by rule 3 or rule 2 (resolution never matches by title or time).
+**Scheduled calendar sync must NOT run until the operator has reconciled existing Meetings.** WP3a does not deliver this pass or register `meeting_sync_v1` as a consumer; both are WP3b (section 0). Otherwise every hand-made Meeting that matches a provider event is duplicated by rule 3 or rule 2 (resolution never matches by title or time).
 
 **Batch bind plan (Manager ruling R-OP-6, operator delegation 2026-11-22).** This refines the earlier default-off constraint; the "not before reconciliation" rule stands.
 
@@ -381,9 +449,10 @@ Cursors are opaque, grant-bound and keyed on the section 14 order (precedent: S3
 ## 19. Deployment and monitoring (WP3 onward; operator-gated)
 
 - One additive migration per WP that needs one; downgrade refuses while rows exist.
-- Switches, all default off: `MY_PA_COMMUNICATIONS_ENABLED` (reads), `MY_PA_COMMUNICATIONS_INGEST_ENABLED` (the poll step).
+- Switches, all default off: `MY_PA_COMMUNICATIONS_ENABLED` (reads), `MY_PA_COMMUNICATIONS_INGEST_ENABLED` (the poll step). **WP3a adds only `MY_PA_COMMUNICATIONS_INGEST_ENABLED`** (setting `communications_ingest_enabled`, default false) and `MY_PA_COMMUNICATIONS_INGEST_POLL_SECONDS` (default 900, bounded 60–86,400); `MY_PA_COMMUNICATIONS_ENABLED` gates the reads and is added by WP4.
 - **Scheduler:** the poll step runs inside `apps/worker.py run --plane cycles` (#367: `run_cycle_scheduler` loop, `pg_try_advisory_lock` single flight) with its own lock key and interval (default 15 minutes), not a new plane, process or cron.
-- **Monitoring:** per run, counts by outcome; per source, freshness seconds, open gaps, rejected snapshots, quarantined records, identity conflicts; log lines carry codes and counts only. A runbook under `ops/runbooks/` is written in WP3.
+- **As built (ruling M2).** The cycles plane runs a tuple of steps, each with its own switch, advisory-lock key and due rule. The daily cycle keeps its date rule and `MY_PA_CYCLE_SCHEDULER_ENABLED`; the ingestion step's lock is `COMMS_INGEST_LOCK_KEY` = `advisory_lock_key(b"my-pa-ingest-poll")` (the first 8 bytes of its SHA-256, signed), it is due at plane start and then one interval after each attempt, and a busy lock skips that step only. The plane runs when either switch is on; with both off it still exits 2 `plane cycles disabled`. Composition stays in `apps/worker.py` (infrastructure does not import application): the workspace stores are composed eagerly, and a misconfigured workspace root exits 2 `plane cycles workspace_misconfigured`. Each poll writes one counts-only JSON log line (`comms_ingest.run`: sources, outcomes, summed counts). The cycles container reads the workspace through the read-only overlay `ops/nas/remote/compose.comms-ingest.remote.example.yml` (ruling M8; the store refuses a mount that is not `ST_RDONLY`).
+- **Monitoring:** per run, counts by outcome; per source, freshness seconds, open gaps, rejected snapshots, quarantined records, identity conflicts; log lines carry codes and counts only. A runbook under `ops/runbooks/` is written in WP3: [`ops/runbooks/communications-ingestion.md`](../../ops/runbooks/communications-ingestion.md) (WP3a).
 - Deployment, production migration, grants and source admission stay operator actions. They are bundled into the one consolidated activation of section 20.6 (R-OP-7).
 
 ## 20. Testing and acceptance
@@ -403,11 +472,13 @@ Cursors are opaque, grant-bound and keyed on the section 14 order (precedent: S3
 
 ### 20.2 WP2
 
-Implemented on branch with these tests (FAST unit, contract and database tiers). Migration from empty and from the preceding head; binding uniqueness; moved occurrence keeps identity; cancelled occurrence; series resolution; no title/time matching; reconciliation call CAS and idempotency; synthetic calendar fixtures only.
+Implemented (merged in #373) with these tests (FAST unit, contract and database tiers). Migration from empty and from the preceding head; binding uniqueness; moved occurrence keeps identity; cancelled occurrence; series resolution; no title/time matching; reconciliation call CAS and idempotency; synthetic calendar fixtures only.
 
 ### 20.3 WP3
 
 Lifecycle idempotency (same SHA-256 twice writes once); re-publication and alias paths; stability rule; record totals reconcile per snapshot; cross-publication identity conflict quarantines and does not rewrite; append-only triggers; partition guard; backfill resume; dry run writes nothing; the Manager's isolated-database real-corpus run reproduces section 20.1's figures; the scheduler step's single flight.
+
+**WP3a (implemented on branch `feat/comms-ingestion`).** Migration tier `tests/schema/test_communications_ingestion_migration.py` (tables, foreign keys, CHECKs, named-mutable, append-only and `TRUNCATE` triggers, downgrade refusal while rows exist); database tier `tests/database/test_communications_ingestion_persistence.py`, `test_communications_ingestion_application.py`, `test_communications_ingest_cli.py` (admit, dry-run backfill, backfill, idempotent rerun, coverage, aggregate over the synthetic fixtures) and `test_cycle_plane_steps.py` (two-process single flight on the new lock key); FAST `tests/unit/test_ingestion_lifecycle.py`, `test_communications_ingest.py`, `test_communications_coverage.py`, `test_communications_ingest_cli.py` (refusal on missing or mismatched expectations, DSN never echoed, dry run writes nothing, output holds no fixture subject or address) and `test_cycle_plane_steps.py` (per-step lock, due rule and interval, the switch matrix, the read-only overlay); the architecture guards of section 0.2. The real-corpus run is the Manager's, through the operator command against an isolated database; the WP1 figures it should reproduce are in section 20.1, deduplicated across sources (the WP1 aggregate counts each publication separately).
 
 ### 20.4 WP4
 
@@ -443,3 +514,5 @@ The Manager ruled on the open items of this spec and ADR-022 after WP1. They wer
 | — | The `Disclaimer` and "received this … in error" disclaimer markers are still unanchored | **Open WP4 item**; not fixed in WP1 | section 6 |
 
 **WP2 rulings.** The Manager's WP2 rulings of 2026-11-21 — D1 to D12 and resolution rule 7 (publication ordering, fix F1) — are recorded in [section 12.5](#125-manager-rulings-2026-11-21-for-wp2-ratified-under-operator-delegation-2026-11-22), with the WP2 open items, limitation and residual risk in section 12.6 and the WP3 reconcile-before-sync constraint in section 12.7. They are ratified under operator delegation 2026-11-22.
+
+**WP3a rulings.** The Manager's WP3a rulings of 2026-11-22 (M1–M8, m1–m14 and the FTS ruling) and the deviations they make from this spec as first designed are recorded in [section 0.3](#03-wp3a-rulings-and-deviations-from-this-spec-as-first-designed), and amended in place in sections 1.2, 1.3, 3, 5, 6, 7, 9, 10, 11 and 19.

@@ -153,6 +153,14 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # correlated predicate between two tables composes
         # `matching_partition_criterion`. No hand-written partition comparison.
         "infrastructure/persistence/meetings.py",
+        # Communications intelligence WP3a's ingestion lifecycle and
+        # communications rows, in the `meetings.py` shape: every SELECT and
+        # UPDATE composes `_mine` over `partition_criterion`, every INSERT
+        # `_bound` over `principal_bound_values`, and the item-to-message and
+        # observation-to-item joins `matching_partition_criterion`. No
+        # hand-written partition comparison.
+        "infrastructure/persistence/ingestion.py",
+        "infrastructure/persistence/communications.py",
         # Record lineage S1's Issue plane, in the same shape: every SELECT and
         # UPDATE composes `_mine` or `principal_scoped`, every INSERT `_bound`,
         # and every correlated predicate `matching_partition_criterion`.
@@ -582,6 +590,17 @@ PER_MODULE_ONLY: Final = {
         "INSERT composes `_bound` over `principal_bound_values`, correlated "
         "Meeting-table predicates use `matching_partition_criterion`; not yet in "
         "a dedicated statement-level scanner."
+    ),
+    "infrastructure/persistence/ingestion.py": (
+        "communications intelligence WP3a: every SELECT/UPDATE composes `_mine` over "
+        "`partition_criterion`, every INSERT `_bound` over `principal_bound_values`; "
+        "not yet in a dedicated statement-level scanner."
+    ),
+    "infrastructure/persistence/communications.py": (
+        "communications intelligence WP3a: every SELECT/UPDATE composes `_mine` over "
+        "`partition_criterion`, every INSERT (the set-like ON CONFLICT ones included) "
+        "`_bound` over `principal_bound_values`, the item and observation joins "
+        "`matching_partition_criterion`; not yet in a dedicated statement-level scanner."
     ),
     "infrastructure/persistence/issue_handoffs.py": (
         "record lineage S2: every SELECT composes `_mine` over `partition_criterion`, "

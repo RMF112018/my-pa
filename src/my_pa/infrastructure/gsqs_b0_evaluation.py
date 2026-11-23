@@ -16,12 +16,14 @@ from my_pa.contracts.ports import (
     AuditSink,
     CaptureRepository,
     CommitmentManagementRepository,
+    CommunicationsRepository,
     ContextPreferenceRepository,
     ContextRunRepository,
     EnrollmentRepository,
     EntitiesRepository,
     GoodNotesProposalAdmission,
     GoodNotesSemanticRepository,
+    IngestionRepository,
     IssueHandoffRepository,
     IssueRepository,
     IssueTimelineRepository,
@@ -228,6 +230,14 @@ class GsqsB0EvaluationUnitOfWork(UnitOfWork):
     @property
     def meetings(self) -> MeetingRepository:
         return cast(MeetingRepository, self._unused)
+
+    @property
+    def ingestion(self) -> IngestionRepository:
+        return cast(IngestionRepository, self._unused)
+
+    @property
+    def communications(self) -> CommunicationsRepository:
+        return cast(CommunicationsRepository, self._unused)
 
     @property
     def issues(self) -> IssueRepository:

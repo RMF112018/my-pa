@@ -89,9 +89,10 @@ def _offline(target: str, *, down: bool = False) -> str:
 def test_the_revision_is_directly_on_the_files_workspace_head() -> None:
     script = ScriptDirectory.from_config(_config())
     # Communications intelligence WP2's `6418b57081c3` (Meeting provider
-    # bindings) is additive on this revision, so this revision is the head's
-    # parent rather than the head.
-    assert script.get_heads() == ["6418b57081c3"]
+    # bindings) is additive on this revision and WP3a's ingestion revision on
+    # that, so this revision is the head's grandparent rather than the head.
+    assert script.get_heads() == ["52a829ef718a"]
+    assert script.get_revision("52a829ef718a").down_revision == "6418b57081c3"
     assert script.get_revision("6418b57081c3").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "b77334135653"

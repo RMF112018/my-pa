@@ -338,6 +338,20 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "meeting_prep_versions",
         "meeting_series_provider_bindings",
         "meeting_provider_bindings",
+        # Communications intelligence WP3a stacks the ingestion lifecycle and the
+        # communications tables.
+        "ingest_sources",
+        "ingest_snapshots",
+        "ingest_snapshot_paths",
+        "ingest_runs",
+        "ingest_run_snapshots",
+        "ingest_coverage_windows",
+        "communication_messages",
+        "communication_mailbox_items",
+        "communication_observations",
+        "communication_participants",
+        "communication_identifiers",
+        "communication_quarantine",
     }
     assert {
         "entities",

@@ -428,6 +428,7 @@ class BulkIdempotencyConflictError(Exception):
 
 
 __all__ = [
+    "INGEST_ADMITTED_BY_OPERATOR_CLI",
     "TRANSACTION_CONFLICT_SQLSTATES",
     "Acceptance",
     "AssignmentWriteRequest",
@@ -456,6 +457,15 @@ __all__ = [
     "CommitmentManagementRepository",
     "CommitmentManagementUnitOfWork",
     "CommitmentReferenceOwners",
+    "CommunicationIdentifierRecord",
+    "CommunicationMailboxItemRecord",
+    "CommunicationMessageRecord",
+    "CommunicationObservationRecord",
+    "CommunicationParticipantRecord",
+    "CommunicationProjection",
+    "CommunicationQuarantineRecord",
+    "CommunicationSnapshotTally",
+    "CommunicationsRepository",
     "ConstraintManagementRepository",
     "ConstraintManagementUnitOfWork",
     "ConstraintRevisionSnapshot",
@@ -477,6 +487,22 @@ __all__ = [
     "EvidenceUnavailableError",
     "FrameRepository",
     "GeneralReportRepository",
+    "IngestApplied",
+    "IngestConsumer",
+    "IngestConsumerHandler",
+    "IngestCoverageDeclaration",
+    "IngestCoverageWindowRecord",
+    "IngestPrepared",
+    "IngestRunOutcome",
+    "IngestRunRecord",
+    "IngestRunSnapshotOutcome",
+    "IngestRunSnapshotRecord",
+    "IngestRunTrigger",
+    "IngestSnapshotPathRecord",
+    "IngestSnapshotRecord",
+    "IngestSnapshotStatus",
+    "IngestSourceRecord",
+    "IngestionRepository",
     "InitialAlias",
     "InitialIdentifier",
     "IssueCursorError",
@@ -6452,6 +6478,21 @@ class UnitOfWork(ABC):
         `principal_id` remains a parameter on every method of the port and is
         the authenticated caller's partition, never a caller-supplied field.
         """
+
+    @property
+    @abstractmethod
+    def ingestion(self) -> IngestionRepository:
+        """The ingestion lifecycle rows, inside this transaction (communications WP3a).
+
+        On the general unit of work so a snapshot's lifecycle rows and the
+        consumer's rows (`communications`) commit or roll back together: one
+        snapshot, one transaction (contract section 10).
+        """
+
+    @property
+    @abstractmethod
+    def communications(self) -> CommunicationsRepository:
+        """The communications rows, inside this transaction (communications WP3a)."""
 
     @property
     @abstractmethod
@@ -14091,3 +14132,611 @@ class RemoteClientStandingReader(ABC):
     @abstractmethod
     def standing(self, client_ref: str, *, now: datetime) -> RemoteClientStanding | None:
         """The current standing of the remote client `client_ref` names, or `None`."""
+
+
+# --- Communications intelligence WP3a: the ingestion lifecycle and the
+# communications tables (contract sections 1.2, 1.3, 5.1 and 5.2; revision
+# `52a829ef718a`).
+#
+# Plain records over the twelve tables. The Principal is a parameter on every
+# method, the authenticated partition, never a record field. Closed
+# communications vocabularies travel as their `StrEnum` values (`str`): the
+# communications domain is a self-contained slice that this module does not
+# import, and the CHECKs refuse an unknown member.
+
+
+class IngestConsumer(StrEnum):
+    """The consumers a source may be admitted for (Manager ruling M4)."""
+
+    COMMUNICATIONS_EVIDENCE_V2 = "communications_evidence_v2"
+    MEETING_SYNC_V1 = "meeting_sync_v1"
+    PULSE_CSV_EXPORT = "pulse_csv_export"
+
+
+class IngestSnapshotStatus(StrEnum):
+    """A snapshot is pending until finalized once to `ingested` or `rejected` (M3)."""
+
+    PENDING = "pending"
+    INGESTED = "ingested"
+    REJECTED = "rejected"
+
+
+class IngestRunTrigger(StrEnum):
+    SCHEDULE = "schedule"
+    OPERATOR = "operator"
+    BACKFILL = "backfill"
+
+
+class IngestRunOutcome(StrEnum):
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
+class IngestRunSnapshotOutcome(StrEnum):
+    """What one run did with one snapshot it touched.
+
+    `already_known` is a SHA-256 the source had already ingested or rejected (a
+    rerun, or the same bytes at another path, recorded as an alias); `failed` is a
+    snapshot whose transaction rolled back.
+    """
+
+    INGESTED = "ingested"
+    REJECTED = "rejected"
+    ALREADY_KNOWN = "already_known"
+    FAILED = "failed"
+
+
+#: The only admission channel (Manager ruling m8: no audit row, no capability).
+INGEST_ADMITTED_BY_OPERATOR_CLI: Final = "operator_cli"
+
+
+@dataclass(frozen=True, slots=True)
+class IngestSourceRecord:
+    ingest_source_id: str
+    consumer: IngestConsumer
+    workspace_id: str
+    path_prefix: str
+    file_pattern: str
+    enabled: bool
+    admitted_at: datetime
+    admitted_by: str = INGEST_ADMITTED_BY_OPERATOR_CLI
+
+
+@dataclass(frozen=True, slots=True)
+class IngestSnapshotRecord:
+    snapshot_id: str
+    ingest_source_id: str
+    file_sha256: str
+    byte_count: int
+    observed_version_token: str | None
+    first_seen_at: datetime
+    status: IngestSnapshotStatus = IngestSnapshotStatus.PENDING
+    rejection_code: str | None = None
+    parser_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IngestSnapshotPathRecord:
+    snapshot_id: str
+    ingest_source_id: str
+    relative_path: str
+    first_seen_at: datetime
+    superseded_by_snapshot_id: str | None = None
+    superseded_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IngestRunRecord:
+    run_id: str
+    ingest_source_id: str
+    trigger: IngestRunTrigger
+    started_at: datetime
+    finished_at: datetime | None = None
+    outcome: IngestRunOutcome | None = None
+    #: Code-count JSON: names to non-negative integers, never content.
+    counts: Mapping[str, int] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IngestRunSnapshotRecord:
+    run_id: str
+    snapshot_id: str
+    ingest_source_id: str
+    outcome: IngestRunSnapshotOutcome
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class IngestCoverageWindowRecord:
+    coverage_window_id: str
+    ingest_source_id: str
+    snapshot_id: str
+    start_utc: datetime
+    #: Inclusive (contract section 9).
+    end_utc: datetime
+    coverage_state: str
+    #: One object per declared lane: `key_kind`, `role`, `lane`, `authorized`,
+    #: `state` (Manager ruling m4) -- closed values and booleans only.
+    lane_states: tuple[Mapping[str, object], ...]
+    recorded_at: datetime
+
+
+class IngestionRepository(ABC):
+    """The consumer-neutral ingestion lifecycle tables, inside one transaction.
+
+    Every method takes the authenticated Principal's capture-plane identifier
+    and reaches the partition through `principal_scope`. Nothing here commits.
+    A write the guards refuse (a terminal snapshot, a superseded path, a
+    finished run) raises the database error rather than being absorbed.
+    """
+
+    @abstractmethod
+    def insert_source(self, principal_id: str, source: IngestSourceRecord) -> None:
+        """Admit one source."""
+
+    @abstractmethod
+    def get_source(self, principal_id: str, ingest_source_id: str) -> IngestSourceRecord | None:
+        """One source, or `None`."""
+
+    @abstractmethod
+    def list_sources(
+        self, principal_id: str, *, enabled_only: bool = False
+    ) -> tuple[IngestSourceRecord, ...]:
+        """Every source of the Principal, ordered by `ingest_source_id`."""
+
+    @abstractmethod
+    def set_source_enabled(self, principal_id: str, ingest_source_id: str, enabled: bool) -> None:
+        """Switch one source; `RepositoryFailureError` when it does not exist."""
+
+    @abstractmethod
+    def find_snapshot(
+        self, principal_id: str, ingest_source_id: str, file_sha256: str
+    ) -> IngestSnapshotRecord | None:
+        """The source's snapshot of exactly these bytes (the idempotency key), or `None`."""
+
+    @abstractmethod
+    def get_snapshot(self, principal_id: str, snapshot_id: str) -> IngestSnapshotRecord | None:
+        """One snapshot, or `None`."""
+
+    @abstractmethod
+    def list_snapshots(
+        self, principal_id: str, ingest_source_id: str
+    ) -> tuple[IngestSnapshotRecord, ...]:
+        """Every snapshot of one source, ordered by `first_seen_at`, then id."""
+
+    @abstractmethod
+    def insert_snapshot(self, principal_id: str, snapshot: IngestSnapshotRecord) -> None:
+        """Record a new snapshot (normally `pending`)."""
+
+    @abstractmethod
+    def finalize_snapshot(
+        self,
+        principal_id: str,
+        snapshot_id: str,
+        *,
+        status: IngestSnapshotStatus,
+        rejection_code: str | None,
+        parser_version: str | None,
+    ) -> None:
+        """Move a pending snapshot to its terminal status, once.
+
+        `RepositoryFailureError` when no such snapshot exists; the trigger
+        refuses a second finalization or a non-terminal status.
+        """
+
+    @abstractmethod
+    def insert_snapshot_path(self, principal_id: str, path: IngestSnapshotPathRecord) -> None:
+        """Record that a snapshot was seen at a relative path (an alias when not the first)."""
+
+    @abstractmethod
+    def current_path(
+        self, principal_id: str, ingest_source_id: str, relative_path: str
+    ) -> IngestSnapshotPathRecord | None:
+        """The path's one unsuperseded row, or `None`."""
+
+    @abstractmethod
+    def supersede_path(
+        self,
+        principal_id: str,
+        snapshot_id: str,
+        relative_path: str,
+        *,
+        superseded_by_snapshot_id: str,
+        superseded_at: datetime,
+    ) -> None:
+        """Mark a path row superseded, once; `RepositoryFailureError` when absent."""
+
+    @abstractmethod
+    def list_snapshot_paths(
+        self, principal_id: str, ingest_source_id: str
+    ) -> tuple[IngestSnapshotPathRecord, ...]:
+        """Every path row of one source, ordered by path, then `first_seen_at`."""
+
+    @abstractmethod
+    def find_snapshot_path(
+        self, principal_id: str, snapshot_id: str, relative_path: str
+    ) -> IngestSnapshotPathRecord | None:
+        """The one row of a snapshot at a path, superseded or not, or `None`.
+
+        The path-revert test (WP3a-I2): bytes reappearing at a path where their
+        row was already superseded cannot be recorded again.
+        """
+
+    @abstractmethod
+    def insert_run(self, principal_id: str, run: IngestRunRecord) -> None:
+        """Start a run (unfinished)."""
+
+    @abstractmethod
+    def get_run(self, principal_id: str, run_id: str) -> IngestRunRecord | None:
+        """One run, or `None`."""
+
+    @abstractmethod
+    def finish_run(
+        self,
+        principal_id: str,
+        run_id: str,
+        *,
+        finished_at: datetime,
+        outcome: IngestRunOutcome,
+        counts: Mapping[str, int],
+    ) -> None:
+        """Finish a run, once; `RepositoryFailureError` when absent."""
+
+    @abstractmethod
+    def link_run_snapshot(self, principal_id: str, link: IngestRunSnapshotRecord) -> None:
+        """Record what a run did with one snapshot."""
+
+    @abstractmethod
+    def list_run_snapshots(
+        self, principal_id: str, run_id: str
+    ) -> tuple[IngestRunSnapshotRecord, ...]:
+        """Every snapshot link of one run, ordered by `recorded_at`, then snapshot id."""
+
+    @abstractmethod
+    def insert_coverage_window(self, principal_id: str, window: IngestCoverageWindowRecord) -> None:
+        """Record an ingested snapshot's declared window."""
+
+    @abstractmethod
+    def list_coverage_windows(
+        self, principal_id: str, ingest_source_id: str
+    ) -> tuple[IngestCoverageWindowRecord, ...]:
+        """Every window of one source, ordered by `start_utc`, then `end_utc`, then id."""
+
+    @abstractmethod
+    def get_coverage_window(
+        self, principal_id: str, snapshot_id: str
+    ) -> IngestCoverageWindowRecord | None:
+        """The window of one ingested snapshot, of whatever source, or `None`.
+
+        A consumer orders snapshots by their declared window (the communications
+        projection rule, contract section 11) through this read.
+        """
+
+
+@dataclass(frozen=True, slots=True)
+class IngestCoverageDeclaration:
+    """The window a prepared snapshot declares, as the lifecycle records it.
+
+    `lane_states` follows `IngestCoverageWindowRecord.lane_states`: closed values
+    and booleans only, never a producer string.
+    """
+
+    start_utc: datetime
+    #: Inclusive (contract section 9).
+    end_utc: datetime
+    coverage_state: str
+    lane_states: tuple[Mapping[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class IngestPrepared:
+    """What a consumer made of one file's bytes, before anything is written.
+
+    `rejection_code` is a closed token when the consumer refuses the file as a
+    whole (then nothing else is meaningful). `window_start` orders accepted
+    snapshots oldest first (contract section 10); `coverage` is the window the
+    lifecycle records for an ingested snapshot, or `None` for a consumer that
+    declares none. `record_counts` are code counts only (a dry run reports
+    them). `payload` is the consumer's own parsed form, opaque to the lifecycle.
+    """
+
+    rejection_code: str | None
+    window_start: datetime | None
+    coverage: IngestCoverageDeclaration | None
+    record_counts: Mapping[str, int]
+    payload: object = field(default=None, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class IngestApplied:
+    """What applying one snapshot wrote: code counts only, never content."""
+
+    record_counts: Mapping[str, int]
+
+
+class IngestConsumerHandler(ABC):
+    """One consumer's reading of a snapshot, injected into the lifecycle (ruling M5).
+
+    The lifecycle (`application.ingestion`) knows files, digests, paths, runs
+    and windows; a handler knows what the bytes mean. `prepare` is pure (no
+    write, no clock); `apply` writes the consumer's rows inside the caller's
+    unit of work, which also holds the snapshot's lifecycle rows, so an
+    exception rolls back that snapshot whole.
+    """
+
+    @property
+    @abstractmethod
+    def consumer(self) -> IngestConsumer:
+        """The consumer this handler serves (one handler per consumer)."""
+
+    @property
+    @abstractmethod
+    def parser_version(self) -> str:
+        """The token recorded on every snapshot this handler finalizes."""
+
+    @property
+    @abstractmethod
+    def max_bytes(self) -> int:
+        """Files larger than this are refused before any byte is read."""
+
+    @abstractmethod
+    def prepare(self, data: bytes) -> IngestPrepared:
+        """Parse and classify one file's bytes; never raises for bad input."""
+
+    @abstractmethod
+    def apply(
+        self,
+        unit: UnitOfWork,
+        principal_id: str,
+        snapshot: IngestSnapshotRecord,
+        prepared: IngestPrepared,
+    ) -> IngestApplied:
+        """Write the consumer's rows for one accepted, pending snapshot."""
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationProjection:
+    """The mutable projection of a message (contract section 5.1, rulings m1, m2).
+
+    The text pointer names the observation the text and the `body_*` columns
+    were taken from; they change together or not at all.
+    """
+
+    body_state: str
+    body_sha256: str
+    body_utf8_bytes: int
+    content_type: str
+    search_text: str | None
+    search_text_sha256: str | None
+    search_text_version: str
+    search_text_basis: str
+    search_text_flags: tuple[str, ...]
+    text_snapshot_id: str
+    text_record_ordinal: int
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationMessageRecord:
+    message_id: str
+    mailbox_ref: str
+    identity_kind: str
+    identity_value: str
+    conversation_id: str | None
+    subject: str | None
+    sender_address: str | None
+    message_time: datetime
+    message_time_basis: str
+    has_attachments: bool | None
+    projection: CommunicationProjection
+    first_snapshot_id: str
+    latest_snapshot_id: str
+    identity_conflict: bool = False
+    participants_reconciled: bool = False
+    participants_disagreed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationMailboxItemRecord:
+    item_id: str
+    message_id: str
+    mailbox_ref: str
+    provider_id: str
+    provider_id_format: str
+    first_snapshot_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationObservationRecord:
+    observation_id: str
+    item_id: str
+    snapshot_id: str
+    record_ordinal: int
+    classification: str
+    reasons: tuple[str, ...]
+    folder_role: str
+    lane_verification: str
+    selected_field: str
+    selected_utc: datetime
+    received_utc: datetime | None
+    received_state: str
+    sent_utc: datetime | None
+    sent_state: str
+    body_sha256: str
+    unique_body_sha256: str | None
+    #: Normalized address sets per participant field, addresses only.
+    participants: Mapping[str, tuple[str, ...]]
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationParticipantRecord:
+    message_id: str
+    field: str
+    address: str
+    first_observation_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationIdentifierRecord:
+    message_id: str
+    kind: str
+    value: str
+    extractor_version: str
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationQuarantineRecord:
+    quarantine_id: str
+    snapshot_id: str
+    record_ordinal: int
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationSnapshotTally:
+    """How many rows one snapshot left: observations and quarantined records."""
+
+    observations: int
+    quarantined: int
+
+
+class CommunicationsRepository(ABC):
+    """The communications tables (contract sections 5.1 and 5.2), inside one transaction.
+
+    Every method takes the authenticated Principal's capture-plane identifier
+    and reaches the partition through `principal_scope`. Nothing here commits.
+    Participants and identifiers are set-like: a row already present is kept and
+    the duplicate is ignored, so a re-observation never fails on them.
+    """
+
+    @abstractmethod
+    def get_message(
+        self, principal_id: str, message_id: str, *, for_update: bool = False
+    ) -> CommunicationMessageRecord | None:
+        """One message, optionally row-locked, or `None`."""
+
+    @abstractmethod
+    def find_message_by_identity(
+        self,
+        principal_id: str,
+        mailbox_ref: str,
+        identity_kind: str,
+        identity_value: str,
+        *,
+        for_update: bool = False,
+    ) -> CommunicationMessageRecord | None:
+        """The message of one canonical key, or `None`."""
+
+    @abstractmethod
+    def find_item_by_provider_id(
+        self, principal_id: str, mailbox_ref: str, provider_id: str
+    ) -> CommunicationMailboxItemRecord | None:
+        """The mailbox item of one provider id, or `None` (ruling M6: match, never rekey)."""
+
+    @abstractmethod
+    def find_message_by_provider_id(
+        self,
+        principal_id: str,
+        mailbox_ref: str,
+        provider_id: str,
+        *,
+        for_update: bool = False,
+    ) -> CommunicationMessageRecord | None:
+        """The message a provider id's item is attached to, or `None`."""
+
+    @abstractmethod
+    def list_items(
+        self, principal_id: str, message_id: str
+    ) -> tuple[CommunicationMailboxItemRecord, ...]:
+        """Every mailbox item of one message, ordered by item id."""
+
+    @abstractmethod
+    def insert_message(self, principal_id: str, message: CommunicationMessageRecord) -> None:
+        """Create one canonical message."""
+
+    @abstractmethod
+    def update_message_projection(
+        self,
+        principal_id: str,
+        message_id: str,
+        *,
+        projection: CommunicationProjection,
+        latest_snapshot_id: str,
+    ) -> None:
+        """Replace the projection and advance `latest_snapshot_id`.
+
+        `RepositoryFailureError` when the message does not exist.
+        """
+
+    @abstractmethod
+    def set_latest_snapshot(self, principal_id: str, message_id: str, snapshot_id: str) -> None:
+        """Advance only `latest_snapshot_id`; `RepositoryFailureError` when absent."""
+
+    @abstractmethod
+    def set_message_flags(
+        self,
+        principal_id: str,
+        message_id: str,
+        *,
+        identity_conflict: bool | None = None,
+        participants_reconciled: bool | None = None,
+        participants_disagreed: bool | None = None,
+    ) -> None:
+        """Set the named flags (`None` leaves one unchanged).
+
+        `RepositoryFailureError` when the message does not exist.
+        """
+
+    @abstractmethod
+    def insert_item(self, principal_id: str, item: CommunicationMailboxItemRecord) -> None:
+        """Attach one provider id to its message."""
+
+    @abstractmethod
+    def insert_observation(
+        self, principal_id: str, observation: CommunicationObservationRecord
+    ) -> None:
+        """Record one usable record ordinal of a snapshot."""
+
+    @abstractmethod
+    def insert_participants(
+        self, principal_id: str, participants: Sequence[CommunicationParticipantRecord]
+    ) -> int:
+        """Add canonical participants; a present one is kept. Returns how many were new."""
+
+    @abstractmethod
+    def list_participants(
+        self, principal_id: str, message_id: str
+    ) -> tuple[CommunicationParticipantRecord, ...]:
+        """Every canonical participant of one message, ordered by field, then address."""
+
+    @abstractmethod
+    def insert_identifiers(
+        self, principal_id: str, identifiers: Sequence[CommunicationIdentifierRecord]
+    ) -> int:
+        """Add technical identifiers; a present one is kept. Returns how many were new."""
+
+    @abstractmethod
+    def list_identifiers(
+        self, principal_id: str, message_id: str
+    ) -> tuple[CommunicationIdentifierRecord, ...]:
+        """Every identifier of one message, ordered by version, kind, then value."""
+
+    @abstractmethod
+    def insert_quarantine(
+        self, principal_id: str, quarantine: CommunicationQuarantineRecord
+    ) -> None:
+        """Record one quarantined record ordinal with its reason codes."""
+
+    @abstractmethod
+    def list_observations(
+        self, principal_id: str, message_id: str
+    ) -> tuple[CommunicationObservationRecord, ...]:
+        """Every observation of every item of one message, with its participants JSON.
+
+        Ordered by snapshot id, then record ordinal. This is the read-time
+        provenance of the canonical participants (ruling M7).
+        """
+
+    @abstractmethod
+    def tally_snapshot(self, principal_id: str, snapshot_id: str) -> CommunicationSnapshotTally:
+        """How many observation and quarantine rows one snapshot left."""

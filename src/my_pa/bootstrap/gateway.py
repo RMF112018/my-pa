@@ -316,6 +316,7 @@ __all__ = [
     "files_apply_stores",
     "files_approval_operator",
     "files_workspace_store",
+    "files_workspace_stores",
     "files_workspaces",
     "local_principal",
     "remote_client_authenticator",
@@ -807,6 +808,21 @@ def files_workspaces(settings: Settings, work_engine: Engine) -> tuple[ComposedF
             )
         )
     return tuple(composed)
+
+
+def files_workspace_stores(
+    settings: Settings, work_engine: Engine
+) -> dict[str, FileWorkspaceStore]:
+    """`workspace_id -> store` over `files_workspaces`, for the ingestion lifecycle.
+
+    Communications contract section 19 (WP3a): the cycles-plane poll and the
+    operator ingestion command read the publications through these stores, so
+    each root keeps every containment check and overlap refusal (and the
+    `ST_RDONLY` refusal of a `read_only` workspace) composed above. Only the
+    primary store of each workspace is exposed: the lifecycle never reaches a
+    staging tree or a pending-change store.
+    """
+    return {space.workspace_id: space.store for space in files_workspaces(settings, work_engine)}
 
 
 def files_apply_stores(

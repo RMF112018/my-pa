@@ -49,12 +49,14 @@ from my_pa.contracts.ports import (
     AuditSink,
     CaptureRepository,
     CommitmentManagementRepository,
+    CommunicationsRepository,
     ContextPreferenceRepository,
     ContextRunRepository,
     EnrollmentRepository,
     EntitiesRepository,
     EvidenceUnavailableError,
     GoodNotesSemanticRepository,
+    IngestionRepository,
     IssueHandoffRepository,
     IssueRepository,
     IssueTimelineRepository,
@@ -285,6 +287,14 @@ class _FailsAfterTheWork(UnitOfWork):
     @property
     def meetings(self) -> MeetingRepository:
         return self._inner.meetings
+
+    @property
+    def ingestion(self) -> IngestionRepository:
+        return self._inner.ingestion
+
+    @property
+    def communications(self) -> CommunicationsRepository:
+        return self._inner.communications
 
     @property
     def issues(self) -> IssueRepository:

@@ -85,8 +85,12 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: admits `meetings.provider.bind` and the internal sync namespace, each with a
 #: completed shape; `captures` is untouched. WP2-F1 moved it again: the
 #: provider binding table gains the `last_applied_generated_at_utc` ordering
-#: stamp; `captures` is untouched.
-TABLES_SHA256: Final = "d68a66f1e41dc07cc7aa0208ea6f0e9110c745f5ba55b12510e185731f5e924b"
+#: stamp; `captures` is untouched. Moved again by the communications
+#: intelligence WP3a revision, which declares the twelve ingestion and
+#: communications tables and imports their vocabularies from
+#: `domain.communications` and `contracts.ports`; purely additive, `captures` is
+#: untouched.
+TABLES_SHA256: Final = "5aff8e6e4ab20d18ffa19c0025b3aaf6f1d4240d5513ede83ae3275d9a63fdc9"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

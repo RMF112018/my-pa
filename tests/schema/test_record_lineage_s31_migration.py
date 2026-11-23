@@ -69,7 +69,7 @@ SCHEMA: Final = "knowledge"
 REVISION: Final = "023f8f7eb499"
 PREVIOUS: Final = "c5260943d933"
 #: CPM Workbench S5b-1 (`6c2306330ceb`) is additive on this revision.
-HEAD: Final = "6418b57081c3"
+HEAD: Final = "52a829ef718a"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261025_023f8f7eb499_record_lineage_s31.py"
 EARLIER: Final = (
@@ -262,7 +262,8 @@ def _left_function_body(name: str) -> str:
 def test_the_revision_is_the_single_head_on_c5260943d933() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "4d1069a7d84f"
+    assert script.get_revision(HEAD).down_revision == "6418b57081c3"
+    assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
     assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
     assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
     assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
@@ -274,7 +275,7 @@ def test_the_revision_is_the_single_head_on_c5260943d933() -> None:
     assert script.get_revision(PREVIOUS).down_revision == "6f1476b8da52"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert MIGRATION.name.endswith("_record_lineage_s31.py")
-    assert len(list(MIGRATIONS.glob("*.py"))) == 131
+    assert len(list(MIGRATIONS.glob("*.py"))) == 132
 
 
 # ---- the freeze -------------------------------------------------------------

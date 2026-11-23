@@ -654,6 +654,19 @@ class Settings(StrictModel):
     #: The scheduler's IANA zone, env `MY_PA_CYCLE_SCHEDULER_TIMEZONE`. The run
     #: is due at local midnight in it. Validated by `zoneinfo` at load.
     cycle_scheduler_timezone: str = "America/New_York"
+    #: Communications ingestion poll switch (communications contract section
+    #: 19, WP3a Manager ruling M2), env `MY_PA_COMMUNICATIONS_INGEST_ENABLED`.
+    #: Default off. On, the `cycles` plane runs the ingestion poll step over
+    #: every enabled `ingest_sources` row besides (or instead of) the daily
+    #: cycle; with this and `cycle_scheduler_enabled` both off the plane exits
+    #: 2. It withholds no capability and changes no row by being set.
+    communications_ingest_enabled: bool = False
+    #: The poll step's interval in seconds, env
+    #: `MY_PA_COMMUNICATIONS_INGEST_POLL_SECONDS` (contract section 19: 15
+    #: minutes). A file is read once its size and version token held still
+    #: across two consecutive polls, so one is ingested 1-2 intervals after
+    #: the collector finishes writing it.
+    communications_ingest_poll_seconds: int = Field(default=900, ge=60, le=86_400)
     #: KLP-WP-04 (R6 section 3.4, KLP-AC-019). The exact OAuth client ids bound
     #: as Knowledge discovery clients. Compared exactly, never by prefix; empty --
     #: the default -- binds no client, so `knowledge.assertions.submit` and

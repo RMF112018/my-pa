@@ -70,7 +70,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Final
@@ -101,6 +101,7 @@ from my_pa.domain.communications.coverage import (
     LaneFact,
     RangeCoverage,
     WindowFact,
+    range_coverage,
     rolling_coverage,
     summarize_coverage,
 )
@@ -262,7 +263,7 @@ class _Apply:
             return True
         return stored.projection.body_sha256 != primary.body.sha256
 
-    def touch(self, record: CommunicationMessageRecord, *, created: bool) -> _Touched:
+    def track_message(self, record: CommunicationMessageRecord, *, created: bool) -> _Touched:
         touched = self.touched.get(record.message_id)
         if touched is None:
             touched = _Touched(record=record, created=created)
@@ -353,7 +354,7 @@ class _Apply:
         )
         if record is None:
             record = self._create(item, primary)
-            self.touch(record, created=True)
+            self.track_message(record, created=True)
         elif self._disagrees(record, primary):
             return record, None
         return record, self._new_item(record.message_id, item, primary)
@@ -374,7 +375,9 @@ class _Apply:
         )
         self.quarantined += 1
 
-    def observe(self, item_id: str, record: RecordOutcome, message: NormalizedMessage) -> str:
+    def add_observation(
+        self, item_id: str, record: RecordOutcome, message: NormalizedMessage
+    ) -> str:
         reasons = {reason.value for reason in record.reasons}
         in_window = self.publication.window.contains(message.timestamps.selected_utc)
         if (
@@ -607,10 +610,12 @@ class CommunicationsEvidenceHandler(IngestConsumerHandler):
             observation_ids: dict[int, str] = {}
             for record in records:
                 assert record.message is not None  # noqa: S101 - grouped on it above
-                observation_ids[record.ordinal] = run.observe(item_id, record, record.message)
+                observation_ids[record.ordinal] = run.add_observation(
+                    item_id, record, record.message
+                )
                 final[record.classification.value] += 1
             run.participants(message.message_id, item, observation_ids)
-            touched = run.touch(message, created=False)
+            touched = run.track_message(message, created=False)
             touched.flags |= item.flags
             run.offer(touched, primary)
         for touched in run.touched.values():
@@ -672,3 +677,19 @@ class CommunicationsCoverageReader:
     def rolling(self, principal_id: str, ingest_source_id: str) -> RangeCoverage:
         """The monitoring read: `[now - 30 d, now]` complete, partial (with gaps) or none."""
         return rolling_coverage(self._facts(principal_id, ingest_source_id), now=self._clock())
+
+    def range(
+        self, principal_id: str, ingest_source_id: str, *, start: datetime, end: datetime
+    ) -> RangeCoverage:
+        """`[start, end]` (whole seconds, inclusive): complete, partial (with gaps) or none."""
+        summary = self.summary(principal_id, ingest_source_id)
+        return range_coverage(summary.intervals, start=start, end=end)
+
+    def combined(self, principal_id: str, ingest_source_ids: Sequence[str]) -> CoverageSummary:
+        """One summary over the windows of several sources (overlaps merge, contract 9)."""
+        facts = tuple(
+            fact
+            for source_id in sorted(set(ingest_source_ids))
+            for fact in self._facts(principal_id, source_id)
+        )
+        return summarize_coverage(facts, now=self._clock())

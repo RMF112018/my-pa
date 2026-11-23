@@ -469,3 +469,44 @@ def test_the_coverage_reader_merges_stored_windows_and_reports_the_rolling_gap()
     rolling = reader.rolling(P, scene.source_id)
     assert rolling.state is RangeState.PARTIAL
     assert len(rolling.gaps) == 3  # before the 17th, the 19th, after the 21st
+
+
+def test_the_coverage_reader_reads_one_range_and_merges_several_sources() -> None:
+    """The operator CLI's `coverage --from/--to` and `aggregate` reads (contract 9, 19)."""
+    scene = Scene()
+    for day in (17, 18):
+        scene.ingest(f"202611{day}-comms.json", pub(day, [s.message(day, selected=at(day))]))
+    other_dir = "Daily/rich"
+    other = scene.lifecycle.admit(
+        P,
+        consumer=IngestConsumer.COMMUNICATIONS_EVIDENCE_V2,
+        workspace_id="mcp",
+        path_prefix=other_dir + "/",
+        file_pattern="*-comms.json",
+    ).ingest_source_id
+    scene.store.put(f"{other_dir}/20261119-comms.json", pub(19, [s.message(19, selected=at(19))]))
+    scene.lifecycle.backfill(P, other)
+    reader = CommunicationsCoverageReader(
+        unit_of_work=unit_of_work_factory(scene.world), clock=lambda: NOW
+    )
+    inside = reader.range(
+        P,
+        scene.source_id,
+        start=datetime(2026, 11, 17, 6, tzinfo=UTC),
+        end=datetime(2026, 11, 18, 6, tzinfo=UTC),
+    )
+    assert (inside.state, inside.gaps) == (RangeState.COMPLETE, ())
+    beyond = reader.range(
+        P,
+        scene.source_id,
+        start=datetime(2026, 11, 18, 6, tzinfo=UTC),
+        end=datetime(2026, 11, 20, 6, tzinfo=UTC),
+    )
+    assert beyond.state is RangeState.PARTIAL
+    assert len(beyond.gaps) == 1
+    alone = reader.summary(P, scene.source_id)
+    combined = reader.combined(P, [other, scene.source_id, other])
+    assert (alone.snapshots, combined.snapshots) == (2, 3)
+    assert [(i.start.day, i.end.day) for i in combined.intervals] == [(17, 20)]
+    assert combined.gaps == ()
+    assert reader.combined(P, []).snapshots == 0

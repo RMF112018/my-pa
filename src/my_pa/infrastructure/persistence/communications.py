@@ -17,6 +17,13 @@ id's item to its message) composes `matching_partition_criterion`.
 column but the projection group, `latest_snapshot_id` and the three flags; the
 update methods here name only those columns. A provider id is matched, never
 rekeyed (Manager ruling M6): there is no method that changes an item.
+
+**The operator aggregate.** `communications_aggregate` is the one read outside
+the port: counts over the rows a set of ingest sources' snapshots produced, for
+the operator CLI's `aggregate` (the real-corpus check of contract section 20.3).
+It scopes by the sources' `ingest_snapshots`, which is the one table it reads
+beyond the six, and returns counts and closed codes only -- never a subject, an
+address, a provider id, an identifier value or a row id.
 """
 
 from __future__ import annotations
@@ -26,7 +33,7 @@ from typing import Any, Final
 
 from sqlalchemy import ColumnElement, Select, Table, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.engine import Connection, Row
+from sqlalchemy.engine import Connection, Result, Row
 
 from my_pa.contracts.ports import (
     CommunicationIdentifierRecord,
@@ -53,9 +60,10 @@ from my_pa.infrastructure.persistence.tables import (
     communication_observations,
     communication_participants,
     communication_quarantine,
+    ingest_snapshots,
 )
 
-__all__ = ["SqlCommunicationsRepository"]
+__all__ = ["SqlCommunicationsRepository", "communications_aggregate"]
 
 
 def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
@@ -596,3 +604,129 @@ class SqlCommunicationsRepository(CommunicationsRepository):
             )
             for row in rows
         )
+
+
+def _counts(rows: Result[Any]) -> dict[str, int]:
+    return {str(code): int(count) for code, count in rows}
+
+
+def communications_aggregate(
+    connection: Connection, principal_id: str, ingest_source_ids: Sequence[str]
+) -> dict[str, object]:
+    """Counts over what `ingest_source_ids`' snapshots produced (module docstring).
+
+    * `observations` -- total, by classification, folder role and lane
+      verification (one row per accepted record of an ingested snapshot);
+    * `quarantined_records` and `quarantine_reasons` (one count per reason);
+    * `items` and `messages` -- distinct mailbox items and canonical messages
+      the scoped observations reach;
+    * `multi_lane_item_snapshots` -- (item, snapshot) pairs with more than one
+      observation, which is the per-publication `multi_lane` item count of the
+      WP1 aggregate summed over publications; `multi_lane_items` the distinct
+      items among them;
+    * `messages_identity_conflict` -- scoped messages flagged `identity_conflict`;
+    * `identifiers` -- per kind, stored identifier rows and distinct messages.
+    """
+    ids = sorted(set(ingest_source_ids))
+    observations = communication_observations
+    items = communication_mailbox_items
+    messages = communication_messages
+    snapshots = (
+        select(ingest_snapshots.c.snapshot_id)
+        .where(
+            _mine(ingest_snapshots, principal_id),
+            ingest_snapshots.c.ingest_source_id.in_(ids),
+        )
+        .scalar_subquery()
+    )
+    scoped = (_mine(observations, principal_id), observations.c.snapshot_id.in_(snapshots))
+
+    def grouped(column: ColumnElement[Any], *where: ColumnElement[bool]) -> dict[str, int]:
+        return _counts(
+            connection.execute(
+                select(column, func.count()).where(*where).group_by(column).order_by(column)
+            )
+        )
+
+    total = connection.execute(select(func.count()).where(*scoped)).scalar_one()
+    item_ids = select(observations.c.item_id).where(*scoped).distinct().subquery()
+    message_ids = (
+        select(items.c.message_id)
+        .where(
+            _mine(items, principal_id),
+            items.c.item_id.in_(select(item_ids.c.item_id)),
+        )
+        .distinct()
+        .subquery()
+    )
+    pairs = (
+        select(observations.c.item_id)
+        .where(*scoped)
+        .group_by(observations.c.item_id, observations.c.snapshot_id)
+        .having(func.count() > 1)
+        .subquery()
+    )
+    quarantine_scope = (
+        _mine(communication_quarantine, principal_id),
+        communication_quarantine.c.snapshot_id.in_(snapshots),
+    )
+    reasons = (
+        select(func.unnest(communication_quarantine.c.reasons).label("reason"))
+        .where(*quarantine_scope)
+        .subquery()
+    )
+    identifier_scope = (
+        _mine(communication_identifiers, principal_id),
+        communication_identifiers.c.message_id.in_(select(message_ids.c.message_id)),
+    )
+    identifiers: dict[str, dict[str, int]] = {
+        str(kind): {"rows": int(rows), "messages": int(distinct)}
+        for kind, rows, distinct in connection.execute(
+            select(
+                communication_identifiers.c.kind,
+                func.count(),
+                func.count(func.distinct(communication_identifiers.c.message_id)),
+            )
+            .where(*identifier_scope)
+            .group_by(communication_identifiers.c.kind)
+            .order_by(communication_identifiers.c.kind)
+        )
+    }
+    return {
+        "observations": {
+            "total": int(total),
+            "by_classification": grouped(observations.c.classification, *scoped),
+            "by_folder_role": grouped(observations.c.folder_role, *scoped),
+            "by_lane_verification": grouped(observations.c.lane_verification, *scoped),
+        },
+        "quarantined_records": int(
+            connection.execute(select(func.count()).where(*quarantine_scope)).scalar_one()
+        ),
+        "quarantine_reasons": _counts(
+            connection.execute(
+                select(reasons.c.reason, func.count())
+                .group_by(reasons.c.reason)
+                .order_by(reasons.c.reason)
+            )
+        ),
+        "items": int(connection.execute(select(func.count()).select_from(item_ids)).scalar_one()),
+        "messages": int(
+            connection.execute(select(func.count()).select_from(message_ids)).scalar_one()
+        ),
+        "multi_lane_item_snapshots": int(
+            connection.execute(select(func.count()).select_from(pairs)).scalar_one()
+        ),
+        "multi_lane_items": int(
+            connection.execute(select(func.count(func.distinct(pairs.c.item_id)))).scalar_one()
+        ),
+        "messages_identity_conflict": int(
+            connection.execute(
+                select(func.count()).where(
+                    _mine(messages, principal_id),
+                    messages.c.message_id.in_(select(message_ids.c.message_id)),
+                    messages.c.identity_conflict.is_(True),
+                )
+            ).scalar_one()
+        ),
+        "identifiers": identifiers,
+    }

@@ -280,6 +280,40 @@ def test_discovery_matches_the_pattern_over_every_page_without_recursion() -> No
     assert set(scene.store.calls) <= {"list_directory", "stat", "open_download"}
 
 
+def test_a_backfill_name_pattern_narrows_the_listed_candidates() -> None:
+    """Contract section 10 "path glob": both the source pattern and the narrowing match."""
+    scene = Scene()
+    for day in (17, 18, 19):
+        scene.put(f"202611{day}-comms.json", doc(day))
+    scene.put("20261118-notes.json", doc(18))  # matches the narrowing, not the source pattern
+    counts = scene.backfill(name_pattern="20261118-*")
+    assert (counts["snapshots_seen"], counts["snapshots_ingested"]) == (1, 1)
+    assert scene.handler.applied == [datetime(2026, 11, 18, 5, tzinfo=UTC)]
+    rest = scene.backfill()
+    # The narrowed file is the one this process already finished: unchanged, not re-read.
+    assert (rest["skipped_unchanged"], rest["snapshots_ingested"]) == (1, 2)
+
+
+@pytest.mark.parametrize("pattern", ["", "a/b", "x" * 1_000])
+def test_a_backfill_name_pattern_that_is_not_one_name_is_refused(pattern: str) -> None:
+    scene = Scene()
+    runs = len(scene.world.runs)
+    with pytest.raises(IngestRefusedError) as refused:
+        scene.backfill(name_pattern=pattern)
+    assert refused.value.code is IngestRefusalCode.INVALID_LOCATION
+    assert len(scene.world.runs) == runs
+
+
+def test_a_backfill_takes_paths_or_a_name_pattern_never_both() -> None:
+    scene = Scene()
+    path = scene.put("20261117-comms.json", doc(17))
+    runs = len(scene.world.runs)
+    with pytest.raises(ValueError, match="exclusive"):
+        scene.backfill(paths=[path], name_pattern="*")
+    assert len(scene.world.runs) == runs
+    assert scene.handler.applied == []
+
+
 # ---- idempotency, aliases, supersession, revert ----------------------------------
 
 

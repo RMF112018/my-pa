@@ -17,16 +17,21 @@ supersession or a second finish is refused by the revision's triggers with
 `restrict_violation`; this module does not pre-check and absorb it, so the
 caller sees the refusal. A missing row on a targeted update is
 `RepositoryFailureError`.
+
+**The operator aggregate.** `ingest_aggregate` is the one read here outside the
+port: counts by closed code over a set of sources, for the operator CLI's
+`aggregate` and monitoring reads (contract section 19). It returns counts and
+closed codes only, never a path, a digest or an identifier.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, Final
 
-from sqlalchemy import ColumnElement, Table, insert, select, update
-from sqlalchemy.engine import Connection, Row
+from sqlalchemy import ColumnElement, Table, func, insert, select, update
+from sqlalchemy.engine import Connection, Result, Row
 
 from my_pa.contracts.ports import (
     IngestConsumer,
@@ -57,7 +62,7 @@ from my_pa.infrastructure.persistence.tables import (
     ingest_sources,
 )
 
-__all__ = ["SqlIngestionRepository"]
+__all__ = ["SqlIngestionRepository", "ingest_aggregate"]
 
 
 def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
@@ -557,3 +562,63 @@ class SqlIngestionRepository(IngestionRepository):
             )
         ).one_or_none()
         return None if row is None else _to_coverage(row)
+
+
+def _grouped(
+    connection: Connection,
+    *columns: ColumnElement[Any],
+    where: Sequence[ColumnElement[bool]],
+) -> Result[Any]:
+    return connection.execute(
+        select(*columns, func.count()).where(*where).group_by(*columns).order_by(*columns)
+    )
+
+
+def ingest_aggregate(
+    connection: Connection, principal_id: str, ingest_source_ids: Sequence[str]
+) -> dict[str, object]:
+    """Snapshot and run counts over `ingest_source_ids`, by closed code (module docstring).
+
+    `snapshots` counts by status and `rejections` by rejection code;
+    `superseded_paths` counts path rows a newer snapshot replaced; `runs`
+    counts by `trigger` then `outcome` (`unfinished` for a run with no finish).
+    """
+    ids = sorted(set(ingest_source_ids))
+    snapshots = _grouped(
+        connection,
+        ingest_snapshots.c.status,
+        where=(
+            _mine(ingest_snapshots, principal_id),
+            ingest_snapshots.c.ingest_source_id.in_(ids),
+        ),
+    )
+    rejections = _grouped(
+        connection,
+        ingest_snapshots.c.rejection_code,
+        where=(
+            _mine(ingest_snapshots, principal_id),
+            ingest_snapshots.c.ingest_source_id.in_(ids),
+            ingest_snapshots.c.rejection_code.is_not(None),
+        ),
+    )
+    superseded = connection.execute(
+        select(func.count()).where(
+            _mine(ingest_snapshot_paths, principal_id),
+            ingest_snapshot_paths.c.ingest_source_id.in_(ids),
+            ingest_snapshot_paths.c.superseded_by_snapshot_id.is_not(None),
+        )
+    ).scalar_one()
+    runs: dict[str, dict[str, int]] = {}
+    for trigger, outcome, count in _grouped(
+        connection,
+        ingest_runs.c.trigger,
+        ingest_runs.c.outcome,
+        where=(_mine(ingest_runs, principal_id), ingest_runs.c.ingest_source_id.in_(ids)),
+    ):
+        runs.setdefault(str(trigger), {})[str(outcome or "unfinished")] = int(count)
+    return {
+        "snapshots": {str(status): int(count) for status, count in snapshots},
+        "rejections": {str(code): int(count) for code, count in rejections},
+        "superseded_paths": int(superseded),
+        "runs": runs,
+    }

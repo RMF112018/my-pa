@@ -394,14 +394,24 @@ class IngestionLifecycle:
         ingest_source_id: str,
         *,
         paths: Sequence[str] | None = None,
+        name_pattern: str | None = None,
         dry_run: bool = False,
     ) -> IngestRunReport:
         """A backfill (trigger `backfill`) of the listed files, or of every candidate.
 
         `paths` are workspace-relative and must be direct children of the
-        source's prefix matching its pattern. A disabled source may be
-        backfilled: `enabled` governs only the scheduled poll.
+        source's prefix matching its pattern. `name_pattern` (exclusive with
+        `paths`) narrows the listed candidates to the names that also match it
+        (`fnmatch.fnmatchcase`, one name, no `/`): the contract section 10
+        "path glob". A disabled source may be backfilled: `enabled` governs only
+        the scheduled poll.
         """
+        if paths is not None and name_pattern is not None:
+            raise ValueError("paths and name_pattern are exclusive")
+        if name_pattern is not None and (
+            not 1 <= len(name_pattern) <= _MAX_PATTERN or "/" in name_pattern
+        ):
+            raise IngestRefusedError(IngestRefusalCode.INVALID_LOCATION)
         source = self._source(principal_id, ingest_source_id)
         if paths is not None:
             directory = _directory(source.path_prefix)
@@ -415,6 +425,7 @@ class IngestionLifecycle:
             IngestRunTrigger.BACKFILL,
             paths=None if paths is None else tuple(sorted(set(paths))),
             dry_run=dry_run,
+            name_pattern=name_pattern,
         )
 
     def _source(self, principal_id: str, ingest_source_id: str) -> IngestSourceRecord:
@@ -434,6 +445,7 @@ class IngestionLifecycle:
         *,
         paths: Sequence[str] | None,
         dry_run: bool,
+        name_pattern: str | None = None,
     ) -> IngestRunReport:
         handler = self._handlers[source.consumer]
         try:
@@ -463,6 +475,7 @@ class IngestionLifecycle:
             state=state,
             run_id=run_id,
             stability_gated=trigger is IngestRunTrigger.SCHEDULE,
+            name_pattern=name_pattern,
         )
         run.execute(paths)
         outcome = state.outcome()
@@ -500,8 +513,10 @@ class _Run:
         state: _RunState,
         run_id: str | None,
         stability_gated: bool,
+        name_pattern: str | None = None,
     ) -> None:
         self._lifecycle = lifecycle
+        self._name_pattern = name_pattern
         self._principal_id = principal_id
         self._source = source
         self._handler = handler
@@ -532,8 +547,13 @@ class _Run:
         while True:
             page = self._store.list_directory(directory, after=after, page_size=_PAGE_SIZE)
             for entry in page.entries:
-                if entry.kind is EntryKind.FILE and fnmatch.fnmatchcase(
-                    entry.name, self._source.file_pattern
+                if (
+                    entry.kind is EntryKind.FILE
+                    and fnmatch.fnmatchcase(entry.name, self._source.file_pattern)
+                    and (
+                        self._name_pattern is None
+                        or fnmatch.fnmatchcase(entry.name, self._name_pattern)
+                    )
                 ):
                     yield entry
             if page.next_after is None:

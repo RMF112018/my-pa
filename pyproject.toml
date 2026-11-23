@@ -229,7 +229,9 @@ dependencies = [
 # mypy 1.11.0 fails this tree on PEP 695, and 1.20.2 still reports one
 # unreachable error under SQLAlchemy 2.0.51. 2.3.1 is the first measured
 # clean mypy. validate and dependency-floor both install the newest mypy.
-dev = ["mypy>=2.3.1", "pytest>=8.2", "ruff>=0.6"]
+# pytest-xdist (operator decision O4, 2026-11-22) serves only the advisory
+# `validate-fast-xdist` lane (`--dist loadfile`); the serial lanes stay required.
+dev = ["mypy>=2.3.1", "pytest>=8.2", "pytest-xdist>=3.6", "ruff>=0.6"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import Engine, text
 
-from tests.db.provisioning import COUNTERS, WorkerHeadTemplate
+from tests.db.provisioning import COUNTERS, TEST_SESSION_TIMEZONE, WorkerHeadTemplate
 
 pytestmark = [pytest.mark.database, pytest.mark.database_clone]
 
@@ -41,3 +41,11 @@ def test_ordinary_clone_tests_do_not_invoke_upgrade_again(db_engine: Engine) -> 
     snapshot = COUNTERS.snapshot()
     assert snapshot["upgrade_head"] == 1
     assert snapshot["clone_create"] >= 1
+
+
+def test_every_test_session_runs_in_utc(db_engine: Engine) -> None:
+    """`PGTZ` from `tests/db/provisioning.py` reaches the server as `TimeZone`."""
+    with db_engine.connect() as connection:
+        zone = connection.execute(text("SHOW TimeZone")).scalar_one()
+    assert TEST_SESSION_TIMEZONE == "UTC"
+    assert zone == "UTC", f"a test session ran in {zone!r}"

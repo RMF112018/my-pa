@@ -300,3 +300,67 @@ def test_a_dry_run_writes_nothing(scene: Scene) -> None:
     report = scene.lifecycle().backfill(P, scene.source_id, dry_run=True)
     assert report.counts["snapshots_ingested"] == len(FILES)
     assert scene.counts() == before
+
+
+def _day_publication(day: int, messages: list[dict[str, object]]) -> bytes:
+    start = datetime(2026, 11, day, 5, tzinfo=UTC)
+    end = start + timedelta(days=1) - timedelta(seconds=1)
+    window = s.window(
+        start.isoformat().replace("+00:00", "Z"),
+        end.isoformat().replace("+00:00", "Z"),
+        24,
+        "weekday_prior_24h",
+    )
+    return s.encode(s.publication(messages, window))
+
+
+def test_a_cross_kind_provider_id_is_quarantined_identity_kind_mismatch(scene: Scene) -> None:
+    """F1 on PostgreSQL: the closed reason is admitted by the revision's CHECK, the
+    stored message is untouched, and the Message-ID is one provider_returned message."""
+    message_id = "<synthetic-0001@example.invalid>"
+    scene.store.put(
+        f"{DIRECTORY}/20261117-comms.json",
+        _day_publication(17, [s.message(1, selected="2026-11-17T12:00:00Z", imid=None)]),
+    )
+    scene.backfill()
+    stored = scene.counts()
+    sent_copy = s.message(
+        2,
+        folder="sent",
+        selected="2026-11-18T12:00:00Z",
+        selected_field="sentDateTime",
+        imid=message_id,
+    )
+    scene.store.put(
+        f"{DIRECTORY}/20261118-comms.json",
+        _day_publication(
+            18, [s.message(1, selected="2026-11-18T12:00:00Z", imid=message_id), sent_copy]
+        ),
+    )
+    report = scene.backfill()
+    assert report.outcome is IngestRunOutcome.COMPLETED
+    assert report.counts["records_identity_kind_mismatch"] == 1
+    rows = scene.counts()
+    assert rows["communication_quarantine"] == stored["communication_quarantine"] + 1
+    assert rows["communication_messages"] == stored["communication_messages"] + 1
+    assert (
+        scene.scalar(
+            "SELECT count(*) FROM knowledge.communication_quarantine "
+            "WHERE 'identity_kind_mismatch' = ANY(reasons)"
+        )
+        == 1
+    )
+    assert (
+        scene.scalar(
+            "SELECT count(*) FROM knowledge.communication_messages "
+            "WHERE identity_kind = 'provider_returned' "
+            "AND identity_value = '<synthetic-0001@example.invalid>'"
+        )
+        == 1
+    )
+    assert (
+        scene.scalar(
+            "SELECT count(*) FROM knowledge.communication_messages WHERE identity_conflict"
+        )
+        == 0
+    )

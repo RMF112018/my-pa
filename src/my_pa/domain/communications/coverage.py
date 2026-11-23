@@ -20,7 +20,11 @@ about the source:
 * **range coverage** -- for `[start, end]` (whole seconds, inclusive), whether
   the merged intervals cover it `complete`ly, `partial`ly (with the gaps inside
   the range) or not at all (`none`). `rolling_coverage` is that read for the
-  last `ROLLING_DAYS` days.
+  `ROLLING_DAYS` days ending at the latest covered instant,
+  `[latest_covered - ROLLING_DAYS, latest_covered]` (`None` when nothing is
+  covered). It reports holes only: it ends where coverage ends, so the
+  not-yet-published tail never makes it `partial`; staleness is
+  `freshness_seconds`, reported beside it.
 
 Nothing here has a clock: `now` is always a parameter.
 """
@@ -201,6 +205,15 @@ def range_coverage(merged: Sequence[Interval], *, start: datetime, end: datetime
     return RangeCoverage(start, end, state, tuple(gaps), covered)
 
 
-def rolling_coverage(windows: Sequence[WindowFact], *, now: datetime) -> RangeCoverage:
-    """`range_coverage` of the complete windows over `[now - ROLLING_DAYS, now]`."""
-    return range_coverage(_complete(windows), start=now - timedelta(days=ROLLING_DAYS), end=now)
+def rolling_coverage(windows: Sequence[WindowFact]) -> RangeCoverage | None:
+    """`range_coverage` over `[latest - ROLLING_DAYS, latest]`, `latest` the last covered instant.
+
+    `None` when no complete window exists. Staleness is not this read's
+    concern (it is `freshness_seconds`): the range ends at the latest covered
+    instant, so only holes inside the last 30 covered days make it `partial`.
+    """
+    merged = _complete(windows)
+    if not merged:
+        return None
+    latest = merged[-1].end
+    return range_coverage(merged, start=latest - timedelta(days=ROLLING_DAYS), end=latest)

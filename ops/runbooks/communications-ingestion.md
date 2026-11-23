@@ -81,6 +81,7 @@ docker compose -p my-pa-remote-mcp -f ... \
 
 Output is one JSON line: source ids, run ids, closed codes, counts and UTC timestamps. Exit `0`
 done, `1` refused (`{"refused": CODE}`), `2` usage, `3` a run finished `partial` or `failed`.
+`coverage` and `aggregate` refuse `source_not_found` for a source id that was never admitted.
 
 ## 5. Admission
 
@@ -141,8 +142,12 @@ python apps/cli/communications_ingest.py <assertions> aggregate \
 
 - `coverage`: merged intervals (inclusive ends), `gap_count` and `gap_seconds`, `freshness_seconds`
   (now minus the latest covered instant), per-lane states (`not_authorized` is reported as such),
-  and `rolling_30d` (`complete`, `partial` or `none` over the last 30 days, with its gaps).
-  `--from`/`--to` reads one range the same way.
+  and `rolling_30d`: the 30 days ending at the latest covered instant (`start` is `end` minus
+  30 days, `end` is `latest_covered`), `complete` or `partial` with its gaps, or `none` with null
+  `start`/`end` when nothing is covered. Read `freshness_seconds` for staleness (no new
+  publication since `latest_covered`) and `rolling_30d` for holes inside the covered span; the
+  rolling read never turns `partial` just because the newest publication is late.
+  `--from`/`--to` reads one range the same way, over exactly the instants given.
 - `aggregate`: snapshots by status, rejection codes, superseded paths, runs by trigger and
   outcome; observations by classification, folder role and lane verification; quarantined
   records and reasons; distinct items and messages; multi-lane items; messages flagged
@@ -171,15 +176,24 @@ them, and known bytes link `already_known` without a write.
 - **Failed or partial run.** The failed snapshot's transaction rolled back alone
   (`snapshots_failed`); the rest committed. The next poll or a rerun of the backfill retries it,
   and idempotency makes the retry safe. A run with nothing but failures is `failed`.
-- **Rejected snapshot.** Status `rejected` with its `rejection_code`; nothing else is written
-  and the row never changes. A file refused while it was still changing is not rejected: it is
-  `skipped_changing` and retried. To recover, the collector publishes corrected bytes, which are
-  a new snapshot.
+- **Rejected snapshot.** Status `rejected` with its `rejection_code`; the row never changes and no
+  communications row or coverage window is written. Its path is placed like any snapshot's: it
+  supersedes that path's current row, so the path now points at the rejected snapshot. A file
+  refused while it was still changing is not rejected: it is `skipped_changing` and retried. To
+  recover, the collector publishes corrected bytes, which are a new snapshot and supersede the
+  rejected one at the path. Re-publishing the *earlier good* bytes does not recover the path: it
+  is a path revert (below), writes nothing, and the path keeps pointing at the rejected snapshot
+  (the earlier snapshot's observations and coverage stay).
 - **Re-publication.** New bytes at a known path are a new snapshot; the path's earlier row is
   superseded, its observations stay, and coverage keeps both windows (they merge).
 - **Path revert.** Earlier bytes reappearing at a path a newer snapshot superseded are counted
   `snapshots_path_reverted` and nothing is written: supersession is one-way, so the newer
   snapshot stays current for that path.
+- **`lock_held`.** `run-once` and `backfill` (not `--dry-run`) hold the poll's advisory lock
+  (`COMMS_INGEST_LOCK_KEY`, the cycles plane's own) for the whole run. While the scheduled poll
+  or another operator run holds it, the command refuses `lock_held` (exit 1) at once and writes
+  nothing; run it again when that run has finished (a poll logs `comms_ingest.run`). A poll that
+  finds the lock held by an operator run logs `comms_ingest.skipped` and retries next interval.
 - **Restart.** Stability memory lives in the process. After a restart the first poll observes
   and the second reads; already-ingested digests are only linked.
 - **Too large or unreadable.** Over the consumer's byte limit is `skipped_too_large`; an
@@ -197,6 +211,13 @@ them, and known bytes link `already_known` without a write.
 
 - `poll_enabled` stops at the first source whose workspace is unavailable; the poll is then
   logged `comms_ingest.failed` and retried after the interval.
-- A backfill holds each new file's bytes (at most the consumer's limit) in memory until applied.
+- Every run (poll, `run-once` and backfill) reads and prepares every fresh file before its first
+  snapshot transaction, holding each file's bytes and parsed publication together until the run
+  applies them: at most the consumer's limit (64 MiB) times the number of fresh files, plus the
+  parsed form. The first poll or backfill over the canonical 29-file folder holds all of them at
+  once; size the cycles container's memory for that.
+- A file whose parse raises (not a rejection: the handler failed) is counted `snapshots_failed`,
+  writes nothing and is not remembered as finished, so every later poll reads and prepares it
+  again until its bytes change. A `snapshots_failed` count that recurs every poll is that file.
 - `aggregate` counts are over the rows the named sources' snapshots produced, deduplicated
   across sources; the WP1 file-level aggregate counts each publication separately.

@@ -5,8 +5,9 @@ publications, the real lifecycle, and the in-memory repositories of
 `communications_ingest_fakes`. Proved here: every record ordinal leaves exactly
 one row and the totals reconcile; an exact repeat is an observation of its
 provider id's item; every Manager ruling M6 branch (agree and attach, sender
-disagreement, body disagreement, check c, check d, `provider_id_only` joined
-to `provider_returned` by provider id, a second item under one Message-ID);
+disagreement, body disagreement, check c, check d, check e -- `provider_id_only`
+and `provider_returned` never joined by provider id, in either arrival order --
+a second item under one Message-ID);
 participants with their first observation; the projection rule independent of
 arrival order; identifiers; the coverage window's lanes; and a handler failure
 or dry run leaving no communications row. Everything is synthetic.
@@ -268,20 +269,84 @@ def test_check_c_one_provider_id_with_two_message_ids_is_a_conflict() -> None:
     assert quarantine_reasons(scene) == [("identity_conflict",)]
 
 
-@pytest.mark.parametrize("first_has_id", [False, True], ids=["id_only_first", "returned_first"])
-def test_provider_id_only_and_provider_returned_join_by_provider_id(first_has_id: bool) -> None:
+MESSAGE_ID_ONE: Final = "<synthetic-0001@example.invalid>"
+
+
+def _kind_split_publications() -> tuple[bytes, bytes]:
+    """Finding F1's reproduction: D17 keys provider id 1 `provider_id_only`;
+    D18 carries provider id 1 with Message-ID X and a Sent copy (provider id 2)
+    under X."""
+    d17 = pub(17, [s.message(1, selected=at(17), imid=None)])
+    sent_copy = s.message(
+        2, folder="sent", selected=at(18), selected_field="sentDateTime", imid=MESSAGE_ID_ONE
+    )
+    d18 = pub(18, [s.message(1, selected=at(18), imid=MESSAGE_ID_ONE), sent_copy])
+    return d17, d18
+
+
+@pytest.mark.parametrize("d17_first", [True, False], ids=["d17_then_d18", "d18_then_d17"])
+def test_identity_kinds_never_merge_by_provider_id(d17_first: bool) -> None:
+    """Check (e), ruling (a): a provider id whose stored message is keyed in the
+    other identity kind is quarantined `identity_kind_mismatch`, never attached;
+    nothing stored is touched and the Message-ID is never split by this path."""
     scene = Scene()
-    with_id = s.message(1, selected=at(17))
-    without = s.message(1, selected=at(18), imid=None)
-    first, second = (with_id, without) if first_has_id else (without, with_id)
-    scene.ingest("20261117-comms.json", pub(17, [first]))
-    report = scene.ingest("20261118-comms.json", pub(18, [second]))
-    message = scene.message()
-    assert message.identity_kind == ("provider_returned" if first_has_id else "provider_id_only")
-    assert report.counts["records_identity_joined_by_provider_id"] == 1
-    assert len(scene.world.items) == 1
+    d17, d18 = _kind_split_publications()
+    order = [("20261117-comms.json", d17), ("20261118-comms.json", d18)]
+    if not d17_first:
+        order.reverse()
+    scene.ingest(*order[0])
+    (first_snapshot,) = (sid for _, sid in scene.world.snapshots)
+    stored_before = dict(scene.world.messages)
+    report = scene.ingest(*order[1])
+    (second_snapshot,) = (sid for _, sid in scene.world.snapshots if sid != first_snapshot)
+    d17_snapshot = first_snapshot if d17_first else second_snapshot
+
+    # One quarantine row, closed reason and count; the totals reconcile.
+    assert report.counts["records_identity_kind_mismatch"] == 1
+    assert report.counts["records_quarantined"] == 1
+    assert "records_identity_joined_by_provider_id" not in report.counts
+    (quarantined,) = scene.world.quarantine.values()
+    assert (quarantined.snapshot_id, quarantined.record_ordinal) == (second_snapshot, 0)
+    assert "identity_kind_mismatch" in quarantined.reasons
+    assert "identity_conflict" not in quarantined.reasons
+    assert scene.rows_for(second_snapshot) == report.counts["records_total"]
+    assert scene.rows_for(first_snapshot) == (1 if d17_first else 2)
+
+    # The stored messages are untouched: not rewritten, not flagged.
+    for message_id, before in stored_before.items():
+        assert scene.world.messages[message_id] == before
+    assert not any(m.identity_conflict for m in scene.world.messages.values())
+
+    # Message-ID X is exactly one provider_returned message.
+    kinds = {m.message_id: m.identity_kind for m in scene.world.messages.values()}
+    returned = [
+        m
+        for m in scene.world.messages.values()
+        if (m.identity_kind, m.identity_value) == ("provider_returned", MESSAGE_ID_ONE)
+    ]
+    assert len(returned) == 1
+
+    # No message holds observations of both kinds: the D17 (no Message-ID)
+    # observation is the provider_id_only message's alone, or quarantined.
+    item_message = {i.item_id: i.message_id for i in scene.world.items.values()}
+    snapshots_by_message: dict[str, set[str]] = {}
+    for observation in scene.world.observations.values():
+        snapshots_by_message.setdefault(item_message[observation.item_id], set()).add(
+            observation.snapshot_id
+        )
+    for message_id, snapshots in snapshots_by_message.items():
+        if kinds[message_id] == "provider_id_only":
+            assert snapshots == {d17_snapshot}
+        else:
+            assert d17_snapshot not in snapshots
+    assert len(scene.world.items) == 2
     assert len(scene.world.observations) == 2
-    assert not message.identity_conflict
+    if d17_first:
+        # pid1 stays provider_id_only; pid2 alone creates X's message.
+        assert sorted(kinds.values()) == ["provider_id_only", "provider_returned"]
+    else:
+        # pid1 and pid2 under X; the later id-only record of pid1 writes nothing.
+        assert list(kinds.values()) == ["provider_returned"]
 
 
 def test_a_second_provider_id_under_one_message_id_is_a_second_item() -> None:
@@ -467,8 +532,12 @@ def test_the_coverage_reader_merges_stored_windows_and_reports_the_rolling_gap()
     assert lanes["procore_rfis"].latest_state == "not_authorized"
     assert lanes["procore_rfis"].intervals == ()
     rolling = reader.rolling(P, scene.source_id)
+    assert rolling is not None
+    # Ends at the latest covered instant, not at the clock: no trailing gap.
+    assert rolling.end == datetime(2026, 11, 21, 4, 59, 59, tzinfo=UTC)
+    assert rolling.start == rolling.end - timedelta(days=30)
     assert rolling.state is RangeState.PARTIAL
-    assert len(rolling.gaps) == 3  # before the 17th, the 19th, after the 21st
+    assert len(rolling.gaps) == 2  # before the 17th, the 19th; nothing after the 21st
 
 
 def test_the_coverage_reader_reads_one_range_and_merges_several_sources() -> None:

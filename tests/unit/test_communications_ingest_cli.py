@@ -89,6 +89,9 @@ class _Connection:
     def __init__(self, database: str, heads: list[str]) -> None:
         self.database = database
         self.heads = heads
+        #: The poll lock: free, or held by another session (F4).
+        self.lock_free = True
+        self.lock_calls: list[str] = []
 
     def execute(self, statement: object) -> _Result:
         sql = str(statement)
@@ -96,7 +99,16 @@ class _Connection:
             return _Result([self.database])
         if "alembic_version" in sql:
             return _Result(list(self.heads))
-        raise AssertionError("the fake engine answers only the identity queries")
+        if "pg_try_advisory_lock" in sql:
+            self.lock_calls.append("try")
+            return _Result([self.lock_free])
+        if "pg_advisory_unlock" in sql:
+            self.lock_calls.append("unlock")
+            return _Result([True])
+        raise AssertionError("the fake engine answers only the identity and lock queries")
+
+    def commit(self) -> None:
+        return None
 
 
 class _Engine:
@@ -360,6 +372,65 @@ def test_a_lifecycle_refusal_is_its_code(
         "command": "enable",
         "refused": "source_not_found",
     }
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["run-once"], ["backfill"], ["backfill", "--file", "a-lean-comms.json"]],
+    ids=["run-once", "backfill", "backfill-file"],
+)
+def test_a_held_poll_lock_refuses_lock_held_and_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], argv: list[str]
+) -> None:
+    """F4: `run-once` and `backfill` take the poll's lock; held elsewhere, they refuse."""
+    scene = _Scene(monkeypatch)
+    source = scene.admit(capsys)
+    scene.put_fixtures()
+    scene.engine.connection.lock_free = False
+    before = (scene.world.row_count(), list(scene.world.writes))
+    command, *rest = argv
+    assert run(capsys, command, "--source", source, *rest) == (
+        cli.EXIT_REFUSED,
+        {"command": command, "refused": "lock_held"},
+    )
+    assert scene.engine.connection.lock_calls == ["try"]
+    assert (scene.world.row_count(), list(scene.world.writes)) == before
+
+
+def test_a_free_poll_lock_is_taken_and_released_and_a_dry_run_takes_none(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    scene = _Scene(monkeypatch)
+    source = scene.admit(capsys)
+    scene.put_fixtures()
+    calls = scene.engine.connection.lock_calls
+    scene.engine.connection.lock_free = False
+    assert run(capsys, "backfill", "--source", source, "--dry-run")[0] == cli.EXIT_OK
+    assert run(capsys, "coverage", "--source", source)[0] == cli.EXIT_OK
+    assert calls == []
+    scene.engine.connection.lock_free = True
+    assert run(capsys, "backfill", "--source", source)[0] == cli.EXIT_OK
+    assert calls == ["try", "unlock"]
+
+
+@pytest.mark.parametrize("command", ["coverage", "aggregate"])
+def test_reads_of_an_unknown_source_refuse_source_not_found(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    """F6: a read never answers an empty coverage for a source that does not exist."""
+    scene = _Scene(monkeypatch)
+    source = scene.admit(capsys)
+    assert run(capsys, command, "--source", "isrc_missing0000") == (
+        cli.EXIT_REFUSED,
+        {"command": command, "refused": "source_not_found"},
+    )
+    if command == "aggregate":
+        assert run(capsys, command, "--source", source, "--source", "isrc_missing0000")[1] == {
+            "command": command,
+            "refused": "source_not_found",
+        }
+    else:  # the aggregate's SQL reads run in tests/database (the fake engine has none)
+        assert run(capsys, command, "--source", source)[0] == cli.EXIT_OK
 
 
 def test_a_dry_run_writes_nothing_and_reports_counts(

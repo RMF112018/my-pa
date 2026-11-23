@@ -144,16 +144,29 @@ def test_a_range_ending_before_it_starts_is_refused() -> None:
         range_coverage((), start=day(1)[0], end=day(0)[0])
 
 
-def test_the_rolling_read_spans_thirty_days_to_now() -> None:
-    now = D0 + timedelta(days=40)
-    windows = [window(*day(n)) for n in range(5, 41)]  # covers day 5 through now
-    rolling = rolling_coverage(windows, now=now)
+def test_the_rolling_read_spans_thirty_days_to_the_latest_covered_instant() -> None:
+    windows = [window(*day(n)) for n in range(5, 41)]  # covers day 5 through day 40
+    latest = day(40)[1]
+    rolling = rolling_coverage(windows)
+    assert rolling is not None
     assert ROLLING_DAYS == 30
-    assert rolling.start == now - timedelta(days=30)
-    assert rolling.end == now
+    assert rolling.start == latest - timedelta(days=30)
+    assert rolling.end == latest
     assert rolling.state is RangeState.COMPLETE
     holed = [w for w in windows if w.start != day(30)[0]]
-    holed_read = rolling_coverage(holed, now=now)
+    holed_read = rolling_coverage(holed)
+    assert holed_read is not None
     assert holed_read.state is RangeState.PARTIAL
     assert holed_read.gaps == (Interval(*day(30)),)
-    assert rolling_coverage([], now=now).state is RangeState.NONE
+    assert rolling_coverage([]) is None
+
+
+def test_a_stale_source_with_no_holes_is_complete_and_staleness_is_freshness() -> None:
+    """F5: the not-yet-published tail is staleness (freshness), never a rolling hole."""
+    windows = [window(*day(n)) for n in range(5, 41)]
+    now = day(40)[1] + timedelta(days=3)
+    rolling = rolling_coverage(windows)
+    assert rolling is not None
+    assert rolling.state is RangeState.COMPLETE
+    assert rolling.gaps == ()
+    assert summarize_coverage(windows, now=now).freshness_seconds == 3 * 86_400

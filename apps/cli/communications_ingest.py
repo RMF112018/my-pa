@@ -45,7 +45,16 @@ Exit status (closed):
 
 Refusal codes: the lifecycle's `IngestRefusalCode` values, plus
 `target_mismatch`, `settings_invalid`, `workspace_misconfigured`,
-`invalid_range`, `database_unreachable` and `database_unavailable`.
+`invalid_range`, `lock_held`, `database_unreachable` and `database_unavailable`.
+`coverage` and `aggregate` refuse `source_not_found` for a source id that names
+no admitted source of the operator.
+
+**One writer at a time.** `run-once` and `backfill` (not `--dry-run`, and not
+the read commands) hold the poll's session advisory lock,
+`COMMS_INGEST_LOCK_KEY` (`pg_try_advisory_lock`, on a dedicated connection,
+for the whole run) -- the same key the cycles plane's poll step takes. When
+another session holds it (a poll in progress, or a second operator run) the
+command does not wait: it refuses `lock_held` (exit 1) and writes nothing.
 
 `backfill` takes either explicit `--file` names (each a name in the source's
 folder, or a workspace-relative path under it) or one `--glob` name pattern, or
@@ -60,7 +69,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Final, Protocol
 
@@ -75,8 +85,14 @@ from my_pa.bootstrap.communications_ingest import (
 )
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.settings import Settings, load_settings
-from my_pa.contracts.ports import FileWorkspaceRootError, IngestConsumer, IngestRunOutcome
+from my_pa.contracts.ports import (
+    FileWorkspaceRootError,
+    IngestConsumer,
+    IngestRunOutcome,
+    IngestSourceRecord,
+)
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.jobs.cycle_scheduler import COMMS_INGEST_LOCK_KEY, single_flight
 from my_pa.infrastructure.persistence.communications import communications_aggregate
 from my_pa.infrastructure.persistence.ingestion import ingest_aggregate
 
@@ -186,7 +202,16 @@ class _Range(Protocol):
     def gaps(self) -> Sequence[_Span]: ...
 
 
-def _range_fields(coverage: _Range) -> dict[str, object]:
+def _range_fields(coverage: _Range | None) -> dict[str, object]:
+    if coverage is None:  # nothing covered: the rolling read has no anchor
+        return {
+            "start": None,
+            "end": None,
+            "state": "none",
+            "covered_seconds": 0,
+            "gap_count": 0,
+            "gap_seconds": 0,
+        }
     return {
         "start": _iso(coverage.start),
         "end": _iso(coverage.end),
@@ -198,6 +223,7 @@ def _range_fields(coverage: _Range) -> dict[str, object]:
 
 
 def _coverage(engine: Engine, principal_id: str, args: argparse.Namespace) -> int:
+    _require_source(engine, principal_id, args.source)
     reader = coverage_reader(engine)
     summary = reader.summary(principal_id, args.source)
     rolling = reader.rolling(principal_id, args.source)
@@ -242,6 +268,8 @@ def _coverage(engine: Engine, principal_id: str, args: argparse.Namespace) -> in
 
 def _aggregate(engine: Engine, principal_id: str, args: argparse.Namespace) -> int:
     sources = sorted(set(args.source))
+    for source_id in sources:
+        _require_source(engine, principal_id, source_id)
     with engine.connect() as connection:
         lifecycle = ingest_aggregate(connection, principal_id, sources)
         communications = communications_aggregate(connection, principal_id, sources)
@@ -307,34 +335,48 @@ def _dispatch(engine: Engine, settings: Settings, args: argparse.Namespace) -> i
             )
             return EXIT_OK
         case "run-once":
-            return _run_report("run-once", lifecycle.run_once(principal_id, args.source))
+            with _poll_lock(engine):
+                return _run_report("run-once", lifecycle.run_once(principal_id, args.source))
         case "backfill":
             paths = None
             if args.file is not None:
                 paths = _backfill_paths(
-                    _source_prefix(engine, principal_id, args.source), args.file
+                    _require_source(engine, principal_id, args.source).path_prefix, args.file
                 )
-            return _run_report(
-                "backfill",
-                lifecycle.backfill(
-                    principal_id,
-                    args.source,
-                    paths=paths,
-                    name_pattern=args.glob,
-                    dry_run=args.dry_run,
-                ),
-            )
+            if args.dry_run:  # writes nothing, so it takes no lock
+                return _run_report(
+                    "backfill",
+                    lifecycle.backfill(
+                        principal_id, args.source, paths=paths, name_pattern=args.glob, dry_run=True
+                    ),
+                )
+            with _poll_lock(engine):
+                return _run_report(
+                    "backfill",
+                    lifecycle.backfill(
+                        principal_id, args.source, paths=paths, name_pattern=args.glob
+                    ),
+                )
         case unknown:  # pragma: no cover - argparse rejects an unknown command first
             raise SystemExit(f"unhandled command {unknown!r}")
 
 
-def _source_prefix(engine: Engine, principal_id: str, source_id: str) -> str:
-    """The source's own prefix, to resolve bare `--file` names (never printed)."""
+def _require_source(engine: Engine, principal_id: str, source_id: str) -> IngestSourceRecord:
+    """The admitted source, or the refusal `source_not_found` (its prefix is never printed)."""
     with ingest_unit_of_work(engine)() as unit:
         source = unit.ingestion.get_source(principal_id, source_id)
     if source is None:
         raise _RefusalError("source_not_found")
-    return source.path_prefix
+    return source
+
+
+@contextmanager
+def _poll_lock(engine: Engine) -> Iterator[None]:
+    """Hold the poll's advisory lock for the run, or refuse `lock_held` without waiting."""
+    with single_flight(engine, key=COMMS_INGEST_LOCK_KEY) as held:
+        if not held:
+            raise _RefusalError("lock_held")
+        yield
 
 
 def _run(args: argparse.Namespace) -> int:

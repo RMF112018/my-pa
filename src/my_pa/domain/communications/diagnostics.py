@@ -71,6 +71,11 @@ class ReasonCode(StrEnum):
     PROVIDER_ID_FIELDS_DISAGREE = "provider_id_fields_disagree"
     IDENTITY_CONFLICT = "identity_conflict"
     PROVIDER_ID_CONFLICT = "provider_id_conflict"
+    # Across publications only (WP3a ingestion, never the parser): the record's
+    # provider id names a stored item whose message is keyed in the other
+    # identity kind (`provider_id_only` vs `provider_returned`). The key spaces
+    # never merge, so the record is quarantined; the join is WP3b.
+    IDENTITY_KIND_MISMATCH = "identity_kind_mismatch"
     # Degradation: the record is usable with a stated weakness.
     IDENTITY_PROVIDER_ID_ONLY = "identity_provider_id_only"
     IDENTITY_STATE_INCONSISTENT = "identity_state_inconsistent"
@@ -106,6 +111,7 @@ QUARANTINE_REASONS: Final = frozenset(
         ReasonCode.PROVIDER_ID_FIELDS_DISAGREE,
         ReasonCode.IDENTITY_CONFLICT,
         ReasonCode.PROVIDER_ID_CONFLICT,
+        ReasonCode.IDENTITY_KIND_MISMATCH,
     }
 )
 

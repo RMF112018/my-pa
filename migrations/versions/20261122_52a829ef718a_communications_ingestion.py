@@ -609,7 +609,7 @@ _QUARANTINE_DDL: Final = """
       CONSTRAINT a_communication_quarantine_reason_is_known CHECK (reasons <@
           ARRAY['body_content_missing', 'body_truncated', 'conversation_id_absent',
           'derived_text_invalid', 'fetch_error_reported', 'identity_conflict',
-          'identity_provider_id_only', 'identity_state_inconsistent',
+          'identity_kind_mismatch', 'identity_provider_id_only', 'identity_state_inconsistent',
           'in_window_disagreement', 'integrity_mismatch', 'invalid_field_type',
           'invalid_field_value', 'lane_identity_inconsistent', 'mailbox_ref_mismatch',
           'missing_required_field', 'participant_entry_invalid', 'participant_from_absent',

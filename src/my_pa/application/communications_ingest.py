@@ -19,10 +19,15 @@ each mailbox item of the publication:
 1. its provider id already has a stored item: that item's message is the
    match -- matched, never rekeyed. When the stored message is keyed by a
    different Internet Message-ID than the one this publication carries, that is
-   one provider id with two Message-IDs (check c): an identity conflict. A
-   stored `provider_id_only` message and a publication carrying the Message-ID
-   (or the reverse) is joined by the provider id (finding R3-2 / check e,
-   counted `records_identity_joined_by_provider_id`);
+   one provider id with two Message-IDs (check c): an identity conflict. When
+   the stored message is keyed in the *other* identity kind (a stored
+   `provider_id_only` message and a publication carrying the Message-ID, or
+   the reverse; finding R3-2 / check e), the two key spaces never merge
+   (contract section 3, ADR-022 decision 4): every observation of the item in
+   this snapshot is quarantined `identity_kind_mismatch`, counted
+   `records_identity_kind_mismatch`, and creates no message and no item; the
+   stored item and message are not touched (not even flagged). The join is
+   WP3b;
 2. otherwise the canonical key `(principal, mailbox_ref, identity_kind,
    identity_value)` finds the message, or a new one is created;
 3. the item's primary observation is checked against the stored message: a
@@ -310,8 +315,13 @@ class _Apply:
 
     def resolve(
         self, item: MailboxItem, primary: NormalizedMessage
-    ) -> tuple[CommunicationMessageRecord, str | None]:
-        """The item's message and its item id, or `(message, None)` on a conflict."""
+    ) -> tuple[CommunicationMessageRecord | None, str | None]:
+        """The item's message and its item id; `(message, None)` on a conflict.
+
+        `(None, None)` when the provider id's stored item belongs to a message
+        of the other identity kind: the record is quarantined
+        `identity_kind_mismatch` and nothing stored is touched.
+        """
         key = item.canonical_key
         stored_item = self.repo.find_item_by_provider_id(
             self.principal_id, primary.mailbox_ref, item.provider_id
@@ -328,8 +338,9 @@ class _Apply:
             if record is None:
                 raise CommunicationsTotalsError("a stored item names no message")
             if record.identity_kind != key.kind.value:
-                self.counts["records_identity_joined_by_provider_id"] += 1
-            elif record.identity_value != key.value:
+                # Check (e): the key spaces never merge, in either direction.
+                return None, None
+            if record.identity_value != key.value:
                 # Check (c): one provider id, two Internet Message-IDs.
                 self.counts["records_provider_id_message_id_conflict"] += 1
                 return record, None
@@ -589,6 +600,18 @@ class CommunicationsEvidenceHandler(IngestConsumerHandler):
                 raise CommunicationsTotalsError("a primary observation carries no message")
             records = sorted(by_provider_id[item.provider_id], key=lambda r: r.ordinal)
             message, item_id = run.resolve(item, primary)
+            if message is None:
+                run.counts["records_identity_kind_mismatch"] += len(records)
+                for record in records:
+                    run.quarantine(
+                        record.ordinal,
+                        (
+                            *(reason.value for reason in record.reasons),
+                            ReasonCode.IDENTITY_KIND_MISMATCH.value,
+                        ),
+                    )
+                    final[RecordClassification.QUARANTINED.value] += 1
+                continue
             if item_id is None:
                 run.counts["records_identity_conflict_cross_publication"] += len(records)
                 for record in records:
@@ -674,9 +697,13 @@ class CommunicationsCoverageReader:
         """Merged intervals, gaps, lanes, freshness and snapshot counts."""
         return summarize_coverage(self._facts(principal_id, ingest_source_id), now=self._clock())
 
-    def rolling(self, principal_id: str, ingest_source_id: str) -> RangeCoverage:
-        """The monitoring read: `[now - 30 d, now]` complete, partial (with gaps) or none."""
-        return rolling_coverage(self._facts(principal_id, ingest_source_id), now=self._clock())
+    def rolling(self, principal_id: str, ingest_source_id: str) -> RangeCoverage | None:
+        """The monitoring read for holes: `[latest covered - 30 d, latest covered]`.
+
+        Complete or partial (with gaps); `None` when nothing is covered.
+        Staleness is the summary's `freshness_seconds`, not this read.
+        """
+        return rolling_coverage(self._facts(principal_id, ingest_source_id))
 
     def range(
         self, principal_id: str, ingest_source_id: str, *, start: datetime, end: datetime

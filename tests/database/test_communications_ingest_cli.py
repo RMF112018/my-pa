@@ -27,6 +27,7 @@ from apps.cli import communications_ingest as cli
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
 
+from my_pa.infrastructure.jobs.cycle_scheduler import COMMS_INGEST_LOCK_KEY
 from tests.fixtures.communications_evidence import synthetic as s
 
 pytestmark = pytest.mark.database
@@ -283,3 +284,41 @@ def test_the_read_only_workspace_is_never_written(
         for path in workspace.rglob("*")
     }
     assert after == snapshot
+
+
+def test_run_once_and_backfill_refuse_lock_held_while_another_session_holds_the_poll_lock(
+    migrated_engine: Engine, workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """F4: the command contends for `COMMS_INGEST_LOCK_KEY` with the cycles plane's poll."""
+    operator = Operator(migrated_engine, capsys)
+    canonical = _admit(operator, CANONICAL, "*-comms.json")
+    before = operator.counts()
+    with migrated_engine.connect() as holder:
+        assert holder.execute(
+            text("SELECT pg_try_advisory_lock(:key)"), {"key": COMMS_INGEST_LOCK_KEY}
+        ).scalar_one()
+        holder.commit()
+        try:
+            for argv in (("run-once",), ("backfill",)):
+                code, out, _ = operator(*argv, "--source", canonical)
+                assert (code, out) == (
+                    cli.EXIT_REFUSED,
+                    {"command": argv[0], "refused": "lock_held"},
+                )
+            # A dry run writes nothing and takes no lock.
+            code, dry, _ = operator("backfill", "--source", canonical, "--dry-run")
+            assert (code, dry["dry_run"]) == (cli.EXIT_OK, True)
+            assert operator.counts() == before
+        finally:
+            holder.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": COMMS_INGEST_LOCK_KEY})
+            holder.commit()
+    code, report, _ = operator("backfill", "--source", canonical)
+    assert (code, report["outcome"]) == (cli.EXIT_OK, "completed")
+    assert report["counts"]["snapshots_ingested"] == len(CANONICAL_FILES)
+    # Released after the run: a session can take it at once.
+    with migrated_engine.connect() as probe:
+        assert probe.execute(
+            text("SELECT pg_try_advisory_lock(:key)"), {"key": COMMS_INGEST_LOCK_KEY}
+        ).scalar_one()
+        probe.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": COMMS_INGEST_LOCK_KEY})
+        probe.commit()

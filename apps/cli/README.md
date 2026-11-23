@@ -154,6 +154,36 @@ with the store readers and purge it may name.
 [`ops/runbooks/mcp-interaction-log.md`](/ops/runbooks/mcp-interaction-log.md)
 covers enabling the log, reading it and scheduling the purge.
 
+## `communications_ingest.py` — the communications ingestion lifecycle
+
+Admits `ingest_sources`, turns their scheduled polling on and off, runs the
+poll step once, backfills, and reports coverage and corpus aggregates
+(communications contract sections 10, 11 and 19).
+
+```text
+python apps/cli/communications_ingest.py <assertions> admit --consumer C --workspace W \
+    --path-prefix P --file-pattern F [--disabled]
+python apps/cli/communications_ingest.py <assertions> enable|disable|run-once --source ID
+python apps/cli/communications_ingest.py <assertions> backfill --source ID \
+    [--file NAME ... | --glob PATTERN] [--dry-run]
+python apps/cli/communications_ingest.py <assertions> coverage --source ID [--from T --to T]
+python apps/cli/communications_ingest.py <assertions> aggregate --source ID [--source ID ...]
+```
+
+`<assertions>` is `--expected-database` and `--expected-alembic-head`, both
+required; they are compared to the parsed `MY_PA_DATABASE_URL` before an engine
+is built and to the live connection before anything is read. The URL is never
+an argument and never printed. It records no audit row (`admitted_by` is
+`operator_cli`) and builds no application service, but it reaches the
+consumer-neutral lifecycle in `my_pa.application.ingestion`, so it is `EXEMPT`
+in `tests/architecture/test_operator_commands_are_not_capabilities.py` and
+governed by `tests/unit/test_communications_ingest_cli.py` instead. Output is
+one JSON line of ids, codes, counts and UTC timestamps; exit `0` done, `1`
+refused with a closed code, `2` usage, `3` a run finished `partial` or
+`failed`.
+[`ops/runbooks/communications-ingestion.md`](/ops/runbooks/communications-ingestion.md)
+covers admission, backfill, monitoring and recovery.
+
 ## `sources.py` — the source configuration plane
 
 `sources.py` configures a root as a source and observes it, which is the

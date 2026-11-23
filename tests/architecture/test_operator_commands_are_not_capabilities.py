@@ -194,6 +194,10 @@ EXEMPT = {
     "apple_credentials.py": "tests/unit/test_apple_operator_commands.py",
     # GoodNotes operator command; explicit-owner principal selection.
     "goodnotes.py": "tests/unit/test_goodnotes_operator_command.py",
+    # Communications ingestion (WP3a): reaches the consumer-neutral lifecycle in
+    # `my_pa.application.ingestion` by design; its own test holds that it names
+    # no capability, builds no service and imports only the two aggregate reads.
+    "communications_ingest.py": "tests/unit/test_communications_ingest_cli.py",
 }
 
 #: The identifier rule 3 forbids anywhere in the file.

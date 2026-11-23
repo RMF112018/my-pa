@@ -14,6 +14,8 @@ At 00:00 `America/New_York` every day, the `cycles` worker plane (`apps/worker.p
 
 When the process starts, it runs at once for the current local date. That is the catch-up rule. Missed earlier dates are never backfilled. Rerunning for the same date writes nothing new. A session advisory lock admits one run at a time across processes.
 
+The same plane also runs the communications ingestion poll when `MY_PA_COMMUNICATIONS_INGEST_ENABLED` is on, as a separate step with its own lock and interval ([`communications-ingestion.md`](communications-ingestion.md)). Either switch alone starts the plane; with both off it exits 2.
+
 A new `reports.commit` or `reports.record_run_state` to a closed cycle is refused with `conflict` and the details `cycle_run_id` and `cycle_closed`. ChatLLM producers should call `reports.begin_cycle` for the new date and use the `cycle_run_id` it returns.
 
 ## 2. Configuration

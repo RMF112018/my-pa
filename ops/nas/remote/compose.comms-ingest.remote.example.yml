@@ -1,0 +1,28 @@
+# Communications ingestion poll (communications contract sections 10, 11 and 19; WP3a Manager
+# ruling M8) on the cycles plane. Used WITH ops/nas/remote/compose.yml, the live overlays in the
+# app container's com.docker.compose.project.config_files label, AND
+# ops/nas/remote/compose.cycle-scheduler.remote.example.yml, project my-pa-remote-mcp.
+# Runbook: ops/runbooks/communications-ingestion.md. Not a secret. Applying it is part of the
+# one consolidated activation (contract section 20.6, R-OP-7); nothing here has been run.
+# It gives the existing my-pa-cycle-scheduler service a READ-ONLY bind of the same host subtree
+# the remote MCP files workspace serves (ADR-019 decision 7: a workspace read, not a source
+# root) and names it as a read_only workspace, so the store refuses to start unless the mount
+# really is read-only (ST_RDONLY). The ingestion lifecycle only lists, stats and reads.
+# The single-root and policy variables are cleared because the shared env file may set them:
+# MY_PA_FILES_WORKSPACE_ROOT is exclusive with MY_PA_FILES_WORKSPACES, and an SDCR policy file
+# requires a direct mcp workspace. MY_PA_REMOTE_UID needs read access to the subtree.
+# Ingestion stays OFF until the operator uncomments the switch below (default false).
+services:
+  my-pa-cycle-scheduler:
+    environment:
+      MY_PA_FILES_WORKSPACES: "mcp=/srv/my-pa/workspaces/mcp;mode=read_only"
+      MY_PA_FILES_WORKSPACE_ROOT: ""
+      MY_PA_FILES_SDCR_POLICY_FILE: ""
+      MY_PA_FILES_APPLY_ROOTS: ""
+      MY_PA_COMMUNICATIONS_INGEST_POLL_SECONDS: "900"
+#      MY_PA_COMMUNICATIONS_INGEST_ENABLED: "true"
+    volumes:
+      - type: bind
+        source: /volume1/homes/bfetting/MCP
+        target: /srv/my-pa/workspaces/mcp
+        read_only: true

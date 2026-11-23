@@ -69,16 +69,31 @@ accept.
   a decided match only while the plane is effective. Generic PDF extraction on the
   `enrollment` plane stays `unsupported`.
 
-* `cycles` runs the daily Morning Intelligence cycle scheduler
-  (`infrastructure.jobs.cycle_scheduler`, ADR-010 amendment of 2026-11-20). It
-  claims no job: it polls the clock and, once per local date in
-  `MY_PA_CYCLE_SCHEDULER_TIMEZONE` (at local midnight, or at once on start),
-  closes the operator Principal's stale open cycles and begins the date's cycle
-  through `ApplicationService.invoke` (`application.daily_cycle`). One session
-  advisory lock keeps two `cycles` processes from running a date together. The
-  plane is refused (exit 2, before an engine is built) unless
-  `MY_PA_CYCLE_SCHEDULER_ENABLED` is on. It prints one JSON line per run;
-  `--lease-seconds` does not apply to it.
+* `cycles` runs the cycles-plane steps (`infrastructure.jobs.cycle_scheduler`,
+  ADR-010 amendment of 2026-11-20; communications contract section 19). It
+  claims no job: it polls the clock and runs each step that is due, each under
+  its own session advisory lock, so two `cycles` processes never run the same
+  step together and a busy step never holds up the other. Two steps, each with
+  its own switch:
+
+  - the daily Morning Intelligence cycle (`MY_PA_CYCLE_SCHEDULER_ENABLED`):
+    once per local date in `MY_PA_CYCLE_SCHEDULER_TIMEZONE` (at local
+    midnight, or at once on start) it closes the operator Principal's stale
+    open cycles and begins the date's cycle through `ApplicationService.invoke`
+    (`application.daily_cycle`);
+  - the communications ingestion poll (`MY_PA_COMMUNICATIONS_INGEST_ENABLED`):
+    every `MY_PA_COMMUNICATIONS_INGEST_POLL_SECONDS` (default 900, and at once
+    on start) one stability-gated `IngestionLifecycle.poll_enabled` over every
+    enabled ingest source of the operator Principal. The lifecycle is built
+    once and lives as long as the process, so its in-process stability memory
+    (two consecutive polls with the same size and version token) survives
+    between polls. The workspace stores are composed from
+    `MY_PA_FILES_WORKSPACES` at start; a misconfigured root refuses the plane
+    (exit 2, `plane cycles workspace_misconfigured`).
+
+  With both switches off the plane is refused (exit 2, `plane cycles
+  disabled`, before an engine is built). It prints one JSON line per run,
+  codes and counts only; `--lease-seconds` does not apply to it.
 
 Three planes and one loop for the job planes: `run_worker` is parameterised over
 the plane (`D-76`, `D-77`), so the lease protocol has one implementation and
@@ -123,9 +138,12 @@ from sqlalchemy import select
 
 from my_pa.application.capture_lifecycle import always_eligible
 from my_pa.application.daily_cycle import DailyCycleRunner
+from my_pa.application.ingestion import IngestionLifecycle, IngestRunReport
 from my_pa.application.service import ApplicationService
+from my_pa.bootstrap.communications_ingest import ingestion_lifecycle
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.settings import AuthMode, load_settings
+from my_pa.contracts.ports import FileWorkspaceRootError, IngestRunOutcome
 from my_pa.domain.common.time import utc_now
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.jobs.capture_pipeline import (
@@ -133,9 +151,13 @@ from my_pa.infrastructure.jobs.capture_pipeline import (
     process_capture_version,
 )
 from my_pa.infrastructure.jobs.cycle_scheduler import (
+    COMMS_INGEST_LOCK_KEY,
     DEFAULT_CYCLE_POLL_SECONDS,
     CycleSchedulerRun,
-    run_cycle_scheduler,
+    DailyStep,
+    IntervalStep,
+    SchedulerStep,
+    run_scheduler_steps,
 )
 from my_pa.infrastructure.jobs.extraction import extract_enrollment
 from my_pa.infrastructure.jobs.reenrichment import (
@@ -320,51 +342,112 @@ def _report_cycles(run: CycleSchedulerRun) -> None:
     print(f"runs         {run.runs}")
     print(f"skipped      {run.skipped}")
     print(f"failed       {run.failed}")
+    for name, counts in run.steps.items():
+        print(f"step         {name} runs={counts.runs}", end="")
+        print(f" skipped={counts.skipped} failed={counts.failed}")
+
+
+def comms_ingest_log_fields(reports: tuple[IngestRunReport, ...]) -> dict[str, object]:
+    """The poll step's one log line: outcomes and summed counts, never a path or id."""
+    outcomes: dict[str, int] = {}
+    counts: dict[str, int] = {}
+    for report in reports:
+        outcomes[report.outcome.value] = outcomes.get(report.outcome.value, 0) + 1
+        for key, value in report.counts.items():
+            counts[key] = counts.get(key, 0) + value
+    return {
+        "event": "comms_ingest.run",
+        "sources": len(reports),
+        "outcomes": dict(sorted(outcomes.items())),
+        "counts": dict(sorted(counts.items())),
+    }
+
+
+def _comms_ingest_step(
+    lifecycle: IngestionLifecycle, principal_id: str, seconds: int
+) -> IntervalStep:
+    """The ingestion poll step over one long-lived lifecycle (its stability memory)."""
+
+    def poll() -> bool:
+        reports = lifecycle.poll_enabled(principal_id)
+        _log_line(comms_ingest_log_fields(reports))
+        return all(report.outcome is not IngestRunOutcome.FAILED for report in reports)
+
+    return IntervalStep(
+        name="comms_ingest",
+        event="comms_ingest",
+        lock_key=COMMS_INGEST_LOCK_KEY,
+        interval_seconds=seconds,
+        run_once=poll,
+    )
 
 
 def _run_cycles(args: argparse.Namespace) -> int:
-    """Serve the daily cycle scheduler (ADR-010 amendment of 2026-11-20).
+    """Serve the cycles-plane steps (ADR-010 amendment; communications contract 19).
 
-    Refused before an engine is built unless `MY_PA_CYCLE_SCHEDULER_ENABLED` is
-    on. The Principal is the fixed local operator (`local_principal`): every
-    remote OAuth client row is constrained to it, so it owns ChatLLM's cycles.
-    The begin step goes through a minimal `ApplicationService` -- the default
-    composition already serves `reports.begin_cycle` -- with the audit sink on
-    its own engine, as the gateway composes it.
+    Refused before an engine is built unless `MY_PA_CYCLE_SCHEDULER_ENABLED` or
+    `MY_PA_COMMUNICATIONS_INGEST_ENABLED` is on. The Principal is the fixed
+    local operator (`local_principal`): every remote OAuth client row is
+    constrained to it, so it owns ChatLLM's cycles and the ingested
+    communications. The daily begin step goes through a minimal
+    `ApplicationService` -- the default composition already serves
+    `reports.begin_cycle` -- with the audit sink on its own engine, as the
+    gateway composes it. The ingestion poll writes no audit row
+    (`bootstrap.communications_ingest`).
     """
     settings = load_settings()
-    if not settings.cycle_scheduler_enabled:
+    if not (settings.cycle_scheduler_enabled or settings.communications_ingest_enabled):
         print("plane cycles disabled")
         return 2
-    zone = ZoneInfo(settings.cycle_scheduler_timezone)
     engine = create_database_engine(settings.parsed_database_url(), statement_timeout_ms=30_000)
-    audit_engine = create_database_engine(
-        settings.parsed_database_url(), statement_timeout_ms=30_000
-    )
-    audit = SqlAlchemyAuditSink(audit_engine)
-
-    def unit_of_work() -> SqlAlchemyUnitOfWork:
-        return SqlAlchemyUnitOfWork(engine, audit=audit)
-
-    runner = DailyCycleRunner(
-        service=ApplicationService(unit_of_work=unit_of_work, limits=settings.effective_limits()),
-        unit_of_work=unit_of_work,
-        principal=local_principal(),
-        clock=utc_now,
-    )
-
-    def run_for(business_date: date) -> bool:
-        outcome = runner(business_date)
-        _log_line(outcome.log_fields())
-        return outcome.begun
-
-    stop = threading.Event()
-    _install_stop_handlers(stop)
+    engines = [engine]
+    steps: list[SchedulerStep] = []
     try:
-        run = run_cycle_scheduler(
+        if settings.cycle_scheduler_enabled:
+            audit_engine = create_database_engine(
+                settings.parsed_database_url(), statement_timeout_ms=30_000
+            )
+            engines.append(audit_engine)
+            audit = SqlAlchemyAuditSink(audit_engine)
+
+            def unit_of_work() -> SqlAlchemyUnitOfWork:
+                return SqlAlchemyUnitOfWork(engine, audit=audit)
+
+            runner = DailyCycleRunner(
+                service=ApplicationService(
+                    unit_of_work=unit_of_work, limits=settings.effective_limits()
+                ),
+                unit_of_work=unit_of_work,
+                principal=local_principal(),
+                clock=utc_now,
+            )
+
+            def run_for(business_date: date) -> bool:
+                outcome = runner(business_date)
+                _log_line(outcome.log_fields())
+                return outcome.begun
+
+            steps.append(
+                DailyStep(zone=ZoneInfo(settings.cycle_scheduler_timezone), run_for=run_for)
+            )
+        if settings.communications_ingest_enabled:
+            try:
+                lifecycle = ingestion_lifecycle(settings, engine, eager=True)
+            except FileWorkspaceRootError:
+                print("plane cycles workspace_misconfigured")
+                return 2
+            steps.append(
+                _comms_ingest_step(
+                    lifecycle,
+                    local_principal().principal_id,
+                    settings.communications_ingest_poll_seconds,
+                )
+            )
+        stop = threading.Event()
+        _install_stop_handlers(stop)
+        run = run_scheduler_steps(
             engine,
-            zone=zone,
-            run_for=run_for,
+            steps=steps,
             stop=stop,
             clock=utc_now,
             log=_log_line,
@@ -376,8 +459,8 @@ def _run_cycles(args: argparse.Namespace) -> int:
             max_iterations=1 if args.once else args.max_iterations,
         )
     finally:
-        engine.dispose()
-        audit_engine.dispose()
+        for built in engines:
+            built.dispose()
     _report_cycles(run)
     return 0
 

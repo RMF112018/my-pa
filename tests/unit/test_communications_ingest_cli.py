@@ -42,7 +42,10 @@ DIRECTORY: Final = "My PA/Daily Intelligence/communications"
 #: A URL whose every part is distinctive, so an echo of any part is caught.
 DSN: Final = "postgresql+psycopg://dsnuser:dsnsecret@dsnhost.invalid:6543/dsncatalog"
 DSN_PARTS: Final = ("dsnuser", "dsnsecret", "dsnhost", "6543", "postgresql+psycopg")
-HEAD: Final = "52a829ef718a"
+#: A synthetic revision: the command compares it with the (fake) live
+#: `alembic_version` row, so naming the real chain head here would only make
+#: this file a head pin that every later migration has to advance.
+HEAD: Final = "feedfacecafe"
 EXPECT: Final = ["--expected-database", "dsncatalog", "--expected-alembic-head", HEAD]
 #: The fixture fields whose values are content and must never be printed.
 CONTENT_KEYS: Final = frozenset(
@@ -263,11 +266,11 @@ def test_a_mismatched_configured_database_refuses_before_an_engine(
     "engine",
     [
         _Engine(database="other_catalog"),
-        _Engine(heads=["6418b57081c3"]),
+        _Engine(heads=["deadbeef0001"]),
         _Engine(heads=[]),
-        _Engine(heads=[HEAD, "6418b57081c3"]),
+        _Engine(heads=[HEAD, "0123456789ab"]),
     ],
-    ids=["catalog", "older-head", "no-head", "two-heads"],
+    ids=["catalog", "other-head", "no-head", "two-heads"],
 )
 def test_a_mismatched_connected_identity_refuses_before_any_read(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], engine: _Engine

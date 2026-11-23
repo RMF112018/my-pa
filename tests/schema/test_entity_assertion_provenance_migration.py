@@ -352,6 +352,13 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "communication_participants",
         "communication_identifiers",
         "communication_quarantine",
+        # Communications intelligence WP3b stacks the meeting sync staging and
+        # reconciliation tables.
+        "meeting_sync_publications",
+        "meeting_sync_events",
+        "meeting_provider_review_marks",
+        "meeting_provider_reconciliation_passes",
+        "meeting_provider_key_tombstones",
     }
     assert {
         "entities",

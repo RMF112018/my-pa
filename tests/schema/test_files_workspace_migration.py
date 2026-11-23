@@ -130,14 +130,15 @@ def test_the_revision_is_the_single_head_on_b77334135653() -> None:
     # revision, communications intelligence WP2's `6418b57081c3` (Meeting
     # provider bindings) on that, and WP3a's ingestion revision on that, so this
     # revision is the head's great-grandparent.
-    assert script.get_heads() == ["52a829ef718a"]
+    assert script.get_heads() == ["61fafdfd2986"]
+    assert script.get_revision("61fafdfd2986").down_revision == "52a829ef718a"
     assert script.get_revision("52a829ef718a").down_revision == "6418b57081c3"
     assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
     assert script.get_revision("4d1069a7d84f").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "4c37731671fc"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 132
+    assert len(list(MIGRATIONS.glob("*.py"))) == 133
 
 
 # ---- the freeze -------------------------------------------------------------

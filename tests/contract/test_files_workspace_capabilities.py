@@ -89,7 +89,8 @@ def test_the_inventory_is_the_17_appended_names_and_the_2_purposes() -> None:
     # Communications intelligence WP2: two more, `mpbnd` and `msbnd`.
     # Communications intelligence WP3a: eight more (the ingestion lifecycle and
     # the communications rows).
-    assert (len(Capability), len(Purpose), len(IdKind)) == (299, 70, 191)
+    # Communications intelligence WP3b: one more (`msevt`, a staged sync event).
+    assert (len(Capability), len(Purpose), len(IdKind)) == (299, 70, 192)
     assert frozenset(members[-17:]) == FILE_WORKSPACE_CAPABILITIES
     assert set(FILES_WORKSPACE_COMMAND_TYPES) == FILE_WORKSPACE_CAPABILITIES
     # WP4's frozen audit vocabulary names exactly these (contract section 13).
@@ -100,8 +101,10 @@ def test_the_inventory_is_the_17_appended_names_and_the_2_purposes() -> None:
 def test_the_id_kinds_are_the_contract_prefixes() -> None:
     # ADR-020 C1 appended one Meeting kind (`mprep`) after the files kinds,
     # communications intelligence WP2 the two provider binding kinds after it,
-    # and WP3a the eight ingestion and communications kinds after those.
-    assert [kind.value for kind in list(IdKind)[-8:]] == [
+    # WP3a the eight ingestion and communications kinds after those, and WP3b
+    # the one staged sync event kind after those.
+    assert list(IdKind)[-1:] == [IdKind.MEETING_SYNC_EVENT]
+    assert [kind.value for kind in list(IdKind)[-9:-1]] == [
         "isrc",
         "isnp",
         "irun",
@@ -111,12 +114,12 @@ def test_the_id_kinds_are_the_contract_prefixes() -> None:
         "cobs",
         "cqrn",
     ]
-    assert list(IdKind)[-11:-8] == [
+    assert list(IdKind)[-12:-9] == [
         IdKind.MEETING_PREP_VERSION,
         IdKind.MEETING_PROVIDER_BINDING,
         IdKind.MEETING_SERIES_PROVIDER_BINDING,
     ]
-    assert [kind.value for kind in list(IdKind)[-17:-11]] == [
+    assert [kind.value for kind in list(IdKind)[-18:-12]] == [
         "fwupl",
         "fwdnl",
         "fwver",

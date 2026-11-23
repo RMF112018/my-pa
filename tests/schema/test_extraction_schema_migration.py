@@ -631,6 +631,16 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "communication_quarantine",
         }
     ),
+    # Communications intelligence WP3b: meeting sync staging and reconciliation.
+    "61fafdfd2986": frozenset(
+        {
+            "meeting_sync_publications",
+            "meeting_sync_events",
+            "meeting_provider_review_marks",
+            "meeting_provider_reconciliation_passes",
+            "meeting_provider_key_tombstones",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

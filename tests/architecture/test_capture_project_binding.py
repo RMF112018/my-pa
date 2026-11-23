@@ -89,8 +89,10 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: intelligence WP3a revision, which declares the twelve ingestion and
 #: communications tables and imports their vocabularies from
 #: `domain.communications` and `contracts.ports`; purely additive, `captures` is
-#: untouched.
-TABLES_SHA256: Final = "5aff8e6e4ab20d18ffa19c0025b3aaf6f1d4240d5513ede83ae3275d9a63fdc9"
+#: untouched. Moved again by the communications intelligence WP3b revision,
+#: which declares the five meeting sync tables, the binding snapshot columns and
+#: the snapshot digest key; `captures` is untouched.
+TABLES_SHA256: Final = "ec6c3444606b76ab8701c6aac3336ce564e93a4c72594a63202b2f88f3cf3922"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

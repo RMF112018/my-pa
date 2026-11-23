@@ -310,6 +310,8 @@ def test_contract_prefixes_are_stable() -> None:
         "cmitm",
         "cobs",
         "cqrn",
+        # Communications intelligence WP3b: one staged meeting_sync_v1 event.
+        "msevt",
     }
 
 

@@ -4,8 +4,8 @@
 `knowledge.meeting_series_provider_bindings`, `knowledge.meeting_provider_bindings`,
 their two partial unique indexes and four guards. This module proves:
 
-* **the graph** -- this revision, directly on `4d1069a7d84f`, is the parent of the
-  WP3a ingestion head;
+* **the graph** -- this revision, directly on `4d1069a7d84f`, is the grandparent of
+  the WP3b meeting sync head;
 * **the freeze** -- the revision imports nothing from the package it migrates and
   names every column, constraint and index `tables.py` declares for both tables;
 * **offline SQL** for both directions, without a server;
@@ -74,6 +74,18 @@ MIGRATION: Final = (
 )
 
 TABLES: Final = frozenset({"meeting_provider_bindings", "meeting_series_provider_bindings"})
+#: What `tables.py` declares on `meeting_provider_bindings` that the WP3b
+#: revision `61fafdfd2986` adds (Manager ruling D10), not this revision.
+LATER_COLUMNS: Final = frozenset({"origin_snapshot_id", "last_seen_snapshot_id"})
+LATER_CONSTRAINTS: Final = frozenset(
+    {
+        "origin_snapshot_id_is_an_opaque_identifier",
+        "last_seen_snapshot_id_is_an_opaque_identifier",
+        "a_provider_binding_last_seen_names_its_snapshot",
+        "a_provider_binding_last_seen_names_a_snapshot_of_its_digest",
+        "a_provider_binding_origin_names_a_snapshot_of_its_principal",
+    }
+)
 INDEXES: Final = frozenset(
     {"one_provider_binding_per_occurrence", "one_provider_binding_per_single_meeting"}
 )
@@ -125,8 +137,10 @@ def _offline(target: str, *, down: bool = False) -> str:
 def test_the_revision_is_directly_on_the_meeting_prep_head() -> None:
     script = ScriptDirectory.from_config(_config())
     # Communications intelligence WP3a's ingestion revision is additive on this
-    # revision, so this revision is the head's parent rather than the head.
-    assert script.get_heads() == ["52a829ef718a"]
+    # revision and WP3b's meeting sync revision on that, so this revision is the
+    # head's grandparent rather than the head.
+    assert script.get_heads() == ["61fafdfd2986"]
+    assert script.get_revision("61fafdfd2986").down_revision == "52a829ef718a"
     assert script.get_revision("52a829ef718a").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "640aaacc78e8"
@@ -154,11 +168,14 @@ def test_the_frozen_ddl_names_every_declared_column_constraint_and_index(table: 
     flat = _WHITESPACE.sub(" ", source)
     assert f"CREATE TABLE knowledge.{table.name} (" in source
     for column in table.c:
-        assert re.search(rf"\b{column.name}\b", source), column.name
+        if column.name not in LATER_COLUMNS:
+            assert re.search(rf"\b{column.name}\b", source), column.name
     names = [
         str(constraint.name)
         for constraint in table.constraints
-        if constraint.name is not None and not str(constraint.name).startswith("_")
+        if constraint.name is not None
+        and not str(constraint.name).startswith("_")
+        and str(constraint.name) not in LATER_CONSTRAINTS
     ]
     assert len(names) >= 8
     for name in names:
@@ -486,7 +503,7 @@ def test_the_revision_round_trips_from_the_meeting_prep_head(
         str(constraint.name)
         for table in (meeting_provider_bindings, meeting_series_provider_bindings)
         for constraint in table.constraints
-        if constraint.name is not None
+        if constraint.name is not None and str(constraint.name) not in LATER_CONSTRAINTS
     }
     assert declared - {"meeting_provider_bindings_pkey"} <= _catalog(engine)["constraints"]
     command.downgrade(_config(), PREVIOUS)

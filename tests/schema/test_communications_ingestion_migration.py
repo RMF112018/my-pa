@@ -5,7 +5,8 @@ creates the twelve tables of the consumer-neutral ingestion lifecycle and the
 communications evidence (contract sections 1.2, 1.3, 5.1 and 5.2 as amended by
 the WP3a Manager rulings), their indexes and their guards. This module proves:
 
-* **the graph** -- exactly one head, this revision, directly on `6418b57081c3`;
+* **the graph** -- this revision, directly on `6418b57081c3`, is the parent of the
+  WP3b meeting sync head;
 * **the freeze** -- the revision imports nothing from the package it migrates
   and names every column, constraint and index `tables.py` declares; on a live
   server the catalog the revision builds (columns, types, defaults, generated
@@ -76,6 +77,16 @@ MIGRATION: Final = (
 )
 
 TABLES: Final = tuple(table.name for table in COMMUNICATIONS_INGESTION_TABLES)
+#: Constraints `tables.py` declares on these tables that a later revision adds:
+#: the WP3b revision `61fafdfd2986` keys `ingest_snapshots` by its digest too.
+LATER_CONSTRAINTS: Final = frozenset({"an_ingest_snapshot_is_identified_with_its_digest"})
+#: Tables of later revisions that reference these (so a `TRUNCATE ... CASCADE`
+#: reaches them) and refuse TRUNCATE by their own `<table>_refuse_truncate`.
+LATER_TRUNCATE_GUARDED: Final = (
+    "meeting_provider_bindings",
+    "meeting_sync_publications",
+    "meeting_sync_events",
+)
 INDEXES: Final = frozenset(
     {
         "one_current_ingest_snapshot_per_path",
@@ -148,9 +159,12 @@ def _source() -> str:
 # ---- the graph --------------------------------------------------------------
 
 
-def test_the_revision_is_the_single_head_directly_on_the_provider_binding_head() -> None:
+def test_the_revision_is_directly_on_the_provider_binding_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    # Communications intelligence WP3b's meeting sync revision is additive on
+    # this revision, so this revision is the head's parent rather than the head.
+    assert script.get_heads() == ["61fafdfd2986"]
+    assert script.get_revision("61fafdfd2986").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "4d1069a7d84f"
 
@@ -186,7 +200,7 @@ def test_the_frozen_ddl_names_every_declared_column_constraint_and_index(table: 
     for column in table.c:
         assert re.search(rf"\b{column.name}\b", source), column.name
     for constraint in table.constraints:
-        if constraint.name is not None:
+        if constraint.name is not None and constraint.name not in LATER_CONSTRAINTS:
             assert str(constraint.name) in source, constraint.name
     for index in table.indexes:
         assert f"INDEX {index.name} ON knowledge.{table.name}" in flat, index.name
@@ -364,7 +378,12 @@ def _assert_absent(engine: Engine) -> None:
 def test_the_revision_builds_exactly_the_catalog_tables_py_declares(
     disposable_database: str, engine: Engine
 ) -> None:
-    """The freeze, on the server: revision-built and `tables.py`-built are identical."""
+    """The freeze, on the server: head-built and `tables.py`-built are identical.
+
+    At the head, not at this revision: `tables.py` declares the head, and the
+    WP3b revision adds `an_ingest_snapshot_is_identified_with_its_digest` to
+    `ingest_snapshots`.
+    """
     del disposable_database
     command.upgrade(_config(), "head")
     migrated = _shape(engine)
@@ -388,11 +407,11 @@ def test_the_revision_round_trips_from_the_provider_binding_head(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _assert_present(engine)
     command.downgrade(_config(), PREVIOUS)
     _assert_absent(engine)
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _assert_present(engine)
 
 
@@ -401,7 +420,7 @@ def test_every_foreign_key_is_composite_with_the_principal_and_restricts(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     with engine.connect() as connection:
         rows = connection.execute(
             text(
@@ -425,7 +444,7 @@ def test_the_search_document_is_generated_in_english(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     seed = _Seed()
     with engine.begin() as connection:
         seed.plant(connection)
@@ -1461,7 +1480,11 @@ def test_every_unique_key_refuses_its_duplicate_alone(seeded: tuple[Engine, _See
     # The `..._is_identified_within_...` keys exist to be foreign-key targets;
     # every other unique key has a duplicate case.
     covered = {constraint for constraint, _statement, _lift in cases}
-    assert {name for name in declared - covered if "_is_identified_within_" not in name} == set()
+    assert {
+        name
+        for name in declared - covered - LATER_CONSTRAINTS
+        if "_is_identified_within_" not in name
+    } == set()
 
 
 # ---- FOREIGN KEY constraints -------------------------------------------------------------
@@ -1937,6 +1960,13 @@ def test_truncate_is_refused_on_every_table_by_its_own_trigger(
     and with all twelve disabled the statement is accepted."""
     engine, _seed = seeded
     every = [f"ALTER TABLE knowledge.{t} DISABLE TRIGGER {t}_refuse_truncate" for t in TABLES]
+    # A later revision's tables that a CASCADE from these reaches (the WP3b
+    # meeting sync tables and the bindings name `ingest_snapshots`) refuse
+    # TRUNCATE by their own triggers; they are lifted for the second half.
+    downstream = [
+        f"ALTER TABLE knowledge.{t} DISABLE TRIGGER {t}_refuse_truncate"
+        for t in LATER_TRUNCATE_GUARDED
+    ]
     failures = []
     for table in TABLES:
         others = "; ".join(line for line in every if f"knowledge.{table} " not in line)
@@ -1944,10 +1974,10 @@ def test_truncate_is_refused_on_every_table_by_its_own_trigger(
         def statement(connection: Connection, table: str = table) -> None:
             connection.execute(text(f"TRUNCATE knowledge.{table} CASCADE"))
 
-        alone = _attempt(engine, statement, prelude=others)
+        alone = _attempt(engine, statement, prelude="; ".join([others, *downstream]))
         if alone is None or _sqlstate(alone) != RESTRICT_VIOLATION:
             failures.append((table, "not refused by its own trigger alone"))
-        if _attempt(engine, statement, prelude="; ".join(every)) is not None:
+        if _attempt(engine, statement, prelude="; ".join(every + downstream)) is not None:
             failures.append((table, "refused with every TRUNCATE trigger disabled"))
     assert failures == []
 
@@ -1957,7 +1987,7 @@ def test_a_downgrade_refuses_while_one_source_exists(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     with engine.begin() as connection:
         connection.execute(insert(ingest_sources).values(**_Seed().source()))
     with pytest.raises(DBAPIError) as refused:
@@ -1971,7 +2001,7 @@ def test_a_downgrade_refuses_while_the_full_chain_exists(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     with engine.begin() as connection:
         _Seed().plant(connection)
     with pytest.raises(DBAPIError) as refused:

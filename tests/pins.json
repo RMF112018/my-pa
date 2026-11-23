@@ -131,12 +131,13 @@
       "b77334135653",
       "640aaacc78e8",
       "4d1069a7d84f",
-      "6418b57081c3"
+      "6418b57081c3",
+      "52a829ef718a"
     ],
     "heads": [
-      "6418b57081c3"
+      "52a829ef718a"
     ],
-    "revision_files": 131
+    "revision_files": 132
   },
   "chatllm": {
     "classes": {
@@ -151,10 +152,10 @@
     "version": "chatllm-data-v15"
   },
   "counts": {
-    "alembic_revisions": 131,
+    "alembic_revisions": 132,
     "capability": 299,
     "chatllm_policy_entries": 299,
-    "id_kind": 183,
+    "id_kind": 191,
     "purpose": 70,
     "safe_detail": 439
   },
@@ -643,7 +644,15 @@
       "fwpnd",
       "mprep",
       "mpbnd",
-      "msbnd"
+      "msbnd",
+      "isrc",
+      "isnp",
+      "irun",
+      "icov",
+      "cmsg",
+      "cmitm",
+      "cobs",
+      "cqrn"
     ],
     "purpose": [
       "bounded_enrollment",

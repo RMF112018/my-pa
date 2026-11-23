@@ -1,4 +1,4 @@
-# P6 XER/XML schedule import — whole-slice contract (S7-1 to S7-6)
+# P6 XER/XML schedule import — whole-slice contract (S7-0 to S7-6)
 
 **Status:** proposed implementation contract. Design only; nothing in it is implemented,
 migrated, granted, switched on or deployed. The decision record is
@@ -51,14 +51,17 @@ imported, so nothing here is tailored to them. Every statement is marked:
 | Trust boundary and limits | all | 13 |
 | Conformance script | S7-1 (script), S7-5 (real-corpus runs) | 12 |
 | Slices, acceptance tests, prove-red plan, operator gates | — | 14, 15 |
-| Re-capture of an imported publication from its retained snapshot | S7-6 (optional, later) | 7.6 |
+| Re-capture of an imported publication from its retained snapshot | S7-6 (optional, undecided) | 7.6 |
+| Scenario engine amendment: start and finish milestones, `my-pa-cpm-v2`, MY-PA standard calendar, fixed-calendar lag | S7-0 | 11.6, 11.7 |
 | `p6_xml_v1` at contract level | later slice | 16 |
 
 ### 0.2 Out of scope
 
 Resources, roles, costs, expenses, risks, notebooks, steps and baselines **as typed
 schedule logic** (their fields can still be captured generically, section 7); multi-project
-exports (refused); mixing PDF and P6 formats in one Series; CPM over a publication (ADR-017
+exports (refused, typed; **decided** 2026-11-23: not common); mixing PDF and P6 formats in one
+Series or a cross-format delta (**decided** 2026-11-23: a project with PDF history starts a new
+Series for XER); CPM over a publication (ADR-017
 decision 2); any write to P6; real project data in the repository; production anything.
 
 ---
@@ -95,6 +98,9 @@ decision 2); any write to P6; real project data in the repository; production an
    optional-field registry with grant-gated selection, a generic typed field store, an
    observed-fields record, reads that filter and sort on captured fields, and named limits
    (section 7).
+5. (Answers, 2026-11-23) The operator decided the open questions: section 17. They add the
+   MY-PA standard calendar (11.6), faithful start and finish milestones on a new engine id
+   (11.7, slice S7-0), full snapshot retention (7.6) and the decided defaults of 11.5.
 
 ---
 
@@ -292,8 +298,8 @@ applied to versions already imported.
   catalogue marks the value set open; in a T or O field it is stored as its raw token
   (≤ 64 characters, pattern `[A-Za-z0-9_]{1,64}`, else null) with the non-fatal
   `p6_unknown_enum_value`.
-- Multiple `PROJECT` rows: fatal `p6_multiple_projects` (single-project exports only in this
-  version).
+- Multiple `PROJECT` rows: fatal `p6_multiple_projects` (single-project exports only;
+  operator decision 2026-11-23: multi-project exports are not common, keep refusing them).
 
 ### 5.4 Caps (hard; exceeding any is fatal `p6_bound_exceeded` naming the bound)
 
@@ -320,14 +326,17 @@ applied to versions already imported.
 after `%E`), `p6_record_width_mismatch`, `p6_bound_exceeded`, `p6_required_table_missing`,
 `p6_required_field_missing`, `p6_multiple_projects`, `p6_value_invalid` (R field),
 `p6_unknown_enum_value` (R field), `p6_duplicate_activity_id` (`task_code` repeated or empty),
-`p6_reference_dangling` (a `TASK.wbs_id`, `TASK.clndr_id` or same-project `TASKPRED` end that
-names no row), `p6_wbs_cycle`, `p6_calendar_invalid` (unparseable `clndr_data` of a calendar an
-activity uses).
+`p6_reference_dangling` (a `TASK.wbs_id` or same-project `TASKPRED` end that names no
+row), `p6_wbs_cycle`. A missing or unparseable activity calendar is **not** fatal (operator
+decision 2026-11-23): it is `p6_calendar_missing` below.
 
 Non-fatal: `p6_unknown_table`, `p6_unknown_field`, `p6_unknown_field_unnamed`,
 `p6_unknown_enum_value` (T/O), `p6_export_version_untested`, `p6_value_invalid` (T/O field:
 stored null), `p6_external_relationship` (`pred_proj_id ≠ proj_id`: stored, flagged),
 `p6_calendar_invalid` (unused calendar), `p6_calendar_base_substituted`,
+`p6_calendar_missing` (a `TASK.clndr_id` that names no row, or a used calendar whose data is
+unparseable: the activity is stored with its P6 calendar id and the scenario snapshot gives it
+the MY-PA standard calendar, section 11.6),
 `p6_capture_cap_reached` (section 7.7), `p6_project_identity_changed` (section 11.1: makes the
 publication `review_required`).
 
@@ -442,8 +451,9 @@ guessed).
 
 Derived activity columns: `start_at` = `actual_start` if set else `early_start`, `finish_at` =
 `actual_finish` if set else `early_finish` (equal to XML `StartDate`/`FinishDate`, section 4);
-`wbs_path` (labels from the project node's children down, ≤ 64); `kind` (`task`, or
-`milestone` for `TT_Mile`/`TT_FinMile`); `milestone_edge` (`start`/`finish`/null).
+`wbs_path` (labels from the project node's children down, ≤ 64); `kind` (`task` for
+`TT_Task` and the other non-milestone types, `start_milestone` for `TT_Mile`,
+`finish_milestone` for `TT_FinMile`; mapped faithfully, never collapsed, section 11.7).
 
 Enumerations: `task_type` {`TT_Task`, `TT_Mile`, `TT_FinMile`} [S], {`TT_LOE`, `TT_WBS`,
 `TT_Rsrc`} [D]; `status_code` {`TK_NotStart`} [S], {`TK_Active`, `TK_Complete`} [D];
@@ -706,18 +716,25 @@ See section 10.5: `schedule_p6_activities.list` and `schedule_p6_field_values.li
 and sort on captured fields; the delta reports captured-field changes; a scenario snapshot
 can carry selected captured fields inert (section 11.5).
 
-### 7.6 Raw-source retention and re-capture (recommendation: **retain**)
+### 7.6 Raw-source retention (**decided: retain every snapshot**) and re-capture (optional, undecided)
 
 The admitted bytes are stored anyway (section 9.1), so re-parsing an already imported version
-is possible. Recommendation: **yes, retain**, because it is the only way a field selected
-later reaches earlier versions, and the conformance script and the XML cross-check need the
-exact bytes. Cost: about the export size per distinct file per Principal (the sample: 1.9 MB;
-PostgreSQL TOAST compresses text, ratio not measured). At 50 projects × 52 weekly exports a
-year that is about 4.9 GB a year uncompressed [A]. The quota (section 7.7) bounds it; a
-retention rule (for example keep the snapshots of baselines and the last N updates) is an
-operator decision (gate G-9).
+is possible. **Operator decision 2026-11-23: every snapshot is retained** (no retention rule
+deletes one). Reasons: it is the only way a field selected later reaches earlier versions, and
+the conformance script and the XML cross-check need the exact bytes. Cost: about the export
+size per distinct file per Principal (the sample: 1.9 MB; PostgreSQL TOAST compresses text,
+ratio not measured). At 50 projects × 52 weekly exports a year that is about 4.9 GB a year
+uncompressed [A]. The placeholder quota (section 7.7, kept by the same decision) bounds it.
 
-**S7-6 (optional, later):** `schedule_p6_captures.request` (write) enqueues a re-capture of 1
+**Re-capture in plain words.** When a schedule is imported, MY-PA keeps an exact copy of the
+file and saves only the fields you have chosen to capture. If you later decide a field matters
+(say, a custom code your scheduler added), new imports will capture it, but the versions
+imported before your choice will not have it. Re-capture is an optional extra that would go
+back to those kept copies and read the newly chosen field out of them, so older versions gain
+the field too, without changing anything already recorded. It is not needed for anything else
+in this design, and whether to build it is still open.
+
+**S7-6 (optional, undecided):** `schedule_p6_captures.request` (write) enqueues a re-capture of 1
 publication under the Series' current selection: it re-parses the retained snapshot in the
 contained child and **appends** field values under a new `capture_run_id`; typed rows and
 earlier values are never changed; reads use the latest capture run per publication.
@@ -736,8 +753,8 @@ earlier values are never changed; reads use the latest capture run per publicati
 | field key | `^(xer:[A-Z][A-Z0-9_]{0,31}\.[A-Za-z][A-Za-z0-9_]{0,63}|udf:[A-Z]{1,16}:.{1,120}|code:.{1,120})$` |
 | filters per read | ≤ 3 field predicates, operators `eq`, `in` (≤ 50 values), `lt`, `le`, `gt`, `ge`, `prefix` (text, ≤ 100 characters); 1 sort key; no `OR`, no regular expression, no expression language, no SQL fragment |
 | execution | nothing captured is evaluated: UDF indicator expressions are **N**; values are data only |
-| snapshot bytes per Principal | ≤ 8 GiB (`rate_limited(STORAGE_QUOTA)`), operator-adjustable by setting [A] |
-| imports per Principal | ≤ 60 per hour, ≤ 500 per day (`rate_limited`) |
+| snapshot bytes per Principal | ≤ 8 GiB (`rate_limited(STORAGE_QUOTA)`), operator-adjustable by setting; placeholder kept by operator decision 2026-11-23 |
+| imports per Principal | ≤ 60 per hour, ≤ 500 per day (`rate_limited`); placeholders kept by the same decision |
 | selection events per Series | ≤ 1,000 |
 
 Reaching the per-entity or per-publication cap stops capture for that publication's further
@@ -801,12 +818,12 @@ table and plane name, if built, are a separate later revision.
 Per publication (sample-sized): about 3,000 activities, 4,700 relationships, 470 WBS rows, 4
 calendars, 900 code/UDF values, 300 observed-field rows: about 9,400 rows and one 2 MB
 snapshot. At 50 projects × 52 versions a year: about 24 million rows and 5 GB of snapshots
-a year. Every per-run table leads its primary key and indexes with `parser_run_id`, so a
+a year, all retained (section 7.6). Every per-run table leads its primary key and indexes with `parser_run_id`, so a
 publication's reads touch only its own index range, and history reads use
 `(principal_id, series_id, schedule_activity_id)`. No declarative partitioning in this
 version: the per-run keys keep lookups bounded and the row counts are well inside one
-PostgreSQL table's comfortable range; partitioning by `series_id` hash and a retention rule
-are the documented next step when the operator sets retention (gate G-9). The S5
+PostgreSQL table's comfortable range; partitioning by `series_id` hash is the documented next step if
+the measured size calls for it (gate G-9); snapshots are never deleted (section 7.6). The S5
 `RESTRICT` foreign keys apply: deleting a publication requires a retention design first.
 
 ---
@@ -926,7 +943,8 @@ on `schedule_p6_field_values.list` and only when selected with `include_personal
 
 ### 10.5 Read shapes
 
-- **activity**: `{schedule_activity_id, activity_id, name, kind, milestone_edge, task_type,
+- **activity**: `{schedule_activity_id, activity_id, name, kind (task | start_milestone |
+  finish_milestone), task_type,
   status, wbs_path, calendar_id, original_hours, remaining_hours, start, finish,
   early_start, early_finish, late_start, late_finish, planned_start, planned_finish,
   actual_start, actual_finish, total_float_hours, free_float_hours, constraint: {type, date},
@@ -1033,33 +1051,165 @@ selects the algorithm by the Series' format.
 ### 11.5 Scenario hand-off
 
 `schedule_scenarios.create` from a P6 publication (or an approved baseline naming one) builds
-version 1 **without** client calendars or `minutes_per_source_unit`:
+version 1 **without** client calendars or `minutes_per_source_unit`. The request may name
+calendars (below); everything else is mapped:
 
 | Content | From |
 |---|---|
 | `data_date` | `data_date` (minute exact) |
-| `settings.default_calendar` | `p6-<default_p6_calendar_id>` (or the most used activity calendar if the project default is unused [A]) |
-| `settings.lag_calendar` | `rcal_Predecessor` → `predecessor`, `rcal_Successor` → `successor`, `rcal_24Hour` → `twenty_four_hour`; `rcal_Project` has no engine equivalent: the request must give `lag_calendar` (else `invalid_request(LAG_CALENDAR)`) |
-| `settings.progress_policy` | `progress_override` Y → `progress_override`; `retained_logic` Y → `retained_logic`; neither (P6 "actual dates") → request must choose |
+| calendars | by default every calendar an activity uses (≤ 32, else `invalid_request(CALENDARS)`), key `p6-<id>`; week intervals in minutes (Monday first); exceptions 2000-01-01..2099-12-31 only (others counted `exceptions_out_of_range`); ≤ 4 intervals per day else refused `invalid_request(CALENDAR)`. The request may add or substitute **any imported P6 calendar of the same Project** (named by `(publication_id, p6_calendar_id)` of any P6 publication of that Project the caller owns, including a project's own unique calendar), and the MY-PA standard calendar `my-pa-us-40h-v1` (section 11.6) is always available |
+| `settings.default_calendar` | the request's `default_calendar` if given; else `p6-<default_p6_calendar_id>` when that calendar exists and parses; else **`my-pa-us-40h-v1`** (counted `default_calendar_standard`) |
+| activity `calendar` | `p6-<clndr_id>`; when the activity's calendar is missing or unparseable (`p6_calendar_missing`), **`my-pa-us-40h-v1`** (counted `calendars_defaulted`); the request may remap any activity calendar to another available one |
+| `settings.lag_calendar` | `rcal_Predecessor` → `predecessor`, `rcal_Successor` → `successor`, `rcal_24Hour` → `twenty_four_hour`, **`rcal_Project` → `calendar:p6-<default_p6_calendar_id>`** (the project default calendar, a fixed lag calendar: section 11.7), or `calendar:my-pa-us-40h-v1` when the project has no usable default calendar (counted `lag_calendar_standard`); the request may override |
+| `settings.progress_policy` | `progress_override` Y → `progress_override`; `retained_logic` Y → `retained_logic`; **neither (P6 "actual dates") → `retained_logic` by default** (counted `progress_policy_defaulted`); the request may override. Why this default: retained logic is P6's own default, it never schedules remaining work of an out-of-sequence activity earlier than its logic allows (so it cannot understate a forecast), and P6 "actual dates" mode differs from it only for out-of-sequence progressed activities, which the engine already reports; the default is visible in the snapshot report and changeable by `settings.set` |
 | `settings.must_finish_by`, threshold | `must_finish_by`; `critical_float_hours × 60` |
-| calendars | every calendar an activity uses (≤ 32, else `invalid_request(CALENDARS)`), key `p6-<id>`; week intervals in minutes (Monday first); exceptions 2000-01-01..2099-12-31 only (others counted `exceptions_out_of_range`); ≤ 4 intervals per day else refused `invalid_request(CALENDAR)` |
-| activities | every activity; `kind` task/milestone (start/finish edge kept only in `published_reference`, counted `milestone_edge_collapsed`); `TT_LOE`/`TT_WBS` excluded with their relationships, counted |
-| durations | `remaining_minutes = remaining_hours × 60`, `original_minutes = original_hours × 60`; a non-integral product is rounded half-even and counted `durations_quantized` |
-| constraints | `CS_MSOA` → SNET, `CS_MEOA` → FNET, `CS_MSOB` → SNLT, `CS_MEOB` → FNLT, `CS_MANDSTART` → MSO, `CS_MANDFIN` → MFO; `CS_MSO`, `CS_MEO`, `CS_ALAP` not representable: dropped and counted `constraints_unsupported`; a primary + secondary pair the engine's slot rule refuses keeps the primary and counts `constraints_dropped` |
-| progress | `actual_start`/`actual_finish`; `TK_Complete` without an actual finish is refused `invalid_request(ROWS)` |
+| activities | every activity; `kind`: `TT_Task` → `task`, `TT_Mile` → `start_milestone`, `TT_FinMile` → `finish_milestone` (faithful; section 11.7); `TT_LOE`/`TT_WBS` excluded with their relationships, counted |
+| durations | `remaining_minutes = remaining_hours × 60`, `original_minutes = original_hours × 60`; a non-integral product is rounded half-even and counted `durations_quantized`; milestones 0 and 0 |
+| constraints | `CS_MSOA` → SNET, `CS_MEOA` → FNET, `CS_MSOB` → SNLT, `CS_MEOB` → FNLT, `CS_MANDSTART` → MSO, `CS_MANDFIN` → MFO; `CS_MSO`, `CS_MEO`, `CS_ALAP` not representable: dropped and counted `constraints_unsupported`; a primary + secondary pair the engine's slot rule refuses keeps the primary and counts `constraints_dropped`. On a milestone the constraint is put on the milestone's own side (section 11.7): a finish-side constraint on a start milestone becomes its start-side twin (FNET → SNET, FNLT → SNLT, MFO → MSO) and vice versa, counted `milestone_constraints_converted`; the date is unchanged, so nothing is lost (a milestone has one date) |
+| progress | `actual_start`/`actual_finish`; a start milestone takes `actual_start` (its actual finish is the same instant), a finish milestone `actual_finish`; `TK_Complete` without the needed actual date is refused `invalid_request(ROWS)` |
 | relationships | every same-project relationship between included activities; `lag_minutes = lag_hours × 60`; external ones counted `external_relationships_dropped` |
 | `published_reference` | publication id, Activity ID, P6 early/late dates and floats, and the request's `include_fields` (≤ 50 captured keys) as `fields` |
 
-Including `fields` adds an optional key to `published_reference`; documents without it are
-byte-identical to `schedule-scenario-content-v1`, documents with it are
-`schedule-scenario-content-v2` (the same canonical rules, the key added). The engine never
-reads captured fields: they are inert data. The snapshot report lists every count above.
+Content schema: a document that uses none of the S7-0 additions (edged milestones, a
+`calendar:` lag calendar, `published_reference.fields`) is a byte-identical
+`schedule-scenario-content-v1` document; one that uses any of them is
+`schedule-scenario-content-v2` (section 11.7). A P6 snapshot with any milestone or with
+`rcal_Project` is therefore v2. The engine never reads captured fields: they are inert data.
+The snapshot report lists every count above.
+
+**PDF snapshots (S7-0 change):** the S6 snapshot input's `calendars` and `default_calendar`
+become optional; when omitted, the MY-PA standard calendar is the only calendar and the
+default (counted `default_calendar_standard`). A request that supplies calendars, as every
+existing caller does, produces exactly the same content and hash as today. PDF rows keep kind
+`milestone` (the PDF does not say which edge), so a PDF snapshot stays v1.
 
 Because the P6 early/late dates and floats travel inert, the engine's result on a version 1
 of an unmodified P6 publication can be compared with P6's own numbers: that comparison is the
 S7-5 oracle (section 14), never a claim of equivalence (P6 options the engine lacks —
 `sched_lag_early_start_flag`, expected finish, multiple float paths — are listed per
 publication as `unmodelled_settings`).
+
+### 11.6 MY-PA standard calendar `my-pa-us-40h-v1`
+
+The default calendar wherever a source gives none (PDF rows, a missing or unparseable P6
+calendar, a P6 project without a usable default calendar, `rcal_Project` without one). It is a
+versioned constant of the scenario domain (S7-0), generated by rule, never by a year list:
+
+| Item | Value |
+|---|---|
+| key | `my-pa-us-40h-v1` (a change of any rule below is a new key, `-v2`; existing content keeps the old calendar's materialized data) |
+| week | Monday to Friday, 1 interval `[480, 960]` (08:00–16:00, 8 hours, 40 a week); Saturday and Sunday non-working |
+| interval override | the constant `STANDARD_WORKDAY = (480, 960)`; a snapshot request may pass `standard_workday` (`HH:MM`–`HH:MM`, 1..1,440 minutes, at most 4 intervals) to materialize a variant, keyed `my-pa-us-40h-v1-<start><end>` (for example `my-pa-us-40h-v1-07001530`) so 2 variants never share a key |
+| holidays | the US federal holidays: New Year's Day (1 Jan), Martin Luther King Jr. Day (3rd Monday of January), Presidents Day (3rd Monday of February), Memorial Day (last Monday of May), Juneteenth (19 June, **from 2021**, the year it became a federal holiday), Independence Day (4 July), Labor Day (1st Monday of September), Columbus / Indigenous Peoples' Day (2nd Monday of October), Veterans Day (11 November), Thanksgiving (4th Thursday of November), Christmas Day (25 December) |
+| observed rule | a fixed-date holiday on a Saturday is observed the Friday before, on a Sunday the Monday after; the observed day is the non-working exception (the weekend day is non-working anyway). New Year's Day on a Saturday is observed on 31 December of the previous year (for example 1 Jan 2022 → Fri 31 Dec 2021) |
+| window | the rules are defined for every year the engine supports; an observed date outside 2000-01-01..2099-12-31 is dropped (1 Jan 2000 is a Saturday: its observed day, 31 Dec 1999, is outside the window) |
+| materialization | the engine limits a calendar to 1,000 exceptions and a version to 2,000 (S6 §2.10), and 100 years of 11 holidays exceed that, so a snapshot materializes the holidays of the years `data_date.year − 2` to `data_date.year + 20` (clipped to the window; ≤ 253 dates); a scenario that runs past that horizon reports `standard_calendar_horizon_exceeded` and the client may extend it with `calendar.exception.put` |
+| holidays as exceptions | each observed date is an exception with no interval (non-working) |
+
+Planned tests (S7-0): each fixed-date holiday on a Saturday, a Sunday and a weekday (for
+example Independence Day 2099 is a Saturday → Fri 3 Jul; Christmas 2021 is a Saturday → Fri
+24 Dec; Veterans Day 2000 is a Saturday → Fri 10 Nov); New Year on a Saturday crossing into the
+previous year (2022 → 31 Dec 2021) and at the window edge (2000 → dropped); each nth-weekday
+rule including "last Monday of May" in a May with 5 Mondays and with 4; leap years (2000, a
+century leap year; 2024; 2096) for every February and nth-weekday rule; Juneteenth absent in
+2020 and present (observed Fri 18 Jun) in 2021; the 2099 year complete; the count per year (10
+before 2021, 11 from 2021, less any observed day pushed outside the window); the horizon
+clipping; the generator is pure and deterministic (same input, same canonical bytes).
+
+### 11.7 Scenario engine amendment (S7-0): start and finish milestones, `my-pa-cpm-v2`
+
+This amends ADR-017 (recorded in ADR-023, "Amendment to ADR-017") and the S6 contract
+sections 2.3, 2.4, 2.8, 3.3, 3.5 and 3.6.
+
+**Kinds.** `kind` ∈ `task` | `milestone` | `start_milestone` | `finish_milestone`. `milestone`
+keeps its v1 meaning exactly (used by PDF snapshots, whose rows do not say which edge). Both
+edged kinds have `original_minutes = remaining_minutes = 0` and 1 date (start = finish).
+
+**Scheduling semantics (`my-pa-cpm-v2`, additions to S6 §3 only).**
+
+| | start milestone | finish milestone |
+|---|---|---|
+| its date is | the start: the beginning of a working period | the finish: the end of a working period |
+| forward | `x` as S6 §3.5 step 3, then `ES = EF = next_work(C_j, x)` | `x` as S6 §3.5 step 3, then `ES = EF = max(D, prev_end(C_j, x))` |
+| backward | `y` as S6 §3.6 step 5, then `LS = LF = next_work(C_j, y)` | `y` as S6 §3.6 step 5, then `LS = LF = prev_end(C_j, y)` |
+| relationships | every type is allowed; because start = finish, FS/SS from it use its one date, and FS/SS/FF/SF bounds onto it bound that date (`retreat(C_j, t, 0) = t`), exactly as today | same |
+| constraints | start side only: SNET, SNLT, MSO (a finish-side one is refused `constraint_conflict` in a change set; the snapshot converts it, section 11.5) | finish side only: FNET, FNLT, MFO |
+| mandatory pin | applied at `at`, unsnapped (as v1) | same |
+| progress | `actual_start` = its date (`actual_finish` must be null or equal) | `actual_finish` = its date (`actual_start` must be null or equal) |
+
+Snapping moves a milestone only across non-working time (`W(C_j, x, next_work(C_j, x)) = 0`
+and `W(C_j, prev_end(C_j, x), x) = 0`), so floats in working minutes are unchanged; what changes
+is the wall-clock date, which matters for the dates shown and for a `twenty_four_hour` or fixed
+lag calendar. Example: a task finishing Monday 16:00 drives, by FS 0, a start milestone at
+Tuesday 08:00 and a finish milestone at Monday 16:00 (under v1 both would read Monday 16:00).
+
+**Fixed lag calendar.** `settings.lag_calendar` also accepts `calendar:<key>` (an existing
+calendar of the version): every relationship's lag is measured on that calendar. It carries
+P6 `rcal_Project`. It cannot be removed while named (`calendar_in_use`).
+
+**Versioning and compatibility.**
+
+- A new engine id **`my-pa-cpm-v2`** is needed: v2 output differs from v1 on edged milestones
+  and fixed lag calendars, and a run is stored and replayed by `(version, engine version)`.
+- `my-pa-cpm-v1` is frozen: its code path, outputs and output hashes stay **byte-identical**
+  for every existing and future v1 document.
+- The engine is chosen by the content schema: a `schedule-scenario-content-v1` document runs
+  on v1, a v2 document on v2. `schedule_cpm_runs.create` takes no new input. A v1 document can
+  never be run on v2 and vice versa, so existing scenarios never change results.
+- Content: v2 = v1 + the 2 kinds + `calendar:<key>` lag calendars + optional
+  `published_reference.fields`; hash `sha256(b"schedule-scenario-content-v2\n" + canonical)`.
+  A change set that introduces a v2 feature into a v1 parent produces a v2 child; a change
+  set that removes every v2 feature produces a v1 child again (the schema follows the content,
+  so the v1 hash is reproducible).
+- Change set grammar: `activity.add`/`activity.edit` accept the 2 kinds; `settings.set`
+  accepts `calendar:<key>`; `op_error` gains no member (wrong-side constraints use
+  `constraint_conflict`).
+- Client-asserted outputs: `OutputEngine` gains `my-pa-cpm-v2`.
+
+**Effect on existing S6 pieces.**
+
+| Piece | Effect |
+|---|---|
+| persistence | **no migration**: content is stored as validated JSON; `schedule_cpm_runs.engine_version` is already checked by the pattern `^my-pa-cpm-v[1-9][0-9]{0,3}$` (`a_cpm_run_engine_version_is_known`, `src/my_pa/infrastructure/persistence/tables.py`), which admits `my-pa-cpm-v2`; `OutputEngine` values carry no database CHECK at the basis (S7-0 re-verifies both) |
+| stored versions, runs, outputs | unchanged; nothing is rewritten |
+| snapshots | PDF snapshots unchanged (kind `milestone`, v1) unless calendars are omitted, which only adds the standard calendar; P6 snapshots are new |
+| change sets | additive grammar; existing change sets replay identically |
+| contract hashes | v1 content, change-set and output hashes unchanged; v2 has its own prefix |
+| read shapes | `kind` gains 2 values; run reads carry `engine_version` already |
+| ChatLLM profile | the capability set does not change, so no profile bump; tool input schemas that enumerate `kind` or `lag_calendar` widen additively (if a pinned tool-schema snapshot exists at the head, it moves in the same PR) |
+| modules touched | `src/my_pa/domain/schedule/scenario/` (`model.py`, `canonical.py`, `changeset.py`, `snapshot.py`, `cpm.py`, `outputs.py`), `src/my_pa/application/schedule_scenarios.py` (engine selection, `_RUN_BASIS`), `src/my_pa/infrastructure/persistence/schedule_cpm_lease.py` (run lookup by the chosen engine), the S6 command docstrings and tool descriptions |
+
+**Recommendation: a separate slice S7-0, its own PR, first.** It changes merged S6 modules
+(above), not the new `p6` package, and its key proof — every v1 golden byte-identical — is
+cleanest reviewed alone. It needs **no migration**, so it does not enter the migration lane
+(the repository's one-at-a-time migration lane) and can merge before, after or between
+migration PRs; only S7-2 takes a place in that lane.
+
+**S7-0 tests and acceptance.**
+
+- E1 every S6 golden network (G1…, S1…) and every recorded v1 output hash is unchanged
+  (byte-for-byte), run on the v1 path after the change.
+- E2 the v2 code path on every v1 golden with `milestone` and no fixed lag calendar yields the
+  same activity results as v1 (differential test; only `engine_version` differs).
+- E3 new goldens: start milestone after FS from a 16:00 finish → next working start; finish
+  milestone → 16:00; both under a `twenty_four_hour` and a fixed lag calendar (dates differ as
+  specified); a finish milestone whose only bound is the data date at a non-working instant →
+  the data date; backward-pass late dates of both kinds; floats equal to the unsnapped working
+  minutes; a pinned milestone unsnapped.
+- E4 change-set refusals: finish-side constraint on a start milestone and the reverse
+  (`constraint_conflict`); removal of a calendar named as fixed lag calendar
+  (`calendar_in_use`).
+- E5 content schema: a v1 document hashes as before; adding then removing an edged milestone
+  returns to the identical v1 hash; v2 canonical form and hash golden.
+- E6 standard calendar tests of section 11.6.
+- E7 PDF snapshot without calendars → standard calendar; with calendars → identical bytes and
+  hash to the pre-S7-0 golden.
+- E8 a run on a v1 version is stored and replayed as `my-pa-cpm-v1`, a run on a v2 version as
+  `my-pa-cpm-v2`; `schedule_cpm_runs.read` reports each.
+
+Prove-red for S7-0: make the v2 start-milestone snap a no-op (E3 must fail); route a v1
+document to the v2 path with a deliberately different tie-break (E1/E2 must fail); drop the
+observed-day Saturday rule (E6 must fail); include Juneteenth before 2021 (E6 must fail).
 
 ---
 
@@ -1102,7 +1252,9 @@ field; a different `ERMHDR` version (`8.4`, `19.12`, `26.4`); UDFs present (text
 date, code) and absent; activity codes with a parent chain; a cross-project relationship;
 Windows-1252 bytes; UTF-8 bytes; invalid bytes; CRLF and LF; a width mismatch; each cap at
 its bound and one past it; a calendar with a `00:00` day end; a calendar without
-`DaysOfWeek`; a duplicate Activity ID; a multi-project file. Every fixture is generated by a
+`DaysOfWeek`; an activity naming a missing calendar (non-fatal `p6_calendar_missing`); start
+and finish milestones with constraints on either side; `rcal_Project` and neither progress flag
+set; a duplicate Activity ID; a multi-project file. Every fixture is generated by a
 committed script from synthetic names (no real project, person, code, calendar or UDF label).
 
 ---
@@ -1139,8 +1291,16 @@ but false — the trust label says what it is: what that file published.
 
 ## 14. Slices, acceptance tests, prove-red plan
 
-Order: S7-1 → (gate G-1) → S7-2 → S7-3 → S7-4 → S7-5; S7-6 optional after S7-4. One work
-package at a time.
+Order: S7-0 → S7-1 → (gate G-1) → S7-2 → S7-3 → S7-4 → S7-5; S7-6 optional (undecided)
+after S7-4. One work package at a time. S7-0 and S7-1 need no migration; S7-2 is the only
+slice that enters the migration lane. S7-0 is a separate PR on merged S6 modules (section
+11.7); it comes first because S7-4's scenario hand-off depends on it, but S7-1 does not, so
+S7-1 may start once S7-0 has merged or in parallel with it if the operator allows 2 PRs.
+
+### S7-0 — scenario engine amendment (no migration)
+
+Deliverables, acceptance E1–E8 and its prove-red plan: section 11.7; the standard calendar
+and its tests: section 11.6. S7-4's scenario hand-off (D6) depends on it.
 
 ### S7-1 — pure parser, catalogue and conformance script (no migration, no IO in the domain)
 
@@ -1207,8 +1367,10 @@ Acceptance:
   (no code change).
 - D4 filters/sorts: each operator; caps; refusal of anything else.
 - D5 delta: every change kind on synthetic pairs; N-version history; `fields_not_comparable`.
-- D6 scenario snapshot from a P6 publication: every mapping row of 11.5, counts, v1/v2
-  content.
+- D6 scenario snapshot from a P6 publication: every mapping row of 11.5 (including calendar
+  choice across the Project's P6 publications, the standard-calendar defaults, `rcal_Project`
+  → fixed lag calendar, the progress-policy default, faithful start/finish milestones and the
+  milestone constraint conversion), counts, v1/v2 content.
 - D7 remote: published only with switch, writes-enabled and grant; the PDF import is still
   never published.
 
@@ -1263,8 +1425,8 @@ masked test, never "covered"), recorded in the PR:
 | G-6 | grants per client for the 7 names, `set-client-writes`, ChatLLM `profile-apply` at the new profile |
 | G-7 | the S7-5 real-corpus run and its acceptance |
 | G-8 | personal-field capture (`include_personal`) for any Series |
-| G-9 | snapshot retention rule, quota and any partitioning |
-| G-10 | build S7-6 or not |
+| G-9 | partitioning, if measured size calls for it; and any later change to the placeholder quota or rates (retention itself is decided: every snapshot is kept) |
+| G-10 | build S7-6 or not (undecided) |
 
 ---
 
@@ -1282,20 +1444,18 @@ catalogue version. Detailed in its own slice.
 
 ---
 
-## 17. Open questions for the operator
+## 17. Operator decisions on the open questions (2026-11-23) and what remains open
 
-1. **Multi-project exports:** refused in this version. Are they common in your exports?
-2. **Mixed formats:** a Series is PDF-only or P6-only. Should a project with PDF history
-   start a new Series for XER, or is a cross-format delta (dates and names only) wanted?
-3. **Quota and rate:** 8 GiB of snapshots and 60 imports an hour per Principal are
-   placeholders.
-4. **Retention:** keep every snapshot (recommended), or keep baselines and the last N?
-5. **Personal fields** (`create_user`, `update_user`, `add_by_name`, OBS and LOCATION
-   fields): never capture, or capture on explicit selection (designed)?
-6. **`rcal_Project` lag calendar and P6 "actual dates" progress mode** have no engine
-   equivalent: is requiring the client to choose acceptable, or should the engine gain them?
-7. **Start/finish milestones** collapse to `milestone` in the engine: acceptable?
-8. **S7-6 re-capture:** build it?
+| # | Question | Decision |
+|---|---|---|
+| 1 | Multi-project exports | **Decided:** not common; refused with the typed fatal issue `p6_multiple_projects` |
+| 2 | Mixed formats | **Decided:** a project with PDF history starts a new Series for XER; no cross-format delta (`conflict(SERIES_FORMAT)`) |
+| 3 | Quota and rate | **Decided:** keep the placeholders (8 GiB of snapshots; 60 imports an hour, 500 a day, per Principal) |
+| 4 | Retention | **Decided:** retain every snapshot (section 7.6) |
+| 5 | Personal fields | **Decided:** captured only on explicit selection with `include_personal` (gate G-8), as designed |
+| 6 | Calendars, `rcal_Project`, progress policy | **Decided:** a request may choose any imported P6 calendar of the Project; the default where a source has none is the MY-PA standard calendar `my-pa-us-40h-v1` (section 11.6); `rcal_Project` maps to a fixed lag calendar on the project default calendar (standard calendar if none, section 11.7); progress policy defaults to `retained_logic` when neither P6 flag is set (recommended and justified in 11.5), overridable |
+| 7 | Start/finish milestones | **Decided:** represented faithfully; engine amendment S7-0, `my-pa-cpm-v2` (section 11.7); the earlier collapse design is withdrawn |
+| 8 | S7-6 re-capture | **Open:** optional and undecided; explained in plain words in section 7.6 |
 
 ## 18. What could not be determined
 

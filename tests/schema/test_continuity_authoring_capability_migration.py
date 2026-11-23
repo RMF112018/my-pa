@@ -8,6 +8,7 @@ from typing import Final
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from tests.pins import ALEMBIC_REVISION_COUNT
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -72,7 +73,7 @@ def test_this_revision_is_in_the_chain() -> None:
     # (RULING-M11); 91 since `6a2f9d1c4b80` added the GoodNotes pull schema on
     # top of that -- counted on the merged tree, not derived (RULING-M2).
     # R8 adds one receipt migration on the previous 91-revision chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 132
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == ALEMBIC_REVISION_COUNT
 
 
 def test_the_frozen_literals_are_this_revision_s_vocabulary() -> None:

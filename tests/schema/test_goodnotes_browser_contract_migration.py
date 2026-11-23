@@ -16,13 +16,14 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
+from tests.pins import ALEMBIC_HEAD
 
 from my_pa.infrastructure.database.engine import create_database_engine
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "a1c9e4b72f80"
-CURRENT_HEAD_REVISION: Final = "52a829ef718a"
+CURRENT_HEAD_REVISION: Final = ALEMBIC_HEAD
 PREVIOUS: Final = "2774329487be"
 MIGRATION: Final = (
     ROOT / "migrations/versions/20260906_a1c9e4b72f80_admit_goodnotes_browser_contracts.py"

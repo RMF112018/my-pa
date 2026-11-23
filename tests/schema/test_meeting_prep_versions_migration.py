@@ -39,6 +39,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, insert, text, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError, IntegrityError
+from tests.pins import ALEMBIC_HEAD
 
 from my_pa.domain.meeting.model import MAX_MEETING_PREP_CHARACTERS
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -91,7 +92,7 @@ def test_the_revision_is_directly_on_the_files_workspace_head() -> None:
     # Communications intelligence WP2's `6418b57081c3` (Meeting provider
     # bindings) is additive on this revision and WP3a's ingestion revision on
     # that, so this revision is the head's grandparent rather than the head.
-    assert script.get_heads() == ["52a829ef718a"]
+    assert script.get_heads() == [ALEMBIC_HEAD]
     assert script.get_revision("52a829ef718a").down_revision == "6418b57081c3"
     assert script.get_revision("6418b57081c3").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS

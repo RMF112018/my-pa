@@ -54,6 +54,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, Table, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
+from tests.pins import ALEMBIC_HEAD, ALEMBIC_REVISION_COUNT
 from tests.schema import knowledge_schema_ahead_contract as contract
 from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
@@ -82,11 +83,8 @@ MATRIX_PATH: Final = ROOT / "tests" / "architecture" / "klp_implementation_matri
 SCHEMA: Final = "knowledge"
 REVISION: Final = "6734f039f7a6"
 PREVIOUS: Final = "0641c354ca85"
-#: The chain head. `93f3aa113f58` (Intelligence focus-area admission) is additive
-#: on `REVISION`, `cc373834a485` (Continuity Project sixteen-field admission) is
-#: additive on it, and `a591b81f10a2` (Intelligence report type registry) is
-#: additive on that, so a database upgraded to head stands there.
-HEAD: Final = "52a829ef718a"
+#: The current head, from the reviewed snapshot (`tests/pins.json`).
+HEAD: Final = ALEMBIC_HEAD
 MIGRATION: Final = VERSIONS / "20261004_6734f039f7a6_knowledge_assertion_layer.py"
 RESTRICT_VIOLATION: Final = "23001"
 FOREIGN_KEY_VIOLATION: Final = "23503"
@@ -228,7 +226,7 @@ def test_the_revision_is_directly_on_0641c354ca85_under_one_later_head() -> None
     # R6 counted 112 files at this revision; `93f3aa113f58`, `cc373834a485`,
     # `a591b81f10a2`, `c8f7ae406d47` and `HEAD` are the five files added since.
     assert migration_contract["expected_post_r6_revision_file_count"] == 112
-    assert len(files) == 132
+    assert len(files) == ALEMBIC_REVISION_COUNT
     assert [path.name for path in VERSIONS.glob("*_knowledge_assertion_layer.py")] == [
         MIGRATION.name
     ]

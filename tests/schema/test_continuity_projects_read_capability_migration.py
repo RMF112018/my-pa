@@ -33,13 +33,14 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
+from tests.pins import ALEMBIC_HEAD, ALEMBIC_REVISION_COUNT
 
 from my_pa.infrastructure.database.engine import create_database_engine
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "b3e9d7a41c25"
-CURRENT_HEAD: Final = "52a829ef718a"
+CURRENT_HEAD: Final = ALEMBIC_HEAD
 PREVIOUS: Final = "9f2c8a1d4e70"
 VOCABULARY_PREDECESSOR: Final = "de5ec1c65857"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
@@ -151,7 +152,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 132
+    assert len(list(MIGRATIONS.glob("*.py"))) == ALEMBIC_REVISION_COUNT
 
 
 def test_revision_is_frozen_and_does_not_import_live_schema_or_enums() -> None:

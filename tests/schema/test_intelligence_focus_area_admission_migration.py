@@ -25,6 +25,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import DBAPIError
 from tests.conftest import DEFAULT_LIMITS, metadata_for, operator
+from tests.pins import ALEMBIC_HEAD
 
 from my_pa.application.commands import BeginIntelligenceCycle, CommitIntelligenceArtifact
 from my_pa.application.service import ApplicationService
@@ -47,9 +48,8 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 VERSIONS: Final = ROOT / "migrations" / "versions"
 REVISION: Final = "93f3aa113f58"
 PREVIOUS: Final = "6734f039f7a6"
-#: The chain head: `a591b81f10a2` (Intelligence report type registry) is additive
-#: on `REVISION`, so a database upgraded to head stands there.
-HEAD: Final = "52a829ef718a"
+#: The current head, from the reviewed snapshot (`tests/pins.json`).
+HEAD: Final = ALEMBIC_HEAD
 MIGRATION: Final = VERSIONS / "20261007_93f3aa113f58_intelligence_focus_area_admission.py"
 PLANE_MIGRATION: Final = VERSIONS / "20260820_e9b2c4d7a150_admit_intelligence_artifact_plane.py"
 CHECK_VIOLATION: Final = "23514"

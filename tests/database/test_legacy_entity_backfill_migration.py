@@ -62,13 +62,14 @@ from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError
 
 from my_pa.infrastructure.database.engine import create_database_engine
+from tests.pins import ALEMBIC_HEAD, ALEMBIC_REVISION_COUNT
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 
 REVISION: Final = "b8e4d1a6c073"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-HEAD_REVISION: Final = "52a829ef718a"
+HEAD_REVISION: Final = ALEMBIC_HEAD
 CURRENT_HEAD_REVISION: Final = HEAD_REVISION
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: What was head until `REVISION` stacked on it, and therefore the revision
@@ -80,22 +81,8 @@ GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: writes in `entity_names` differs between the two parents.
 PREVIOUS_REVISION: Final = "16f05c46b8c3"
 
-#: Every `migrations/versions/*.py` on the chain, this revision included.
-#: Counted on the merged tree after the re-parent (RULING-M2): 88 on
-#: `origin/main` at `16f05c46b8c3` plus this revision, graph vocabulary,
-#: GoodNotes pull, promotion receipt, and canvas overlay successors. The
-#: Intelligence focus-area admission `93f3aa113f58` makes it 113, the Continuity
-#: Project sixteen-field admission `cc373834a485` makes it 114, and the
-#: Intelligence report type registry `a591b81f10a2` makes it 115, and the MCP
-#: interaction log `c8f7ae406d47` 116, and the Commitment counterparty Entity
-#: cutover `5c1e7a9b3d42` 117; the record lineage slices since (S1 to S4 and S3.1)
-#: make it 123, the CPM Workbench S5b-1 foundation 124, and the CPM Workbench
-#: S5b-2 vocabulary revision 125, the Schedule Scenarios S6-2 plane 126, and the
-#: Reports Modernization WP01 general report plane 127, Schedule Scenarios S6-3
-#: revision B 128, and the files workspace WP4 plane 129. (130 counted the
-#: ADR-020 meeting prep revision.) Communications intelligence WP2's provider
-#: bindings revision makes it 131, and WP3a's ingestion revision 132.
-REVISION_FILE_COUNT: Final = 132
+#: Every `migrations/versions/*.py` on the chain, from the reviewed snapshot.
+REVISION_FILE_COUNT: Final = ALEMBIC_REVISION_COUNT
 
 #: The revision's frozen salt, restated. If this and the revision ever disagree
 #: the expectations below stop matching, which is the point of restating it.

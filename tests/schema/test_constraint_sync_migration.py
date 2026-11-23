@@ -26,6 +26,7 @@ from tests.database.test_constraint_schema_invariants import (
     _sync_run_values,
     _sync_target_values,
 )
+from tests.pins import ALEMBIC_HEAD, ALEMBIC_REVISION_COUNT
 
 from my_pa.infrastructure.persistence.constraints import SqlConstraintManagementRepository
 from my_pa.infrastructure.persistence.tables import (
@@ -39,7 +40,7 @@ from my_pa.infrastructure.persistence.tables import (
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "b8e4d6f20a11"
-CURRENT_HEAD: Final = "52a829ef718a"
+CURRENT_HEAD: Final = ALEMBIC_HEAD
 PREVIOUS: Final = "f7a2c9d51e64"
 MIGRATION: Final = ROOT / "migrations/versions/20260908_b8e4d6f20a11_add_constraint_sync_backend.py"
 TABLES: Final = (
@@ -81,7 +82,7 @@ def test_revision_is_the_only_head_and_directly_follows_wp07() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert len(list(script.walk_revisions())) == 132
+    assert len(list(script.walk_revisions())) == ALEMBIC_REVISION_COUNT
 
 
 def test_revision_is_frozen_and_adds_exact_vocabulary() -> None:

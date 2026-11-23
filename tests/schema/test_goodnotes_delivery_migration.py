@@ -14,6 +14,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import Executable
+from tests.pins import ALEMBIC_HEAD, ALEMBIC_REVISION_COUNT
 
 from my_pa.infrastructure.database.engine import create_database_engine
 
@@ -62,28 +63,8 @@ PHASE_B_REVISION: Final = "b64e29a0f7c1"
 PHASE_B_HEAD: Final = "3d07af4dc513"
 GSQS_REVISION: Final = "c4b0a1d9e827"
 PHASE_B_START: Final = "c7a1f04b9e63"
-#: The chain's current head is `a4d8e31b2c90` (R8 promotion receipt), additive
-#: on `6a2f9d1c4b80` (GoodNotes pull/review), whose parent is `c3f8a1d07e94`.
-#: That graph-vocabulary parent is additive on
-#: `b8e4d1a6c073`, whose RI-ENT-WP-12 migration backfills one
-#: `display`-typed `entity_names` row per active `entities` row -- `display_value`
-#: from `entities.display_name`, `normalized_value` from `entities.canonical_name`,
-#: never a `legal` name -- and writes no `entity_project_participations` row
-#: (RULING-M10). It was written against `c99cd8ed8d1c` and re-parented onto
-#: `16f05c46b8c3` once RI-ENT-WP-10/11 merged (RULING-M11), so the pair stand as one
-#: chain rather than two heads. `16f05c46b8c3` (RI-ENT-WP-10/11) widens three
-#: closed-set CHECKs -- `audit_events.capability_is_known` (115 -> 135),
-#: `entity_mutation_events.a_mutated_record_family_is_known` (6 -> 11) and
-#: `entity_proposals.an_accepted_proposal_record_family_is_known` (6 -> 11) -- to admit
-#: RI-ENT-WP-10's five entity reads and RI-ENT-WP-11's fifteen entity mutation contracts,
-#: creating and altering no table; it was itself re-parented from `c99cd8ed8d1c` onto
-#: `2c00c9ac64bc` (UI-IMP-WP02 auth persistence) for the same reason. `2c00c9ac64bc`
-#: adds WebAuthn credential, challenge, recovery-code and opaque session tables, and is
-#: itself additive on `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing pass), which
-#: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
-#: `design_coordination_with`; that in turn stacked on `1cda4d536268` (RI-ENT-WP-07).
-#: Written out rather than derived so chain drift fails here rather than passing.
-HEAD_REVISION: Final = "52a829ef718a"
+#: The current head, from the reviewed snapshot (`tests/pins.json`).
+HEAD_REVISION: Final = ALEMBIC_HEAD
 PRIOR: Final = "d7e1a4c8b926"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_e8c1b5a7d204_add_goodnotes_new_only_delivery_receipts.py"
@@ -169,7 +150,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     # and RI-ENT-WP-12's integration counted 89 from the merged tree rather
     # than adding one to either side (RULING-M2).
     # R8 adds one receipt migration on the previous 91-revision chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 132
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == ALEMBIC_REVISION_COUNT
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

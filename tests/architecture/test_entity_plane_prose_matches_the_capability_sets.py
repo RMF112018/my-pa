@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+from tests import pins
 
 from my_pa.application.service import _ENTITY_CAPABILITIES, _ENTITY_WRITE_CAPABILITIES
 from my_pa.domain.identity.operation import Capability, permitted_purposes
@@ -83,12 +84,12 @@ _TENS: Final[tuple[str, ...]] = (
 
 
 def _spelled(value: int) -> str:
-    """The English form this corpus uses for a two-digit count."""
-    if value < len(_UNITS):
-        return _UNITS[value]
-    tens, unit = divmod(value, 10)
-    head = _TENS[tens - 2]
-    return head if unit == 0 else f"{head}-{_UNITS[unit]}"
+    """The English form this corpus uses for a count: `tests.pins.spell` (phase P5)."""
+    return pins.spell(value)
+
+
+#: The inverse over the two-digit counts this module's claim pattern can match.
+_READ: Final[dict[str, int]] = {pins.spell(value): value for value in range(100)}
 
 
 def _parse(word: str) -> int | None:
@@ -106,16 +107,7 @@ def _parse(word: str) -> int | None:
     word = word.strip().lower()
     if word.isdigit():
         return int(word)
-    if word in _UNITS:
-        return _UNITS.index(word)
-    head, _, tail = word.partition("-")
-    if head in _TENS:
-        base = (_TENS.index(head) + 2) * 10
-        if not tail:
-            return base
-        if tail in _UNITS and _UNITS.index(tail) < 10:
-            return base + _UNITS.index(tail)
-    return None
+    return _READ.get(word)
 
 
 def _quantities() -> dict[str, int]:

@@ -674,6 +674,7 @@ jobs:
             tests/architecture/test_no_stored_revision_is_labelled_head.py \
             tests/architecture/test_non_scaffold_readmes_are_routed.py \
             tests/architecture/test_open_decision_counts.py \
+            tests/architecture/test_pins_are_current.py \
             tests/architecture/test_platform_apple_mechanisms.py \
             tests/architecture/test_readme_state_claims.py \
             tests/architecture/test_record_event_flush_discipline.py \

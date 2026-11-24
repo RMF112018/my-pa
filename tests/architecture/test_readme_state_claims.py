@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+from tests import pins
 
 from my_pa.adapters.mcp.server import published_tools
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
@@ -217,345 +218,89 @@ def test_the_readme_names_the_readiness_state_the_build_reports() -> None:
     )
 
 
-def _alembic_identity() -> tuple[int, str]:
-    from alembic.config import Config
-    from alembic.script import ScriptDirectory
+#: The generated current-state page (phase P5, operator decision O1-a). The
+#: head, the revision count and the capability total are stated there and only
+#: there; `test_generated_repository_state_is_rendered` holds it to the snapshot.
+GENERATED_STATE: Final = "generated/repository-state.md"
 
-    script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    heads = script.get_heads()
-    assert len(heads) == 1
-    return len(list(script.walk_revisions())), heads[0]
-
-
-#: Spelled revision counts, so a guard states the count the chain actually has
-#: rather than a literal that goes stale in step with the prose it guards.
-SPELLED_COUNTS: Final[dict[int, str]] = {
-    # The structurally unwired Run 01 remainder lives down here; it shrinks as
-    # each of those names is wired, so the small end of the vocabulary is spelled
-    # too rather than left for a later package to discover missing. It reached
-    # one at `PC-CM-RUN01-WP06`, which is why the vocabulary now starts there:
-    # the package that wires the last name should find the spelling waiting for
-    # it rather than discover this map cannot say "zero".
-    1: "One",
-    2: "Two",
-    3: "Three",
-    4: "Four",
-    5: "Five",
-    6: "Six",
-    7: "Seven",
-    8: "Eight",
-    9: "Nine",
-    10: "Ten",
-    11: "Eleven",
-    12: "Twelve",
-    13: "Thirteen",
-    14: "Fourteen",
-    15: "Fifteen",
-    16: "Sixteen",
-    17: "Seventeen",
-    18: "Eighteen",
-    19: "Nineteen",
-    20: "Twenty",
-    21: "Twenty-one",
-    22: "Twenty-two",
-    23: "Twenty-three",
-    24: "Twenty-four",
-    25: "Twenty-five",
-    26: "Twenty-six",
-    27: "Twenty-seven",
-    28: "Twenty-eight",
-    29: "Twenty-nine",
-    30: "Thirty",
-    31: "Thirty-one",
-    32: "Thirty-two",
-    33: "Thirty-three",
-    34: "Thirty-four",
-    35: "Thirty-five",
-    36: "Thirty-six",
-    37: "Thirty-seven",
-    38: "Thirty-eight",
-    39: "Thirty-nine",
-    40: "Forty",
-    41: "Forty-one",
-    42: "Forty-two",
-    43: "Forty-three",
-    44: "Forty-four",
-    45: "Forty-five",
-    46: "Forty-six",
-    47: "Forty-seven",
-    48: "Forty-eight",
-    49: "Forty-nine",
-    50: "Fifty",
-    51: "Fifty-one",
-    52: "Fifty-two",
-    53: "Fifty-three",
-    54: "Fifty-four",
-    55: "Fifty-five",
-    56: "Fifty-six",
-    57: "Fifty-seven",
-    58: "Fifty-eight",
-    59: "Fifty-nine",
-    60: "Sixty",
-    61: "Sixty-one",
-    62: "Sixty-two",
-    63: "Sixty-three",
-    64: "Sixty-four",
-    65: "Sixty-five",
-    66: "Sixty-six",
-    67: "Sixty-seven",
-    68: "Sixty-eight",
-    69: "Sixty-nine",
-    70: "Seventy",
-    71: "Seventy-one",
-    72: "Seventy-two",
-    73: "Seventy-three",
-    74: "Seventy-four",
-    75: "Seventy-five",
-    76: "Seventy-six",
-    77: "Seventy-seven",
-    78: "Seventy-eight",
-    79: "Seventy-nine",
-    80: "Eighty",
-    # The eighties and the nineties, extended each time the public capability
-    # set crossed a decade -- at `WP-RI-A-02`, and again when Phase A's three
-    # entity work packages integrated and it reached ninety-five. The map is
-    # extended rather than the assertion relaxed, for the reason it exists: a
-    # figure this test cannot spell is a figure it cannot check, and "extend the
-    # readable count vocabulary" is a refusal rather than a pass.
-    81: "Eighty-one",
-    82: "Eighty-two",
-    83: "Eighty-three",
-    84: "Eighty-four",
-    85: "Eighty-five",
-    86: "Eighty-six",
-    87: "Eighty-seven",
-    88: "Eighty-eight",
-    89: "Eighty-nine",
-    90: "Ninety",
-    91: "Ninety-one",
-    92: "Ninety-two",
-    93: "Ninety-three",
-    94: "Ninety-four",
-    95: "Ninety-five",
-    96: "Ninety-six",
-    97: "Ninety-seven",
-    98: "Ninety-eight",
-    99: "Ninety-nine",
-    100: "One hundred",
-    101: "One hundred one",
-    102: "One hundred two",
-    103: "One hundred three",
-    104: "One hundred and four",
-    # Extended at `RI-ENT-WP-10`, when the entity plane's five record-family
-    # reads took the public set past a hundred and four. The map is extended
-    # rather than the assertion relaxed, for the reason stated at the eighties:
-    # a figure this test cannot spell is a figure it cannot check.
-    105: "One hundred five",
-    106: "One hundred six",
-    107: "One hundred seven",
-    108: "One hundred eight",
-    109: "One hundred and nine",
-    # Extended at `RI-ENT-WP-11`, when the entity plane's record-family writes
-    # took the public set past a hundred and nine. Extended rather than the
-    # assertion relaxed, for the reason stated at the eighties and repeated at
-    # `RI-ENT-WP-10`: a figure this test cannot spell is a figure it cannot
-    # check.
-    110: "One hundred and ten",
-    111: "One hundred and eleven",
-    112: "One hundred and twelve",
-    113: "One hundred and thirteen",
-    114: "One hundred and fourteen",
-    115: "One hundred and fifteen",
-    116: "One hundred and sixteen",
-    117: "One hundred and seventeen",
-    118: "One hundred and eighteen",
-    119: "One hundred and nineteen",
-    120: "One hundred and twenty",
-    121: "One hundred and twenty-one",
-    122: "One hundred and twenty-two",
-    123: "One hundred and twenty-three",
-    124: "One hundred and twenty-four",
-    125: "One hundred and twenty-five",
-    126: "One hundred and twenty-six",
-    127: "One hundred and twenty-seven",
-    128: "One hundred and twenty-eight",
-    # UI-IMP-WP17 admits canvas.workspace get/put. The map is extended rather
-    # than the assertion relaxed: a figure this test cannot spell is a figure
-    # it cannot check.
-    129: "One hundred and twenty-nine",
-    130: "One hundred and thirty",
-    131: "One hundred and thirty-one",
-    132: "One hundred and thirty-two",
-    133: "One hundred and thirty-three",
-    134: "One hundred and thirty-four",
-    135: "One hundred and thirty-five",
-    136: "One hundred and thirty-six",
-    # Extended at `PC-CM-IMP-WP04`, when the six Constraint Management reads
-    # took the public set past a hundred and thirty-six. Extended rather than
-    # the assertion relaxed, for the reason stated at the eighties and
-    # repeated since: a figure this test cannot spell is a figure it cannot
-    # check.
-    137: "One hundred and thirty-seven",
-    138: "One hundred and thirty-eight",
-    139: "One hundred and thirty-nine",
-    140: "One hundred and forty",
-    141: "One hundred and forty-one",
-    142: "One hundred and forty-two",
-    # Extended at `PC-CM-IMP-WP07`, when the twelve Constraint Management
-    # mutations took the public set past a hundred and forty-two. Extended
-    # rather than the assertion relaxed, for the reason stated at the eighties
-    # and repeated since: a figure this test cannot spell is a figure it cannot
-    # check.
-    143: "One hundred and forty-three",
-    144: "One hundred and forty-four",
-    145: "One hundred and forty-five",
-    146: "One hundred and forty-six",
-    147: "One hundred and forty-seven",
-    148: "One hundred and forty-eight",
-    149: "One hundred and forty-nine",
-    150: "One hundred and fifty",
-    151: "One hundred and fifty-one",
-    152: "One hundred and fifty-two",
-    153: "One hundred and fifty-three",
-    154: "One hundred and fifty-four",
-    155: "One hundred and fifty-five",
-    156: "One hundred and fifty-six",
-    157: "One hundred and fifty-seven",
-    158: "One hundred and fifty-eight",
-    159: "One hundred and fifty-nine",
-    160: "One hundred and sixty",
-    161: "One hundred and sixty-one",
-    163: "One hundred and sixty-three",
-    164: "One hundred and sixty-four",
-    165: "One hundred and sixty-five",
-    166: "One hundred and sixty-six",
-    167: "One hundred and sixty-seven",
-    168: "One hundred and sixty-eight",
-    169: "One hundred and sixty-nine",
-    170: "One hundred and seventy",
-    171: "One hundred and seventy-one",
-    172: "One hundred and seventy-two",
-    173: "One hundred and seventy-three",
-    # Extended at WP-MTG-04, when the six Meeting records names took the public
-    # set to a hundred and seventy-eight: a figure this test cannot spell is a
-    # figure it cannot check.
-    174: "One hundred and seventy-four",
-    175: "One hundred and seventy-five",
-    176: "One hundred and seventy-six",
-    177: "One hundred and seventy-seven",
-    178: "One hundred and seventy-eight",
-    179: "One hundred and seventy-nine",
-    180: "One hundred and eighty",
-    181: "One hundred and eighty-one",
-    # Extended at KLP-WP-03, whose six Knowledge Assertion names took the public
-    # set to a hundred and eighty-seven.
-    182: "One hundred and eighty-two",
-    183: "One hundred and eighty-three",
-    184: "One hundred and eighty-four",
-    185: "One hundred and eighty-five",
-    186: "One hundred and eighty-six",
-    187: "One hundred and eighty-seven",
-    # Extended at KLP-WP-04, whose submit and checkpoint took the public set to a
-    # hundred and eighty-nine.
-    188: "One hundred and eighty-eight",
-    189: "One hundred and eighty-nine",
-    # Extended at KLP-WP-05, whose `record_events.provenance` took the public
-    # set to a hundred and ninety.
-    190: "One hundred and ninety",
-    # Extended for the report type registry, whose `reports.types.create` and
-    # `reports.types.list` took the public set to a hundred and ninety-two.
-    191: "One hundred and ninety-one",
-    192: "One hundred and ninety-two",
-    # Extended for record lineage S1, whose six Issue-plane names took the public
-    # set to a hundred and ninety-eight.
-    193: "One hundred and ninety-three",
-    194: "One hundred and ninety-four",
-    195: "One hundred and ninety-five",
-    196: "One hundred and ninety-six",
-    197: "One hundred and ninety-seven",
-    198: "One hundred and ninety-eight",
-    # Extended for record lineage S1's memberships, associations, reverse read
-    # and note history, which took the public set to two hundred and six.
-    199: "One hundred and ninety-nine",
-    200: "Two hundred",
-    201: "Two hundred and one",
-    202: "Two hundred and two",
-    203: "Two hundred and three",
-    204: "Two hundred and four",
-    205: "Two hundred and five",
-    206: "Two hundred and six",
-    # Extended for record lineage S2, which took the public set to two hundred
-    # and fourteen.
-    207: "Two hundred and seven",
-    208: "Two hundred and eight",
-    209: "Two hundred and nine",
-    210: "Two hundred and ten",
-    211: "Two hundred and eleven",
-    212: "Two hundred and twelve",
-    213: "Two hundred and thirteen",
-    214: "Two hundred and fourteen",
-    # Extended for record lineage S3, which took the public set to two hundred
-    # and twenty-two.
-    215: "Two hundred and fifteen",
-    216: "Two hundred and sixteen",
-    217: "Two hundred and seventeen",
-    218: "Two hundred and eighteen",
-    219: "Two hundred and nineteen",
-    220: "Two hundred and twenty",
-    221: "Two hundred and twenty-one",
-    222: "Two hundred and twenty-two",
-    # Extended for record lineage S4, which took the public set to two hundred
-    # and twenty-nine.
-    223: "Two hundred and twenty-three",
-    224: "Two hundred and twenty-four",
-    225: "Two hundred and twenty-five",
-    226: "Two hundred and twenty-six",
-    227: "Two hundred and twenty-seven",
-    228: "Two hundred and twenty-eight",
-    229: "Two hundred and twenty-nine",
-    # Extended for record lineage S3.1, which took the public set to two
-    # hundred and thirty-three.
-    230: "Two hundred and thirty",
-    231: "Two hundred and thirty-one",
-    232: "Two hundred and thirty-two",
-    233: "Two hundred and thirty-three",
-    # CPM Workbench S5b-2: the 7 Schedule capabilities, 233 -> 240.
-    234: "Two hundred and thirty-four",
-    235: "Two hundred and thirty-five",
-    236: "Two hundred and thirty-six",
-    237: "Two hundred and thirty-seven",
-    238: "Two hundred and thirty-eight",
-    239: "Two hundred and thirty-nine",
-    240: "Two hundred and forty",
-    # Reports Modernization WP02: `reports.publish`, 240 -> 241.
-    241: "Two hundred and forty-one",
-    # Reports Modernization WP03: its five additions, 241 -> 246.
-    246: "Two hundred and forty-six",
-    # Reports Modernization WP05b: its four custody additions, 246 -> 250.
-    250: "Two hundred and fifty",
-    # Reports Modernization WP06: its five transfer additions, 250 -> 255.
-    255: "Two hundred and fifty-five",
-    # Schedule Scenarios S6-3: the 26 plane names, 255 -> 281.
-    281: "Two hundred and eighty-one",
-    # Files workspace WP5: the 17 `files.*` names, 281 -> 298.
-    298: "Two hundred and ninety-eight",
-    # Communications intelligence WP2-W3: `meetings.provider.bind`, 298 -> 299.
-    299: "Two hundred and ninety-nine",
+#: Every current-state document that used to restate those figures by hand.
+CURRENT_STATE_DOCS: Final = {
+    "README": README,
+    "architecture index": ARCHITECTURE_INDEX,
+    "system context": SYSTEM_CONTEXT,
+    "module boundaries": MODULE_BOUNDARIES,
+    "gateway runbook": ROOT / "ops" / "runbooks" / "gateway-operations.md",
+    "MCP runbook": ROOT / "ops" / "runbooks" / "mcp-and-cli-operations.md",
 }
 
+#: A spelled count of revisions or capabilities, in any of the shapes these
+#: documents wrote it: "one hundred and thirty-two Alembic revisions",
+#: "**one hundred and thirty-two** revisions", "at revision one hundred and
+#: thirty-two", "two hundred and ninety-nine capabilities". Any number, right or
+#: wrong: the figure lives in the generated page, so restating it is the defect.
+_SPELLED_NUMBER: Final = (
+    r"(?:(?:one|two|three|four|five|six|seven|eight|nine) (?:thousand|hundred)"
+    r"(?: and)?[ -]?)+[a-z-]*"
+)
+RESTATED_FIGURE: Final = re.compile(
+    rf"\b(?:{_SPELLED_NUMBER})\**\s+(?:public\s+)?(?:Alembic\s+)?(?:revisions|capabilit)"
+    rf"|\bat revision (?:{_SPELLED_NUMBER})"
+    r"|\bhead `[0-9a-f]{12}` at revision",
+    re.IGNORECASE,
+)
 
-def test_readme_derives_the_current_alembic_count_and_head() -> None:
-    count, head = _alembic_identity()
-    assert count in SPELLED_COUNTS, "extend the readable README count vocabulary"
-    readme = README.read_text(encoding="utf-8")
-    assert f"{SPELLED_COUNTS[count]} Alembic revisions" in readme
-    assert f"head `{head}`" in readme
 
-    architecture_index = ARCHITECTURE_INDEX.read_text(encoding="utf-8")
-    spelled = SPELLED_COUNTS[count].lower()
-    assert f"Alembic owns {spelled} revisions at head `{head}`" in architecture_index
-    assert f"current head `{head}` at revision {spelled}" in architecture_index
-    assert f"current head `{head}` at revision ninety." not in architecture_index
+#: A double-quoted span on one line: a dated correction quoting what a sentence
+#: used to say ("exposes one hundred one capabilities"), which is history.
+_QUOTED: Final = re.compile(r'"[^"\n]*"')
+
+
+def _unquoted(text: str) -> str:
+    return _QUOTED.sub('""', text)
+
+
+def test_current_state_docs_link_to_the_generated_state_and_do_not_restate_it() -> None:
+    """The replacement for the two derived-count guards (O1-a).
+
+    `test_readme_derives_the_current_alembic_count_and_head` and
+    `test_current_state_docs_name_the_current_capability_and_migration_counts`
+    derived the head, the revision count and the capability total and required
+    each document to spell them: correct, and the reason every migration or
+    capability edited seven to nine documents. The figures are generated into
+    `docs/generated/repository-state.md` now, bound there to the chain and the
+    enum. Each document must link to it, and none may spell a revision count, a
+    capability total or a `head ... at revision` pair of its own.
+    """
+    unlinked = [
+        label
+        for label, path in CURRENT_STATE_DOCS.items()
+        if GENERATED_STATE not in path.read_text(encoding="utf-8")
+    ]
+    assert not unlinked, f"{unlinked} no longer link to docs/{GENERATED_STATE}"
+    restated = [
+        f"{label}: {match.group(0)!r}"
+        for label, path in CURRENT_STATE_DOCS.items()
+        for match in RESTATED_FIGURE.finditer(_unquoted(path.read_text(encoding="utf-8")))
+    ]
+    assert not restated, (
+        f"current-state documents restate a figure the generated page owns: {restated}. "
+        f"Link to docs/{GENERATED_STATE} instead"
+    )
+
+
+def test_the_restated_figure_reader_reads_every_shape_it_replaced() -> None:
+    planted = (
+        "One hundred and thirty-two Alembic revisions cover the schema.\n"
+        "Alembic owns one hundred and thirty-two revisions at head `52a829ef718a`.\n"
+        "current head `52a829ef718a` at revision one hundred and thirty-two.\n"
+        "the candidate has **two hundred and ninety-nine**\ncapabilities.\n"
+        "routes the two hundred and ninety-nine public capabilities over HTTP.\n"
+    )
+    assert len(RESTATED_FIGURE.findall(planted)) == 5
+    assert RESTATED_FIGURE.search("settled at revision one hundred and thirty-two.")
+    assert not RESTATED_FIGURE.search(
+        "one hundred and twenty-five: one hundred and seventy-four handler-implemented"
+    )
 
 
 def test_relationships_are_not_listed_as_unimplemented_once_the_package_exists() -> None:
@@ -621,41 +366,6 @@ def test_readme_declares_the_current_remediation_lineage_and_preserves_history()
     assert "9b35476b70fe4fbc03bb8f9835d93c1b71089bbe" in section
     assert "recovery/pre-20260805-utc-rollback-c9fb513" in section
     assert "campaign history" in section and "no longer current-state authority" in section
-
-
-def test_current_state_docs_name_the_current_capability_and_migration_counts() -> None:
-    """Protect the two exact-state figures that repeatedly went stale.
-
-    The head is derived rather than written down here. It was a literal until
-    `9def3c2e63bb` moved it, and a literal in the guard is the same claim with
-    the same shelf life as the literal in the document it is guarding — so the
-    guard went stale in step with the prose instead of catching it.
-
-    The capability figure is now derived for the same reason and by the same
-    argument. It was a spelled literal until `d2b8f5c04e71` admitted the
-    `entities.*` names, and on that day the guard and all three documents were
-    wrong together — the guard asserting the stale spelling was present, which is
-    the one thing that cannot detect a stale spelling. `Capability` is what the
-    application dispatches on, so it is what the prose has to agree with.
-    """
-    _count, head = _alembic_identity()
-    capabilities = len(list(Capability))
-    assert capabilities in SPELLED_COUNTS, "extend the readable count vocabulary"
-    spelled = SPELLED_COUNTS[capabilities].lower()
-    documents = {
-        "system context": ROOT / "docs" / "architecture" / "system-context.md",
-        "gateway runbook": ROOT / "ops" / "runbooks" / "gateway-operations.md",
-        "MCP runbook": ROOT / "ops" / "runbooks" / "mcp-and-cli-operations.md",
-    }
-    for label, path in documents.items():
-        text = path.read_text(encoding="utf-8")
-        assert f"{spelled} capabilit" in text.lower().replace(" public ", " "), (
-            f"{label} lost the current capability count"
-        )
-        assert SPELLED_COUNTS[_count].lower() in text.lower(), (
-            f"{label} lost the current revision count"
-        )
-        assert head in text, f"{label} lost the current Alembic head"
 
 
 def test_current_state_docs_derive_the_default_capability_split() -> None:
@@ -810,9 +520,9 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert f"{implemented} have application commands/handlers" in readme
     assert f"fully composed authenticated client sees all {implemented} implemented tools" in readme
     entity_split = (
-        f"{SPELLED_COUNTS[entity_total].lower()} `entities.*` capabilities: "
-        f"{SPELLED_COUNTS[entity_reads].lower()} reads and "
-        f"{SPELLED_COUNTS[entity_writes].lower()} writes"
+        f"{pins.spell(entity_total)} `entities.*` capabilities: "
+        f"{pins.spell(entity_reads)} reads and "
+        f"{pins.spell(entity_writes)} writes"
     )
     assert entity_split in readme
     assert "forty-two `entities.*` capabilities" not in readme
@@ -843,8 +553,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     names = "name" if unwired_count == 1 else "names"
     if unwired_count:
         readme_breakdown = (
-            f"and the {SPELLED_COUNTS[unwired_count].lower()} remaining Run 01 {names} — are\n"
-            "`not_implemented`"
+            f"and the {pins.spell(unwired_count)} remaining Run 01 {names} — are\n`not_implemented`"
         )
     else:
         readme_breakdown = (
@@ -859,7 +568,6 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     system_context_text = SYSTEM_CONTEXT.read_text(encoding="utf-8")
     assert f"wires {implemented} through HTTP, MCP, and CLI composition" in system_context_text
     system_context = system_context_text.lower()
-    assert f"{SPELLED_COUNTS[total].lower()} capabilities" in system_context
     assert f"exposes {default} of them" in system_context
 
     architecture_index = (ROOT / "docs/architecture/00_ARCHITECTURE_INDEX.md").read_text(
@@ -868,7 +576,6 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     runbook = (ROOT / "ops/runbooks/mcp-and-cli-operations.md").read_text(encoding="utf-8")
     gateway_runbook = (ROOT / "ops/runbooks/gateway-operations.md").read_text(encoding="utf-8")
     assert f"default composition serves {default} of" in architecture_index
-    assert f"{SPELLED_COUNTS[total].lower()} capabilities" in architecture_index
     assert f"**{default} application-available capabilities**" in runbook
     assert f"publishes **{default - 3} tools**" in runbook
     assert f"unconfigured local stdio: {default - 3}" in runbook
@@ -878,26 +585,24 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert f"{implemented} have application commands/handlers" in runbook
     assert f"all {implemented} implemented tools" in runbook
     normalized_runbook = " ".join(runbook.split()).lower()
-    assert (
-        f"the {SPELLED_COUNTS[implemented].lower()} command-backed names" in normalized_runbook
-    ), "the MCP/CLI runbook's command-backed figure no longer matches the dispatch table"
+    assert f"the {pins.spell(implemented)} command-backed names" in normalized_runbook, (
+        "the MCP/CLI runbook's command-backed figure no longer matches the dispatch table"
+    )
     unwired_runbook_claim = (
-        f"the exact {SPELLED_COUNTS[unwired_count].lower()} remaining run 01 {names} "
-        "as `not_implemented`"
+        f"the exact {pins.spell(unwired_count)} remaining run 01 {names} as `not_implemented`"
         if unwired_count
         else "no declared name is left without one"
     )
     assert unwired_runbook_claim in normalized_runbook, (
         "the MCP/CLI runbook's unwired Run 01 figure no longer matches the dispatch table"
     )
-    assert f"A default process serves\n{SPELLED_COUNTS[default].lower()}" in gateway_runbook
+    assert f"A default process serves\n{pins.spell(default)}" in gateway_runbook
     assert (
-        f"{SPELLED_COUNTS[len(withheld_families)].lower()} handler-implemented capabilities "
+        f"{pins.spell(len(withheld_families))} handler-implemented capabilities "
         "are composition-withheld"
     ) in gateway_runbook
     gateway_unwired_claim = (
-        f"{SPELLED_COUNTS[unwired_count].lower()}\n"
-        f"{'is' if unwired_count == 1 else 'are'} structurally unwired"
+        f"{pins.spell(unwired_count)}\n{'is' if unwired_count == 1 else 'are'} structurally unwired"
         if unwired_count
         else "none\nis structurally unwired"
     )
@@ -910,18 +615,17 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
         COMPLETION_PLAN.read_text(encoding="utf-8"), "3. What is implemented"
     )
     normalized_completion_state = " ".join(completion_state.split()).lower()
-    assert f"all {SPELLED_COUNTS[total].lower()} capability names" in normalized_completion_state
     assert f"names, {implemented} have application commands/handlers" in normalized_completion_state
     completion_unwired_claim = (
-        f"{SPELLED_COUNTS[unwired_count].lower()} remaining run 01 {names} "
+        f"{pins.spell(unwired_count)} remaining run 01 {names} "
         f"{'remains' if unwired_count == 1 else 'remain'} structurally unwired"
         if unwired_count
         else "no run 01 name remains structurally unwired"
     )
     assert completion_unwired_claim in normalized_completion_state
 
-    module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert f"{SPELLED_COUNTS[total].lower()} capabilities" in module_boundaries
+    # The spelled capability total these documents carried is generated now:
+    # `test_current_state_docs_link_to_the_generated_state_and_do_not_restate_it`.
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:
@@ -974,12 +678,10 @@ def test_web_readme_names_the_routes_and_capabilities_the_bff_reaches() -> None:
     assert routed <= documented, (
         f"web README omits routed capabilities {sorted(routed - documented)}"
     )
-    # Derived, not spelled out here: see the note on
-    # `test_current_state_docs_name_the_current_capability_and_migration_counts`.
-    # A literal in this guard is the same claim, with the same shelf life, as the
-    # literal in the document it is guarding.
-    assert len(capability_values) in SPELLED_COUNTS, "extend the readable count vocabulary"
-    assert f"{SPELLED_COUNTS[len(capability_values)].lower()} capability names" in lowered
+    # The capability total is generated (phase P5): the web README links to it
+    # and, like every current-state document, does not restate it.
+    assert GENERATED_STATE in text
+    assert not RESTATED_FIGURE.search(_unquoted(text)), RESTATED_FIGURE.search(_unquoted(text))
     # WP11 is MCP/backend-only; the browser routes remain the pre-sync subset.
     sync_capabilities = {
         capability for capability in capability_values if capability.startswith("constraint_sync.")

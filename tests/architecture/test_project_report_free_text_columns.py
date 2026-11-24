@@ -4,15 +4,19 @@ Layer A and the typed line values hold raw export text as source evidence:
 names, descriptions, minutes, vendor names inside a record key. This module is
 that set's inventory, in the shape of the communications no-content guard:
 
-* `FREE_TEXT` -- every text, JSON or array column that may carry export
-  content, with why;
-* `STRUCTURED` -- every other text, JSON or array column, each held by a CHECK
-  of its own table that names it (an identifier shape, a closed set, a digest,
-  a version token, a catalogue key or a count object), so a column cannot be
-  filed here without a guard that keeps content out of it.
+* `FREE_TEXT` -- every column that may carry export content, with why;
+* `STRUCTURED` -- every other column that is not of an explicitly non-text
+  type, each held by a CHECK of its own table that names it (an identifier
+  shape, a closed set, a digest, a version token, a catalogue key or a count
+  object), so a column cannot be filed here without a guard that keeps content
+  out of it.
 
-The two sets are disjoint and together exactly the text-bearing columns of
-the twelve tables, read off `tables.py` (which
+Only the explicitly non-text types (`NON_TEXT_TYPES`: Boolean, the integers,
+Numeric, Date and DateTime) are exempt. Every other column -- `Text`, `String`,
+`VARCHAR`, `Unicode`, `JSON`, `JSONB`, `ARRAY` or a type not yet seen -- must be
+listed, so a classification by allow-list cannot miss a new text type (the R1
+S1 finding). The two sets are disjoint and together exactly the non-exempt
+columns of the twelve tables, read off `tables.py` (which
 `tests/schema/test_project_report_evidence_migration.py` holds equal to the
 revision). A new free-text column fails here until it is listed, which is the
 point: a reader (WP4P) must know every column it could disclose.
@@ -20,11 +24,30 @@ point: a reader (WP4P) must know every column it could disclose.
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Any, Final
 
 import pytest
-from sqlalchemy import ARRAY, CheckConstraint, Text
+from sqlalchemy import (
+    ARRAY,
+    JSON,
+    VARCHAR,
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Column,
+    Date,
+    DateTime,
+    Integer,
+    MetaData,
+    Numeric,
+    SmallInteger,
+    String,
+    Table,
+    Text,
+    Unicode,
+)
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.types import TypeEngine
 
 from my_pa.infrastructure.persistence.tables import PROJECT_REPORT_TABLES
 
@@ -169,13 +192,31 @@ STRUCTURED: Final[frozenset[tuple[str, str]]] = frozenset(
 )
 
 
-def _text_bearing() -> set[tuple[str, str]]:
+#: The only exempt column types: none of them can hold text. `Integer` covers
+#: `SmallInteger` and `BigInteger` (its subclasses). A UUID type would join here
+#: if the tables used one; they do not.
+NON_TEXT_TYPES: Final[tuple[type[TypeEngine[Any]], ...]] = (
+    Boolean,
+    Integer,
+    Numeric,
+    Date,
+    DateTime,
+)
+
+
+def _text_bearing(tables: tuple[Table, ...]) -> set[tuple[str, str]]:
+    """Every column of `tables` not of an explicitly non-text type."""
     return {
         (table.name, column.name)
-        for table in PROJECT_REPORT_TABLES
+        for table in tables
         for column in table.c
-        if isinstance(column.type, (Text, JSONB, ARRAY))
+        if not isinstance(column.type, NON_TEXT_TYPES)
     }
+
+
+def _unlisted(tables: tuple[Table, ...]) -> set[tuple[str, str]]:
+    """The text-bearing columns of `tables` neither inventory lists: must be empty."""
+    return _text_bearing(tables) - set(FREE_TEXT) - STRUCTURED
 
 
 def test_the_twelve_tables_are_the_ones_inventoried() -> None:
@@ -185,10 +226,9 @@ def test_the_twelve_tables_are_the_ones_inventoried() -> None:
 def test_every_text_bearing_column_is_listed_exactly_once() -> None:
     free = set(FREE_TEXT)
     assert not free & STRUCTURED
-    assert free | STRUCTURED == _text_bearing(), (
-        sorted(_text_bearing() - free - STRUCTURED),
-        sorted((free | STRUCTURED) - _text_bearing()),
-    )
+    assert _unlisted(PROJECT_REPORT_TABLES) == set()
+    # And nothing listed is stale (a renamed or dropped column, or an exempt one).
+    assert (free | STRUCTURED) - _text_bearing(PROJECT_REPORT_TABLES) == set()
 
 
 @pytest.mark.parametrize(("table_name", "column"), sorted(STRUCTURED))
@@ -205,7 +245,26 @@ def test_a_structured_column_is_held_by_a_check_that_names_it(table_name: str, c
     ), (table_name, column)
 
 
-def test_a_planted_free_text_column_fails_the_inventory() -> None:
-    """The prove-red, kept: a new unlisted text column is seen."""
-    planted = _text_bearing() | {("project_report_lines", "planted_minutes")}
-    assert planted != set(FREE_TEXT) | STRUCTURED
+@pytest.mark.parametrize(
+    "planted_type",
+    [String(200), VARCHAR(40), Unicode(200), Text(), JSON(), JSONB(), ARRAY(Text())],
+    ids=lambda t: type(t).__name__,
+)
+def test_a_planted_text_column_of_any_type_fails_the_inventory(
+    planted_type: TypeEngine[Any],
+) -> None:
+    """The real check, on a throwaway table: an unlisted text column of any type is seen,
+    while the exempt types beside it are not."""
+    planted = Table(
+        "project_report_lines",
+        MetaData(),
+        Column("planted_minutes", planted_type),
+        Column("planted_count", Integer),
+        Column("planted_small", SmallInteger),
+        Column("planted_big", BigInteger),
+        Column("planted_flag", Boolean),
+        Column("planted_amount", Numeric(20, 4)),
+        Column("planted_day", Date),
+        Column("planted_at", DateTime(timezone=True)),
+    )
+    assert _unlisted((planted,)) == {("project_report_lines", "planted_minutes")}

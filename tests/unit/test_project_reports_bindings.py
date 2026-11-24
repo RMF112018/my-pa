@@ -296,3 +296,10 @@ def test_a_filter_declaration_holds_for_versions_first_seen_at_or_after_it() -> 
     assert filter_semantics(declared, later) is FilterSemantics.OPERATOR_DECLARED
     earlier = datetime(2030, 1, 1, tzinfo=UTC)
     assert filter_semantics(declared, earlier) is FilterSemantics.UNKNOWN
+
+
+def test_a_binding_is_active_or_retired_only() -> None:
+    """WP3P-S3: the binding state the revision freezes (`active`, `retired`)."""
+    from my_pa.domain.project_reports.model import BindingState
+
+    assert [state.value for state in BindingState] == ["active", "retired"]

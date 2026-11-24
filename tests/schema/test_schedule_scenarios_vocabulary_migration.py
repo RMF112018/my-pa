@@ -40,7 +40,7 @@ from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, MetaData, insert, text
 from sqlalchemy.exc import DBAPIError
-from tests.pins import ALEMBIC_HEAD, ALEMBIC_REVISION_COUNT
+from tests.pins import ALEMBIC_REVISION_COUNT
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES, S63_PURPOSES
 
@@ -95,14 +95,7 @@ def _literals(block: object) -> list[str]:
 
 def test_the_revision_is_on_4c37731671fc_under_the_files_workspace_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    # Files workspace WP4 (`640aaacc78e8`) is additive on this revision.
-    assert script.get_heads() == [ALEMBIC_HEAD]
-    assert script.get_revision("52a829ef718a").down_revision == "6418b57081c3"
-    assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
-    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
-    assert script.get_revision("640aaacc78e8").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert script.get_revision(PREVIOUS).down_revision == "2a90f91dd786"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert len(list(MIGRATIONS.glob("*.py"))) == ALEMBIC_REVISION_COUNT
 

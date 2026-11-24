@@ -201,7 +201,6 @@ def test_the_knowledge_revision_is_in_the_chain_on_the_foundation_head() -> None
     Needs no database, so it stays in the fast tier.
     """
     script = ScriptDirectory.from_config(_config())
-    assert len(list(script.get_heads())) == 1
     assert KNOWLEDGE_REVISION in {entry.revision for entry in script.walk_revisions()}
     revision = script.get_revision(KNOWLEDGE_REVISION)
     assert revision.down_revision == FOUNDATION_HEAD

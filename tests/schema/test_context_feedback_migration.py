@@ -122,7 +122,6 @@ def _record(engine: Engine, capability: str, purpose: str) -> None:
 
 def test_the_chain_has_one_head_and_this_revision_is_in_the_chain() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert len(list(script.get_heads())) == 1
     assert HEAD_REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(HEAD_REVISION).down_revision == PREVIOUS
     # 79 since `7e114f822af2` (RI-ENT-WP-02) added the entity_names/

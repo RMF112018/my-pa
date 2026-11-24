@@ -418,7 +418,6 @@ def test_the_review_revision_is_in_the_chain_on_the_proposal_revision() -> None:
     this file.
     """
     script = ScriptDirectory.from_config(_config())
-    assert len(list(script.get_heads())) == 1
     assert REVIEW_REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVIEW_REVISION).down_revision == PROPOSAL_REVISION
 

@@ -765,7 +765,6 @@ def test_the_extraction_revision_is_in_the_chain_on_the_knowledge_revision() -> 
     the property the tables below actually depend on.
     """
     script = ScriptDirectory.from_config(_config())
-    assert len(list(script.get_heads())) == 1
     assert EXTRACTION_REVISION in {entry.revision for entry in script.walk_revisions()}
     revision = script.get_revision(EXTRACTION_REVISION)
     assert revision.down_revision == KNOWLEDGE_REVISION

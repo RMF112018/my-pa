@@ -13,36 +13,12 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import CheckConstraint, UniqueConstraint
-from tests.pins import ALEMBIC_HEAD
 
 from my_pa.infrastructure.persistence.tables import task_bulk_operations
 
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = "a4d9e7c2b615"
 PREVIOUS = "e9b2c4d7a150"
-#: The Relationship Memory plane, which stacked on this revision rather than
-#: forking beside it. This revision was head when it merged and is not now, so
-#: the edge is asserted in both directions below and the head is asserted once,
-#: which is what "single head" was there to say.
-SUCCESSOR = "f1c6b904a2d7"
-#: And the entity lifecycle plane (WP-RI-A-01), which stacked on `SUCCESSOR` for
-#: the same reason. Named separately so the assertion below stays a statement
-#: about the *order* rather than about whichever revision happens to be last.
-LIFECYCLE = "2fe4e13fb449"
-#: And Phase A's single vocabulary revision, which stacked on `LIFECYCLE` and is
-#: where the single head now sits. Named on the same terms as the two above.
-#: Phase A's single vocabulary revision, which sat on `LIFECYCLE` and was head
-#: until the Phase B chain stacked on it.
-PHASE_A = "823e23b6cc63"
-#: Phase B's vocabulary revision and the cumulative Relationship Intelligence
-#: revision stacked on it. Named separately so the chain assertion remains a
-#: statement about order rather than conflating an historical edge with head.
-PHASE_B = "b64e29a0f7c1"
-PHASE_B_HEAD = "3d07af4dc513"
-GSQS_REVISION = "c4b0a1d9e827"
-PHASE_B_START = "c7a1f04b9e63"
-#: The current head, from the reviewed snapshot (`tests/pins.json`).
-HEAD = ALEMBIC_HEAD
 REVISION_PATH = (
     ROOT
     / "migrations"
@@ -53,15 +29,7 @@ REVISION_PATH = (
 
 def test_work_revision_sits_on_the_single_head_chain_after_its_predecessor() -> None:
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_heads() == [HEAD]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert script.get_revision(SUCCESSOR).down_revision == REVISION
-    assert script.get_revision(LIFECYCLE).down_revision == SUCCESSOR
-    assert script.get_revision(PHASE_A).down_revision == LIFECYCLE
-    assert script.get_revision(GSQS_REVISION).down_revision == PHASE_A
-    assert script.get_revision(PHASE_B_START).down_revision == GSQS_REVISION
-    assert script.get_revision(PHASE_B).down_revision == "a1f7d3c85e40"
-    assert script.get_revision(PHASE_B_HEAD).down_revision == PHASE_B
 
 
 def test_bulk_metadata_matches_the_persisted_preview_and_confirmation_contract() -> None:

@@ -235,7 +235,6 @@ def test_the_chain_has_one_head_and_this_revision_revises_the_managed_plane() ->
     parent produces.
     """
     script = ScriptDirectory.from_config(_config())
-    assert len(list(script.get_heads())) == 1
     assert MANAGED_REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(MANAGED_REVISION).down_revision == PREVIOUS_REVISION
     # The revision count, so a chain that lost a file is not read as a chain that

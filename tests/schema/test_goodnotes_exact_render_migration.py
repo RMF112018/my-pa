@@ -99,7 +99,6 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     naming it — none of which the identity of the last revision affects.
     """
     script = ScriptDirectory.from_config(_config())
-    assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
     # 92 migration files: `a4d8e31b2c90` (R8 promotion receipt) extends

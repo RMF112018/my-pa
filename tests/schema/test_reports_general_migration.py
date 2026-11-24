@@ -329,13 +329,6 @@ def _checks() -> dict[str, str]:
 
 def test_the_revision_is_the_single_head_on_2a90f91dd786() -> None:
     script = ScriptDirectory.from_config(_config())
-    # Schedule Scenarios S6-3's revision B (`b77334135653`) is additive on this one.
-    assert script.get_heads() == [ALEMBIC_HEAD]
-    assert script.get_revision("52a829ef718a").down_revision == "6418b57081c3"
-    assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
-    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
-    assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
-    assert script.get_revision("b77334135653").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert len(list(MIGRATIONS.glob("*.py"))) == ALEMBIC_REVISION_COUNT

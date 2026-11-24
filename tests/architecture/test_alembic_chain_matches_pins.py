@@ -83,7 +83,7 @@ def test_alembic_chain_is_linear_and_matches_pins() -> None:
     on_chain = set()
     for name in chain:
         revision = script.get_revision(name)
-        assert revision is not None and revision.path is not None, name
+        assert revision is not None, name
         on_chain.add(Path(revision.path).resolve())
     files = {path.resolve() for path in pins.MIGRATIONS.glob("*.py")}
     assert files == on_chain, f"revision files off the chain: {sorted(map(str, files - on_chain))}"

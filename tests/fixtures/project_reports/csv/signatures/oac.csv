@@ -1,0 +1,7 @@
+Meeting > Number,Meeting > Date,Meeting Item > Category,Meeting Item > Agenda/Item Number,Meeting Item > Title,Meeting Item > Description,Meeting Item > Date Updated,Meeting Item > Minutes
+1,1/5/2026,General,1,Synthetic item one,Synthetic description,1/5/2026,(01/05) synthetic note
+1,1/5/2026,General,2,Synthetic item two,,1/5/2026,
+2,1/12/2026,General,1,Synthetic item one,Synthetic description,1/12/2026,"(01/05) synthetic note
+(01/12) second synthetic note"
+2,1/12/2026,Safety,2,Synthetic item two,"Line one
+Line two",1/12/2026,(01/12) synthetic

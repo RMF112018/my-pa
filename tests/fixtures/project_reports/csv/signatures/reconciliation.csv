@@ -1,0 +1,9 @@
+Prime Contract Change Order > Number,Prime Contract Potential Change Order > Number,Prime Contract Potential Change Order > Date Created,Prime Contract Potential Change Order > Status,Prime Contract Change Order Line Item > Description,Prime Contract Change Order Line Item > Amount,Prime Contract Change Order Line Item > Date Created,Commitment Change Order > Number,Commitment Change Order > Status,Commitment Change Order Line Item > Description,Commitment Change Order Line Item > Amount
+(Blank),,,,,$150.00,,,,,
+,1,6/1/2026,Approved,Synthetic line,$100.00,6/1/2026,,,,
+,2,6/1/2026,Pending - Pricing,,$40.00,6/1/2026,,,,
+,3,6/2/2026,Void,Synthetic line,$10.00,6/2/2026,,,,
+SYN-CO-1,,,,,$200.00,,,,,$20.00
+,4,6/3/2026,Approved,Synthetic line,$200.00,6/3/2026,,,,
+,,,,,,,1,Approved,Synthetic commitment line,$20.00
+Grand Totals,,,,,$350.00,,,,,$20.00

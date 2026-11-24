@@ -60,7 +60,8 @@ MAX_REVIEW_PAGE_SIZE: Final = 100
 #: At most this many unbound provider events per `meetings.provider.review`
 #: answer (Manager ruling on the S4 handoff, decision 6 amended). The list is
 #: ordered by start, then key, and the first this-many are answered with the
-#: full count and a `truncated` flag; binding or marking shrinks the list.
+#: full count and a `truncated` flag; binding an event's key removes it from
+#: the list (a `no_provider_event` mark concerns a Meeting and leaves it).
 MAX_UNBOUND_PROVIDER_EVENTS: Final = 200
 #: Every derived bind-item key starts with this, so it is recognizably a
 #: reconcile item's in the `meetings.provider.bind` key space.

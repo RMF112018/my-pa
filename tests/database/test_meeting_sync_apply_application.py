@@ -5,7 +5,8 @@ backfill (staging), `apply_pending` without the latch (nothing applied, no
 Meeting-plane row), the latch inserted through the repository, apply (Meetings
 and bindings created, the snapshot foreign keys set), a rerun idempotent;
 `not_seen` through the real window query, the Meeting untouched; the unbind
-tombstone suppressing a re-create; the binding-writer advisory lock
+tombstone suppressing a re-create; a disabled source held until re-enabled;
+the binding-writer advisory lock
 serializing two connections whose row locks do not overlap, and concurrent
 binding writers in opposite orders finishing without a deadlock; and the
 cycles-plane step and the operator CLI `run-once` applying. Everything is
@@ -234,6 +235,28 @@ def test_a_stale_publication_is_skipped_and_writes_only_its_apply_columns(scene:
     )
     assert scene.apply() == {"publications_skipped_stale": 1}
     assert scene.count("meetings") == 1
+    assert scene.scalar("SELECT title FROM knowledge.meetings") == "New"
+
+
+def test_a_disabled_source_is_held_until_re_enabled(scene: Scene) -> None:
+    scene.latch()
+    scene.stage("a-meetings.json", _publication("2026-11-22T06:00:00Z", _event("uid-1", "Old")))
+    scene.stage("b-meetings.json", _publication("2026-11-23T06:00:00Z", _event("uid-1", "New")))
+    scene.lifecycle().set_enabled(scene.principal, scene.source_id, False)
+    assert scene.apply() == {"publications_held_source_disabled": 2}
+    assert {table: scene.count(table) for table in MEETING_PLANE} == dict.fromkeys(MEETING_PLANE, 0)
+    assert (
+        scene.scalar(
+            "SELECT count(*) FROM knowledge.meeting_sync_publications WHERE applied_at IS NULL"
+        )
+        == 2
+    )
+    scene.lifecycle().set_enabled(scene.principal, scene.source_id, True)
+    assert scene.apply() == {
+        "events_created": 1,
+        "events_updated": 1,
+        "publications_applied": 2,
+    }
     assert scene.scalar("SELECT title FROM knowledge.meetings") == "New"
 
 

@@ -13,6 +13,17 @@ answer counts the publications waiting (`unapplied_awaiting_reconciliation`).
 Once it exists, every staged publication still unapplied is applied at the next
 call, the ones staged before the latch included.
 
+**A disabled source is held (Manager S3 ruling, decision 2 amended).** An
+operator's disable means no further Meeting writes from that source: its staged
+publications are not applied, stay staged and unapplied, and are counted
+`publications_held_source_disabled`; nothing of theirs is written. Re-enabling
+the source resumes them, in order, at the next call. The source is also re-read
+inside each publication's transaction, so a disable committed between the
+listing and that transaction still holds the publication and the rest of its
+source. Before the
+latch exists the latch is the gate and every waiting publication, held or not,
+is counted `unapplied_awaiting_reconciliation`.
+
 **Order and the high-water gate (ruling D8).** Each admitted `meeting_sync_v1`
 source is taken in turn, and its unapplied publications in
 `(generated_at_utc, file_sha256)` order. Against the newest publication of the
@@ -93,6 +104,7 @@ __all__ = [
 APPLY_COUNT_NAMES: Final = frozenset(
     {
         "unapplied_awaiting_reconciliation",
+        "publications_held_source_disabled",
         "publications_applied",
         "publications_skipped_stale",
         "publications_skipped_ordering_conflict",
@@ -119,6 +131,10 @@ class MeetingSyncApplyReport:
     """What one `apply_pending` call did: closed names to integers, never content."""
 
     counts: Mapping[str, int] = field(default_factory=dict)
+
+
+class _SourceDisabledError(Exception):
+    """The source was disabled after the listing: hold this publication (no write)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,10 +218,15 @@ class MeetingSyncApplier:
         counts: Counter[str] = Counter()
         with self._unit_of_work() as unit:
             latched = unit.meeting_sync.get_reconciliation_pass(principal_id) is not None
-            pending = {
-                source.ingest_source_id: self._pending(unit, principal_id, source.ingest_source_id)
+            sources = [
+                source
                 for source in unit.ingestion.list_sources(principal_id)
                 if source.consumer is IngestConsumer.MEETING_SYNC_V1
+            ]
+            disabled = {s.ingest_source_id for s in sources if not s.enabled}
+            pending = {
+                source.ingest_source_id: self._pending(unit, principal_id, source.ingest_source_id)
+                for source in sources
             }
         if not latched:
             waiting = sum(len(entries) for entries in pending.values())
@@ -213,10 +234,17 @@ class MeetingSyncApplier:
                 counts["unapplied_awaiting_reconciliation"] = waiting
             return MeetingSyncApplyReport(counts=dict(sorted(counts.items())))
         for source_id in sorted(pending):
-            for entry in pending[source_id]:
+            entries = pending[source_id]
+            if source_id in disabled:
+                counts["publications_held_source_disabled"] += len(entries)
+                continue
+            for index, entry in enumerate(entries):
                 try:
                     with self._unit_of_work() as unit:
                         counts.update(self._apply_one(unit, principal_id, source_id, entry))
+                except _SourceDisabledError:  # disabled since the listing: hold the rest
+                    counts["publications_held_source_disabled"] += len(entries) - index
+                    break
                 except Exception:  # this publication rolls back; its source stops here
                     counts["publications_failed"] += 1
                     break
@@ -251,6 +279,11 @@ class MeetingSyncApplier:
         counts: Counter[str] = Counter()
         if staging.get_reconciliation_pass(principal_id) is None:  # append-only: cannot vanish
             raise RepositoryFailureError
+        source = unit.ingestion.get_source(principal_id, source_id)
+        if source is None:
+            raise RepositoryFailureError
+        if not source.enabled:  # rolled back with the unit of work: nothing written
+            raise _SourceDisabledError
         publication = staging.get_publication(principal_id, entry.snapshot_id)
         if publication is None:
             raise RepositoryFailureError

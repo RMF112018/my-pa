@@ -17,7 +17,7 @@ series refusal over the explicit-bind path. Everything is synthetic.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
@@ -231,6 +231,74 @@ def test_nothing_applies_before_the_latch_and_everything_after(scene: Scene) -> 
     meetings = dict(scene.world.meetings)
     assert scene.apply() == {}
     assert scene.world.meetings == meetings
+
+
+# ---- a disabled source is held (S3 handoff, decision 2 amended) ---------------------
+
+
+def _set_enabled(scene: Scene, enabled: bool, source: str = SOURCE) -> None:
+    record = scene.ingest.sources[(P, source)]
+    scene.ingest.sources[(P, source)] = replace(record, enabled=enabled)
+
+
+def test_a_disabled_source_is_held_and_resumes_in_order_when_re_enabled(scene: Scene) -> None:
+    scene.latch()
+    first = scene.stage(stamp(1), Ev("uid-1", title="First"))
+    second = scene.stage(stamp(2), Ev("uid-1", title="Second"))
+    _set_enabled(scene, False)
+    assert scene.apply() == {"publications_held_source_disabled": 2}
+    assert scene.world.meetings == {}
+    assert scene.world.meeting_provider_bindings == {}
+    assert scene.publication(first).applied_at is None
+    assert scene.publication(second).applied_at is None
+    assert scene.world.provider_binding_writer_locks == []
+    _set_enabled(scene, True)
+    assert scene.apply() == {
+        "events_created": 1,
+        "events_updated": 1,
+        "publications_applied": 2,
+    }
+    assert scene.titles() == ["Second"]
+
+
+def test_a_disabled_source_does_not_hold_another_source(scene: Scene) -> None:
+    other = "isrc_msyncapply00002"
+    scene.ingest.sources[(P, other)] = replace(
+        scene.ingest.sources[(P, SOURCE)], ingest_source_id=other, path_prefix="elsewhere/"
+    )
+    scene.latch()
+    scene.stage(stamp(1), Ev("uid-1"))
+    scene.stage(stamp(1), Ev("uid-2"), source=other)
+    _set_enabled(scene, False)
+    assert scene.apply() == {
+        "events_created": 1,
+        "publications_applied": 1,
+        "publications_held_source_disabled": 1,
+    }
+
+
+def test_a_disable_after_the_listing_holds_the_publication_and_the_rest(scene: Scene) -> None:
+    scene.latch()
+    first = scene.stage(stamp(1), Ev("uid-1"))
+    scene.stage(stamp(2), Ev("uid-2"))
+    opened = [0]
+
+    def uow() -> UnitOfWork:
+        opened[0] += 1
+        if opened[0] == 2:  # the listing's unit has closed: the operator disables now
+            _set_enabled(scene, False)
+        return scene.uow()
+
+    scene.applier = MeetingSyncApplier(unit_of_work=uow, clock=scene.clock)
+    assert scene.apply() == {"publications_held_source_disabled": 2}
+    assert scene.world.meetings == {}
+    assert scene.publication(first).applied_at is None
+
+
+def test_before_the_latch_a_disabled_source_counts_as_awaiting(scene: Scene) -> None:
+    scene.stage(stamp(1), Ev("uid-1"))
+    _set_enabled(scene, False)
+    assert scene.apply() == {"unapplied_awaiting_reconciliation": 1}
 
 
 def test_no_staged_publication_and_no_latch_reports_nothing(scene: Scene) -> None:

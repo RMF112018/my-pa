@@ -311,7 +311,8 @@ by title or time). It is done once, through the connected client, and it is one-
    key, with `unbound_provider_events_total` and `unbound_provider_events_truncated` (more
    remain). While `unbound_provider_events_next` is not `null`, review again with
    `events_after` = that value to read the next page of events, until it is `null`: every
-   event is reachable before the latch. The event cursor and the Meetings' `after` are
+   event is reachable before the latch. If a new publication is staged during the sweep,
+   restart the event sweep without `events_after`. The event cursor and the Meetings' `after` are
    independent. The two lists are never paired: the operator decides every match.
 2. **Reconcile.** `meetings.provider.reconcile` with up to 50 items per call, each either
    `bind` (the Meeting, its `expected_version`, and the event's `provider_event_ref` from the
@@ -321,7 +322,7 @@ by title or time). It is done once, through the connected client, and it is one-
    resend the **same batch** under the same idempotency key with the item fixed in place (the
    other items replay; the fixed one is evaluated again), or send the fixed item under a
    **new** idempotency key. Do not resend only the fixed item under the same key: its index
-   changes, and a bind item's derived key is the batch key plus its index, so it collides with
+   may change, and a bind item's derived key is the batch key plus its index, so it collides with
    the bind item that had that index in the first send and is refused `idempotency_conflict`.
    There is no "mark all". Bound keys leave the event list, so repeat review then reconcile
    until `unreviewed_count` is `0`.

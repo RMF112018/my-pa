@@ -246,6 +246,12 @@ from my_pa.domain.meeting_sync.model import (
     MAX_PROVIDER_EVENT_ID_CHARACTERS,
     ProviderEventIdFormat,
 )
+from my_pa.domain.meeting_sync.reconcile import (
+    MAX_RECONCILE_ITEMS,
+    MAX_REVIEW_PAGE_SIZE,
+    ReconcileItem,
+    ReconcileItemAction,
+)
 from my_pa.domain.project_controls.category import ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import (
     ConstraintLifecycleState,
@@ -564,6 +570,7 @@ __all__ = [
     "ReadManagedDocumentCommand",
     "ReadProject",
     "ReadTask",
+    "ReconcileMeetingProviders",
     "RecordContextFeedback",
     "RecordIntelligenceRunState",
     "RecordRelationshipEventCommand",
@@ -579,6 +586,7 @@ __all__ = [
     "RetireEntityAlias",
     "RetireEntityIdentifier",
     "RevealSubject",
+    "ReviewMeetingProviders",
     "ReviseCapture",
     "ReviseManagedDocument",
     "ReviseManagedDocumentCommand",
@@ -13385,6 +13393,20 @@ class UpdateMeetingSeries:
         )
 
 
+_ADOPT_PROVIDER_SERIES_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "boolean",
+        "description": (
+            "bind, occurrence only, optional (default false): let the provider series "
+            "decide the Meeting's series. When that series is already one of your "
+            "MeetingSeries the Meeting moves into it; when it is unbound and the "
+            "Meeting is standalone a series is created (titled with the Meeting's "
+            "title) and bound. False keeps both cases refused."
+        ),
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class BindMeetingProvider:
     """`meetings.provider.bind`: bind one of your Meetings to a calendar event, or unbind it.
@@ -13454,6 +13476,7 @@ class BindMeetingProvider:
                 "enum": [member.value for member in ProviderEventIdFormat],
                 "description": "bind only, optional: whether that id is stable (default unknown).",
             },
+            "adopt_provider_series": dict(_ADOPT_PROVIDER_SERIES_SCHEMA),
         }
     )
 
@@ -13467,6 +13490,7 @@ class BindMeetingProvider:
     series_ical_uid: str | None = field(default=None, repr=False)
     provider_event_id: str | None = field(default=None, repr=False)
     provider_event_id_format: str | None = None
+    adopt_provider_series: bool = False
 
     def __post_init__(self) -> None:
         _identifier(self.meeting_id, IdKind.MEETING, SafeDetail.MEETING_ID)
@@ -13501,8 +13525,252 @@ class BindMeetingProvider:
                 series_ical_uid=self.series_ical_uid,
                 provider_event_id=self.provider_event_id,
                 provider_event_id_format=event_id_format,
+                adopt_provider_series=self.adopt_provider_series,
             )
         )
+
+
+#: The keys one reconcile item may carry (a document naming anything else is refused).
+_RECONCILE_ITEM_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "action",
+        "meeting_id",
+        "expected_version",
+        "provider_event_ref",
+        "calendar_ref",
+        "ical_uid",
+        "occurrence_original_start_utc",
+        "series_ical_uid",
+        "provider_event_id",
+        "provider_event_id_format",
+        "adopt_provider_series",
+    }
+)
+
+
+def _reconcile_item(document: object) -> ReconcileItem:
+    """One wire item as the domain item, or a refusal naming `items` and the field."""
+    if not isinstance(document, Mapping) or not set(document) <= _RECONCILE_ITEM_KEYS:
+        raise InvalidRequestError(SafeDetail.ITEMS)
+    refused: SafeDetail | None = None
+    try:
+        action = _closed_member(document.get("action"), ReconcileItemAction, SafeDetail.ACTION)
+        meeting_id = document.get("meeting_id")
+        if not isinstance(meeting_id, str):
+            raise InvalidRequestError(SafeDetail.MEETING_ID)
+        _identifier(meeting_id, IdKind.MEETING, SafeDetail.MEETING_ID)
+        ref = document.get("provider_event_ref")
+        if ref is not None:
+            if not isinstance(ref, str):
+                raise InvalidRequestError(SafeDetail.PROVIDER_EVENT_REF)
+            _identifier(ref, IdKind.MEETING_SYNC_EVENT, SafeDetail.PROVIDER_EVENT_REF)
+        expected = document.get("expected_version")
+        if expected is not None:
+            _meeting_expected_version(expected)
+        for name, detail in (
+            ("calendar_ref", SafeDetail.CALENDAR_REF),
+            ("ical_uid", SafeDetail.ICAL_UID),
+            ("series_ical_uid", SafeDetail.SERIES_ICAL_UID),
+            ("provider_event_id", SafeDetail.PROVIDER_EVENT_ID),
+        ):
+            _optional_storable_text(document.get(name), detail)
+        event_id_format = document.get("provider_event_id_format")
+        adopt = document.get("adopt_provider_series", False)
+        item = _meeting_value(
+            lambda: ReconcileItem(
+                action=action,
+                meeting_id=meeting_id,
+                expected_version=expected,
+                provider_event_ref=ref,
+                calendar_ref=document.get("calendar_ref"),
+                ical_uid=document.get("ical_uid"),
+                occurrence_original_start_utc=document.get("occurrence_original_start_utc"),
+                series_ical_uid=document.get("series_ical_uid"),
+                provider_event_id=document.get("provider_event_id"),
+                provider_event_id_format=(
+                    None
+                    if event_id_format is None
+                    else _closed_member(
+                        event_id_format,
+                        ProviderEventIdFormat,
+                        SafeDetail.PROVIDER_EVENT_ID_FORMAT,
+                    )
+                ),
+                adopt_provider_series=adopt,
+            )
+        )
+        if action is ReconcileItemAction.BIND and ref is None:
+            # The full-key form: validate the key now, as the bind would.
+            _meeting_value(
+                lambda: MeetingProviderBindRequest(
+                    action=ProviderBindAction.BIND,
+                    meeting_id=item.meeting_id,
+                    calendar_ref=item.calendar_ref,
+                    ical_uid=item.ical_uid,
+                    occurrence_original_start_utc=item.occurrence_original_start_utc,
+                    series_ical_uid=item.series_ical_uid,
+                    provider_event_id=item.provider_event_id,
+                    provider_event_id_format=item.provider_event_id_format,
+                    adopt_provider_series=item.adopt_provider_series,
+                )
+            )
+        return item
+    except InvalidRequestError as error:
+        refused = error.safe_details[0] if error.safe_details else SafeDetail.ITEMS
+    raise InvalidRequestError(SafeDetail.ITEMS, refused)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewMeetingProviders:
+    """`meetings.provider.review`: the calendar reconciliation pass, side by side.
+
+    Answers the pass (`pending` until every in-scope Meeting is bound or marked,
+    then `complete` and calendar sync applies), one page of your in-scope
+    Meetings -- not cancelled, starting no earlier than 30 days ago -- that have
+    neither a provider binding nor a `no_provider_event` mark, ordered by
+    `(start_at, meeting_id)`, and the staged calendar events whose provider key
+    is bound to no Meeting (a key you unbound is listed `suppressed`). The two
+    lists are never paired or ranked: you decide each match and send it to
+    `meetings.provider.reconcile`. Pass `next_after` back as `after` for the next
+    page of Meetings.
+    """
+
+    capability: ClassVar[Capability] = Capability.MEETINGS_PROVIDER_REVIEW
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_REVIEW_PAGE_SIZE,
+                "description": "How many unreviewed Meetings to return (default 100).",
+            },
+            "after": _meeting_id_schema(
+                IdKind.MEETING, "The previous page's next_after: list strictly after it."
+            ),
+        }
+    )
+
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.page_size is not None and (
+            type(self.page_size) is not int or not 1 <= self.page_size <= MAX_REVIEW_PAGE_SIZE
+        ):
+            raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.MEETING, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcileMeetingProviders:
+    """`meetings.provider.reconcile`: bind or mark your Meetings for calendar sync, in a batch.
+
+    0..50 items, each independent: `bind` names a Meeting, its
+    `expected_version`, and the calendar event either by the review's
+    `provider_event_ref` or by its full provider key (`calendar_ref`,
+    `ical_uid`, and for an occurrence `occurrence_original_start_utc` with
+    `series_ical_uid`; optionally `provider_event_id` and its format) -- exactly
+    as `meetings.provider.bind` would, and with its refusals; `no_provider_event`
+    marks a Meeting as having no calendar event. Each item answers `bound`,
+    `marked`, `replayed` or `refused` with one token; a refused item changes
+    nothing and the others still apply. When no in-scope Meeting is left
+    unreviewed the pass completes (once, for good) and calendar sync applies at
+    its next run; an empty `items` only does that.
+
+    The principal is not here. Authority comes from authenticated context.
+    """
+
+    capability: ClassVar[Capability] = Capability.MEETINGS_PROVIDER_RECONCILE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "items": {
+                "type": "array",
+                "minItems": 0,
+                "maxItems": MAX_RECONCILE_ITEMS,
+                "description": "The binds and marks, applied independently, in order.",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["action", "meeting_id"],
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": [member.value for member in ReconcileItemAction],
+                            "description": (
+                                "bind names the event; no_provider_event names only the Meeting."
+                            ),
+                        },
+                        "meeting_id": _meeting_id_schema(IdKind.MEETING, "Your Meeting."),
+                        "expected_version": {
+                            **_MEETING_EXPECTED_VERSION_SCHEMA,
+                            "description": "bind only: the Meeting version you last read.",
+                        },
+                        "provider_event_ref": _meeting_id_schema(
+                            IdKind.MEETING_SYNC_EVENT,
+                            "bind: the review's provider_event_ref, instead of the key fields.",
+                        ),
+                        "calendar_ref": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": MAX_CALENDAR_REF_CHARACTERS,
+                            "description": "bind by key: the event's calendar reference.",
+                        },
+                        "ical_uid": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": MAX_ICAL_UID_CHARACTERS,
+                            "description": "bind by key: the event's iCalendar UID, exactly.",
+                        },
+                        "occurrence_original_start_utc": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": (
+                                "bind by key, occurrence only: the original start, an "
+                                "offset-aware RFC 3339 instant. Requires series_ical_uid."
+                            ),
+                        },
+                        "series_ical_uid": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": MAX_ICAL_UID_CHARACTERS,
+                            "description": "bind by key, occurrence only: the series UID.",
+                        },
+                        "provider_event_id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": MAX_PROVIDER_EVENT_ID_CHARACTERS,
+                            "description": "bind by key, optional: the provider's event id.",
+                        },
+                        "provider_event_id_format": {
+                            "type": "string",
+                            "enum": [member.value for member in ProviderEventIdFormat],
+                            "description": "bind by key, optional: whether that id is stable.",
+                        },
+                        "adopt_provider_series": dict(_ADOPT_PROVIDER_SERIES_SCHEMA),
+                    },
+                },
+            },
+            "idempotency_key": _MEETING_IDEMPOTENCY_KEY_SCHEMA,
+        }
+    )
+
+    items: tuple[Mapping[str, object], ...]
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        _storable_text(self.idempotency_key, SafeDetail.IDEMPOTENCY_KEY)
+        self.reconcile_items()
+
+    def reconcile_items(self) -> tuple[ReconcileItem, ...]:
+        """The normalized items, in order."""
+        items: object = self.items
+        if not isinstance(items, tuple) or len(items) > MAX_RECONCILE_ITEMS:
+            raise InvalidRequestError(SafeDetail.ITEMS)
+        return tuple(_reconcile_item(item) for item in items)
 
 
 def _closed_member[MemberT: StrEnum](
@@ -19054,6 +19322,8 @@ type Command = (
     | UpdateMeeting
     | UpdateMeetingSeries
     | BindMeetingProvider
+    | ReviewMeetingProviders
+    | ReconcileMeetingProviders
     | ListRecordEvents
     | GetRecordEventProvenance
     | ReadKnowledgeAssertion

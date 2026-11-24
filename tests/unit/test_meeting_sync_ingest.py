@@ -176,6 +176,28 @@ class FakeStaging(MeetingSyncRepository):
     def get_event(self, principal_id: str, event_id: str) -> NoReturn:
         raise AssertionError("get_event")
 
+    def list_staging_sources(self, principal_id: str) -> NoReturn:
+        raise AssertionError("list_staging_sources")
+
+    def list_unbound_events(self, principal_id: str, snapshot_id: str) -> NoReturn:
+        raise AssertionError("list_unbound_events")
+
+    def savepoint(self) -> NoReturn:
+        raise AssertionError("savepoint")
+
+    def list_unreviewed_meetings(
+        self,
+        principal_id: str,
+        *,
+        since: datetime,
+        after_meeting_id: str | None,
+        limit: int,
+    ) -> NoReturn:
+        raise AssertionError("list_unreviewed_meetings")
+
+    def count_review_scope(self, principal_id: str, *, since: datetime) -> NoReturn:
+        raise AssertionError("count_review_scope")
+
     def insert_review_mark(
         self, principal_id: str, mark: MeetingProviderReviewMarkRecord
     ) -> NoReturn:

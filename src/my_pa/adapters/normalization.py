@@ -288,6 +288,7 @@ from my_pa.application.commands import (
     ReadScheduleScenarioVersion,
     ReadScheduleSeriesCurrent,
     ReadTask,
+    ReconcileMeetingProviders,
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordIssueHandoff,
@@ -320,6 +321,7 @@ from my_pa.application.commands import (
     RetireEntityName,
     RevealKnowledgeAssertion,
     RevealSubject,
+    ReviewMeetingProviders,
     ReviseCapture,
     ReviseEntityAddress,
     ReviseEntityAffiliation,
@@ -2884,6 +2886,18 @@ def _bind_meeting_provider(payload: Mapping[str, Any]) -> Command:
     return BindMeetingProvider(**_meeting_shapes(payload))
 
 
+def _reconcile_meeting_providers(payload: Mapping[str, Any]) -> Command:
+    """`meetings.provider.reconcile`: `items` becomes a tuple and each item's original
+    start an instant; the command converts the closed vocabularies itself."""
+    converted = dict(payload)
+    items = converted.get("items")
+    if isinstance(items, list):
+        converted["items"] = tuple(
+            _meeting_shapes(item) if isinstance(item, Mapping) else item for item in items
+        )
+    return ReconcileMeetingProviders(**converted)
+
+
 def _update_issue(payload: Mapping[str, Any]) -> Command:
     """`issues.update`: `clear_fields` becomes a tuple; nothing else converts.
 
@@ -3139,6 +3153,8 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.MEETINGS_UPDATE: _update_meeting,
         Capability.MEETINGS_SERIES_UPDATE: _update_meeting_series,
         Capability.MEETINGS_PROVIDER_BIND: _bind_meeting_provider,
+        Capability.MEETINGS_PROVIDER_REVIEW: lambda payload: ReviewMeetingProviders(**payload),
+        Capability.MEETINGS_PROVIDER_RECONCILE: _reconcile_meeting_providers,
         Capability.RECORD_EVENTS_LIST: _list_record_events,
         Capability.RECORD_EVENTS_PROVENANCE: lambda payload: GetRecordEventProvenance(**payload),
         Capability.KNOWLEDGE_ASSERTIONS_READ: lambda payload: ReadKnowledgeAssertion(**payload),

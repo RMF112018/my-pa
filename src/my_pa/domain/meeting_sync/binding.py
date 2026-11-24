@@ -13,6 +13,13 @@ either both `occurrence_original_start_utc` and `series_ical_uid` (an
 occurrence) or neither (a single meeting), plus an optional provider event id
 and its format; an unbind names the Meeting only.
 
+`adopt_provider_series` (WP3b ruling D6, default `False`) is an occurrence
+bind's consent to let the provider series decide the Meeting's series: when the
+provider series is already bound to a MeetingSeries the Meeting is moved into
+it, and when the provider series is unbound and the Meeting is standalone a
+MeetingSeries is created for it, titled with the Meeting's title, and bound.
+Without it both cases stay refusals, as before.
+
 `bind_decision` is the closed refusal order over the state the application read
 under the Meeting lock. Every refusal is a `MeetingErrorField` token naming the
 rule, never a key value or the other Meeting a key is bound to.
@@ -78,12 +85,17 @@ class MeetingProviderBindRequest:
     series_ical_uid: str | None = None
     provider_event_id: str | None = None
     provider_event_id_format: ProviderEventIdFormat | None = None
+    adopt_provider_series: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.action, ProviderBindAction):
             raise MeetingInvalidRequestError(MeetingErrorField.ACTION)
         validate_meeting_id(self.meeting_id)
+        if not isinstance(self.adopt_provider_series, bool):
+            raise MeetingInvalidRequestError(MeetingErrorField.ADOPT_PROVIDER_SERIES)
         if self.action is ProviderBindAction.UNBIND:
+            if self.adopt_provider_series:
+                raise MeetingInvalidRequestError(MeetingErrorField.ADOPT_PROVIDER_SERIES)
             for value, token in (
                 (self.calendar_ref, MeetingErrorField.CALENDAR_REF),
                 (self.ical_uid, MeetingErrorField.ICAL_UID),
@@ -121,6 +133,9 @@ class MeetingProviderBindRequest:
             raise MeetingInvalidRequestError(MeetingErrorField.OCCURRENCE_ORIGINAL_START_UTC)
         if self.occurrence_original_start_utc is not None and self.series_ical_uid is None:
             raise MeetingInvalidRequestError(MeetingErrorField.SERIES_ICAL_UID)
+        # Only an occurrence has a provider series to adopt (D6).
+        if self.adopt_provider_series and self.occurrence_original_start_utc is None:
+            raise MeetingInvalidRequestError(MeetingErrorField.ADOPT_PROVIDER_SERIES)
         if self.provider_event_id is not None:
             _bounded_text(
                 self.provider_event_id,
@@ -162,9 +177,19 @@ class BoundSeries:
 
 @dataclass(frozen=True, slots=True)
 class BindDecision:
-    """An accepted bind: whether its series binding must be created with it."""
+    """An accepted bind: what must be written with it.
+
+    * `create_series_binding` -- bind the provider series to the Meeting's
+      (post-write) series;
+    * `move_to_series_id` -- D6 adopt: move the Meeting into this MeetingSeries,
+      which the provider series is already bound to;
+    * `create_series` -- D6 adopt: create a MeetingSeries for the standalone
+      Meeting (then `create_series_binding` is set too).
+    """
 
     create_series_binding: bool
+    move_to_series_id: str | None = None
+    create_series: bool = False
 
 
 def bind_decision(
@@ -187,7 +212,10 @@ def bind_decision(
     * `uid_series` -- the series binding of the key's series UID, or `None`;
     * `meeting_series_binding` -- the series binding of the Meeting's series.
 
-    Never reads a title, a time or any other Meeting content: rule 4.
+    Never reads a title, a time or any other Meeting content: rule 4. With
+    `request.adopt_provider_series` (D6) the two series refusals that the
+    provider series can settle become a move or a series creation; a Meeting
+    series already bound to a *different* provider series stays refused.
     """
     if meeting_is_bound:
         raise MeetingInvalidRequestError(MeetingErrorField.MEETING_ALREADY_PROVIDER_BOUND)
@@ -197,6 +225,15 @@ def bind_decision(
         raise MeetingInvalidRequestError(MeetingErrorField.PROVIDER_BINDING_KIND_CONFLICT)
     if request.occurrence_original_start_utc is None:
         return BindDecision(create_series_binding=False)
+    if request.adopt_provider_series:
+        if uid_series is not None and uid_series.meeting_series_id != meeting_series_id:
+            # The provider series is another MeetingSeries': the Meeting moves into it.
+            return BindDecision(
+                create_series_binding=False, move_to_series_id=uid_series.meeting_series_id
+            )
+        if uid_series is None and meeting_series_id is None:
+            # An unbound provider series and a standalone Meeting: a series is born.
+            return BindDecision(create_series_binding=True, create_series=True)
     if meeting_series_id is None:
         raise MeetingInvalidRequestError(MeetingErrorField.PROVIDER_BINDING_REQUIRES_SERIES)
     if uid_series is not None and uid_series.meeting_series_id != meeting_series_id:

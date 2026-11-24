@@ -354,6 +354,9 @@ def _bind_document(
         "provider_event_id_format",
         None if event_id_format is None else event_id_format.value,
     )
+    # WP3b ruling D6: named only when set, so every earlier bind keeps its digest.
+    if request.adopt_provider_series:
+        document["adopt_provider_series"] = True
     return document
 
 
@@ -1288,6 +1291,7 @@ class MeetingApplication:
             raise MeetingStaleVersionError()
 
         unbound: MeetingProviderBindingRecord | None = None
+        series: _AdoptedSeries | None = None
         if request.action is ProviderBindAction.UNBIND:
             if locked is None:
                 raise MeetingInvalidRequestError(MeetingErrorField.MEETING_NOT_PROVIDER_BOUND)
@@ -1295,11 +1299,28 @@ class MeetingApplication:
             unbound = locked
         else:
             existing = meetings.read_provider_binding_for_meeting(principal_id, current.meeting_id)
-            self._bind(meetings, principal_id, request, current, existing is not None, locked, at)
+            series = self._bind(
+                meetings,
+                principal_id,
+                request,
+                current,
+                existing is not None,
+                locked,
+                at,
+                idempotency_key=key,
+                request_digest=digest,
+            )
+        series_id = current.meeting_series_id if series is None else series.meeting_series_id
 
         after_version = current.version + 1
         meetings.update_meeting(
-            principal_id, replace(_unchanged_record(current), version=after_version, updated_at=at)
+            principal_id,
+            replace(
+                _unchanged_record(current),
+                meeting_series_id=series_id,
+                version=after_version,
+                updated_at=at,
+            ),
         )
         receipt = MeetingHistoryView(
             history_id=issue_identifier(IdKind.MEETING_HISTORY),
@@ -1315,7 +1336,7 @@ class MeetingApplication:
         meetings.insert_meeting_history(
             principal_id,
             receipt,
-            meeting_series_id=current.meeting_series_id,
+            meeting_series_id=series_id,
             idempotency_key=key,
             request_digest=digest,
         )
@@ -1342,12 +1363,29 @@ class MeetingApplication:
             key,
             request_digest=digest,
             meeting_id=current.meeting_id,
-            meeting_series_id=current.meeting_series_id,
+            meeting_series_id=series_id,
             meeting_history_id=receipt.history_id,
             meeting_series_history_id=None,
             result_version=after_version,
             completed_at=at,
         )
+        series_event_id: str | None = None
+        if series is not None and series.receipt is not None:
+            # D6 adopt created the series: its `created` event first, causing the Meeting's.
+            series_event_id = _stage_meeting_event(
+                uow.record_events,
+                principal_id=principal_id,
+                record_family=RecordEventFamily.MEETING_SERIES,
+                record_id=series.meeting_series_id,
+                event_kind=RecordEventKind.CREATED,
+                record_version=series.receipt.after_version,
+                changed_fields=_SERIES_TITLE_FIELDS,
+                source_capability=source_capability,
+                correlation_id=correlation_id,
+                source_receipt_id=series.receipt.series_history_id,
+                occurred_at=at,
+                actor=_DEFAULT_ACTOR,
+            ).event_id
         _stage_meeting_event(
             uow.record_events,
             principal_id=principal_id,
@@ -1355,12 +1393,17 @@ class MeetingApplication:
             record_id=current.meeting_id,
             event_kind=RecordEventKind.UPDATED,
             record_version=after_version,
-            changed_fields=_PROVIDER_BINDING_FIELDS,
+            changed_fields=(
+                _PROVIDER_BINDING_FIELDS
+                if series_id == current.meeting_series_id
+                else _PROVIDER_BINDING_SERIES_FIELDS
+            ),
             source_capability=source_capability,
             correlation_id=correlation_id,
             source_receipt_id=receipt.history_id,
             occurred_at=at,
             actor=_DEFAULT_ACTOR,
+            causation_event_id=series_event_id,
         )
         return MeetingProviderBindResult(
             meeting_id=current.meeting_id,
@@ -1380,11 +1423,17 @@ class MeetingApplication:
         meeting_is_bound: bool,
         key_bound: MeetingProviderBindingRecord | None,
         at: datetime,
-    ) -> None:
+        *,
+        idempotency_key: str,
+        request_digest: str,
+    ) -> _AdoptedSeries | None:
         """Decide one bind over the state read under both locks, then write it.
 
         `key_bound` is the requested key's binding, locked `FOR UPDATE` before
-        the Meeting lock by the caller.
+        the Meeting lock by the caller. Answers the MeetingSeries the Meeting
+        must be in afterwards when D6 adopt changes it (moved into the provider
+        series' MeetingSeries, or a series created for it, with its receipt),
+        else `None`; the caller writes the Meeting.
         """
         key = request.key
         other_kind_bound = meetings.provider_uid_bound_as_other_kind(
@@ -1414,14 +1463,47 @@ class MeetingApplication:
             uid_series=_bound_series(uid_series),
             meeting_series_binding=_bound_series(series_binding),
         )
+        adopted: _AdoptedSeries | None = None
+        if decision.move_to_series_id is not None:
+            adopted = _AdoptedSeries(decision.move_to_series_id, None)
+        elif decision.create_series:
+            created = MeetingSeriesView(
+                meeting_series_id=issue_identifier(IdKind.MEETING_SERIES),
+                title=current.title,
+                version=1,
+                created_at=at,
+                updated_at=at,
+            )
+            series_receipt = MeetingSeriesHistoryView(
+                series_history_id=issue_identifier(IdKind.MEETING_SERIES_HISTORY),
+                meeting_series_id=created.meeting_series_id,
+                action=MeetingHistoryAction.CREATE,
+                actor=_DEFAULT_ACTOR,
+                outcome=MeetingOutcome.APPLIED,
+                before_version=0,
+                after_version=1,
+                occurred_at=at,
+                recorded_at=at,
+            )
+            meetings.insert_series(principal_id, created)
+            meetings.insert_series_history(
+                principal_id,
+                series_receipt,
+                idempotency_key=idempotency_key,
+                request_digest=request_digest,
+            )
+            adopted = _AdoptedSeries(created.meeting_series_id, series_receipt)
+        target_series_id = (
+            current.meeting_series_id if adopted is None else adopted.meeting_series_id
+        )
         if decision.create_series_binding:
-            if current.meeting_series_id is None or request.series_ical_uid is None:
+            if target_series_id is None or request.series_ical_uid is None:
                 raise RepositoryFailureError
             meetings.insert_series_provider_binding(
                 principal_id,
                 MeetingSeriesProviderBindingRecord(
                     series_binding_id=issue_identifier(IdKind.MEETING_SERIES_PROVIDER_BINDING),
-                    meeting_series_id=current.meeting_series_id,
+                    meeting_series_id=target_series_id,
                     calendar_ref=key.calendar_ref,
                     series_ical_uid=request.series_ical_uid,
                     created_at=at,
@@ -1449,6 +1531,7 @@ class MeetingApplication:
                 updated_at=at,
             ),
         )
+        return adopted
 
     # --- replay -------------------------------------------------------------
 
@@ -1472,6 +1555,16 @@ class MeetingApplication:
 
 #: The one changed-field token every bind and unbind event names (WP2-W3).
 _PROVIDER_BINDING_FIELDS: Final = ("provider_binding",)
+#: A D6 adopt bind also changes the Meeting's series (WP3b-S4).
+_PROVIDER_BINDING_SERIES_FIELDS: Final = ("meeting_series_id", "provider_binding")
+
+
+@dataclass(frozen=True, slots=True)
+class _AdoptedSeries:
+    """The series a D6 adopt bind puts the Meeting in; `receipt` when it created it."""
+
+    meeting_series_id: str
+    receipt: MeetingSeriesHistoryView | None
 
 
 def _bound_series(record: MeetingSeriesProviderBindingRecord | None) -> BoundSeries | None:

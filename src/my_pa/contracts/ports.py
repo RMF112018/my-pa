@@ -583,6 +583,7 @@ __all__ = [
     "MeetingProviderReviewMarkRecord",
     "MeetingRecord",
     "MeetingRepository",
+    "MeetingReviewScopeCounts",
     "MeetingSeriesProviderBindingRecord",
     "MeetingSyncApplyOutcome",
     "MeetingSyncEventRecord",
@@ -640,6 +641,7 @@ __all__ = [
     "SituationRepository",
     "SourceProviders",
     "SourceRepository",
+    "StagedProviderEvent",
     "TaskManagementRepository",
     "TaskManagementUnitOfWork",
     "TimelineLinkRevision",
@@ -651,6 +653,7 @@ __all__ = [
     "TransferSession",
     "UnitOfWork",
     "UnknownScopeError",
+    "UnreviewedMeetingRecord",
     "WorkerHealthRepository",
     "WorkerPlaneStatus",
     "WriteRequestConflictError",
@@ -14921,6 +14924,46 @@ class MeetingProviderKeyTombstoneRecord:
     meeting_history_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class UnreviewedMeetingRecord:
+    """One in-scope Meeting with neither a binding nor a review mark (WP3b-S4, D3).
+
+    Exactly the fields `meetings.provider.review` answers: no description,
+    attendee, note, prep, link or location.
+    """
+
+    meeting_id: str
+    version: int
+    title: str
+    start_at: datetime
+    end_at: datetime | None
+    timezone_name: str
+    meeting_series_id: str | None
+    status: MeetingStatus
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingReviewScopeCounts:
+    """The reconciliation pass's two counts over the in-scope Meetings (D3)."""
+
+    #: In scope: not cancelled, `start_at >= since`.
+    in_scope: int
+    #: In scope with neither a binding nor a review mark.
+    unreviewed: int
+
+
+@dataclass(frozen=True, slots=True)
+class StagedProviderEvent:
+    """One staged event whose provider key has no binding (WP3b-S4 review).
+
+    `suppressed` is whether the key has an unbind tombstone (D5): the sync
+    skips it, and the review lists it so the Principal can still bind it.
+    """
+
+    event: MeetingSyncEventRecord
+    suppressed: bool
+
+
 class MeetingSyncRepository(ABC):
     """The WP3b meeting sync staging and reconciliation tables, inside one transaction.
 
@@ -14983,6 +15026,54 @@ class MeetingSyncRepository(ABC):
     @abstractmethod
     def get_event(self, principal_id: str, event_id: str) -> MeetingSyncEventRecord | None:
         """One staged event by its opaque reference (`msevt_`), or `None`."""
+
+    @abstractmethod
+    def list_staging_sources(self, principal_id: str) -> tuple[str, ...]:
+        """Every ingest source id with a staged publication, sorted (WP3b-S4 review)."""
+
+    @abstractmethod
+    def list_unbound_events(
+        self, principal_id: str, snapshot_id: str
+    ) -> tuple[StagedProviderEvent, ...]:
+        """The publication's staged events whose key no binding names (WP3b-S4).
+
+        Ordered `(calendar_ref, ical_uid, occurrence_original_start_utc NULLS
+        FIRST, record_ordinal)`; each says whether its key is tombstoned.
+        Nonlocking.
+        """
+
+    # --- the reconciliation pass (WP3b-S4) -----------------------------------
+
+    @abstractmethod
+    def savepoint(self) -> AbstractContextManager[None]:
+        """Run a block under a SAVEPOINT of this unit of work's transaction.
+
+        A block that raises rolls back only its own writes -- on every plane of
+        the transaction -- and the exception propagates; one that ends normally
+        releases the savepoint. `meetings.provider.reconcile` runs each item in
+        one, so a refused item never affects the others.
+        """
+
+    @abstractmethod
+    def list_unreviewed_meetings(
+        self,
+        principal_id: str,
+        *,
+        since: datetime,
+        after_meeting_id: str | None,
+        limit: int,
+    ) -> tuple[UnreviewedMeetingRecord, ...]:
+        """One keyset page of in-scope Meetings with no binding and no mark (D3).
+
+        In scope: not cancelled and `start_at >= since`. Ordered by
+        `(start_at, meeting_id)`, strictly after the anchor Meeting's position
+        when `after_meeting_id` is given. Raises `MeetingCursorError` when the
+        anchor names no Meeting of this Principal. Nonlocking.
+        """
+
+    @abstractmethod
+    def count_review_scope(self, principal_id: str, *, since: datetime) -> MeetingReviewScopeCounts:
+        """How many Meetings are in scope, and how many of them are unreviewed (D3)."""
 
     # --- review marks --------------------------------------------------------
 

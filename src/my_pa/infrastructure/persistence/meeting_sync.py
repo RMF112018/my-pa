@@ -10,6 +10,9 @@ Five tables are reached here and nowhere else: `meeting_sync_publications`,
 one-line wrapper over `partition_criterion`), every INSERT composes `_bound` (a
 one-line wrapper over `principal_bound_values`), and the one join (a
 publication to its snapshot, for the apply order) composes
+`matching_partition_criterion`. The WP3b-S4 review reads join the Meeting
+plane (`meetings`, `meeting_provider_bindings`) the same way: every table they
+name is reached through `_mine` and correlated by
 `matching_partition_criterion`. The Principal is a parameter; nothing here
 reads it back from a row or a record.
 
@@ -23,11 +26,24 @@ NOTHING`). A missing row on a targeted update is `RepositoryFailureError`.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime
 from typing import Any, Final
 
-from sqlalchemy import ColumnElement, Table, insert, select, update
+from sqlalchemy import (
+    ColumnElement,
+    Table,
+    and_,
+    exists,
+    func,
+    insert,
+    literal,
+    or_,
+    select,
+    tuple_,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Row
 
@@ -35,12 +51,16 @@ from my_pa.contracts.ports import (
     MeetingProviderKeyTombstoneRecord,
     MeetingProviderReconciliationPassRecord,
     MeetingProviderReviewMarkRecord,
+    MeetingReviewScopeCounts,
     MeetingSyncApplyOutcome,
     MeetingSyncEventRecord,
     MeetingSyncPublicationRecord,
     MeetingSyncRepository,
     RepositoryFailureError,
+    StagedProviderEvent,
+    UnreviewedMeetingRecord,
 )
+from my_pa.domain.meeting.model import MeetingCursorError, MeetingStatus
 from my_pa.domain.meeting_sync.model import EventStatus, ProviderEventIdFormat
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
@@ -50,11 +70,13 @@ from my_pa.infrastructure.persistence.principal_scope import (
 )
 from my_pa.infrastructure.persistence.tables import (
     ingest_snapshots,
+    meeting_provider_bindings,
     meeting_provider_key_tombstones,
     meeting_provider_reconciliation_passes,
     meeting_provider_review_marks,
     meeting_sync_events,
     meeting_sync_publications,
+    meetings,
 )
 
 __all__ = ["SqlMeetingSyncRepository"]
@@ -125,6 +147,45 @@ _TOMBSTONE_COLUMNS: Final = (
     meeting_provider_key_tombstones.c.unbound_at,
     meeting_provider_key_tombstones.c.meeting_history_id,
 )
+
+
+def _same_original(left: Table, right: Table) -> ColumnElement[bool]:
+    """Null-safe equality of two tables' `occurrence_original_start_utc`."""
+    a = left.c.occurrence_original_start_utc
+    b = right.c.occurrence_original_start_utc
+    return or_(and_(a.is_(None), b.is_(None)), a == b)
+
+
+def _same_key(left: Table, right: Table) -> ColumnElement[bool]:
+    """Two tables' rows name the same provider key, in the same partition."""
+    return and_(
+        matching_partition_criterion(left, right),
+        left.c.calendar_ref == right.c.calendar_ref,
+        left.c.ical_uid == right.c.ical_uid,
+        _same_original(left, right),
+    )
+
+
+def _in_review_scope(principal_id: str, since: datetime) -> ColumnElement[bool]:
+    """A Meeting of the Principal the pass reviews (D3): not cancelled, recent enough."""
+    return and_(
+        _mine(meetings, principal_id),
+        meetings.c.status != MeetingStatus.CANCELLED.value,
+        meetings.c.start_at >= since,
+    )
+
+
+def _unreviewed() -> ColumnElement[bool]:
+    """The Meeting has neither a provider binding nor a review mark."""
+    bound = exists().where(
+        matching_partition_criterion(meeting_provider_bindings, meetings),
+        meeting_provider_bindings.c.meeting_id == meetings.c.meeting_id,
+    )
+    marked = exists().where(
+        matching_partition_criterion(meeting_provider_review_marks, meetings),
+        meeting_provider_review_marks.c.meeting_id == meetings.c.meeting_id,
+    )
+    return and_(~bound, ~marked)
 
 
 def _to_publication(row: Row[Any]) -> MeetingSyncPublicationRecord:
@@ -358,6 +419,109 @@ class SqlMeetingSyncRepository(MeetingSyncRepository):
             )
         ).one_or_none()
         return None if row is None else _to_event(row)
+
+    def list_staging_sources(self, principal_id: str) -> tuple[str, ...]:
+        rows = self._connection.execute(
+            select(meeting_sync_publications.c.ingest_source_id)
+            .where(_mine(meeting_sync_publications, principal_id))
+            .distinct()
+            .order_by(meeting_sync_publications.c.ingest_source_id)
+        )
+        return tuple(row.ingest_source_id for row in rows)
+
+    def list_unbound_events(
+        self, principal_id: str, snapshot_id: str
+    ) -> tuple[StagedProviderEvent, ...]:
+        bound = exists().where(_same_key(meeting_provider_bindings, meeting_sync_events))
+        tombstoned = exists().where(_same_key(meeting_provider_key_tombstones, meeting_sync_events))
+        original = meeting_sync_events.c.occurrence_original_start_utc
+        rows = self._connection.execute(
+            select(*_EVENT_COLUMNS, tombstoned.label("suppressed"))
+            .where(
+                _mine(meeting_sync_events, principal_id),
+                meeting_sync_events.c.snapshot_id == snapshot_id,
+                ~bound,
+            )
+            .order_by(
+                meeting_sync_events.c.calendar_ref,
+                meeting_sync_events.c.ical_uid,
+                original.asc().nulls_first(),
+                meeting_sync_events.c.record_ordinal,
+            )
+        )
+        return tuple(
+            StagedProviderEvent(event=_to_event(row), suppressed=bool(row.suppressed))
+            for row in rows
+        )
+
+    # --- the reconciliation pass (WP3b-S4) -----------------------------------
+
+    def savepoint(self) -> AbstractContextManager[None]:
+        return self._savepoint()
+
+    @contextmanager
+    def _savepoint(self) -> Iterator[None]:
+        with self._connection.begin_nested():
+            yield
+
+    def list_unreviewed_meetings(
+        self,
+        principal_id: str,
+        *,
+        since: datetime,
+        after_meeting_id: str | None,
+        limit: int,
+    ) -> tuple[UnreviewedMeetingRecord, ...]:
+        criteria = [_in_review_scope(principal_id, since), _unreviewed()]
+        if after_meeting_id is not None:
+            anchor = self._connection.execute(
+                select(meetings.c.start_at).where(
+                    _mine(meetings, principal_id), meetings.c.meeting_id == after_meeting_id
+                )
+            ).one_or_none()
+            if anchor is None:
+                raise MeetingCursorError()
+            criteria.append(
+                tuple_(meetings.c.start_at, meetings.c.meeting_id)
+                > tuple_(literal(anchor.start_at), literal(after_meeting_id))
+            )
+        rows = self._connection.execute(
+            select(
+                meetings.c.meeting_id,
+                meetings.c.version,
+                meetings.c.title,
+                meetings.c.start_at,
+                meetings.c.end_at,
+                meetings.c.timezone_name,
+                meetings.c.meeting_series_id,
+                meetings.c.status,
+            )
+            .where(*criteria)
+            .order_by(meetings.c.start_at, meetings.c.meeting_id)
+            .limit(limit)
+        )
+        return tuple(
+            UnreviewedMeetingRecord(
+                meeting_id=row.meeting_id,
+                version=row.version,
+                title=row.title,
+                start_at=row.start_at,
+                end_at=row.end_at,
+                timezone_name=row.timezone_name,
+                meeting_series_id=row.meeting_series_id,
+                status=MeetingStatus(row.status),
+            )
+            for row in rows
+        )
+
+    def count_review_scope(self, principal_id: str, *, since: datetime) -> MeetingReviewScopeCounts:
+        row = self._connection.execute(
+            select(
+                func.count().label("in_scope"),
+                func.count().filter(_unreviewed()).label("unreviewed"),
+            ).where(_in_review_scope(principal_id, since))
+        ).one()
+        return MeetingReviewScopeCounts(in_scope=int(row.in_scope), unreviewed=int(row.unreviewed))
 
     # --- review marks --------------------------------------------------------
 

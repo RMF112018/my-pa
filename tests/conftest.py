@@ -40,6 +40,7 @@ import stat
 import sys
 import threading
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -131,6 +132,7 @@ from my_pa.contracts.ports import (
     MeetingProviderReviewMarkRecord,
     MeetingRecord,
     MeetingRepository,
+    MeetingReviewScopeCounts,
     MeetingSeriesProviderBindingRecord,
     MeetingSyncApplyOutcome,
     MeetingSyncEventRecord,
@@ -190,6 +192,7 @@ from my_pa.contracts.ports import (
     SituationRepository,
     SourceProviders,
     SourceRepository,
+    StagedProviderEvent,
     TaskManagementRepository,
     TaskManagementUnitOfWork,
     TransferBegin,
@@ -197,6 +200,7 @@ from my_pa.contracts.ports import (
     TransferSession,
     UnitOfWork,
     UnknownScopeError,
+    UnreviewedMeetingRecord,
     WorkCursorError,
     WriteRequestConflictError,
     WriteRequestRepository,
@@ -10017,6 +10021,150 @@ class _MeetingSync(MeetingSyncRepository):
 
     def get_event(self, principal_id: str, event_id: str) -> MeetingSyncEventRecord | None:
         return self._world.meeting_sync_events.get((principal_id, event_id))
+
+    def _key_matches(
+        self,
+        rows: Iterable[tuple[tuple[str, str], Any]],
+        principal_id: str,
+        event: MeetingSyncEventRecord,
+    ) -> bool:
+        return any(
+            owner == principal_id
+            and row.calendar_ref == event.calendar_ref
+            and row.ical_uid == event.ical_uid
+            and row.occurrence_original_start_utc == event.occurrence_original_start_utc
+            for (owner, _), row in rows
+        )
+
+    def list_staging_sources(self, principal_id: str) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                {
+                    publication.ingest_source_id
+                    for (owner, _), publication in self._world.meeting_sync_publications.items()
+                    if owner == principal_id
+                }
+            )
+        )
+
+    def list_unbound_events(
+        self, principal_id: str, snapshot_id: str
+    ) -> tuple[StagedProviderEvent, ...]:
+        found = [
+            StagedProviderEvent(
+                event=event,
+                suppressed=self._key_matches(
+                    self._world.meeting_provider_key_tombstones.items(), principal_id, event
+                ),
+            )
+            for event in self.list_events(principal_id, snapshot_id)
+            if not self._key_matches(
+                self._world.meeting_provider_bindings.items(), principal_id, event
+            )
+        ]
+
+        def order(staged: StagedProviderEvent) -> tuple[str, str, bool, datetime, int]:
+            e = staged.event
+            original = e.occurrence_original_start_utc
+            return (
+                e.calendar_ref,
+                e.ical_uid,
+                original is not None,
+                original or datetime.min.replace(tzinfo=UTC),
+                e.record_ordinal,
+            )
+
+        return tuple(sorted(found, key=order))
+
+    #: The World planes one reconcile item may write; a savepoint restores them.
+    _SAVEPOINT_PLANES: Final = (
+        "meeting_series",
+        "meetings",
+        "meeting_history",
+        "meeting_series_history",
+        "meeting_write_requests",
+        "meeting_provider_bindings",
+        "meeting_series_provider_bindings",
+        "meeting_provider_review_marks",
+        "meeting_provider_key_tombstones",
+        "meeting_provider_reconciliation_passes",
+    )
+
+    def savepoint(self) -> AbstractContextManager[None]:
+        return self._savepoint()
+
+    @contextmanager
+    def _savepoint(self) -> Iterator[None]:
+        saved = {name: dict(getattr(self._world, name)) for name in self._SAVEPOINT_PLANES}
+        try:
+            yield
+        except BaseException:
+            for name, rows in saved.items():
+                plane = getattr(self._world, name)
+                plane.clear()
+                plane.update(rows)
+            raise
+
+    def _scope(self, principal_id: str, since: datetime) -> list[MeetingRecord]:
+        return [
+            meeting
+            for (owner, _), meeting in self._world.meetings.items()
+            if owner == principal_id
+            and meeting.status is not MeetingStatus.CANCELLED
+            and meeting.start_at >= since
+        ]
+
+    def _unreviewed(self, principal_id: str, meeting_id: str) -> bool:
+        bound = any(
+            owner == principal_id and binding.meeting_id == meeting_id
+            for (owner, _), binding in self._world.meeting_provider_bindings.items()
+        )
+        return not bound and (principal_id, meeting_id) not in (
+            self._world.meeting_provider_review_marks
+        )
+
+    def list_unreviewed_meetings(
+        self,
+        principal_id: str,
+        *,
+        since: datetime,
+        after_meeting_id: str | None,
+        limit: int,
+    ) -> tuple[UnreviewedMeetingRecord, ...]:
+        rows = sorted(
+            (
+                m
+                for m in self._scope(principal_id, since)
+                if self._unreviewed(principal_id, m.meeting_id)
+            ),
+            key=lambda m: (m.start_at, m.meeting_id),
+        )
+        if after_meeting_id is not None:
+            anchor = self._world.meetings.get((principal_id, after_meeting_id))
+            if anchor is None:
+                raise MeetingCursorError()
+            position = (anchor.start_at, after_meeting_id)
+            rows = [m for m in rows if (m.start_at, m.meeting_id) > position]
+        return tuple(
+            UnreviewedMeetingRecord(
+                meeting_id=m.meeting_id,
+                version=m.version,
+                title=m.title,
+                start_at=m.start_at,
+                end_at=m.end_at,
+                timezone_name=m.timezone_name,
+                meeting_series_id=m.meeting_series_id,
+                status=m.status,
+            )
+            for m in rows[:limit]
+        )
+
+    def count_review_scope(self, principal_id: str, *, since: datetime) -> MeetingReviewScopeCounts:
+        scope = self._scope(principal_id, since)
+        return MeetingReviewScopeCounts(
+            in_scope=len(scope),
+            unreviewed=sum(1 for m in scope if self._unreviewed(principal_id, m.meeting_id)),
+        )
 
     def insert_review_mark(self, principal_id: str, mark: MeetingProviderReviewMarkRecord) -> bool:
         key = (principal_id, mark.meeting_id)

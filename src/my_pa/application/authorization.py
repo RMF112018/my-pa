@@ -266,6 +266,7 @@ from my_pa.application.commands import (
     ReadScheduleScenarioVersion,
     ReadScheduleSeriesCurrent,
     ReadTask,
+    ReconcileMeetingProviders,
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordIssueHandoff,
@@ -297,6 +298,7 @@ from my_pa.application.commands import (
     RetireEntityName,
     RevealKnowledgeAssertion,
     RevealSubject,
+    ReviewMeetingProviders,
     ReviseCapture,
     ReviseEntityAddress,
     ReviseEntityAffiliation,
@@ -789,6 +791,10 @@ def _requested_scope(
             # WP2-W3: a provider key names the caller's own Meeting and an
             # external calendar identity it asserts, never a configured source.
             | BindMeetingProvider()
+            # WP3b-S4: the review and reconcile name the caller's own Meetings,
+            # staged events and latch, never a configured source.
+            | ReviewMeetingProviders()
+            | ReconcileMeetingProviders()
             # `record_events.list` (WP-RE-06) names only the acting Principal's
             # own change feed, never a configured source (G1-RD-011).
             | ListRecordEvents()

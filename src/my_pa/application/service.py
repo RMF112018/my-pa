@@ -339,6 +339,7 @@ from my_pa.application.commands import (
     ReadScheduleScenarioVersion,
     ReadScheduleSeriesCurrent,
     ReadTask,
+    ReconcileMeetingProviders,
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordIssueHandoff,
@@ -370,6 +371,7 @@ from my_pa.application.commands import (
     RetireEntityName,
     RevealKnowledgeAssertion,
     RevealSubject,
+    ReviewMeetingProviders,
     ReviseCapture,
     ReviseEntityAddress,
     ReviseEntityAffiliation,
@@ -648,6 +650,12 @@ from my_pa.application.lineage_visibility import (
     withhold_client_ids,
 )
 from my_pa.application.managed_documents import ManagedDocumentService
+from my_pa.application.meeting_provider_reconcile import (
+    MeetingProviderReconciliation,
+    ReconcileResult,
+    ReconciliationPass,
+    ReviewPage,
+)
 from my_pa.application.meetings import (
     MeetingApplication,
     MeetingProviderBindResult,
@@ -4176,6 +4184,85 @@ def _meeting_provider_bind_payload(written: MeetingProviderBindResult) -> dict[s
     }
 
 
+def _optional_instant(value: datetime | None) -> str | None:
+    return None if value is None else format_rfc3339(value)
+
+
+def _reconciliation_pass_payload(reconciliation: ReconciliationPass) -> dict[str, Any]:
+    return {
+        "state": reconciliation.state.value,
+        "completed_at": _optional_instant(reconciliation.completed_at),
+        "unreviewed_count": reconciliation.unreviewed_count,
+    }
+
+
+def _meeting_provider_review_payload(page: ReviewPage) -> dict[str, Any]:
+    """What `meetings.provider.review` answers (WP3b-S4): two lists, never paired.
+
+    The staged event fields are eligible for the operator's own connected
+    clients (Manager ruling D12, R-OP-3). No description, attendee, note,
+    location or link of a Meeting, and no location or link of an event.
+    """
+    return {
+        "pass": _reconciliation_pass_payload(page.reconciliation),
+        "unreviewed_meetings": [
+            {
+                "meeting_id": meeting.meeting_id,
+                "version": meeting.version,
+                "title": meeting.title,
+                "start_at": format_rfc3339(meeting.start_at),
+                "end_at": _optional_instant(meeting.end_at),
+                "timezone_name": meeting.timezone_name,
+                "meeting_series_id": meeting.meeting_series_id,
+                "status": meeting.status.value,
+            }
+            for meeting in page.unreviewed_meetings
+        ],
+        "next_after": page.next_after,
+        "unbound_provider_events": [
+            {
+                "provider_event_ref": staged.event.event_id,
+                "calendar_ref": staged.event.calendar_ref,
+                "ical_uid": staged.event.ical_uid,
+                "occurrence_original_start_utc": _optional_instant(
+                    staged.event.occurrence_original_start_utc
+                ),
+                "series_ical_uid": staged.event.series_ical_uid,
+                "title": staged.event.title,
+                "start_utc": format_rfc3339(staged.event.start_utc),
+                "end_utc": format_rfc3339(staged.event.end_utc),
+                "timezone_name": staged.event.timezone_name,
+                "status": staged.event.status.value,
+                "suppressed": staged.suppressed,
+            }
+            for staged in page.unbound_provider_events
+        ],
+    }
+
+
+def _meeting_provider_reconcile_payload(result: ReconcileResult) -> dict[str, Any]:
+    """What `meetings.provider.reconcile` answers (WP3b-S4): one outcome per item."""
+    return {
+        "items": [
+            {
+                "index": item.index,
+                "meeting_id": item.meeting_id,
+                "outcome": item.outcome.value,
+                "refusal": (
+                    None
+                    if item.refusal is None
+                    else {"code": item.refusal.code.value, "detail": item.refusal.safe_detail}
+                ),
+                "version": item.version,
+                "binding": None if item.binding is None else item.binding.to_canonical_dict(),
+            }
+            for item in result.items
+        ],
+        "pass": _reconciliation_pass_payload(result.reconciliation),
+        "sync_enabled": result.sync_enabled,
+    }
+
+
 def _meeting_series_write_payload(written: MeetingSeriesWriteResult) -> dict[str, Any]:
     """What `meetings.series.update` answers: the current series and its receipt."""
     return {
@@ -5159,6 +5246,7 @@ class ApplicationService:
         #: composition condition withholds it, so `available_capabilities` has no
         #: Meeting branch.
         self._meetings = MeetingApplication()
+        self._meeting_reconciliation = MeetingProviderReconciliation(self._meetings)
         #: Record lineage S1's Issue use cases, held on the same terms as
         #: `_meetings`: stateless, no clock, no transaction of its own.
         self._issues = IssueApplication()
@@ -14432,6 +14520,47 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEETING_TRUST_BASIS),
         )
 
+    def _meetings_provider_review(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReviewMeetingProviders,
+    ) -> _Result:
+        """`meetings.provider.review`: the reconciliation pass, side by side (WP3b-S4)."""
+        with _translated(), _meeting_translated():
+            page = self._meeting_reconciliation.review(
+                unit_of_work,
+                authorization.principal.principal_id,
+                now=authorization.at,
+                page_size=command.page_size,
+                after=command.after,
+            )
+        return _Result(
+            payload=_meeting_provider_review_payload(page),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEETING_TRUST_BASIS),
+        )
+
+    def _meetings_provider_reconcile(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReconcileMeetingProviders,
+    ) -> _Result:
+        """`meetings.provider.reconcile`: independent binds and marks, then the latch."""
+        with _translated(), _meeting_translated():
+            result = self._meeting_reconciliation.reconcile(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.reconcile_items(),
+                command.idempotency_key,
+                authorization.at,
+                correlation_id=authorization.correlation_id,
+            )
+        return _Result(
+            payload=_meeting_provider_reconcile_payload(result),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEETING_TRUST_BASIS),
+        )
+
     # ---- the record lineage S1 Issue plane (ADR-015) ----------------------------
     #
     # Six handlers over `IssueApplication`, in the Meeting shape: the command
@@ -19739,6 +19868,8 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.MEETINGS_UPDATE: ApplicationService._meetings_update,
         Capability.MEETINGS_SERIES_UPDATE: ApplicationService._meetings_series_update,
         Capability.MEETINGS_PROVIDER_BIND: ApplicationService._meetings_provider_bind,
+        Capability.MEETINGS_PROVIDER_REVIEW: ApplicationService._meetings_provider_review,
+        Capability.MEETINGS_PROVIDER_RECONCILE: ApplicationService._meetings_provider_reconcile,
         Capability.ISSUES_CREATE: ApplicationService._issues_create,
         Capability.ISSUES_READ: ApplicationService._issues_read,
         Capability.ISSUES_LIST: ApplicationService._issues_list,

@@ -14,7 +14,9 @@
   the WP3b-S2 staging consumer (`application/meeting_sync_ingest.py`, the
   domain publication) and its composition (`bootstrap/communications_ingest.py`,
   which injects the parser); and the WP3b-S3 applier
-  (`application/meeting_sync_apply.py`, the staged event and `not_seen`);
+  (`application/meeting_sync_apply.py`, the staged event and `not_seen`); and
+  the WP3b-S4 reconciliation pass (`application/meeting_provider_reconcile.py`,
+  the review and reconcile values);
 * the communications and meeting-sync slices do not import each other;
 * provider vocabulary stays out of the domain.
 """
@@ -56,6 +58,9 @@ CONSUMERS = frozenset(
         # WP3b-S3: the applier rebuilds the staged event and decides
         # `not_seen` through the domain.
         "application/meeting_sync_apply.py",
+        # WP3b-S4: the review and reconcile read the pass values and build the
+        # bind request.
+        "application/meeting_provider_reconcile.py",
     }
 )
 

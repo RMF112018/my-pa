@@ -386,11 +386,11 @@ def test_the_revision_round_trips_from_the_provider_binding_head(
     disposable_database: str, engine: Engine
 ) -> None:
     del disposable_database
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _assert_present(engine)
     command.downgrade(_config(), PREVIOUS)
     _assert_absent(engine)
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), REVISION)
     _assert_present(engine)
 
 

@@ -251,6 +251,8 @@ class BindingRefusal(StrEnum):
     PROJECT_NUMBER_MISMATCH = "project_number_mismatch"
     PROJECT_HAS_NO_NUMBER = "project_has_no_number"
     FOLDER_DUPLICATED = "folder_duplicated"
+    #: One binding folder inside another, in either direction (Manager ruling on S1).
+    FOLDER_NESTED = "folder_nested"
     PROJECT_DUPLICATED = "project_duplicated"
     FOLDER_OUTSIDE_EXPORT_ROOT = "folder_outside_export_root"
     FOLDER_NOT_FOUND = "folder_not_found"

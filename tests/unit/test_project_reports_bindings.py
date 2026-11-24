@@ -178,14 +178,37 @@ def test_a_folder_with_a_control_character_is_schema_invalid() -> None:
         "exports/alpha/out",  # the same folder twice
         "exports/ALPHA/out",  # case-folded collision
         "exports/alpha/out/",  # the same after normalization
-        "exports/alpha/out/deeper",  # nested inside the first
-        "exports/alpha",  # the first nested inside it
     ],
 )
 def test_a_folder_mapped_twice_is_refused(second: str) -> None:
     document = _file()
     document["bindings"][1]["folder"] = second
     assert _refusal(_bytes(document)) is BindingRefusal.FOLDER_DUPLICATED
+
+
+@pytest.mark.parametrize(
+    "second",
+    [
+        "exports/alpha/out/deeper",  # nested inside the first
+        "exports/alpha",  # the first nested inside it
+        "exports/ALPHA/out/Deeper",  # nested after case folding
+        "exports/alpha/out/deeper/",  # nested after normalization
+    ],
+)
+def test_a_folder_inside_another_is_nested(second: str) -> None:
+    document = _file()
+    document["bindings"][1]["folder"] = second
+    assert _refusal(_bytes(document)) is BindingRefusal.FOLDER_NESTED
+
+
+def test_a_sibling_sharing_a_name_prefix_is_not_nested() -> None:
+    document = _file()
+    document["bindings"][1]["folder"] = "exports/alpha/outer"
+    result = validate_bindings_file(_bytes(document), workspace_id=WORKSPACE)
+    assert [entry.folder for entry in result.bindings] == [
+        "exports/alpha/out",
+        "exports/alpha/outer",
+    ]
 
 
 def test_unicode_normalization_collides() -> None:

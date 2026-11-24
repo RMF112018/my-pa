@@ -20,8 +20,9 @@ on the first failure, with one closed code and no content:
   `duplicate_json_key`;
 * a folder that is absolute, holds `..`/`.`/an empty segment or a backslash,
   or is not strictly inside `export_root`: `folder_outside_export_root`;
-* 2 folders that resolve to one normalized path (Unicode NFC, case-folded),
-  or one inside another: `folder_duplicated`;
+* 2 folders that resolve to one normalized path (Unicode NFC, case-folded):
+  `folder_duplicated`; one folder inside another, in either direction:
+  `folder_nested`;
 * one Project under 2 folders: `project_duplicated`;
 * a `project_id` that is not a Project identifier: `project_not_found`;
 * a currency outside `[A-Z]{3}`: `currency_invalid`;
@@ -239,8 +240,10 @@ def validate_bindings_file(data: bytes, *, workspace_id: str) -> BindingsFile:
         entry, normal = _binding(item, root)
         for other in seen:
             shorter = min(len(other), len(normal))
-            if other[:shorter] == normal[:shorter]:
+            if other == normal:
                 _refuse(BindingRefusal.FOLDER_DUPLICATED)
+            if other[:shorter] == normal[:shorter]:
+                _refuse(BindingRefusal.FOLDER_NESTED)
         seen.append(normal)
         entries.append(entry)
     if len({entry.project_id for entry in entries}) != len(entries):

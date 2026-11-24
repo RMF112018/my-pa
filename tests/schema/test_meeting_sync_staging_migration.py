@@ -288,9 +288,28 @@ def test_the_offline_upgrade_refuses_first_and_emits_the_whole_revision(
     monkeypatch.setenv("MY_PA_DATABASE_URL", "postgresql+psycopg://localhost/my_pa")
     rendered = _offline(f"{PREVIOUS}:{REVISION}")
     refusal = rendered.index("refusing to upgrade to 61fafdfd2986")
-    assert rendered.index("SET LOCAL lock_timeout") < refusal
-    assert rendered.index("LOCK TABLE knowledge.meeting_provider_bindings") < refusal
-    assert refusal < rendered.index("CREATE TABLE")
+    timeout = rendered.index("SET LOCAL lock_timeout")
+    # R1 finding 7: every lock is taken up front, in one fixed order, before
+    # the refusal and before any DDL: the altered tables ACCESS EXCLUSIVE in the
+    # downgrade's order, then the referenced tables SHARE ROW EXCLUSIVE.
+    altered = rendered.index(
+        "LOCK TABLE knowledge.meeting_provider_bindings, knowledge.ingest_snapshots, "
+        "knowledge.audit_events IN ACCESS EXCLUSIVE MODE"
+    )
+    referenced = rendered.index(
+        "LOCK TABLE knowledge.meetings, knowledge.meeting_history IN SHARE ROW EXCLUSIVE MODE"
+    )
+    assert timeout < altered < referenced < refusal
+    assert rendered.count("LOCK TABLE") == 2
+    first_ddl = min(
+        rendered.index(statement)
+        for statement in ("CREATE TABLE", "ALTER TABLE", "CREATE INDEX", "CREATE FUNCTION")
+    )
+    assert refusal < first_ddl
+    downgrade_order = ("meeting_provider_bindings", "ingest_snapshots", "audit_events")
+    down_lock = _namespace(MIGRATION)["_LOCK_TABLES"]
+    assert isinstance(down_lock, str)
+    assert sorted(downgrade_order, key=down_lock.index) == list(downgrade_order)
     for table in TABLES:
         assert f"CREATE TABLE knowledge.{table} (" in rendered
     for index in INDEXES:

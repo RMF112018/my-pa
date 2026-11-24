@@ -9,7 +9,12 @@ The one additive revision of communications intelligence WP3b, on the sole head
 
 1. sets `lock_timeout` to 10 s for this revision's transaction only
    (`SET LOCAL`), so a lock that cannot be taken aborts the whole revision with
-   `55P03` and leaves the database at `52a829ef718a`;
+   `55P03` and leaves the database at `52a829ef718a`; then takes every lock
+   the revision needs up front, in one fixed order (the downgrade's order for
+   the tables both lock): `ACCESS EXCLUSIVE` on `meeting_provider_bindings`,
+   `ingest_snapshots` and `audit_events` (each is altered), then `SHARE ROW
+   EXCLUSIVE` on `meetings` and `meeting_history` (the new tables' foreign keys
+   reference them), so no lock is upgraded or added mid-revision;
 2. refuses, with `restrict_violation` and before changing anything, while any
    `meeting_provider_bindings` row records a `last_seen_*` observation: such a
    row could not name the snapshot it came from (D10). No sync has run before
@@ -86,9 +91,23 @@ _LOCK_TIMEOUT: Final = "SET LOCAL lock_timeout = '10s'"
 
 _BINDINGS: Final = "meeting_provider_bindings"
 
-#: The ALTER below takes `ACCESS EXCLUSIVE` anyway; taking it first means no
-#: observation can commit between the check and the ALTER.
-_LOCK_BINDINGS: Final = "LOCK TABLE knowledge.meeting_provider_bindings IN ACCESS EXCLUSIVE MODE"
+#: Every lock the upgrade needs, taken first and in one fixed order -- the
+#: downgrade's order for the tables both lock -- so the revision never upgrades
+#: or adds a lock after it began changing things (a deadlock or a long wait
+#: mid-DDL). The altered tables take the `ACCESS EXCLUSIVE` their ALTERs take
+#: anyway (`meeting_provider_bindings`: columns, checks, foreign keys and the
+#: origin trigger; `ingest_snapshots`: the digest key, then the referenced side
+#: of the new foreign keys; `audit_events`: the restated CHECK); taking the
+#: bindings lock before the legacy-observation check also means no observation
+#: can commit between the check and the ALTER. The new tables' foreign keys
+#: reference `meetings` and `meeting_history`, which need `SHARE ROW EXCLUSIVE`.
+_LOCK_ALTERED: Final = (
+    "LOCK TABLE knowledge.meeting_provider_bindings, knowledge.ingest_snapshots, "
+    "knowledge.audit_events IN ACCESS EXCLUSIVE MODE"
+)
+_LOCK_REFERENCED: Final = (
+    "LOCK TABLE knowledge.meetings, knowledge.meeting_history IN SHARE ROW EXCLUSIVE MODE"
+)
 
 _REFUSE_LEGACY_OBSERVATIONS: Final = """
     DO $$
@@ -717,7 +736,8 @@ def _restate(table: str, name: str, expression: str) -> None:
 
 def upgrade() -> None:
     op.execute(_LOCK_TIMEOUT)
-    op.execute(_LOCK_BINDINGS)
+    op.execute(_LOCK_ALTERED)
+    op.execute(_LOCK_REFERENCED)
     op.execute(_REFUSE_LEGACY_OBSERVATIONS)
     for _table, ddl in _TABLES:
         op.execute(ddl)

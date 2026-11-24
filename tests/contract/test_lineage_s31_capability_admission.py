@@ -23,15 +23,10 @@ Every value is synthetic.
 
 from __future__ import annotations
 
-import hashlib
-import importlib
-import inspect
-import json
 from types import SimpleNamespace
 from typing import Any, Final
 
 import pytest
-from pydantic import BaseModel
 from tests import pins
 from tests.conftest import DEFAULT_LIMITS, WHEN, FakeUnitOfWork, Scene, build_service, metadata_for
 from tests.contract.test_lineage_capability_admission import (
@@ -39,13 +34,6 @@ from tests.contract.test_lineage_capability_admission import (
 )
 from tests.contract.test_lineage_s2_capability_admission import (
     _BASE_PAYLOADS as _S2_PAYLOADS,
-)
-from tests.contract.test_lineage_s3_capability_admission import (
-    _ADR_020_EXTENDED_TOOLS,
-    _ADR_020_EXTENDED_VIEWS,
-    _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_MEETING_PREP,
-    _V1_VIEW_FIELDS_SHA256_WITHOUT_MEETING_VIEW,
-    _V1_VIEW_MODULES,
 )
 from tests.contract.test_lineage_s3_capability_admission import (
     _BASE_PAYLOADS as _S3_PAYLOADS,
@@ -692,85 +680,15 @@ def test_lineage_tool_descriptions_carry_the_client_guidance() -> None:
 # ---- old-client rule (section 8) -----------------------------------------------------
 
 
-def _canonical_sha256(document: object) -> str:
-    return hashlib.sha256(
-        json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-
-
 def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
-    """Section 8: the 192 non-lineage, non-S4 tools and the v1 views are byte-identical."""
+    """Section 8: the S3.1 names are lineage names; no v1 purpose or annotation moves.
+
+    Every published tool's payload schema and every v1 view's fields are pinned
+    per name by `tests/contract/test_v1_payload_digests.py` (phase P4, O3).
+    """
     lineage = {capability.value for capability in _LINEAGE_CAPABILITIES}
     lineage |= PROGRAM_REPORTING_CAPABILITIES
     assert lineage >= S31_NAMES
-    # CPM Workbench S5b-2: the 7 Schedule names are excluded beside them; the
-    # count and both pins stay.
-    lineage |= {
-        capability.value for capability in Capability if capability.value.startswith("schedule_")
-    }
-    # Reports Modernization WP02: `reports.publish` is new and `reports.read`
-    # is deliberately extended (the `grpt_` selectors; its legacy `rpt_` answers
-    # are pinned by `tests/unit/test_reports_legacy_read_golden.py`). Both are
-    # excluded, so the remaining 191 shapes stay pinned byte for byte.
-    lineage |= {Capability.REPORTS_PUBLISH.value, Capability.REPORTS_READ.value}
-    # Reports Modernization WP03: its five additions, each excluded as new.
-    lineage |= {
-        Capability.REPORTS_UPDATE.value,
-        Capability.REPORTS_HISTORY.value,
-        Capability.REPORTS_ARCHIVE.value,
-        Capability.REPORTS_DELETE.value,
-        Capability.REPORTS_RESTORE.value,
-    }
-    # Reports Modernization WP05b: its four operator custody names, new too.
-    lineage |= {
-        Capability.REPORTS_HOLD_PLACE.value,
-        Capability.REPORTS_HOLD_RELEASE.value,
-        Capability.REPORTS_RETENTION_SET.value,
-        Capability.REPORTS_RETENTION_GET.value,
-    }
-    # Reports Modernization WP04: `reports.list` and `reports.search` are
-    # deliberately extended (the `plane` selector and catalog filters; their
-    # legacy answers are pinned by
-    # `tests/unit/test_reports_legacy_list_search_golden.py`), so both are
-    # excluded and the remaining 189 shapes stay pinned.
-    lineage |= {Capability.REPORTS_LIST.value, Capability.REPORTS_SEARCH.value}
-    # Reports Modernization WP06: its five transfer names, new too (pinned by
-    # `tests/contract/test_reports_transfer_compact_facade.py`).
-    lineage |= {
-        capability.value
-        for capability in Capability
-        if capability.value.startswith("reports.transfer.")
-    }
-    # Files workspace WP5: its 17 `files.*` names are new.
-    lineage |= {
-        capability.value for capability in Capability if capability.value.startswith("files.")
-    }
-    # ADR-020 (meeting prep briefs): its three deliberately extended tools.
-    lineage |= _ADR_020_EXTENDED_TOOLS
-    # Communications intelligence WP2-W3: `meetings.provider.bind` is new.
-    lineage |= {"meetings.provider.bind"}
-    payloads = {
-        tool.name: tool.input_schema["properties"]["payload"]
-        for tool in TOOLS
-        if tool.name not in lineage
-    }
-    assert len(payloads) == 186
-    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_MEETING_PREP
-    views: dict[str, list[str]] = {}
-    for name in _V1_VIEW_MODULES:
-        module = importlib.import_module(f"my_pa.contracts.v1.{name}")
-        for model_name, model in vars(module).items():
-            if (
-                inspect.isclass(model)
-                and issubclass(model, BaseModel)
-                and model.__module__ == module.__name__
-            ):
-                views[f"{name}.{model_name}"] = sorted(model.model_fields)
-    for extended in _ADR_020_EXTENDED_VIEWS:
-        views.pop(extended)
-    # Communications intelligence WP2-W3: one new view, no existing one changed.
-    views.pop("meetings.MeetingProviderBindingView")
-    assert _canonical_sha256(views) == _V1_VIEW_FIELDS_SHA256_WITHOUT_MEETING_VIEW
     # S3.1 adds no purpose: the envelope's purpose enum is the S4 one.
     published = TOOLS[0].input_schema["$defs"]["Purpose"]["enum"]
     # CPM Workbench S5b-2 appends its 2 purposes after them (contract 3.12),
@@ -792,7 +710,6 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
         "schedule_analysis_read",
         "schedule_baseline_approval",
     ]
-    # Every non-lineage tool's annotations are untouched by the S3.1 hint.
+    # Every tool's annotations are untouched by the S3.1 hint.
     for tool in TOOLS:
-        if tool.name not in lineage:
-            assert tool.annotations is not None
+        assert tool.annotations is not None

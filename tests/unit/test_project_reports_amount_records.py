@@ -44,6 +44,7 @@ REFUSED: Final = (
     Decimal("10000000000000000"),
     Decimal("1E+16"),
     Decimal("-10000000000000000.0000"),
+    Decimal("1.000000001"),
 )
 STORABLE: Final = (
     Decimal("9999999999999999.9999"),
@@ -55,6 +56,10 @@ STORABLE: Final = (
     Decimal("0E+20"),
     Decimal("1E+15"),
     Decimal("-0.0001"),
+    # Trailing zeros past the fourth decimal round to nothing (the exact rule).
+    Decimal("1.50000"),
+    Decimal("0E-10"),
+    Decimal("-2.123400000"),
 )
 
 

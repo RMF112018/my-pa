@@ -372,6 +372,15 @@ from my_pa.domain.project_reports.model import (
     DerivationTrigger as ProjectReportDerivationTrigger,
 )
 from my_pa.domain.project_reports.model import FamilyView as ProjectReportFamilyView
+from my_pa.domain.project_reports.model import (
+    QuarantineReason as ProjectReportQuarantineReason,
+)
+from my_pa.domain.project_reports.model import (
+    ReconciliationOutcome as ProjectReportReconciliationOutcome,
+)
+from my_pa.domain.project_reports.model import RowRole as ProjectReportRowRole
+from my_pa.domain.project_reports.model import TotalScope as ProjectReportTotalScope
+from my_pa.domain.project_reports.model import ValueKind as ProjectReportValueKind
 from my_pa.domain.project_reports.reconciliation import (
     CROSS_CHECK_KIND as PROJECT_REPORT_CROSS_CHECK_KIND,
 )
@@ -911,6 +920,34 @@ class ProjectReportsWorld:
     Project is `active`; a cross-check keeps its sides in their roles (N1); a
     record identity is get-or-create; current derivations are the ones nothing
     supersedes.
+
+    WP3P-S4 (the S3 R2 carry-over a) mirrors the children of a derivation, in
+    the order the repository sends them (row roles, lines, values, stated
+    totals; per row its CHECKs in name order, then its key, then its foreign
+    keys): duplicate row-role, line, line-value and stated-total keys; a row
+    role with no raw row or of another snapshot; a line on a non-detail row,
+    outside its derivation's view, or naming a record of another Project or
+    family; a malformed `group_path`, a header without its level and key, a
+    parent header not before its row, a row reason off a malformed row; a
+    value typed from empty text or untyped from parseable text, a text value
+    that is not its raw text, a reason with no text; a stated total whose
+    `match` values differ, `both_empty` or unchecked with values, checked
+    exactly when additive, its scope against its row and group; a cross-check
+    `match` whose values differ or an unchecked one with values; and the
+    derivation's quarantine CHECKs (reason, completeness, reconciliation,
+    role-count names, adapter unless the signature is unknown).
+
+    Deliberately left unmirrored, each unreachable through the typed port or
+    owned by a later slice: the identifier and token shape regexes and the
+    closed IN-lists (the records carry ids the services issue and `StrEnum`
+    members); `a_line_value_is_held_only_by_its_kinds_column` (the repository
+    places every value in its kind's column, so a port write cannot break it);
+    `a_derivation_adapter_is_whole` and `a_derivation_view_belongs_to_its_family`
+    (the S5 handler writes the registry's own adapter triples); the line
+    CHECKs on identity, degradation, status class and identifier suffix, and
+    the length bounds on texts and project numbers (the S5 handler and the S1
+    domain own those values; the database stays the authority and the S5 DB
+    tier exercises them).
     """
 
     revisions: dict[tuple[str, str], ProjectReportBindingRevisionRecord] = field(
@@ -10567,6 +10604,7 @@ class _ProjectReports(ProjectReportsRepository):
             prior = self._w.derivations.get((principal_id, prior_id))
             if prior is None or prior.snapshot_id != derivation.snapshot_id:
                 self._refuse(_RESTRICT, "project_report_derivations_supersede_an_existing_one")
+        self._check_derivation(derivation)
         if (prior_id is None) != (derivation.trigger is ProjectReportDerivationTrigger.INGEST):
             self._refuse(_CHECK, "only_a_first_derivation_is_an_ingest")
         if key in self._w.derivations:
@@ -10587,15 +10625,177 @@ class _ProjectReports(ProjectReportsRepository):
             derivation.project_id,
         ):
             self._refuse(_FOREIGN, "a_derivation_names_a_binding_revision_of_its_source")
-        for line in lines:
-            if line.record_id is not None and (principal_id, line.record_id) not in self._w.records:
-                self._refuse(_FOREIGN, "a_report_line_names_a_record_of_its_project")
+        # The children, statement by statement as the repository sends them:
+        # every row role, then every line, every value, every stated total.
+        roles = self._check_row_roles(principal_id, derivation, row_roles)
+        self._check_lines(principal_id, derivation, lines, roles)
+        self._check_line_values(lines)
+        self._check_stated_totals(stated_totals, roles)
         self._w.derivations[key] = derivation
         self._w.row_roles[key] = tuple(sorted(row_roles, key=lambda r: r.row_ordinal))
         self._w.lines[key] = tuple(sorted(lines, key=lambda line: line.row_ordinal))
         self._w.stated_totals[key] = tuple(
             sorted(stated_totals, key=lambda t: (t.row_ordinal, t.column_index))
         )
+
+    def _check_derivation(self, derivation: ProjectReportDerivationRecord) -> None:
+        """The quarantine CHECKs of a derivation row, in the server's (name) order."""
+        quarantined = derivation.state is ProjectReportDerivationState.QUARANTINED
+        if (derivation.completeness_class is None) != quarantined:
+            self._refuse(_CHECK, "a_classified_derivation_names_its_completeness")
+        unknown = derivation.quarantine_reason is (
+            ProjectReportQuarantineReason.UNKNOWN_HEADER_SIGNATURE
+        )
+        if (derivation.record_family is None) != unknown:
+            self._refuse(_CHECK, "a_derivation_names_its_adapter_unless_its_signature_is_unknown")
+        if (derivation.reconciliation is None) != quarantined:
+            self._refuse(_CHECK, "a_derivation_reconciliation_is_an_object_when_classified")
+        names = set(derivation.role_counts)
+        if (quarantined and names != {"unclassified"}) or (
+            not quarantined and not names <= {role.value for role in ProjectReportRowRole}
+        ):
+            self._refuse(_CHECK, "a_derivation_role_counts_name_its_roles")
+        if quarantined != (derivation.quarantine_reason is not None):
+            self._refuse(_CHECK, "a_quarantined_derivation_names_its_reason")
+
+    def _check_row_roles(
+        self,
+        principal_id: str,
+        derivation: ProjectReportDerivationRecord,
+        row_roles: Sequence[ProjectReportRowRoleRecord],
+    ) -> dict[int, ProjectReportRowRoleRecord]:
+        raw = {
+            row.row_ordinal for row in self._w.rows.get((principal_id, derivation.snapshot_id), ())
+        }
+        seen: dict[int, ProjectReportRowRoleRecord] = {}
+        for role in row_roles:
+            if any(
+                level not in (1, 2) or type(ordinal) is not int or ordinal < 1
+                for level, _key, ordinal in role.group_path
+            ):
+                self._refuse(_CHECK, "a_row_role_group_path_steps_are_level_key_and_header")
+            header = role.row_role in (
+                ProjectReportRowRole.GROUP_HEADER,
+                ProjectReportRowRole.GROUPING_ONLY,
+            )
+            if (role.group_level is not None) != header or (role.group_key is not None) != header:
+                self._refuse(_CHECK, "a_row_role_header_names_its_level_and_key")
+            if role.row_ordinal < 1:
+                self._refuse(_CHECK, "a_row_role_ordinal_is_positive")
+            if role.parent_header_ordinal is not None and not (
+                1 <= role.parent_header_ordinal < role.row_ordinal
+            ):
+                self._refuse(_CHECK, "a_row_role_parent_header_precedes_it")
+            if role.row_reason is not None and role.row_role is not ProjectReportRowRole.MALFORMED:
+                self._refuse(_CHECK, "a_row_role_reason_is_a_malformed_width")
+            if role.row_ordinal in seen:
+                self._refuse(_UNIQUE, "project_report_row_roles_pkey")
+            if role.derivation_id != derivation.derivation_id or (
+                role.snapshot_id != derivation.snapshot_id
+            ):
+                self._refuse(_FOREIGN, "a_row_role_names_a_derivation_of_its_snapshot")
+            if role.row_ordinal not in raw:
+                self._refuse(_FOREIGN, "a_row_role_names_a_raw_row_of_its_snapshot")
+            seen[role.row_ordinal] = role
+        return seen
+
+    def _check_lines(
+        self,
+        principal_id: str,
+        derivation: ProjectReportDerivationRecord,
+        lines: Sequence[ProjectReportLineRecord],
+        roles: Mapping[int, ProjectReportRowRoleRecord],
+    ) -> None:
+        seen: set[int] = set()
+        for line in lines:
+            if line.row_ordinal in seen:
+                self._refuse(_UNIQUE, "project_report_lines_pkey")
+            seen.add(line.row_ordinal)
+            role = roles.get(line.row_ordinal)
+            if role is None or role.row_role is not ProjectReportRowRole.DETAIL:
+                self._refuse(_FOREIGN, "a_report_line_names_a_detail_row_of_its_derivation")
+            if (line.project_id, line.record_family, line.family_view) != (
+                derivation.project_id,
+                derivation.record_family,
+                derivation.family_view,
+            ):
+                self._refuse(_FOREIGN, "a_report_line_names_a_derivation_of_its_view")
+            if line.record_id is not None:
+                record = self._w.records.get((principal_id, line.record_id))
+                if record is None or (record.project_id, record.record_family) != (
+                    line.project_id,
+                    line.record_family,
+                ):
+                    self._refuse(_FOREIGN, "a_report_line_names_a_record_of_its_project")
+
+    def _check_line_values(self, lines: Sequence[ProjectReportLineRecord]) -> None:
+        """The value-kind CHECKs (name order), then the key, line by line."""
+        texts = (ProjectReportValueKind.TEXT, ProjectReportValueKind.IDENTIFIER)
+        for line in lines:
+            seen: set[str] = set()
+            for value in line.values:
+                if (
+                    value.value_kind in texts
+                    and value.value is not None
+                    and (value.value != value.raw_text)
+                ):
+                    self._refuse(_CHECK, "a_line_text_value_is_its_raw_text")
+                if (value.value is not None) != (
+                    value.raw_text != "" and value.value_reason is None
+                ):
+                    self._refuse(_CHECK, "a_line_value_is_typed_exactly_when_its_text_parses")
+                if value.value_reason is not None and value.raw_text == "":
+                    self._refuse(_CHECK, "a_line_value_reason_needs_its_text")
+                if value.field_key in seen:
+                    self._refuse(_UNIQUE, "project_report_line_values_pkey")
+                seen.add(value.field_key)
+
+    def _check_stated_totals(
+        self,
+        stated_totals: Sequence[ProjectReportStatedTotalRecord],
+        roles: Mapping[int, ProjectReportRowRoleRecord],
+    ) -> None:
+        """The scope and outcome CHECKs (name order), the key, then the total row."""
+        outcome = ProjectReportReconciliationOutcome
+        seen: set[tuple[int, int]] = set()
+        for total in stated_totals:
+            if total.outcome is outcome.BOTH_EMPTY and (
+                total.value is not None or total.computed_value is not None
+            ):
+                self._refuse(_CHECK, "a_both_empty_stated_total_holds_no_value")
+            # SQL three-valued logic: a NULL sum beside a stated value passes.
+            if total.outcome is outcome.MATCH and (
+                total.value is None
+                or (total.computed_value is not None and total.computed_value != total.value)
+            ):
+                self._refuse(_CHECK, "a_matched_stated_total_equals_its_sum")
+            if (total.additivity.value == "additive") != (total.outcome is not outcome.NOT_CHECKED):
+                self._refuse(_CHECK, "a_stated_total_is_checked_exactly_when_additive")
+            group = total.scope is ProjectReportTotalScope.GROUP
+            if (
+                (total.group_level is not None) != group
+                or (total.group_key is not None) != group
+                or total.group_level not in (None, 1, 2)
+            ):
+                self._refuse(_CHECK, "a_stated_total_names_its_group_exactly_in_group_scope")
+            if total.row_role not in (
+                ProjectReportRowRole.GRAND_TOTAL,
+                ProjectReportRowRole.GROUP_HEADER,
+            ):
+                self._refuse(_CHECK, "a_stated_total_row_is_a_total_row")
+            if (total.scope is ProjectReportTotalScope.GRAND) != (
+                total.row_role is ProjectReportRowRole.GRAND_TOTAL
+            ):
+                self._refuse(_CHECK, "a_stated_total_scope_matches_its_row")
+            if total.outcome is outcome.NOT_CHECKED and total.computed_value is not None:
+                self._refuse(_CHECK, "an_unchecked_stated_total_holds_no_sum")
+            key = (total.row_ordinal, total.column_index)
+            if key in seen:
+                self._refuse(_UNIQUE, "project_report_stated_totals_pkey")
+            seen.add(key)
+            role = roles.get(total.row_ordinal)
+            if role is None or role.row_role is not total.row_role:
+                self._refuse(_FOREIGN, "a_stated_total_names_a_total_row_of_its_derivation")
 
     def get_derivation(
         self, principal_id: str, derivation_id: str
@@ -10685,6 +10885,17 @@ class _ProjectReports(ProjectReportsRepository):
             self._refuse(_RESTRICT, "project_report_cross_checks_keep_their_roles")
         if check.left_derivation_id == check.right_derivation_id:
             self._refuse(_CHECK, "a_cross_check_names_two_derivations")
+        outcome = ProjectReportReconciliationOutcome
+        # SQL three-valued logic: a NULL right side beside a left value passes.
+        if check.outcome is outcome.MATCH and (
+            check.left_value is None
+            or (check.right_value is not None and check.left_value != check.right_value)
+        ):
+            self._refuse(_CHECK, "a_matched_cross_check_agrees")
+        if check.outcome in (outcome.BOTH_EMPTY, outcome.NOT_CHECKED) and (
+            check.left_value is not None or check.right_value is not None
+        ):
+            self._refuse(_CHECK, "an_unchecked_cross_check_holds_no_value")
         if key in self._w.cross_checks:
             self._refuse(_UNIQUE, "project_report_cross_checks_pkey")
         for side, name in ((left, "left"), (right, "right")):

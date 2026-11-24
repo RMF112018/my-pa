@@ -15190,8 +15190,8 @@ class MeetingSyncRepository(ABC):
 
 
 #: `NUMERIC(20,4)`: at most 4 decimals and 16 integer digits.
-_PROJECT_REPORT_AMOUNT_SCALE: Final = 4
 _PROJECT_REPORT_AMOUNT_INTEGER_DIGITS: Final = 16
+_PROJECT_REPORT_AMOUNT_QUANTUM: Final = Decimal("0.0001")
 
 
 def _require_storable_amount(value: object) -> None:
@@ -15208,10 +15208,13 @@ def _require_storable_amount(value: object) -> None:
         raise TypeError("a project-report amount is a Decimal")
     if not value.is_finite():
         raise ValueError("a project-report amount is finite")
-    if int(value.as_tuple().exponent) < -_PROJECT_REPORT_AMOUNT_SCALE:
-        raise ValueError("a project-report amount has at most 4 decimals")
     if not value.is_zero() and value.adjusted() >= _PROJECT_REPORT_AMOUNT_INTEGER_DIGITS:
         raise ValueError("a project-report amount has at most 16 integer digits")
+    # The exact rule, not the exponent: `1.50000` and `0E-10` are storable as
+    # they are (trailing zeros), `1.23456` is not. The integer bound runs first,
+    # so the quantized coefficient never exceeds the context's precision.
+    if value != value.quantize(_PROJECT_REPORT_AMOUNT_QUANTUM):
+        raise ValueError("a project-report amount has at most 4 decimals")
 
 
 @dataclass(frozen=True, slots=True)

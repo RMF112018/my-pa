@@ -6,7 +6,11 @@ SQLSTATE and the constraint (or guard trigger) name. The same cases run
 against the in-memory fake (`tests.conftest._ProjectReports`, FAST) and
 against `SqlProjectReportsRepository` on a head-migrated clone (`database`),
 so a guard the S4 and S5 services rely on cannot hold in one and not the
-other. Every identifier and text here is synthetic.
+other. WP3P-S4 (the S3 R2 carry-over a) adds the children of a derivation:
+duplicate row-role, line, line-value and stated-total keys, a row role with no
+raw row, a line on a non-detail row, a `match` with unequal values (stated
+total and cross-check), a malformed `group_path`, and the value-kind, scope
+and quarantine CHECKs. Every identifier and text here is synthetic.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Final
 
 import pytest
@@ -28,19 +33,31 @@ from my_pa.contracts.ports import (
     ProjectReportBindingRevisionRecord,
     ProjectReportCrossCheckRecord,
     ProjectReportDerivationRecord,
+    ProjectReportLineRecord,
+    ProjectReportLineValueRecord,
+    ProjectReportRowRecord,
+    ProjectReportRowRoleRecord,
     ProjectReportSnapshotRecord,
     ProjectReportsRepository,
+    ProjectReportStatedTotalRecord,
     ProjectReportsWriteRefusedError,
 )
 from my_pa.domain.project_reports.model import (
+    Additivity,
     BindingReason,
     BindingState,
     CompletenessClass,
     DerivationState,
     DerivationTrigger,
     FamilyView,
+    IdentityState,
+    LineKind,
+    ObservationState,
     ReconciliationOutcome,
     RecordFamily,
+    RowRole,
+    TotalScope,
+    ValueKind,
 )
 from my_pa.domain.project_reports.reconciliation import CROSS_CHECK_KIND
 from my_pa.infrastructure.persistence.ingestion import SqlIngestionRepository
@@ -293,6 +310,200 @@ def _a_cross_check_in_reversed_roles(r: ProjectReportsRepository) -> None:
     )
 
 
+# ---- the children of a derivation (S3 R2 carry-over a) ------------------------------
+
+#: The three raw rows of `SNAP`: a group header, a detail row and the grand total.
+_RAW_ROWS: Final = (
+    ProjectReportRowRecord(1, "Group A,,", "lf", ("Group A", "", ""), True),
+    ProjectReportRowRecord(2, "7,Subject,1.50", "lf", ("7", "Subject", "1.50"), True),
+    ProjectReportRowRecord(3, "Grand Totals,,1.50", "none", ("Grand Totals", "", "1.50"), True),
+)
+_PATH: Final = ((1, "Group A", 1),)
+
+
+def _roles(derivation_id: str = D1) -> list[ProjectReportRowRoleRecord]:
+    return [
+        ProjectReportRowRoleRecord(
+            derivation_id, 1, SNAP, RowRole.GROUP_HEADER, _PATH, group_level=1, group_key="Group A"
+        ),
+        ProjectReportRowRoleRecord(
+            derivation_id, 2, SNAP, RowRole.DETAIL, _PATH, parent_header_ordinal=1
+        ),
+        ProjectReportRowRoleRecord(derivation_id, 3, SNAP, RowRole.GRAND_TOTAL),
+    ]
+
+
+def _value(**overrides: object) -> ProjectReportLineValueRecord:
+    values: dict[str, object] = {
+        "field_key": "rfi.amount",
+        "value_kind": ValueKind.MONEY,
+        "raw_text": "1.50",
+        "value": Decimal("1.5"),
+    }
+    values.update(overrides)
+    return ProjectReportLineValueRecord(**values)  # type: ignore[arg-type]
+
+
+def _line(**overrides: object) -> ProjectReportLineRecord:
+    values: dict[str, object] = {
+        "derivation_id": D1,
+        "row_ordinal": 2,
+        "project_id": PROJECT,
+        "record_family": RecordFamily.RFIS,
+        "family_view": FamilyView.OPEN_OUTSTANDING,
+        "line_kind": LineKind.RFI_ROW,
+        "identity_state": IdentityState.IDENTITY_MISSING,
+        "observation_state": ObservationState.TYPED,
+        "values": (_value(),),
+    }
+    values.update(overrides)
+    return ProjectReportLineRecord(**values)  # type: ignore[arg-type]
+
+
+def _total(**overrides: object) -> ProjectReportStatedTotalRecord:
+    values: dict[str, object] = {
+        "derivation_id": D1,
+        "row_ordinal": 3,
+        "column_index": 2,
+        "row_role": RowRole.GRAND_TOTAL,
+        "scope": TotalScope.GRAND,
+        "field_key": "rfi.amount",
+        "raw_text": "1.50",
+        "additivity": Additivity.ADDITIVE,
+        "outcome": ReconciliationOutcome.MATCH,
+        "value": Decimal("1.5"),
+        "computed_value": Decimal("1.5"),
+    }
+    values.update(overrides)
+    return ProjectReportStatedTotalRecord(**values)  # type: ignore[arg-type]
+
+
+def _children(
+    r: ProjectReportsRepository,
+    *,
+    roles: object = None,
+    lines: object = (),
+    totals: object = (),
+    **derivation: object,
+) -> None:
+    """`R1`, `SNAP` with its three raw rows, and one derivation `D1` with the children given."""
+    r.insert_binding_revision(P, _revision(R1))
+    snapshot_id, digest = SNAPSHOTS[0]
+    r.insert_snapshot(P, _snapshot(snapshot_id, digest, data_row_count=3), _RAW_ROWS)
+    r.insert_derivation(
+        P,
+        _derivation(D1, role_counts={"detail": 1}, **derivation),
+        row_roles=_roles() if roles is None else roles,  # type: ignore[arg-type]
+        lines=lines,  # type: ignore[arg-type]
+        stated_totals=totals,  # type: ignore[arg-type]
+    )
+
+
+def _a_duplicate_row_role(r: ProjectReportsRepository) -> None:
+    _children(r, roles=[*_roles(), _roles()[1]])
+
+
+def _a_row_role_with_no_raw_row(r: ProjectReportsRepository) -> None:
+    _children(r, roles=[*_roles(), ProjectReportRowRoleRecord(D1, 9, SNAP, RowRole.SPACER)])
+
+
+def _a_malformed_group_path(r: ProjectReportsRepository) -> None:
+    roles = _roles()
+    roles[1] = ProjectReportRowRoleRecord(
+        D1, 2, SNAP, RowRole.DETAIL, ((3, "Group A", 1),), parent_header_ordinal=1
+    )
+    _children(r, roles=roles)
+
+
+def _a_duplicate_line(r: ProjectReportsRepository) -> None:
+    _children(r, lines=(_line(), _line()))
+
+
+def _a_line_on_a_non_detail_row(r: ProjectReportsRepository) -> None:
+    _children(r, lines=(_line(row_ordinal=1),))
+
+
+def _a_duplicate_line_value(r: ProjectReportsRepository) -> None:
+    _children(r, lines=(_line(values=(_value(), _value())),))
+
+
+def _a_value_typed_from_empty_text(r: ProjectReportsRepository) -> None:
+    _children(r, lines=(_line(values=(_value(raw_text=""),)),))
+
+
+def _a_text_value_that_is_not_its_raw_text(r: ProjectReportsRepository) -> None:
+    text = _value(field_key="rfi.subject", value_kind=ValueKind.TEXT, raw_text="A", value="B")
+    _children(r, lines=(_line(values=(text,)),))
+
+
+def _a_duplicate_stated_total(r: ProjectReportsRepository) -> None:
+    _children(r, totals=(_total(), _total()))
+
+
+def _a_matched_stated_total_with_unequal_values(r: ProjectReportsRepository) -> None:
+    _children(r, totals=(_total(computed_value=Decimal("2.5")),))
+
+
+def _a_grand_scope_on_a_group_row(r: ProjectReportsRepository) -> None:
+    _children(r, totals=(_total(row_ordinal=1, row_role=RowRole.GROUP_HEADER),))
+
+
+def _a_quarantined_derivation_with_no_reason(r: ProjectReportsRepository) -> None:
+    r.insert_binding_revision(P, _revision(R1))
+    snapshot_id, digest = SNAPSHOTS[0]
+    r.insert_snapshot(P, _snapshot(snapshot_id, digest), ())
+    r.insert_derivation(
+        P,
+        _derivation(
+            D1,
+            state=DerivationState.QUARANTINED,
+            completeness_class=None,
+            reconciliation=None,
+            role_counts={"unclassified": 0},
+        ),
+    )
+
+
+def _a_classified_derivation_counting_unclassified(r: ProjectReportsRepository) -> None:
+    _heads(r)
+    r.insert_derivation(P, _derivation(D1, role_counts={"unclassified": 0}))
+
+
+def _a_matched_cross_check_with_unequal_values(r: ProjectReportsRepository) -> None:
+    _heads(r)
+    r.insert_derivation(
+        P,
+        _derivation(
+            D1,
+            snapshot_id=SNAP_2,
+            record_family=RecordFamily.BUYOUT,
+            family_view=FamilyView.BUYOUT_SUMMARY,
+        ),
+    )
+    r.insert_derivation(
+        P,
+        _derivation(
+            D2,
+            snapshot_id=SNAP_3,
+            record_family=RecordFamily.CHANGE_ORDER_RECONCILIATION,
+            family_view=FamilyView.RECONCILIATION,
+        ),
+    )
+    r.insert_cross_check(
+        P,
+        ProjectReportCrossCheckRecord(
+            check_kind=CROSS_CHECK_KIND,
+            left_derivation_id=D1,
+            right_derivation_id=D2,
+            project_id=PROJECT,
+            outcome=ReconciliationOutcome.MATCH,
+            checked_at=WHEN,
+            left_value=Decimal("1.5"),
+            right_value=Decimal("2.5"),
+        ),
+    )
+
+
 _REVISION_SUPERSEDES: Final = "project_report_binding_revisions_supersede_an_existing_one"
 _DERIVATION_SUPERSEDES: Final = "project_report_derivations_supersede_an_existing_one"
 
@@ -387,6 +598,80 @@ CASES: Final = (
         RESTRICT,
         "project_report_cross_checks_keep_their_roles",
         _a_cross_check_in_reversed_roles,
+    ),
+    _Case("a_duplicate_row_role", UNIQUE, "project_report_row_roles_pkey", _a_duplicate_row_role),
+    _Case(
+        "a_row_role_with_no_raw_row",
+        FOREIGN,
+        "a_row_role_names_a_raw_row_of_its_snapshot",
+        _a_row_role_with_no_raw_row,
+    ),
+    _Case(
+        "a_malformed_group_path",
+        CHECK,
+        "a_row_role_group_path_steps_are_level_key_and_header",
+        _a_malformed_group_path,
+    ),
+    _Case("a_duplicate_line", UNIQUE, "project_report_lines_pkey", _a_duplicate_line),
+    _Case(
+        "a_line_on_a_non_detail_row",
+        FOREIGN,
+        "a_report_line_names_a_detail_row_of_its_derivation",
+        _a_line_on_a_non_detail_row,
+    ),
+    _Case(
+        "a_duplicate_line_value",
+        UNIQUE,
+        "project_report_line_values_pkey",
+        _a_duplicate_line_value,
+    ),
+    _Case(
+        "a_value_typed_from_empty_text",
+        CHECK,
+        "a_line_value_is_typed_exactly_when_its_text_parses",
+        _a_value_typed_from_empty_text,
+    ),
+    _Case(
+        "a_text_value_that_is_not_its_raw_text",
+        CHECK,
+        "a_line_text_value_is_its_raw_text",
+        _a_text_value_that_is_not_its_raw_text,
+    ),
+    _Case(
+        "a_duplicate_stated_total",
+        UNIQUE,
+        "project_report_stated_totals_pkey",
+        _a_duplicate_stated_total,
+    ),
+    _Case(
+        "a_matched_stated_total_with_unequal_values",
+        CHECK,
+        "a_matched_stated_total_equals_its_sum",
+        _a_matched_stated_total_with_unequal_values,
+    ),
+    _Case(
+        "a_grand_scope_on_a_group_row",
+        CHECK,
+        "a_stated_total_scope_matches_its_row",
+        _a_grand_scope_on_a_group_row,
+    ),
+    _Case(
+        "a_quarantined_derivation_with_no_reason",
+        CHECK,
+        "a_quarantined_derivation_names_its_reason",
+        _a_quarantined_derivation_with_no_reason,
+    ),
+    _Case(
+        "a_classified_derivation_counting_unclassified",
+        CHECK,
+        "a_derivation_role_counts_name_its_roles",
+        _a_classified_derivation_counting_unclassified,
+    ),
+    _Case(
+        "a_matched_cross_check_with_unequal_values",
+        CHECK,
+        "a_matched_cross_check_agrees",
+        _a_matched_cross_check_with_unequal_values,
     ),
 )
 

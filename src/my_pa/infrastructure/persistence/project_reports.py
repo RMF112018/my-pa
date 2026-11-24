@@ -30,7 +30,10 @@ both raw export cells. Every write therefore translates a `DBAPIError` at this
 boundary into `ProjectReportsWriteRefusedError` carrying only the SQLSTATE and
 the constraint (or guard trigger) name -- a deadlock or serialization victim
 into `TransactionConflictError` -- raised outside the handler, so neither
-`__cause__` nor `__context__` holds the driver error.
+`__cause__` nor `__context__` holds the driver error. A non-driver
+`StatementError` (a bind value refused before the statement is sent, whose
+message also quotes the parameters) is translated the same way, with neither
+a SQLSTATE nor a constraint.
 
 Nothing here logs: rows hold raw export text (names, descriptions, minutes).
 """
@@ -46,7 +49,7 @@ from typing import Any, Final
 from sqlalchemy import ColumnElement, Table, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Row
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, StatementError
 
 from my_pa.contracts.ports import (
     ProjectReportBindingRecord,
@@ -125,8 +128,16 @@ def _columns(table: Table) -> tuple[Any, ...]:
     return tuple(column for column in table.c if column.name != "principal_id")
 
 
-def _refusal(error: DBAPIError) -> ProjectReportsWriteRefusedError | TransactionConflictError:
-    """The port error for a driver refusal: its SQLSTATE and constraint name only."""
+def _refusal(error: StatementError) -> ProjectReportsWriteRefusedError | TransactionConflictError:
+    """The port error for a refused statement: its SQLSTATE and constraint name only.
+
+    A `StatementError` that is not a `DBAPIError` failed before the server saw
+    the statement (a bind value its type could not process): it has no
+    SQLSTATE and no constraint, so both are `None`, and its message (which
+    quotes the bound parameters) is dropped like a driver's.
+    """
+    if not isinstance(error, DBAPIError):
+        return ProjectReportsWriteRefusedError(None, None)
     if is_transaction_conflict(error):
         return TransactionConflictError()
     original = error.orig
@@ -140,13 +151,17 @@ def _refusal(error: DBAPIError) -> ProjectReportsWriteRefusedError | Transaction
 
 
 def _refusals_translated[**P, R](write: Callable[P, R]) -> Callable[P, R]:
-    """`write`, with a `DBAPIError` raised as its port error and no chain (S2)."""
+    """`write`, with a `StatementError` raised as its port error and no chain (S2).
+
+    `StatementError` covers `DBAPIError` (a driver refusal) and a bind value
+    refused before the statement was sent; both quote the parameters.
+    """
 
     @functools.wraps(write)
     def translated(*args: P.args, **kwargs: P.kwargs) -> R:
         try:
             return write(*args, **kwargs)
-        except DBAPIError as error:
+        except StatementError as error:
             refused = _refusal(error)
         # Raised outside the handler: `__context__` stays empty, and `from None`
         # would only suppress, not drop, the driver error that quotes the row.

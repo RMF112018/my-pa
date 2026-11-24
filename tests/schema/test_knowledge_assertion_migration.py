@@ -68,6 +68,7 @@ from tests.schema.lineage_s31_schema_ahead_contract import (
 )
 from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES as LINEAGE_S1_CAPABILITIES
 from tests.schema.lineage_schema_ahead_contract import S1_PURPOSES as LINEAGE_S1_PURPOSES
+from tests.schema.meeting_sync_vocabulary_contract import MEETING_SYNC_CAPABILITIES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES, S63_PURPOSES
 
 from my_pa.domain.common.classification import Classification
@@ -2128,6 +2129,8 @@ _ADMITTED_AFTER_THIS_REVISION: Final = (
     | FILES_CAPABILITIES
     # Communications intelligence WP2-W3: admitted by the WP2 provider-binding revision.
     | frozenset({"meetings.provider.bind"})
+    # Communications intelligence WP3b-S1: admitted by the meeting sync staging revision.
+    | MEETING_SYNC_CAPABILITIES
     # And the Reports Modernization general report plane head (`4c37731671fc`).
     | frozenset(
         {

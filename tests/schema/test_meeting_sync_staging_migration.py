@@ -12,7 +12,7 @@ proves:
   and names every column, constraint and index `tables.py` declares for it; on
   a live server the catalog it builds equals the catalog `tables.py` builds;
 * **the audit vocabulary** -- the before text is a byte copy of `6418b57081c3`'s
-  set, the at text adds exactly the two capability names, which the domain
+  set, the at text adds exactly the `meetings.provider.*` names, which the domain
   declares in WP3b-S4 (the schema-ahead gap, measured here);
 * **offline SQL** for both directions, without a server;
 * on disposable databases: the round trip; the upgrade refusal while a binding
@@ -47,6 +47,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import ColumnElement, Engine, Table, delete, insert, text, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
+from tests.schema.meeting_sync_vocabulary_contract import MEETING_SYNC_CAPABILITIES
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -116,7 +117,7 @@ BINDING_CONSTRAINTS: Final = frozenset(
         "a_provider_binding_origin_names_a_snapshot_of_its_principal",
     }
 )
-NEW_CAPABILITIES: Final = frozenset({"meetings.provider.reconcile", "meetings.provider.review"})
+NEW_CAPABILITIES: Final = MEETING_SYNC_CAPABILITIES
 
 P: Final = "prn_msyncmig0001aaaa"
 OTHER: Final = "prn_msyncmig0002bbbb"

@@ -74,6 +74,7 @@ from tests.schema.knowledge_schema_ahead_contract import (
     admitted_ahead,
 )
 from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
+from tests.schema.meeting_sync_vocabulary_contract import MEETING_SYNC_CAPABILITIES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES
 
 from my_pa.contracts.v1.errors import ErrorCode
@@ -738,6 +739,9 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         *FILES_CAPABILITIES,
         # Communications intelligence WP2-W3, admitted by the WP2 provider-binding revision.
         "meetings.provider.bind",
+        # Communications intelligence WP3b-S1, admitted by the meeting sync staging
+        # revision ahead of the domain (S4).
+        *MEETING_SYNC_CAPABILITIES,
     }
 )
 
@@ -993,7 +997,9 @@ CHECKED_VOCABULARY: Final[tuple[tuple[str, str, frozenset[str]], ...]] = (
         | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
         | lineage_admitted_ahead("capability")
         # Files workspace WP4: admitted by its revision, declared by WP5.
-        | FILES_CAPABILITIES,
+        | FILES_CAPABILITIES
+        # Communications intelligence WP3b-S1: admitted by its revision, declared by S4.
+        | MEETING_SYNC_CAPABILITIES,
     ),
     (
         "audit_events",
@@ -1397,6 +1403,7 @@ def test_downgrading_this_revision_restores_the_previous_vocabulary(
             | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
             | lineage_admitted_ahead("capability")
             | FILES_CAPABILITIES
+            | MEETING_SYNC_CAPABILITIES
         )
 
         command.downgrade(_config(), ENROLLMENT_OBJECTS_REVISION)
@@ -1446,6 +1453,7 @@ def test_stopping_at_the_capture_revision_emits_the_twelve_it_merged_with(
             | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
             | lineage_admitted_ahead("capability")
             | FILES_CAPABILITIES
+            | MEETING_SYNC_CAPABILITIES
         )
         assert _admitted(engine, "capability_is_known") == admitted_at_head
         assert _tables(engine) >= PROPOSAL_TABLES

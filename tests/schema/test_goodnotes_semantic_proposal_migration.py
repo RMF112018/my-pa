@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.knowledge_schema_ahead_contract import admitted_ahead
 from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
+from tests.schema.meeting_sync_vocabulary_contract import MEETING_SYNC_CAPABILITIES
 
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
@@ -290,7 +291,11 @@ def test_empty_to_head_and_prior_to_head_admit_the_new_names(disposable_database
             member.value for member in NativeSourceCapability
         }
         assert _admitted(engine, "capability_is_known") == declared | (
-            admitted_ahead("capability") | lineage_admitted_ahead("capability") | FILES_CAPABILITIES
+            admitted_ahead("capability")
+            | lineage_admitted_ahead("capability")
+            | FILES_CAPABILITIES
+            | MEETING_SYNC_CAPABILITIES
+            | MEETING_SYNC_CAPABILITIES
         )
         assert _admitted(engine, "purpose_is_known") == {member.value for member in Purpose} | (
             admitted_ahead("purpose") | lineage_admitted_ahead("purpose") | FILES_PURPOSES

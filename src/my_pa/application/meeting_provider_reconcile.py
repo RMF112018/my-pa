@@ -9,7 +9,11 @@ anything (Manager rulings D2, D3, D4, D6, D12; the pure values are
 with neither a binding nor a mark, and the staged provider events whose key is
 unbound: for each source with a staged publication, the events of its newest
 publication that is applied or still staged (a skipped one is not the
-provider's current view), tombstoned keys listed `suppressed`. The two lists
+provider's current view), tombstoned keys listed `suppressed`. That event list
+is bounded: ordered by `start_utc`, then key (`calendar_ref`, `ical_uid`,
+`occurrence_original_start_utc` with a series master first, then the staged
+id), at most `MAX_UNBOUND_PROVIDER_EVENTS` are answered with the full count
+and whether the list was truncated. The two lists
 are side by side. **Nothing here pairs, ranks or compares a Meeting with an
 event** -- no title, time or similarity is ever read against the other list
 (ruling D2; `tests/architecture/test_meeting_provider_review_no_pairing.py`).
@@ -73,6 +77,7 @@ from my_pa.domain.meeting_sync.binding import MeetingProviderBindRequest, Provid
 from my_pa.domain.meeting_sync.reconcile import (
     MAX_RECONCILE_ITEMS,
     MAX_REVIEW_PAGE_SIZE,
+    MAX_UNBOUND_PROVIDER_EVENTS,
     ReconcileItem,
     ReconcileItemAction,
     ReconcileItemOutcome,
@@ -110,7 +115,12 @@ class ReviewPage:
     unreviewed_meetings: tuple[UnreviewedMeetingRecord, ...]
     #: The last listed Meeting when the page is full (pass it back as `after`).
     next_after: str | None
+    #: At most `MAX_UNBOUND_PROVIDER_EVENTS`, ordered by start, then key.
     unbound_provider_events: tuple[StagedProviderEvent, ...]
+    #: How many unbound events there are in all (before the bound).
+    unbound_provider_events_total: int
+    #: Whether the list answered fewer than `unbound_provider_events_total`.
+    unbound_provider_events_truncated: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,11 +203,18 @@ class MeetingProviderReconciliation:
         meetings = unit.meeting_sync.list_unreviewed_meetings(
             principal_id, since=review_scope_start(at), after_meeting_id=after, limit=limit
         )
+        # The order is the event's own (`StagedProviderEvent.review_order`); no
+        # Meeting is read against it.
+        events = sorted(
+            self._unbound_events(unit, principal_id), key=lambda staged: staged.review_order
+        )
         return ReviewPage(
             reconciliation=_current_pass(unit, principal_id, at),
             unreviewed_meetings=meetings,
             next_after=meetings[-1].meeting_id if len(meetings) == limit else None,
-            unbound_provider_events=self._unbound_events(unit, principal_id),
+            unbound_provider_events=tuple(events[:MAX_UNBOUND_PROVIDER_EVENTS]),
+            unbound_provider_events_total=len(events),
+            unbound_provider_events_truncated=len(events) > MAX_UNBOUND_PROVIDER_EVENTS,
         )
 
     @staticmethod

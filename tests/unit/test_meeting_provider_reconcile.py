@@ -19,6 +19,7 @@ from typing import Any, Final
 
 import pytest
 
+from my_pa.application.commands import ReviewMeetingProviders
 from my_pa.application.meeting_provider_reconcile import MeetingProviderReconciliation
 from my_pa.application.meetings import MeetingApplication
 from my_pa.contracts.ports import MeetingSyncEventRecord, MeetingSyncPublicationRecord
@@ -40,6 +41,7 @@ from my_pa.domain.meeting_sync.binding import (
 from my_pa.domain.meeting_sync.model import COLLECTOR_LOOKBACK, EventStatus, ProviderEventIdFormat
 from my_pa.domain.meeting_sync.reconcile import (
     MAX_RECONCILE_ITEMS,
+    MAX_UNBOUND_PROVIDER_EVENTS,
     RECONCILE_ITEM_KEY_PREFIX,
     ReconcileItem,
     ReconcileItemAction,
@@ -126,8 +128,8 @@ class Scene:
                     ical_uid=event["uid"],
                     series_ical_uid=event.get("series"),
                     occurrence_original_start_utc=event.get("original"),
-                    start_utc=SOON,
-                    end_utc=SOON + timedelta(hours=1),
+                    start_utc=event.get("start", SOON),
+                    end_utc=event.get("start", SOON) + timedelta(hours=1),
                     timezone_name="UTC",
                     status=EventStatus.CONFIRMED,
                     title=event.get("title", "Provider title"),
@@ -348,6 +350,52 @@ def test_a_bound_key_leaves_the_event_list_and_a_tombstoned_key_is_suppressed(
     )
     listed = {e.event.event_id: e.suppressed for e in scene.review().unbound_provider_events}
     assert listed == {ref_a: True, ref_b: False}
+
+
+def test_the_unbound_event_list_is_bounded_ordered_by_start_then_key(scene: Scene) -> None:
+    # Ruling on the S4 handoff, decision 6 amended: at most 200 events, ordered
+    # deterministically (start, then key), with the full count and a flag.
+    assert MAX_UNBOUND_PROVIDER_EVENTS == 200
+    # Staged out of order across two sources; two events share each start.
+    starts = [SOON + timedelta(minutes=n // 2) for n in range(MAX_UNBOUND_PROVIDER_EVENTS + 1)]
+    events = [{"uid": f"uid-{n % 2}-{n:04d}", "start": start} for n, start in enumerate(starts)]
+    scene.stage(*reversed(events[: len(events) // 2]), source="isrc_reconcileunit001")
+    scene.stage(*reversed(events[len(events) // 2 :]), source="isrc_reconcileunit002")
+    page = scene.review()
+    listed = page.unbound_provider_events
+    assert len(listed) == MAX_UNBOUND_PROVIDER_EVENTS
+    assert page.unbound_provider_events_total == MAX_UNBOUND_PROVIDER_EVENTS + 1
+    assert page.unbound_provider_events_truncated is True
+    order = [(e.event.start_utc, e.event.calendar_ref, e.event.ical_uid) for e in listed]
+    assert order == sorted(order)
+    assert [e.event.ical_uid for e in listed] == [e["uid"] for e in events][:-1]
+    # Deterministic: the same staged state answers the same list.
+    assert scene.review().unbound_provider_events == listed
+
+
+def test_a_series_master_precedes_its_occurrences_at_one_start(scene: Scene) -> None:
+    scene.stage(
+        {"uid": "uid-b", "series": SERIES_UID, "original": ORIGINAL},
+        {"uid": "uid-b"},
+        {"uid": "uid-a"},
+    )
+    listed = [
+        (e.event.ical_uid, e.event.occurrence_original_start_utc)
+        for e in scene.review().unbound_provider_events
+    ]
+    assert listed == [("uid-a", None), ("uid-b", None), ("uid-b", ORIGINAL)]
+
+
+def test_at_the_bound_the_list_is_whole_and_not_truncated(scene: Scene) -> None:
+    scene.stage(*({"uid": f"uid-{n:04d}"} for n in range(MAX_UNBOUND_PROVIDER_EVENTS)))
+    page = scene.review()
+    assert len(page.unbound_provider_events) == MAX_UNBOUND_PROVIDER_EVENTS
+    assert page.unbound_provider_events_total == MAX_UNBOUND_PROVIDER_EVENTS
+    assert page.unbound_provider_events_truncated is False
+
+
+def test_the_review_tool_description_states_the_event_bound() -> None:
+    assert f"at most\n    {MAX_UNBOUND_PROVIDER_EVENTS}" in (ReviewMeetingProviders.__doc__ or "")
 
 
 # ---- reconcile ------------------------------------------------------------------

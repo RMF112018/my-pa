@@ -13629,8 +13629,10 @@ class ReviewMeetingProviders:
     Meetings -- not cancelled, starting no earlier than 30 days ago -- that have
     neither a provider binding nor a `no_provider_event` mark, ordered by
     `(start_at, meeting_id)`, and the staged calendar events whose provider key
-    is bound to no Meeting (a key you unbound is listed `suppressed`). The two
-    lists are never paired or ranked: you decide each match and send it to
+    is bound to no Meeting (a key you unbound is listed `suppressed`): at most
+    200, ordered by start then key, with `unbound_provider_events_total` and
+    `unbound_provider_events_truncated` -- bind or mark to shrink the list. The
+    two lists are never paired or ranked: you decide each match and send it to
     `meetings.provider.reconcile`. Pass `next_after` back as `after` for the next
     page of Meetings.
     """

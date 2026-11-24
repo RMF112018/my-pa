@@ -14963,6 +14963,23 @@ class StagedProviderEvent:
     event: MeetingSyncEventRecord
     suppressed: bool
 
+    @property
+    def review_order(self) -> tuple[datetime, str, str, bool, datetime, str]:
+        """The review's deterministic order: start, then key, then the staged id.
+
+        A series master (no original start) sorts before its occurrences.
+        """
+        event = self.event
+        original = event.occurrence_original_start_utc
+        return (
+            event.start_utc,
+            event.calendar_ref,
+            event.ical_uid,
+            original is not None,
+            event.start_utc if original is None else original,
+            event.event_id,
+        )
+
 
 class MeetingSyncRepository(ABC):
     """The WP3b meeting sync staging and reconciliation tables, inside one transaction.

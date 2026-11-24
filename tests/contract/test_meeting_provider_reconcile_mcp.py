@@ -279,7 +279,16 @@ def test_review_then_reconcile_over_the_service_completes_the_pass(scene: Scene)
     assert reviewed.error is None, reviewed.error
     result = reviewed.result
     assert result is not None
-    assert set(result) == {"pass", "unreviewed_meetings", "next_after", "unbound_provider_events"}
+    assert set(result) == {
+        "pass",
+        "unreviewed_meetings",
+        "next_after",
+        "unbound_provider_events",
+        "unbound_provider_events_total",
+        "unbound_provider_events_truncated",
+    }
+    assert result["unbound_provider_events_total"] == 1
+    assert result["unbound_provider_events_truncated"] is False
     assert result["pass"]["state"] == "pending"
     meetings = result["unreviewed_meetings"]
     assert {m["meeting_id"] for m in meetings} >= {scene.meeting_id}

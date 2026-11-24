@@ -7,6 +7,8 @@ clock, so the review scope is deterministic). Proved here:
 * the review scope boundary -- the lookback edge included, one second older
   excluded, a cancelled Meeting excluded -- and keyset paging;
 * the unbound-event list from staged publications, a bound key leaving it;
+  its bound (at most `MAX_UNBOUND_PROVIDER_EVENTS`, start then key, with the
+  total and the truncated flag) over the newest publication only;
 * reconcile item SAVEPOINTs: a refused item (stale version, after its
   reservation was written) rolls back alone -- no write request, binding or
   Record Event of its own -- while the items around it commit;
@@ -47,7 +49,7 @@ from my_pa.domain.identity.operation import permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.meeting.model import MeetingStatus
 from my_pa.domain.meeting_sync.model import COLLECTOR_LOOKBACK
-from my_pa.domain.meeting_sync.reconcile import reconcile_item_key
+from my_pa.domain.meeting_sync.reconcile import MAX_UNBOUND_PROVIDER_EVENTS, reconcile_item_key
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
@@ -239,6 +241,37 @@ def test_the_unbound_events_come_from_the_staged_publication(world: World) -> No
     answer = world.reconcile(bind(meeting, provider_event_ref=events[0]["provider_event_ref"]))
     assert answer["items"][0]["outcome"] == "bound"
     assert [e["ical_uid"] for e in world.review()["unbound_provider_events"]] == ["uid-b"]
+
+
+def test_the_unbound_event_list_is_bounded_over_the_newest_publication(world: World) -> None:
+    staging = world.staging()
+    staging.stage("20261122-meetings.json", _publication("2026-11-22T06:00:00Z", _event("uid-old")))
+    first = datetime(2026, 12, 1, 15, tzinfo=UTC)
+    events = [
+        _event(
+            f"uid-{n:04d}",
+            start_utc=f"{first + timedelta(minutes=n):%Y-%m-%dT%H:%M:%SZ}",
+            end_utc=f"{first + timedelta(minutes=n + 30):%Y-%m-%dT%H:%M:%SZ}",
+        )
+        for n in range(MAX_UNBOUND_PROVIDER_EVENTS + 1)
+    ]
+    staging.stage("20261123-meetings.json", _publication("2026-11-23T06:00:00Z", *reversed(events)))
+    review = world.review()
+    listed = review["unbound_provider_events"]
+    assert len(listed) == MAX_UNBOUND_PROVIDER_EVENTS
+    assert review["unbound_provider_events_total"] == MAX_UNBOUND_PROVIDER_EVENTS + 1
+    assert review["unbound_provider_events_truncated"] is True
+    # Start, then key; the older publication's event is not the provider's view.
+    assert [e["ical_uid"] for e in listed] == [e["ical_uid"] for e in events][:-1]
+    meeting = world.meeting()
+    answer = world.reconcile(bind(meeting, provider_event_ref=listed[0]["provider_event_ref"]))
+    assert answer["items"][0]["outcome"] == "bound"
+    after = world.review()
+    assert after["unbound_provider_events_total"] == MAX_UNBOUND_PROVIDER_EVENTS
+    assert after["unbound_provider_events_truncated"] is False
+    assert [e["ical_uid"] for e in after["unbound_provider_events"]] == [
+        e["ical_uid"] for e in events
+    ][1:]
 
 
 # ---- reconcile -------------------------------------------------------------------

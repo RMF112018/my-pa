@@ -42,6 +42,7 @@ from my_pa.domain.meeting_sync.model import COLLECTOR_LOOKBACK, ProviderEventIdF
 __all__ = [
     "MAX_RECONCILE_ITEMS",
     "MAX_REVIEW_PAGE_SIZE",
+    "MAX_UNBOUND_PROVIDER_EVENTS",
     "RECONCILE_ITEM_KEY_PREFIX",
     "ReconcileItem",
     "ReconcileItemAction",
@@ -56,6 +57,11 @@ __all__ = [
 MAX_RECONCILE_ITEMS: Final = 50
 #: At most this many unreviewed Meetings per `meetings.provider.review` page.
 MAX_REVIEW_PAGE_SIZE: Final = 100
+#: At most this many unbound provider events per `meetings.provider.review`
+#: answer (Manager ruling on the S4 handoff, decision 6 amended). The list is
+#: ordered by start, then key, and the first this-many are answered with the
+#: full count and a `truncated` flag; binding or marking shrinks the list.
+MAX_UNBOUND_PROVIDER_EVENTS: Final = 200
 #: Every derived bind-item key starts with this, so it is recognizably a
 #: reconcile item's in the `meetings.provider.bind` key space.
 RECONCILE_ITEM_KEY_PREFIX: Final = "reconcile-"

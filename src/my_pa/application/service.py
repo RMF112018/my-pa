@@ -4237,6 +4237,8 @@ def _meeting_provider_review_payload(page: ReviewPage) -> dict[str, Any]:
             }
             for staged in page.unbound_provider_events
         ],
+        "unbound_provider_events_total": page.unbound_provider_events_total,
+        "unbound_provider_events_truncated": page.unbound_provider_events_truncated,
     }
 
 

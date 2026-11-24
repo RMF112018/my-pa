@@ -10,7 +10,9 @@ the code that builds them:
   pure values (`domain/meeting_sync/reconcile.py`) import no similarity or
   text-matching module, name no pairing, ranking, scoring or similarity
   identifier, and the application never reads a title or a time -- it hands the
-  repository's records through untouched;
+  repository's records through untouched, ordering the event list only by the
+  event's own `StagedProviderEvent.review_order` (start, then key), which
+  reads nothing of a Meeting;
 * the review answer (`service._meeting_provider_review_payload`) builds its two
   lists independently: no `zip`, no comparison, and neither list's
   comprehension reads the other's records.

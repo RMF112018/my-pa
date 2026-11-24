@@ -124,7 +124,7 @@ INVENTORY: Final[dict[Capability, tuple[str, Purpose, str, bool, bool]]] = {
 def test_the_inventory_is_the_26_appended_names() -> None:
     members = list(Capability)
     # The files workspace WP5 appends its 17 names (and 2 purposes) after these.
-    # Anchored at the first name, not at the end of the enum, so a later
+    # Anchored where the inventory starts, not at the end of the enum, so a later
     # appended name moves nothing; the enum sizes are `tests/pins.json`'s.
     start = members.index(next(iter(INVENTORY)))
     assert members[start : start + len(INVENTORY)] == list(INVENTORY)

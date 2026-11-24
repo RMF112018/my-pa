@@ -81,7 +81,7 @@ _WRITES: Final = frozenset(Capability(name) for name, row in INVENTORY.items() i
 
 def test_the_inventory_is_the_17_appended_names_and_the_2_purposes() -> None:
     members = list(Capability)
-    # Contiguous and in contract order. Anchored at the first name rather than
+    # Contiguous and in contract order. Anchored where the inventory starts rather than
     # at the end of the enum, so a later name appended after them moves nothing
     # here; the enum sizes are `tests/pins.json`'s (`test_pins_are_current`).
     start = members.index(Capability(next(iter(INVENTORY))))

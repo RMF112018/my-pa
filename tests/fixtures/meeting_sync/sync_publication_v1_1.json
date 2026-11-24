@@ -1,0 +1,98 @@
+{
+  "schema": "meeting_sync_v1",
+  "schema_version": "1.1.0",
+  "generated_at_utc": "2026-11-22T06:00:00Z",
+  "cycle_run_id": "synthetic-run-0002",
+  "coverage": {
+    "start_utc": "2026-10-23T06:00:00Z",
+    "end_utc": "2027-01-21T06:00:00Z",
+    "calendar_refs": [
+      "cal-synthetic-secondary",
+      "cal-synthetic-primary"
+    ]
+  },
+  "events": [
+    {
+      "calendar_ref": "cal-synthetic-primary",
+      "ical_uid": "uid-single-0001@example.invalid",
+      "series_ical_uid": null,
+      "occurrence_original_start_utc": null,
+      "start_utc": "2026-12-01T15:00:00Z",
+      "end_utc": "2026-12-01T16:00:00Z",
+      "timezone_name": "America/New_York",
+      "status": "confirmed",
+      "all_day": false,
+      "provider_event_id": "evt-synthetic-0001",
+      "provider_event_id_format": "immutable_verified",
+      "title": "Synthetic kickoff",
+      "location_text": "Room 1",
+      "virtual_meeting_url": "https://meet.example.invalid/kickoff",
+      "attendees": [
+        {
+          "email": "Organizer@Example.invalid",
+          "display_name": "Synthetic Organizer",
+          "is_organizer": true,
+          "response_status": "accepted"
+        },
+        {
+          "email": "guest@example.invalid",
+          "display_name": null,
+          "is_organizer": false,
+          "response_status": "needs_action"
+        }
+      ]
+    },
+    {
+      "calendar_ref": "cal-synthetic-primary",
+      "ical_uid": "uid-series-0001@example.invalid",
+      "series_ical_uid": "uid-series-0001@example.invalid",
+      "occurrence_original_start_utc": "2026-12-02T14:00:00Z",
+      "start_utc": "2026-12-02T14:00:00Z",
+      "end_utc": "2026-12-02T14:30:00Z",
+      "timezone_name": "Europe/London",
+      "status": "tentative",
+      "all_day": false,
+      "provider_event_id": "evt-synthetic-0002",
+      "provider_event_id_format": "mutable",
+      "title": "Synthetic weekly",
+      "location_text": null,
+      "virtual_meeting_url": null,
+      "attendees": []
+    },
+    {
+      "calendar_ref": "cal-synthetic-primary",
+      "ical_uid": "uid-series-0001@example.invalid",
+      "series_ical_uid": "uid-series-0001@example.invalid",
+      "occurrence_original_start_utc": "2026-12-09T14:00:00Z",
+      "start_utc": "2026-12-09T16:00:00+01:00",
+      "end_utc": "2026-12-09T16:30:00+01:00",
+      "timezone_name": "Europe/London",
+      "status": "confirmed",
+      "all_day": false,
+      "title": "Synthetic weekly",
+      "description": "never read"
+    },
+    {
+      "calendar_ref": "cal-synthetic-primary",
+      "ical_uid": "uid-series-0001@example.invalid",
+      "series_ical_uid": "uid-series-0001@example.invalid",
+      "occurrence_original_start_utc": "2026-12-16T14:00:00Z",
+      "start_utc": "2026-12-16T14:00:00Z",
+      "end_utc": "2026-12-16T14:30:00Z",
+      "timezone_name": "Europe/London",
+      "status": "cancelled",
+      "all_day": false,
+      "title": "Synthetic weekly"
+    },
+    {
+      "calendar_ref": "cal-synthetic-primary",
+      "ical_uid": "uid-allday-0001@example.invalid",
+      "start_utc": "2026-12-03T00:00:00Z",
+      "end_utc": "2026-12-04T00:00:00Z",
+      "timezone_name": "Eastern Standard Time",
+      "status": "confirmed",
+      "all_day": true,
+      "title": "Synthetic offsite"
+    }
+  ]
+}

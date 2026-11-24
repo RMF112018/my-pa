@@ -9,8 +9,9 @@ the record identity is get-or-create; current derivations are read through the
 view, so a superseded derivation is never returned; the guards surface
 unabsorbed, as `ProjectReportsWriteRefusedError` carrying no cell text (S2);
 a supersedes cycle, a new pointer on a superseded revision and a cross-check
-in reversed roles are refused (B1, N2, N1); the lifecycle lists a snapshot's paths in first-seen order; and the
-general unit of work exposes the repository on its connection.
+in reversed roles are refused (B1, N2, N1); the lifecycle lists a snapshot's
+paths in first-seen order; and the general unit of work exposes the repository
+on its connection.
 
 Every identifier and text here is synthetic.
 """

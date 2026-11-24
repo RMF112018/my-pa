@@ -70,6 +70,8 @@ from tests.schema.lineage_s31_schema_ahead_contract import (
 from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES as LINEAGE_S1_CAPABILITIES
 from tests.schema.lineage_schema_ahead_contract import S1_PURPOSES as LINEAGE_S1_PURPOSES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES, S63_PURPOSES
+from tests.schema.vocabulary_admissions import SINCE as ADMISSIONS_SINCE
+from tests.schema.vocabulary_admissions import capabilities_admitted_after
 
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.knowledge_assertion import vocabulary as kv
@@ -2103,8 +2105,9 @@ _ADMITTED_AFTER_THIS_REVISION: Final = (
     | S63_CAPABILITIES
     # Files workspace WP4: admitted by its revision (the head).
     | FILES_CAPABILITIES
-    # Communications intelligence WP2-W3: admitted by the WP2 provider-binding revision.
-    | frozenset({"meetings.provider.bind"})
+    # Every family admitted after the files workspace revision (communications
+    # intelligence WP2-W3's `meetings.provider.bind` onward): `vocabulary_admissions.py`.
+    | capabilities_admitted_after(ADMISSIONS_SINCE)
     # And the Reports Modernization general report plane head (`4c37731671fc`).
     | frozenset(
         {

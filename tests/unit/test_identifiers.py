@@ -38,7 +38,13 @@ def test_contract_prefixes_are_stable() -> None:
     # and `memver` are returned on the wire by every `relationship_memory.*`
     # write and read, and `mctx`, `mevd`, `memsub`, `mprop` and `mpev` name rows
     # a caller can reach through history, evidence and the review queue.
-    assert {kind.value for kind in IdKind} == {
+    #
+    # Phase P3 (SCOPE row B2): the set below is frozen as the prefixes published
+    # by then, and each must still exist. The complete current set, in order, is
+    # `tests/pins.json`'s `vocabulary.id_kind` (`test_pins_are_current`), and
+    # `test_id_kind_is_append_only` refuses a removed, renamed or reordered kind,
+    # so a newly appended kind needs no line here.
+    assert {kind.value for kind in IdKind} >= {
         "mem",
         "memver",
         "mctx",

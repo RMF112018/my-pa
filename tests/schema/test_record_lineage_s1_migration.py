@@ -54,6 +54,7 @@ from tests.schema.lineage_s4_schema_ahead_contract import S4_CAPABILITIES, S4_PU
 from tests.schema.lineage_s31_schema_ahead_contract import S31_CAPABILITIES
 from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES, S1_PURPOSES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES, S63_PURPOSES
+from tests.schema.vocabulary_admissions import capabilities_admitted_after
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -397,9 +398,9 @@ def test_at_vocabulary_adds_exactly_the_s1_names() -> None:
             "reports.transfer.read_chunk",
         }
     )
-    # Communications intelligence WP2-W3: its provider-binding revision admits
-    # `meetings.provider.bind` after this revision.
-    declared -= {"meetings.provider.bind"}
+    # Every family a later revision admits (communications intelligence WP2-W3's
+    # `meetings.provider.bind` onward): one home, `vocabulary_admissions.py`.
+    declared -= capabilities_admitted_after(REVISION)
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | S1_CAPABILITIES
     assert (

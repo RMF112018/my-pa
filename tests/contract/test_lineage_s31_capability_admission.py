@@ -32,6 +32,7 @@ from typing import Any, Final
 
 import pytest
 from pydantic import BaseModel
+from tests import pins
 from tests.conftest import DEFAULT_LIMITS, WHEN, FakeUnitOfWork, Scene, build_service, metadata_for
 from tests.contract.test_lineage_capability_admission import (
     _BASE_PAYLOADS as _S1_PAYLOADS,
@@ -72,7 +73,6 @@ from my_pa.application.service import _LINEAGE_CAPABILITIES, ApplicationService
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
-    CHATLLM_DATA_PROFILE_VERSION,
     ChatLLMCapabilityClass,
     ChatLLMCompositionPrerequisite,
     is_chatllm_data_management,
@@ -294,12 +294,13 @@ def test_s31_capabilities_are_operator_decision_required() -> None:
     # P1: only the GSQS pair remains an operator decision (Reports
     # Modernization's `reports.publish` and five management names are
     # `DATA_REQUIRED` since chatllm-data-v12).
-    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
+    assert (
+        counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED]
+        == pins.CHATLLM_CLASS_COUNTS[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED.value]
+    )
     # Schedule Scenarios S6-3: its 26 plane names (no operator decision among them).
     # Files workspace WP5: its 17 `files.*` names (none an operator decision).
-    assert len(Capability) == 299
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
 
 
 def test_switch_off_withholds_every_s31_capability(scene: Scene) -> None:
@@ -522,7 +523,6 @@ def test_no_s31_capability_is_in_the_chatllm_data_profile() -> None:
             desired_effective_capabilities(composed_off, knowledge_manager=knowledge_manager)
             & lineage_plane
         )
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
 
 
 # ---- client guidance (section 7.12) ----------------------------------------------
@@ -778,7 +778,7 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
     # WP05b `report_hold` and `report_retention` after that.
     # Schedule Scenarios S6-3 appends its 3 plane purposes after those, and the
     # files workspace WP5 its 2 after S6-3's.
-    assert len(published) == len(Purpose) == 70
+    assert len(published) == len(Purpose)
     assert published[-2:] == ["file_workspace_read", "file_workspace_authoring"]
     assert published[-12:-2] == [
         "lineage_backfill",

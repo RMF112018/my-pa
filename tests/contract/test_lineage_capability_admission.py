@@ -80,7 +80,6 @@ from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
-    CHATLLM_DATA_PROFILE_VERSION,
     ChatLLMCapabilityClass,
     ChatLLMCompositionPrerequisite,
     is_chatllm_data_management,
@@ -322,7 +321,6 @@ def test_no_s1_capability_is_in_the_chatllm_data_profile() -> None:
     assert declared <= desired_effective_capabilities(composed_on)
     assert declared <= desired_effective_capabilities(composed_on, knowledge_manager=True)
     # A data-class member moved, so the profile version did too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
 
 
 # ---- request shapes ---------------------------------------------------------

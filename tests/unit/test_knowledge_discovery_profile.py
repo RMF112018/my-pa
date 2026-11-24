@@ -50,7 +50,6 @@ from my_pa.bootstrap.knowledge_discovery_profiles import (
 )
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
-    CHATLLM_DATA_PROFILE_VERSION,
     ChatLLMCapabilityClass,
 )
 from my_pa.domain.identity.operation import Capability, permitted_purposes
@@ -308,7 +307,6 @@ def test_the_ordinary_chatllm_profile_excludes_submit_and_checkpoint() -> None:
     # `chatllm-data-v12` only the 11 Reports Modernization names, none a
     # Knowledge name (nor `chatllm-data-v13`'s Schedule Scenarios names nor
     # `chatllm-data-v14`'s `files.*` names).
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
     assert MATRIX["profile_contract"]["ordinary_chatllm_versions"]["KLP-WP-05"] == (
         "chatllm-data-v8"
     )

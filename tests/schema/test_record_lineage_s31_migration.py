@@ -51,6 +51,7 @@ from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES
 from tests.schema.lineage_s31_schema_ahead_contract import S31_CAPABILITIES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES
+from tests.schema.vocabulary_admissions import capabilities_admitted_after
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -418,9 +419,9 @@ def test_at_vocabulary_adds_exactly_the_s31_names() -> None:
             "reports.transfer.read_chunk",
         }
     )
-    # Communications intelligence WP2-W3: its provider-binding revision admits
-    # `meetings.provider.bind` after this revision.
-    declared -= {"meetings.provider.bind"}
+    # Every family a later revision admits (communications intelligence WP2-W3's
+    # `meetings.provider.bind` onward): one home, `vocabulary_admissions.py`.
+    declared -= capabilities_admitted_after(REVISION)
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s31_admitted_ahead("capability")
     assert S31_CAPABILITIES & declared == gap.S31_CAPABILITIES_DECLARED_BY_DOMAIN

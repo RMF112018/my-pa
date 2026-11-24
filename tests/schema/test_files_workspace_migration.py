@@ -44,6 +44,7 @@ from sqlalchemy import Engine, MetaData, insert, text
 from sqlalchemy.exc import DBAPIError
 from tests.pins import ALEMBIC_REVISION_COUNT
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
+from tests.schema.vocabulary_admissions import capabilities_admitted_after
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -182,9 +183,9 @@ def test_at_sets_are_the_live_enums_plus_the_files_names() -> None:
         member.value for member in NativeSourceCapability
     }
     at = set(_literals(mine["_CAPABILITIES_AT_THIS_REVISION"]))
-    # Communications intelligence WP2-W3: its provider-binding revision admits
-    # `meetings.provider.bind` after this revision.
-    declared -= {"meetings.provider.bind"}
+    # Every family a later revision admits (communications intelligence WP2-W3's
+    # `meetings.provider.bind` onward): one home, `vocabulary_admissions.py`.
+    declared -= capabilities_admitted_after(REVISION)
     assert at == declared | FILES_CAPABILITIES
     purposes = set(_literals(mine["_PURPOSES_AT_THIS_REVISION"]))
     assert purposes == {member.value for member in Purpose} | FILES_PURPOSES
@@ -592,9 +593,12 @@ def test_runtime_metadata_matches_the_revision(disposable_database: str, engine:
         head, runtime = _checks(engine), _checks(engine, parity)
         assert (
             set(_literals(head["capability_is_known"]))
-            # Communications intelligence WP2-W3: the runtime declares
-            # `meetings.provider.bind`, which the WP2 revision admits after this one.
-            == (set(_literals(runtime["capability_is_known"])) - {"meetings.provider.bind"})
+            # The runtime declares every family a later revision admits
+            # (communications intelligence WP2-W3's `meetings.provider.bind` onward).
+            == (
+                set(_literals(runtime["capability_is_known"]))
+                - capabilities_admitted_after(REVISION)
+            )
             | FILES_CAPABILITIES
         )
         assert (

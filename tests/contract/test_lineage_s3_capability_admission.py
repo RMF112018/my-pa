@@ -66,7 +66,6 @@ from my_pa.application.service import (
 )
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
-    CHATLLM_DATA_PROFILE_VERSION,
     ChatLLMCapabilityClass,
     ChatLLMCompositionPrerequisite,
 )
@@ -238,7 +237,6 @@ def test_s3_capabilities_are_operator_decision_required() -> None:
         assert policy.exclusion_rationale is None
         assert not is_operator_only(capability)
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
 
 
 def test_backfill_capabilities_are_operator_only_and_control_plane_excluded() -> None:

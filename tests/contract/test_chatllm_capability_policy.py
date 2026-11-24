@@ -1,9 +1,10 @@
 """ChatLLM capability policy is exhaustive and fail-closed."""
 
+from tests import pins
+
 from my_pa.application.service import _HANDLERS
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
-    CHATLLM_DATA_PROFILE_VERSION,
     ChatLLMCapabilityClass,
     ChatLLMCompositionPrerequisite,
     is_chatllm_data_management,
@@ -81,11 +82,15 @@ def test_policy_covers_every_public_capability_exactly_once() -> None:
     # Schedule Scenarios S6-3 package I10-A: the 26 plane names, held at v12.
     # Files workspace WP5 (chatllm-data-v14): the 17 `files.*` names.
     # Communications intelligence WP2-W3 (chatllm-data-v15): `meetings.provider.bind`.
-    assert len(CHATLLM_CAPABILITY_POLICY) == 299
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
+    # The size is `tests/pins.json`'s (`test_pins_are_current`).
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
+    """Each class count is the reviewed snapshot's (`tests/pins.json` `chatllm.classes`).
+
+    The history below is how each figure moved; a new move is reviewed in the
+    `pins.json` diff that `python -m tests.pins regen` writes.
+    """
     counts = dict.fromkeys(ChatLLMCapabilityClass, 0)
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
@@ -95,7 +100,10 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # `.restore`) and the 5 `reports.transfer.*` names, 74 -> 85.
     # Communications intelligence WP2-W3 (chatllm-data-v15): `meetings.provider.bind`,
     # 85 -> 86.
-    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 86
+    assert (
+        counts[ChatLLMCapabilityClass.DATA_REQUIRED]
+        == pins.CHATLLM_CLASS_COUNTS[ChatLLMCapabilityClass.DATA_REQUIRED.value]
+    )
     # KLP-WP-03 (chatllm-data-v6): the six Knowledge Assertion names, 90 -> 96.
     # KLP-WP-05 (chatllm-data-v8): `record_events.provenance`, 96 -> 97.
     # Record lineage P1 (chatllm-data-v10, operator directive 2026-10-26): the
@@ -103,8 +111,14 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # (chatllm-data-v11): the 6 Schedule reads, 131 -> 137. Schedule Scenarios
     # S6-3 (chatllm-data-v13): the 22 client-usable plane names, 137 -> 159.
     # Files workspace WP5 (chatllm-data-v14): the 17 `files.*` names, 159 -> 176.
-    assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 176
-    assert counts[ChatLLMCapabilityClass.COMPATIBILITY_ONLY] == 2
+    assert (
+        counts[ChatLLMCapabilityClass.DATA_CONDITIONAL]
+        == pins.CHATLLM_CLASS_COUNTS[ChatLLMCapabilityClass.DATA_CONDITIONAL.value]
+    )
+    assert (
+        counts[ChatLLMCapabilityClass.COMPATIBILITY_ONLY]
+        == pins.CHATLLM_CLASS_COUNTS[ChatLLMCapabilityClass.COMPATIBILITY_ONLY.value]
+    )
     # KLP-WP-04 (chatllm-data-v7): submit and checkpoint are excluded, 15 -> 17.
     # Record lineage S3: the operator-only backfill pair is excluded, 17 -> 19.
     # Record lineage P1: Issue close and reopen and the 3 confirms are withheld
@@ -115,7 +129,10 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # names excluded, "pending exposure (I10-C)", 29 -> 55 (no version bump);
     # package I10-C (chatllm-data-v13) keeps only the 4 operator baseline
     # decisions excluded, 55 -> 33.
-    assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 33
+    assert (
+        counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED]
+        == pins.CHATLLM_CLASS_COUNTS[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED.value]
+    )
     # Record lineage S1: the six Issue-plane names are an operator decision
     # (ADR-015, OD-07), 2 -> 8, and the eight remaining S1 names 8 -> 16; no
     # data-class member moves, so no profile bump. Record lineage S2's
@@ -129,8 +146,14 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # the five management names (`reports.update`, `.history`, `.archive`,
     # `.delete`, `.restore`) here only until their remote registration; in the
     # end state (chatllm-data-v12) all six are `DATA_REQUIRED`, back to 2.
-    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
-    assert counts[ChatLLMCapabilityClass.RETIRED] == 0
+    assert (
+        counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED]
+        == pins.CHATLLM_CLASS_COUNTS[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED.value]
+    )
+    assert (
+        counts[ChatLLMCapabilityClass.RETIRED]
+        == pins.CHATLLM_CLASS_COUNTS[ChatLLMCapabilityClass.RETIRED.value]
+    )
 
 
 def test_control_plane_and_odr_are_never_data_management() -> None:

@@ -8,6 +8,11 @@ that was not followed by `regen` turns exactly one
 two facts, its name (`vocabulary`) and its required ChatLLM classification
 (`chatllm`), so it turns those two red.
 
+Two rules hold across a `regen` (phase P3), each its own named test:
+`test_id_kind_is_append_only` (an `IdKind` may only be appended) and
+`test_chatllm_version_moves_with_policy` (the hand-bumped profile version moves
+exactly when the policy does). `regen` refuses a change that breaks either.
+
 The other tests keep the snapshot honest without restating a figure: its
 counts are the lengths of its own lists, it records one head that is the end
 of its chain, it is byte-identical to its canonical rendering (a hand edit is
@@ -86,6 +91,52 @@ def test_the_accessors_read_the_committed_snapshot(committed: dict[str, Any]) ->
     assert committed["counts"]["safe_detail"] == pins.SAFE_DETAIL_COUNT
     assert committed["chatllm"]["version"] == pins.CHATLLM_PROFILE_VERSION
     assert committed["chatllm"]["policy_sha256"] == pins.CHATLLM_POLICY_SHA256
+    assert committed["chatllm"]["classes"] == dict(pins.CHATLLM_CLASS_COUNTS)
+
+
+def test_id_kind_is_append_only(committed: dict[str, Any], derived: dict[str, Any]) -> None:
+    """The committed `IdKind` order is a prefix of the current declaration order.
+
+    Persisted identifiers carry these prefixes and tests index `list(IdKind)` by
+    position, so a kind may be appended but never inserted, reordered or
+    removed. `regen` refuses such a change; this names it while it is unregenerated.
+    """
+    assert pins.id_kind_order_violation(committed, derived) is None, pins.id_kind_order_violation(
+        committed, derived
+    )
+
+
+def test_chatllm_version_moves_with_policy(
+    committed: dict[str, Any], derived: dict[str, Any]
+) -> None:
+    """A ChatLLM policy change bumps the profile version, and a bump changes the policy.
+
+    `CHATLLM_DATA_PROFILE_VERSION` stays hand-bumped in `src` (operator-visible:
+    remote grant plans compare it). `regen` refuses either half moving alone;
+    this names it while the snapshot is stale.
+    """
+    assert pins.chatllm_version_violation(committed, derived) is None, (
+        pins.chatllm_version_violation(committed, derived)
+    )
+
+
+def test_the_regen_rules_refuse_what_they_name(derived: dict[str, Any]) -> None:
+    order = derived["vocabulary"]["id_kind"]
+
+    def with_id_kinds(kinds: list[str]) -> dict[str, Any]:
+        return {**derived, "vocabulary": {**derived["vocabulary"], "id_kind": kinds}}
+
+    assert pins.id_kind_order_violation(derived, with_id_kinds([*order, "zzz"])) is None
+    assert pins.id_kind_order_violation(derived, with_id_kinds([order[1], order[0], *order[2:]]))
+    assert pins.id_kind_order_violation(derived, with_id_kinds(order[:-1]))
+
+    def with_chatllm(**changed: str) -> dict[str, Any]:
+        return {**derived, "chatllm": {**derived["chatllm"], **changed}}
+
+    moved_both = with_chatllm(policy_sha256="0" * 64, version="chatllm-data-next")
+    assert pins.chatllm_version_violation(derived, moved_both) is None
+    assert pins.chatllm_version_violation(derived, with_chatllm(policy_sha256="0" * 64))
+    assert pins.chatllm_version_violation(derived, with_chatllm(version="chatllm-data-next"))
 
 
 def test_check_reports_a_stale_section_by_name(derived: dict[str, Any]) -> None:

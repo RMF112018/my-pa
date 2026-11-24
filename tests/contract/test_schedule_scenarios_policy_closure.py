@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+from tests import pins
 from tests.schedule_scenario_samples import SCHEDULE_SCENARIO_COMMAND_TYPES
 
 from my_pa.adapters.mcp.chatllm_gateway import facade_kind, feature_label
@@ -123,10 +124,15 @@ INVENTORY: Final[dict[Capability, tuple[str, Purpose, str, bool, bool]]] = {
 def test_the_inventory_is_the_26_appended_names() -> None:
     members = list(Capability)
     # The files workspace WP5 appends its 17 names (and 2 purposes) after these.
-    assert members[-43:-17] == list(INVENTORY)
+    # Anchored where the inventory starts, not at the end of the enum, so a later
+    # appended name moves nothing; the enum sizes are `tests/pins.json`'s.
+    start = members.index(next(iter(INVENTORY)))
+    assert members[start : start + len(INVENTORY)] == list(INVENTORY)
+    assert members[start + len(INVENTORY)] == Capability("files.workspaces.list")
     assert set(INVENTORY) == _SCHEDULE_SCENARIO_CAPABILITIES == set(SCHEDULE_SCENARIO_COMMAND_TYPES)
-    assert list(Purpose)[-5:-2] == [_W, _R, _A]
-    assert (len(Capability), len(Purpose)) == (299, 70)
+    purposes = list(Purpose)
+    assert purposes[purposes.index(_W) : purposes.index(_W) + 3] == [_W, _R, _A]
+    assert purposes[purposes.index(_W) + 3] == Purpose.FILE_WORKSPACE_READ
 
 
 @pytest.mark.parametrize("capability", list(INVENTORY), ids=lambda c: c.value)
@@ -213,8 +219,8 @@ def test_the_six_plane_cursor_orders_and_the_37_details_exist() -> None:
     # Communications intelligence WP2 ruling D6: the provider-bound series
     # refusal, 426 -> 427.
     # Communications intelligence WP2-W3 (`meetings.provider.bind`): the key's
-    # six field details and six refusals, 427 -> 439.
-    assert len(SafeDetail) == 439
+    # six field details and six refusals, 427 -> 439. The size itself is the
+    # reviewed snapshot's (`tests/pins.json`, `test_pins_are_current`).
     for error in ChangeOpError:
         assert SafeDetail(f"change_set_{error.value}").name == f"CHANGE_SET_{error.name}"
 
@@ -278,7 +284,6 @@ def _grant(capability: Capability) -> ChatLLMGrantRecord:
 
 def test_chatllm_classifies_the_26_at_v13() -> None:
     """Sections 15.3 and 15.12.1: 22 `DATA_CONDITIONAL`, the 4 operator names excluded."""
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
     assert _CLIENT_USABLE == SCHEDULE_SCENARIO_DATA_NAMES
     assert (len(_CLIENT_USABLE), len(_OPERATOR_NAMES)) == (22, 4)
     for capability in _CLIENT_USABLE:
@@ -304,10 +309,13 @@ def test_chatllm_classifies_the_26_at_v13() -> None:
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
     # Files workspace WP5 (chatllm-data-v14): the 17 `files.*` names, 159 -> 176.
-    assert len(CHATLLM_CAPABILITY_POLICY) == 299
-    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 86
-    assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 176
-    assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 33
+    # The class counts are the reviewed snapshot's (`tests/pins.json`).
+    for klass in (
+        ChatLLMCapabilityClass.DATA_REQUIRED,
+        ChatLLMCapabilityClass.DATA_CONDITIONAL,
+        ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED,
+    ):
+        assert counts[klass] == pins.CHATLLM_CLASS_COUNTS[klass.value], klass
     assert ChatLLMCompositionPlanes.__dataclass_fields__["schedule_scenarios"].default is False
 
 
@@ -411,7 +419,7 @@ def test_old_client_stays_healthy_while_the_plane_is_off(held: str) -> None:
         scope=_SCOPE,
     )
     assert healthy_off.is_healthy()
-    assert healthy_off.profile_version == "chatllm-data-v15"
+    assert healthy_off.profile_version == CHATLLM_DATA_PROFILE_VERSION
     diff = diff_chatllm_data_profile(
         implemented=_IMPLEMENTED,
         composed=composed_capabilities(_IMPLEMENTED, on),

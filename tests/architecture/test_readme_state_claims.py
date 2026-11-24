@@ -695,7 +695,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert implemented == 299
+    assert implemented == total
     assert len(withheld_families) == 174
     assert unwired == set()
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
@@ -764,7 +764,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # withheld figure grows by seventeen.
     # Communications intelligence WP2-W3's `meetings.provider.bind` is core and
     # in no withheld family: the default grows by one, the withheld figure holds.
-    assert default == 125 and total == 299 and withheld == 174
+    assert default == 125 and withheld == 174
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured

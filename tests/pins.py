@@ -18,8 +18,12 @@ across all of them. This module is the one place they are recorded:
 - The typed accessors below (`ALEMBIC_HEAD`, `CAPABILITY_COUNT`, ...) read the
   committed snapshot, for later phases to import instead of restating literals.
 
-Additive in P1: no existing test reads this module yet. Not collected (no
-`test_` prefix), following `tests/ci_shard.py`.
+`regen` also enforces two rules a plain snapshot cannot (phase P3): `IdKind`
+only ever grows at its end, and the hand-bumped ChatLLM profile version moves
+exactly when the policy table does. A change breaking either is refused, and
+`test_pins_are_current.py` names the same rule while the snapshot is stale.
+
+Not collected (no `test_` prefix), following `tests/ci_shard.py`.
 
 Usage, from the repository root::
 
@@ -33,7 +37,9 @@ import argparse
 import hashlib
 import json
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Final
 
 ROOT: Final = Path(__file__).resolve().parents[1]
@@ -155,6 +161,54 @@ ID_KIND_ORDER: Final[tuple[str, ...]] = tuple(_COMMITTED["vocabulary"]["id_kind"
 SAFE_DETAIL_COUNT: Final[int] = _COMMITTED["counts"]["safe_detail"]
 CHATLLM_PROFILE_VERSION: Final[str] = _COMMITTED["chatllm"]["version"]
 CHATLLM_POLICY_SHA256: Final[str] = _COMMITTED["chatllm"]["policy_sha256"]
+#: `ChatLLMCapabilityClass` value -> how many policy entries carry it.
+CHATLLM_CLASS_COUNTS: Final[Mapping[str, int]] = MappingProxyType(
+    dict(_COMMITTED["chatllm"]["classes"])
+)
+
+
+# --- Rules regen enforces (and the tests re-check) ------------------------------------------
+
+
+def id_kind_order_violation(committed: dict[str, Any], derived: dict[str, Any]) -> str | None:
+    """Why the derived `IdKind` order is not an append-only extension of the snapshot.
+
+    `IdKind` values are persisted identifier prefixes and tests index the enum
+    by position, so a kind may only ever be appended: the committed order must
+    be a prefix of the derived one. `None` when it is.
+    """
+    before = list(committed["vocabulary"]["id_kind"])
+    after = list(derived["vocabulary"]["id_kind"])
+    if after[: len(before)] == before:
+        return None
+    for position, (old, new) in enumerate(zip(before, after, strict=False)):
+        if old != new:
+            return f"IdKind position {position} was {old!r} and is now {new!r}"
+    return f"IdKind shrank from {len(before)} to {len(after)} kinds"
+
+
+def chatllm_version_violation(committed: dict[str, Any], derived: dict[str, Any]) -> str | None:
+    """Why the ChatLLM profile version and policy did not move together.
+
+    `CHATLLM_DATA_PROFILE_VERSION` is hand-bumped and operator-visible (remote
+    grant plans compare it), so it must change exactly when the policy table
+    does: a policy change under the old version, or a version bump with an
+    unchanged policy, is refused. `None` when they moved together.
+    """
+    old, new = committed["chatllm"], derived["chatllm"]
+    policy_moved = old["policy_sha256"] != new["policy_sha256"]
+    version_moved = old["version"] != new["version"]
+    if policy_moved and not version_moved:
+        return (
+            f"the ChatLLM policy changed but CHATLLM_DATA_PROFILE_VERSION is still "
+            f"{new['version']!r}; bump it"
+        )
+    if version_moved and not policy_moved:
+        return (
+            f"CHATLLM_DATA_PROFILE_VERSION moved {old['version']!r} -> {new['version']!r} "
+            "but the policy is unchanged"
+        )
+    return None
 
 
 # --- Spelling ---------------------------------------------------------------------------
@@ -232,6 +286,12 @@ def main(argv: list[str] | None = None) -> int:
         if len(heads) != 1:
             print(f"refusing to pin {len(heads)} Alembic heads: {heads}", file=sys.stderr)
             return 1
+        committed = load()
+        for rule in (id_kind_order_violation, chatllm_version_violation):
+            violation = rule(committed, derived)
+            if violation is not None:
+                print(f"refusing to regenerate: {violation}", file=sys.stderr)
+                return 1
         PINS_PATH.write_text(render(derived), encoding="utf-8")
         print(f"wrote {PINS_PATH.relative_to(ROOT)}")
         return 0

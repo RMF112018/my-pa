@@ -604,7 +604,14 @@ def selected(rows: list[tuple[str, frozenset[str]]], expression: str) -> int:
     from _pytest.mark.expression import Expression
 
     compiled = Expression.compile(expression)
-    return sum(1 for _, marks in rows if compiled.evaluate(marks.__contains__))
+    count = 0
+    for _, marks in rows:
+
+        def carries(name: str, /, **_: object) -> bool:
+            return name in marks  # noqa: B023 - evaluated before the next iteration
+
+        count += compiled.evaluate(carries)
+    return count
 
 
 def mypy_files() -> int:

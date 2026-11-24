@@ -926,6 +926,9 @@ _POST_KLP_CAPABILITIES: Final = frozenset(
         "reports.types.list",
         # Communications intelligence WP2-W3.
         "meetings.provider.bind",
+        # Communications intelligence WP3b-S4.
+        "meetings.provider.review",
+        "meetings.provider.reconcile",
         # Reports Modernization WP02.
         "reports.publish",
         # Reports Modernization WP03.

@@ -196,6 +196,9 @@ _MEETING_PURPOSES = {
     Capability.MEETINGS_SERIES_UPDATE: Purpose.MEETING_AUTHORING,
     # Communications intelligence WP2-W3 (chatllm-data-v15).
     Capability.MEETINGS_PROVIDER_BIND: Purpose.MEETING_AUTHORING,
+    # Communications intelligence WP3b-S4 (chatllm-data-v16).
+    Capability.MEETINGS_PROVIDER_REVIEW: Purpose.MEETING_READ,
+    Capability.MEETINGS_PROVIDER_RECONCILE: Purpose.MEETING_AUTHORING,
 }
 _MEETING_WRITES = frozenset(
     {
@@ -203,6 +206,7 @@ _MEETING_WRITES = frozenset(
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
         Capability.MEETINGS_PROVIDER_BIND,
+        Capability.MEETINGS_PROVIDER_RECONCILE,
     }
 )
 #: A synthetic, fully composed deployment. Stands in for `Settings` so the
@@ -295,7 +299,7 @@ def test_profile_apply_adds_the_meeting_grants_once_and_then_converges(
         desired = _grant_v2_catalog(repository)
         code, plan = _profile(repository, "profile-plan", capsys)
         assert code == 1
-        assert plan["profile_version"] == "chatllm-data-v15"
+        assert plan["profile_version"] == "chatllm-data-v16"
         assert plan["healthy"] is False
         assert plan["actions"] == [
             {
@@ -347,7 +351,7 @@ def test_profile_commands_refuse_the_previous_profile_version(
         with pytest.raises(SystemExit) as raised:
             _profile(repository, "profile-apply", capsys, profile_version="chatllm-data-v9")
         assert raised.value.code == 2
-        assert "profile version must be chatllm-data-v15" in capsys.readouterr().err
+        assert "profile version must be chatllm-data-v16" in capsys.readouterr().err
         rows = repository.list_capability_grants(remote_client_id=CLIENT_UUID)
         assert not any(row.capability.startswith("meetings.") for row in rows)
 
@@ -398,7 +402,7 @@ def test_v6_profile_apply_adds_the_knowledge_grants_only_with_the_plane_on(
         )
         plan = json.loads(capsys.readouterr().out)
     assert code == 1
-    assert plan["profile_version"] == "chatllm-data-v15"
+    assert plan["profile_version"] == "chatllm-data-v16"
     assert plan["actions"] == [
         {
             "kind": "add",
@@ -486,7 +490,7 @@ def test_v10_profile_plan_adds_the_lineage_grants_only_with_the_switch_on(
         # The switch off (the stand-in's default): converged, no lineage action.
         code, off = _plan_with(repository, _FULL_PLANE_SETTINGS, capsys)
         assert code == 0 and off["healthy"] is True
-        assert off["profile_version"] == "chatllm-data-v15"
+        assert off["profile_version"] == "chatllm-data-v16"
         assert not set(adds(off)) & every
         # The lineage switch on: exactly the 27 `LINEAGE` adds.
         on = SimpleNamespace(**{**vars(_FULL_PLANE_SETTINGS), "lineage_enabled": True})
@@ -723,7 +727,7 @@ def test_v12_profile_diff_plan_and_apply_show_exactly_the_reports_delta(
         desired = _grant_v11_catalog(repository)
         code, diff = _profile(repository, "profile-diff", capsys)
         assert code == 1
-        assert diff["profile_version"] == "chatllm-data-v15"
+        assert diff["profile_version"] == "chatllm-data-v16"
         assert diff["healthy"] is False
         assert diff["add"] == names
         assert diff["renew"] == []
@@ -736,7 +740,7 @@ def test_v12_profile_diff_plan_and_apply_show_exactly_the_reports_delta(
 
         code, plan = _profile(repository, "profile-plan", capsys)
         assert code == 1
-        assert plan["profile_version"] == "chatllm-data-v15"
+        assert plan["profile_version"] == "chatllm-data-v16"
         assert plan["actions"] == [
             {
                 "kind": "add",
@@ -784,12 +788,18 @@ def test_v12_profile_diff_plan_and_apply_show_exactly_the_reports_delta(
 #: repository search for the literal finds nothing. (Reports was one bump,
 #: v11 -> v12; Schedule Scenarios S6-3 one, v12 -> v13; the files workspace
 #: WP5 one, v13 -> v14.)
-_NONEXISTENT_NEXT_VERSION: Final = "chatllm-data-v" + str(16)
+_NONEXISTENT_NEXT_VERSION: Final = "chatllm-data-v" + str(17)
 
 
 @pytest.mark.parametrize(
     "refused",
-    ["chatllm-data-v12", "chatllm-data-v13", "chatllm-data-v14", _NONEXISTENT_NEXT_VERSION],
+    [
+        "chatllm-data-v12",
+        "chatllm-data-v13",
+        "chatllm-data-v14",
+        "chatllm-data-v15",
+        _NONEXISTENT_NEXT_VERSION,
+    ],
 )
 def test_v15_profile_commands_refuse_earlier_versions_and_the_nonexistent_next_version(
     refused: str, capsys: pytest.CaptureFixture[str]
@@ -803,7 +813,7 @@ def test_v15_profile_commands_refuse_earlier_versions_and_the_nonexistent_next_v
         with pytest.raises(SystemExit) as raised:
             _profile(repository, "profile-apply", capsys, profile_version=refused)
         assert raised.value.code == 2
-        assert "profile version must be chatllm-data-v15" in capsys.readouterr().err
+        assert "profile version must be chatllm-data-v16" in capsys.readouterr().err
         rows = repository.list_capability_grants(remote_client_id=CLIENT_UUID)
         assert not {row.capability for row in rows} & {c.value for c in _V12_REPORTS_GRANTS}
 
@@ -837,7 +847,7 @@ def test_v13_profile_plan_adds_the_22_scenario_grants_only_with_both_switches(
         assert code == 0
         code, off = _run(repository, "profile-diff", schedule, capsys)
         assert code == 0 and off["healthy"] is True
-        assert off["profile_version"] == "chatllm-data-v15"
+        assert off["profile_version"] == "chatllm-data-v16"
         # The scenario switch without the Schedule switch composes nothing new.
         code, alone = _run(repository, "profile-plan", scenario_only, capsys)
         assert not {
@@ -887,7 +897,7 @@ def test_v14_profile_plan_adds_the_17_files_grants_only_with_the_workspace_root(
         assert code == 0
         code, off = _run(repository, "profile-diff", _FULL_PLANE_SETTINGS, capsys)
         assert code == 0 and off["healthy"] is True
-        assert off["profile_version"] == "chatllm-data-v15"
+        assert off["profile_version"] == "chatllm-data-v16"
         code, plan = _run(repository, "profile-plan", rooted, capsys)
         assert code == 1
         actions = plan["actions"]

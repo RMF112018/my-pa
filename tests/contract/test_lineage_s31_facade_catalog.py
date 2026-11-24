@@ -209,6 +209,11 @@ def test_non_lineage_tool_annotations_are_unchanged() -> None:
         - files
         # Communications intelligence WP2-W3: `meetings.provider.bind` is new.
         - {Capability.MEETINGS_PROVIDER_BIND.value}
+        # Communications intelligence WP3b-S4: the review and the reconcile are new.
+        - {
+            Capability.MEETINGS_PROVIDER_REVIEW.value,
+            Capability.MEETINGS_PROVIDER_RECONCILE.value,
+        }
     )
     assert len(others) == 192
     for name in sorted(others):

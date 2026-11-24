@@ -676,6 +676,8 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.MEETINGS_SERIES_UPDATE,
         # WP2-W3: the provider reconciliation write.
         Capability.MEETINGS_PROVIDER_BIND,
+        # WP3b-S4: the batch reconciliation write; its review read stays read-only.
+        Capability.MEETINGS_PROVIDER_RECONCILE,
     }
     destructive_writes = {
         Capability.REPORTS_UPDATE,
@@ -785,6 +787,8 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.MEETINGS_SERIES_UPDATE,
         # WP2-W3: a bind or unbind versions an existing Meeting.
         Capability.MEETINGS_PROVIDER_BIND,
+        # WP3b-S4: a reconcile bind versions an existing Meeting.
+        Capability.MEETINGS_PROVIDER_RECONCILE,
     }
     for capability in Capability:
         tool = tools.get(capability.value)

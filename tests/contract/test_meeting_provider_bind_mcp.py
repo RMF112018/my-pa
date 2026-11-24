@@ -97,7 +97,7 @@ def test_the_chatllm_classification_follows_meetings_update() -> None:
         update.family,
         update.composition_prerequisite,
     )
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
 
 
 def test_the_schema_publishes_the_closed_vocabularies() -> None:

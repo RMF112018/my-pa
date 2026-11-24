@@ -13,7 +13,7 @@ proves:
   a live server the catalog it builds equals the catalog `tables.py` builds;
 * **the audit vocabulary** -- the before text is a byte copy of `6418b57081c3`'s
   set, the at text adds exactly the `meetings.provider.*` names, which the domain
-  declares in WP3b-S4 (the schema-ahead gap, measured here);
+  declares since WP3b-S4 (no schema-ahead gap, measured here);
 * **offline SQL** for both directions, without a server;
 * on disposable databases: the round trip; the upgrade refusal while a binding
   records a legacy observation; the downgrade refusals; every CHECK, UNIQUE,
@@ -47,7 +47,6 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import ColumnElement, Engine, Table, delete, insert, text, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
-from tests.schema.meeting_sync_vocabulary_contract import MEETING_SYNC_CAPABILITIES
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -117,7 +116,7 @@ BINDING_CONSTRAINTS: Final = frozenset(
         "a_provider_binding_origin_names_a_snapshot_of_its_principal",
     }
 )
-NEW_CAPABILITIES: Final = MEETING_SYNC_CAPABILITIES
+NEW_CAPABILITIES: Final = frozenset({"meetings.provider.reconcile", "meetings.provider.review"})
 
 P: Final = "prn_msyncmig0001aaaa"
 OTHER: Final = "prn_msyncmig0002bbbb"
@@ -264,19 +263,20 @@ def test_the_audit_before_text_is_a_byte_copy_and_at_adds_exactly_two() -> None:
     assert set(mine["_NEW_CAPABILITIES"]) == NEW_CAPABILITIES  # type: ignore[call-overload]
 
 
-def test_the_audit_at_set_is_the_live_enums_plus_the_schema_ahead_gap() -> None:
-    """The two names are admitted ahead of the domain (WP3b-S4 declares them).
+def test_the_audit_at_set_is_exactly_the_live_enums() -> None:
+    """The two names the revision admitted are declared by the domain (WP3b-S4).
 
-    The gap is measured, not trusted: it is exactly the new names the domain
-    does not yet declare, and it shrinks to nothing once S4 lands.
+    The S1 schema-ahead gap is closed: measured, not trusted, the domain
+    declares both names and the revision's audit set holds every declared one.
     """
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
     at = set(_literals(_namespace(MIGRATION)["_CAPABILITIES_AT_THIS_REVISION"]))
-    gap = at - declared
-    assert gap == NEW_CAPABILITIES - declared
+    assert declared >= NEW_CAPABILITIES
     assert declared <= at
+    # Whatever older planes still admit ahead of the domain, none is this one's.
+    assert not (at - declared) & NEW_CAPABILITIES
 
 
 # ---- offline SQL ---------------------------------------------------------------

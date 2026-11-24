@@ -325,7 +325,7 @@ _V10: Final = "chatllm-data-v10"
 #: The current version (CPM Workbench S5b-2, Reports Modernization and then
 #: Schedule Scenarios S6-3 and the files workspace moved it on from `chatllm-data-v10`, which the 6
 #: files keep as the version that added the lineage plane).
-_CURRENT: Final = "chatllm-data-v15"
+_CURRENT: Final = "chatllm-data-v16"
 _V9_HISTORICAL: Final = re.compile(
     r"since `chatllm-data-v9`|`chatllm-data-v9` adds|`chatllm-data-v9`'s|"
     r"converged on `chatllm-data-v9`"

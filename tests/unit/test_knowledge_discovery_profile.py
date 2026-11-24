@@ -308,7 +308,7 @@ def test_the_ordinary_chatllm_profile_excludes_submit_and_checkpoint() -> None:
     # `chatllm-data-v12` only the 11 Reports Modernization names, none a
     # Knowledge name (nor `chatllm-data-v13`'s Schedule Scenarios names nor
     # `chatllm-data-v14`'s `files.*` names).
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
     assert MATRIX["profile_contract"]["ordinary_chatllm_versions"]["KLP-WP-05"] == (
         "chatllm-data-v8"
     )

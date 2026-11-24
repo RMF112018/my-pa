@@ -336,6 +336,8 @@ ADMITTED_LATER_CAPABILITIES: Final = (
     | FILES_CAPABILITIES
     # Communications intelligence WP2-W3: admitted by the WP2 provider-binding revision.
     | frozenset({"meetings.provider.bind"})
+    # Communications intelligence WP3b-S1: admitted by the meeting sync staging revision.
+    | frozenset({"meetings.provider.reconcile", "meetings.provider.review"})
     # Reports Modernization WP02 and WP03: admitted by `4c37731671fc` and declared with it.
     | frozenset(
         {

@@ -139,7 +139,7 @@ _FULL: Final = {
 
 
 def test_v10_client_usable_lineage_names_are_data_conditional() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
     assert len(EXPOSED_LINEAGE) == 27
     assert len(EXPOSED_PROGRAM) == 7
     assert len(EXPOSED) == 34
@@ -280,16 +280,17 @@ def test_an_active_grant_on_a_withheld_lineage_name_is_an_unexpected_control_pla
 def test_v10_full_plane_targets_with_lineage_and_program_reporting() -> None:
     # chatllm-data-v12 (Reports Modernization): `reports.publish`, the 5 report
     # management names and the 5 `reports.transfer.*` names (`DATA_REQUIRED`,
-    # every plane) add 11; chatllm-data-v15 (WP2-W3) `meetings.provider.bind` adds 1.
-    assert len(_desired(_planes(**_FULL))) == 176
-    assert len(_desired(_planes(**_FULL, lineage=True))) == 203
+    # every plane) add 11; chatllm-data-v15 (WP2-W3) `meetings.provider.bind` adds 1;
+    # chatllm-data-v16 (WP3b-S4) the review and the reconcile add 2.
+    assert len(_desired(_planes(**_FULL))) == 178
+    assert len(_desired(_planes(**_FULL, lineage=True))) == 205
     both = _desired(_planes(**_FULL, lineage=True, program_reporting=True))
-    assert len(both) == 210
+    assert len(both) == 212
     assert both - _desired(_planes(**_FULL)) == EXPOSED
     # Relationship intelligence off (the default planes): the 2 Program reads
     # need the entity plane.
     default = _desired(_planes(constraints=True, lineage=True, program_reporting=True))
-    assert len(default) == 142
+    assert len(default) == 144
     assert default & EXPOSED == EXPOSED - PROGRAM_READS
 
 

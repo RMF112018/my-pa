@@ -238,7 +238,7 @@ def test_s3_capabilities_are_operator_decision_required() -> None:
         assert policy.exclusion_rationale is None
         assert not is_operator_only(capability)
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
 
 
 def test_backfill_capabilities_are_operator_only_and_control_plane_excluded() -> None:
@@ -416,6 +416,8 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     lineage |= _ADR_020_EXTENDED_TOOLS
     # Communications intelligence WP2-W3: `meetings.provider.bind` is new.
     lineage |= {"meetings.provider.bind"}
+    # Communications intelligence WP3b-S4: the review and the reconcile are new.
+    lineage |= {"meetings.provider.review", "meetings.provider.reconcile"}
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS

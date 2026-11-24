@@ -283,6 +283,7 @@ from my_pa.application.commands import (
     ReadScheduleActivityHistory,
     ReadSchedulePublication,
     ReadTask,
+    ReconcileMeetingProviders,
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordIssueHandoff,
@@ -311,6 +312,7 @@ from my_pa.application.commands import (
     RetireEntityName,
     RevealKnowledgeAssertion,
     RevealSubject,
+    ReviewMeetingProviders,
     ReviseCapture,
     ReviseEntityAddress,
     ReviseEntityAffiliation,
@@ -1728,6 +1730,12 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "calendar_ref": "cal-synthetic",
             "ical_uid": "uid-http@example.invalid",
         },
+        # WP3b-S4: the review page, and one mark of the staged Meeting.
+        Capability.MEETINGS_PROVIDER_REVIEW: {"page_size": 10},
+        Capability.MEETINGS_PROVIDER_RECONCILE: {
+            "items": [{"action": "no_provider_event", "meeting_id": scene.meeting_id}],
+            "idempotency_key": "http-meetings-provider-reconcile-0001",
+        },
         Capability.RECORD_EVENTS_LIST: {"page_size": 10},
         Capability.KNOWLEDGE_ASSERTIONS_READ: {"assertion_id": "kasr_httpknowledge000001"},
         Capability.KNOWLEDGE_ASSERTIONS_LIST: {"page_size": 10},
@@ -3078,6 +3086,11 @@ def commands_for(
             idempotency_key="http-meetings-provider-bind-0001",
             calendar_ref="cal-synthetic",
             ical_uid="uid-http@example.invalid",
+        ),
+        Capability.MEETINGS_PROVIDER_REVIEW: ReviewMeetingProviders(page_size=10),
+        Capability.MEETINGS_PROVIDER_RECONCILE: ReconcileMeetingProviders(
+            items=({"action": "no_provider_event", "meeting_id": scene.meeting_id},),
+            idempotency_key="http-meetings-provider-reconcile-0001",
         ),
         Capability.RECORD_EVENTS_LIST: ListRecordEvents(page_size=10),
         Capability.KNOWLEDGE_ASSERTIONS_READ: ReadKnowledgeAssertion(

@@ -20,7 +20,6 @@ from sqlalchemy.exc import IntegrityError
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES
 from tests.schema.knowledge_schema_ahead_contract import admitted_ahead
 from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
-from tests.schema.meeting_sync_vocabulary_contract import MEETING_SYNC_CAPABILITIES
 
 from my_pa.application.apple_machine import AppleBridgeIdentity
 from my_pa.application.native_baseline import (
@@ -671,11 +670,7 @@ def test_current_metadata_capability_vocabulary_matches_alembic_head(c_engine: E
     # exactly the Knowledge schema-ahead gap row (KLP-WP-02, R6 section 12.1).
     assert metadata_values == expected
     assert migrated_values == expected | (
-        admitted_ahead("capability")
-        | lineage_admitted_ahead("capability")
-        | FILES_CAPABILITIES
-        | MEETING_SYNC_CAPABILITIES
-        | MEETING_SYNC_CAPABILITIES
+        admitted_ahead("capability") | lineage_admitted_ahead("capability") | FILES_CAPABILITIES
     )
     assert {member.value for member in Capability} <= metadata_values
     assert {member.value for member in NativeSourceCapability} <= metadata_values

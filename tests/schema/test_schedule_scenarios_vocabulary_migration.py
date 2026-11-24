@@ -41,7 +41,6 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, MetaData, insert, text
 from sqlalchemy.exc import DBAPIError
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
-from tests.schema.meeting_sync_vocabulary_contract import MEETING_SYNC_CAPABILITIES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES, S63_PURPOSES
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
@@ -162,6 +161,9 @@ def test_at_sets_equal_the_live_enums() -> None:
     # Communications intelligence WP2-W3: its provider-binding revision admits
     # `meetings.provider.bind` after this revision.
     declared -= {"meetings.provider.bind"}
+    # Communications intelligence WP3b-S4: the meeting sync staging revision
+    # admits the review and the reconcile after this revision too.
+    declared -= {"meetings.provider.reconcile", "meetings.provider.review"}
     at = _literals(mine["_CAPABILITIES_AT_THIS_REVISION"])
     assert set(at) == declared and len(at) == len(declared) == 292
     purposes = _literals(mine["_PURPOSES_AT_THIS_REVISION"])
@@ -401,12 +403,7 @@ def test_runtime_metadata_matches_the_revision(disposable_database: str, engine:
         assert set(head) == set(runtime) == set(CHECKS)
         # The head is the files workspace revision: the declaration plus the
         # files names, compared as sets (equal once WP5 declares them).
-        # Communications intelligence WP3b-S1 adds the `meetings.provider.*`
-        # names ahead of the domain (S4) the same way.
-        added = {
-            "capability_is_known": FILES_CAPABILITIES | MEETING_SYNC_CAPABILITIES,
-            "purpose_is_known": FILES_PURPOSES,
-        }
+        added = {"capability_is_known": FILES_CAPABILITIES, "purpose_is_known": FILES_PURPOSES}
         for name in CHECKS:
             assert set(_literals(head[name])) == set(_literals(runtime[name])) | added[name]
     finally:

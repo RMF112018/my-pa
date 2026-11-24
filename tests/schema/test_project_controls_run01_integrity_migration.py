@@ -135,8 +135,9 @@ def test_revision_identity_and_frozen_vocabulary_are_exact() -> None:
     # `report_retention`, and WP06 its 5 transfer names, and Schedule Scenarios
     # S6-3 its 26 plane names and 3 purposes, and the files workspace WP5 its 17
     # `files.*` names and 2 purposes, and communications intelligence WP2-W3
-    # `meetings.provider.bind`.
-    assert len(Capability) == 299
+    # `meetings.provider.bind`, and WP3b-S4 `meetings.provider.review` and
+    # `meetings.provider.reconcile`.
+    assert len(Capability) == 301
     assert len(Purpose) == 70
     assert "from my_pa.domain" not in MIGRATION.read_text(encoding="utf-8")
 

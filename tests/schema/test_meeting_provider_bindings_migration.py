@@ -280,6 +280,9 @@ def test_the_audit_at_set_is_the_live_enums() -> None:
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
+    # Communications intelligence WP3b-S4: the meeting sync staging revision
+    # admits the review and the reconcile after this revision.
+    declared -= {"meetings.provider.reconcile", "meetings.provider.review"}
     assert set(_literals(_namespace()["_CAPABILITIES_AT_THIS_REVISION"])) == declared
     # The internal sync namespace is never an audit name, never a Capability.
     assert SYNC not in declared

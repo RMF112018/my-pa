@@ -62,6 +62,8 @@ _MEETING_READS = frozenset(
         Capability.MEETINGS_READ,
         Capability.MEETINGS_LIST,
         Capability.MEETINGS_SEARCH,
+        # WP3b-S4 (chatllm-data-v16): classified as the Meeting reads are.
+        Capability.MEETINGS_PROVIDER_REVIEW,
     }
 )
 _MEETING_WRITES = frozenset(
@@ -71,6 +73,8 @@ _MEETING_WRITES = frozenset(
         Capability.MEETINGS_SERIES_UPDATE,
         # WP2-W3 (chatllm-data-v15, a proposal): classified as `meetings.update`.
         Capability.MEETINGS_PROVIDER_BIND,
+        # WP3b-S4 (chatllm-data-v16): classified as `meetings.provider.bind`.
+        Capability.MEETINGS_PROVIDER_RECONCILE,
     }
 )
 _MEETINGS = _MEETING_READS | _MEETING_WRITES
@@ -81,8 +85,10 @@ def test_policy_covers_every_public_capability_exactly_once() -> None:
     # Schedule Scenarios S6-3 package I10-A: the 26 plane names, held at v12.
     # Files workspace WP5 (chatllm-data-v14): the 17 `files.*` names.
     # Communications intelligence WP2-W3 (chatllm-data-v15): `meetings.provider.bind`.
-    assert len(CHATLLM_CAPABILITY_POLICY) == 299
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
+    # Communications intelligence WP3b-S4 (chatllm-data-v16): `meetings.provider.review`
+    # and `meetings.provider.reconcile`.
+    assert len(CHATLLM_CAPABILITY_POLICY) == 301
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
@@ -94,8 +100,8 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # management names (`reports.update`, `.history`, `.archive`, `.delete`,
     # `.restore`) and the 5 `reports.transfer.*` names, 74 -> 85.
     # Communications intelligence WP2-W3 (chatllm-data-v15): `meetings.provider.bind`,
-    # 85 -> 86.
-    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 86
+    # 85 -> 86. WP3b-S4 (chatllm-data-v16): the review and the reconcile, 86 -> 88.
+    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 88
     # KLP-WP-03 (chatllm-data-v6): the six Knowledge Assertion names, 90 -> 96.
     # KLP-WP-05 (chatllm-data-v8): `record_events.provenance`, 96 -> 97.
     # Record lineage P1 (chatllm-data-v10, operator directive 2026-10-26): the
@@ -182,8 +188,8 @@ def test_report_authoring_writes_are_data_required() -> None:
         assert policy.exclusion_rationale is None
 
 
-def test_the_seven_meeting_capabilities_are_data_required_on_the_core_plane() -> None:
-    assert len(_MEETINGS) == 7
+def test_the_nine_meeting_capabilities_are_data_required_on_the_core_plane() -> None:
+    assert len(_MEETINGS) == 9
     # Record lineage S1's `meetings.notes.*` reads share the family but are an
     # operator decision (ADR-015, OD-07), not core-plane data.
     named = {

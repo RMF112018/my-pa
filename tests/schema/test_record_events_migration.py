@@ -274,6 +274,8 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
         - FILES_CAPABILITIES
         # Communications intelligence WP2-W3: admitted by the WP2 provider-binding revision.
         - {"meetings.provider.bind"}
+        # Communications intelligence WP3b-S1: admitted by the meeting sync staging revision.
+        - {"meetings.provider.reconcile", "meetings.provider.review"}
         # Reports Modernization WP02 and WP03: admitted by `4c37731671fc`.
         - {
             "reports.publish",

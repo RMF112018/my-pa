@@ -402,6 +402,9 @@ def test_at_vocabulary_adds_exactly_the_s1_names() -> None:
     # Communications intelligence WP2-W3: its provider-binding revision admits
     # `meetings.provider.bind` after this revision.
     declared -= {"meetings.provider.bind"}
+    # Communications intelligence WP3b-S4: the meeting sync staging revision
+    # admits the review and the reconcile after this revision too.
+    declared -= {"meetings.provider.reconcile", "meetings.provider.review"}
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | S1_CAPABILITIES
     assert (

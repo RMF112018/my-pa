@@ -297,9 +297,10 @@ def test_s31_capabilities_are_operator_decision_required() -> None:
     assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
     # Schedule Scenarios S6-3: its 26 plane names (no operator decision among them).
     # Files workspace WP5: its 17 `files.*` names (none an operator decision).
-    assert len(Capability) == 299
+    # Communications intelligence WP3b-S4: the review and the reconcile (data).
+    assert len(Capability) == 301
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
 
 
 def test_switch_off_withholds_every_s31_capability(scene: Scene) -> None:
@@ -522,7 +523,7 @@ def test_no_s31_capability_is_in_the_chatllm_data_profile() -> None:
             desired_effective_capabilities(composed_off, knowledge_manager=knowledge_manager)
             & lineage_plane
         )
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
 
 
 # ---- client guidance (section 7.12) ----------------------------------------------
@@ -749,6 +750,8 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
     lineage |= _ADR_020_EXTENDED_TOOLS
     # Communications intelligence WP2-W3: `meetings.provider.bind` is new.
     lineage |= {"meetings.provider.bind"}
+    # Communications intelligence WP3b-S4: the review and the reconcile are new.
+    lineage |= {"meetings.provider.review", "meetings.provider.reconcile"}
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS

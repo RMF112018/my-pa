@@ -197,6 +197,9 @@ def test_at_sets_equal_the_live_enums() -> None:
     # Communications intelligence WP2-W3: its provider-binding revision admits
     # `meetings.provider.bind` after this revision.
     declared -= {"meetings.provider.bind"}
+    # Communications intelligence WP3b-S4: the meeting sync staging revision
+    # admits the review and the reconcile after this revision too.
+    declared -= {"meetings.provider.reconcile", "meetings.provider.review"}
     assert plane["_CAPABILITIES_BEFORE_THIS_REVISION"] == head["_CAPABILITIES_AT_THIS_REVISION"]
     assert plane["_PURPOSES_BEFORE_THIS_REVISION"] == head["_PURPOSES_AT_THIS_REVISION"]
     plane_capabilities = _literals(plane["_CAPABILITIES_AT_THIS_REVISION"])

@@ -2020,6 +2020,12 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "calendar_ref": "cal-synthetic",
             "ical_uid": "uid-parity@example.invalid",
         },
+        # WP3b-S4: the review page, and one mark of the staged Meeting.
+        Capability.MEETINGS_PROVIDER_REVIEW: {"page_size": 10},
+        Capability.MEETINGS_PROVIDER_RECONCILE: {
+            "items": [{"action": "no_provider_event", "meeting_id": scene.meeting_id}],
+            "idempotency_key": "parity-meetings-provider-reconcile-0001",
+        },
         Capability.RECORD_EVENTS_LIST: {"page_size": 10},
         Capability.KNOWLEDGE_ASSERTIONS_READ: {"assertion_id": "kasr_parityknowledge0001"},
         Capability.KNOWLEDGE_ASSERTIONS_LIST: {"page_size": 10, "lifecycle": "active"},
@@ -2462,8 +2468,9 @@ def test_there_are_three_transports_to_compare() -> None:
     # The command union and `RequestMetadata` beside them.
     # Schedule Scenarios S6-3: 26 plane commands, 256 -> 282. Files workspace
     # WP5: 17 `files.*` commands, 282 -> 299. Communications intelligence
-    # WP2-W3: `BindMeetingProvider`, 299 -> 300.
-    assert len(REQUEST_VALUES) == 300, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # WP2-W3: `BindMeetingProvider`, 299 -> 300. WP3b-S4: `ReviewMeetingProviders`
+    # and `ReconcileMeetingProviders`, 300 -> 302.
+    assert len(REQUEST_VALUES) == 302, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -3572,7 +3579,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 299
+    assert len(IMPLEMENTED_CAPABILITIES) == 301
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

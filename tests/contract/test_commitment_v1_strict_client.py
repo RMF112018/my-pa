@@ -240,6 +240,8 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
     excluded |= {"meetings.create", "meetings.update", "meetings.read"}
     # Communications intelligence WP2-W3: `meetings.provider.bind` is new.
     excluded |= {"meetings.provider.bind"}
+    # Communications intelligence WP3b-S4: the review and the reconcile are new.
+    excluded |= {"meetings.provider.review", "meetings.provider.reconcile"}
     payloads = {
         tool.name: tool.input_schema["properties"]["payload"]
         for tool in TOOLS

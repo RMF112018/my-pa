@@ -432,6 +432,9 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.MEETINGS_SERIES_UPDATE, Purpose.MEETING_AUTHORING),
         # Communications intelligence WP2-W3: the provider reconciliation write.
         (Capability.MEETINGS_PROVIDER_BIND, Purpose.MEETING_AUTHORING),
+        # WP3b-S4: the reconciliation pass's review read and reconcile write.
+        (Capability.MEETINGS_PROVIDER_REVIEW, Purpose.MEETING_READ),
+        (Capability.MEETINGS_PROVIDER_RECONCILE, Purpose.MEETING_AUTHORING),
         (Capability.RECORD_EVENTS_LIST, Purpose.RECORD_EVENT_READ),
         # KLP-WP-03: five Knowledge reads under `knowledge_assertion_read` and the
         # explicit create under `knowledge_assertion_authoring`, nothing else.
@@ -678,8 +681,11 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # one of the pair: 298 capabilities, 70 purposes, 300 pairs.
     # Communications intelligence WP2-W3 adds `meetings.provider.bind` under the
     # existing `meeting_authoring`: 299 capabilities, 70 purposes, 301 pairs.
-    assert len(PERMITTED_PAIRS) == 301
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 301 == 20629
+    # WP3b-S4 adds `meetings.provider.review` under the existing `meeting_read`
+    # and `meetings.provider.reconcile` under `meeting_authoring`: 301
+    # capabilities, 70 purposes, 303 pairs.
+    assert len(PERMITTED_PAIRS) == 303
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 303 == 20767
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

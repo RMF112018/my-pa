@@ -17,7 +17,6 @@ from alembic.script import ScriptDirectory
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.knowledge_schema_ahead_contract import admitted_ahead
 from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
-from tests.schema.meeting_sync_vocabulary_contract import MEETING_SYNC_CAPABILITIES
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -320,14 +319,11 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
     # exactly the Knowledge schema-ahead gap row (R6 section 12.1).
     # Files workspace WP4: the revision admits the `files.*` names ahead of the
     # domain, which declares them in WP5 (a union, so it holds either side).
-    # Communications intelligence WP3b-S1 likewise admits the
-    # `meetings.provider.*` names ahead of the domain, which declares them in S4.
     assert (
         admitted
         <= declared
         | (admitted_ahead("capability") | lineage_admitted_ahead("capability"))
         | FILES_CAPABILITIES
-        | MEETING_SYNC_CAPABILITIES
     )
     # This module's own revision, kept separate from the head's. `admitted` is
     # the *latest* admitting revision's vocabulary; subtracting this revision's
@@ -356,7 +352,6 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
         declared
         | (admitted_ahead("capability") | lineage_admitted_ahead("capability"))
         | FILES_CAPABILITIES
-        | MEETING_SYNC_CAPABILITIES
     )
     assert admitted == ahead, (
         f"the last admitting revision {admitting.name} freezes a capability vocabulary "

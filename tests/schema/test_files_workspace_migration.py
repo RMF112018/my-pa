@@ -194,6 +194,9 @@ def test_at_sets_are_the_live_enums_plus_the_files_names() -> None:
     # Communications intelligence WP2-W3: its provider-binding revision admits
     # `meetings.provider.bind` after this revision.
     declared -= {"meetings.provider.bind"}
+    # Communications intelligence WP3b-S4: the meeting sync staging revision
+    # admits the review and the reconcile after this revision too.
+    declared -= {"meetings.provider.reconcile", "meetings.provider.review"}
     assert at == declared | FILES_CAPABILITIES
     purposes = set(_literals(mine["_PURPOSES_AT_THIS_REVISION"]))
     assert purposes == {member.value for member in Purpose} | FILES_PURPOSES
@@ -603,7 +606,15 @@ def test_runtime_metadata_matches_the_revision(disposable_database: str, engine:
             set(_literals(head["capability_is_known"]))
             # Communications intelligence WP2-W3: the runtime declares
             # `meetings.provider.bind`, which the WP2 revision admits after this one.
-            == (set(_literals(runtime["capability_is_known"])) - {"meetings.provider.bind"})
+            # WP3b-S4: likewise the review and the reconcile (the staging revision).
+            == (
+                set(_literals(runtime["capability_is_known"]))
+                - {
+                    "meetings.provider.bind",
+                    "meetings.provider.reconcile",
+                    "meetings.provider.review",
+                }
+            )
             | FILES_CAPABILITIES
         )
         assert (

@@ -90,7 +90,9 @@ def test_the_inventory_is_the_17_appended_names_and_the_2_purposes() -> None:
     # Communications intelligence WP3a: eight more (the ingestion lifecycle and
     # the communications rows).
     # Communications intelligence WP3b: one more (`msevt`, a staged sync event).
-    assert (len(Capability), len(Purpose), len(IdKind)) == (299, 70, 192)
+    # Communications intelligence WP3b-S4: two more capabilities, declared before
+    # the files names (`meetings.provider.review` and `.reconcile`).
+    assert (len(Capability), len(Purpose), len(IdKind)) == (301, 70, 192)
     assert frozenset(members[-17:]) == FILE_WORKSPACE_CAPABILITIES
     assert set(FILES_WORKSPACE_COMMAND_TYPES) == FILE_WORKSPACE_CAPABILITIES
     # WP4's frozen audit vocabulary names exactly these (contract section 13).
@@ -162,7 +164,7 @@ def test_the_tool_hints_follow_the_classification() -> None:
 
 
 def test_chatllm_classifies_the_17_data_conditional_on_the_workspace_at_v14() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
     assert FILES_WORKSPACE_DATA_NAMES == FILE_WORKSPACE_CAPABILITIES
     for capability in FILE_WORKSPACE_CAPABILITIES:
         policy = CHATLLM_CAPABILITY_POLICY[capability]

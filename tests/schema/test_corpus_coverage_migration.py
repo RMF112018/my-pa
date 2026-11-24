@@ -46,7 +46,6 @@ from sqlalchemy.exc import IntegrityError
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES
 from tests.schema.knowledge_schema_ahead_contract import admitted_ahead
 from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
-from tests.schema.meeting_sync_vocabulary_contract import MEETING_SYNC_CAPABILITIES
 
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
@@ -260,7 +259,6 @@ def test_downgrading_this_revision_restores_exactly_the_previous_vocabulary(
                 admitted_ahead("capability")
                 | lineage_admitted_ahead("capability")
                 | FILES_CAPABILITIES
-                | MEETING_SYNC_CAPABILITIES
             )
         )
 
@@ -274,7 +272,6 @@ def test_downgrading_this_revision_restores_exactly_the_previous_vocabulary(
                 admitted_ahead("capability")
                 | lineage_admitted_ahead("capability")
                 | FILES_CAPABILITIES
-                | MEETING_SYNC_CAPABILITIES
             )
         )
     finally:

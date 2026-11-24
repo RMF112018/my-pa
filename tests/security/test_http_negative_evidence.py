@@ -1460,6 +1460,12 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "calendar_ref": "cal-synthetic",
             "ical_uid": "uid-wire@example.invalid",
         },
+        # WP3b-S4: the review page, and one mark of the marked Meeting.
+        Capability.MEETINGS_PROVIDER_REVIEW: {"page_size": 10},
+        Capability.MEETINGS_PROVIDER_RECONCILE: {
+            "items": [{"action": "no_provider_event", "meeting_id": marked.meeting_id}],
+            "idempotency_key": "wire-meetings-provider-reconcile-0001",
+        },
         Capability.RECORD_EVENTS_LIST: {"page_size": 10},
         # KLP-WP-03: uncomposed in this world; each still normalizes.
         Capability.KNOWLEDGE_ASSERTIONS_READ: {"assertion_id": "kasr_wireknowledge00001"},
@@ -2444,6 +2450,9 @@ SCOPED_CAPABILITIES = [
         # WP2-W3: `meetings.provider.bind`, on the identical reading; also in
         # `_SCOPELESS`.
         Capability.MEETINGS_PROVIDER_BIND,
+        # WP3b-S4: the review and the reconcile, also in `_SCOPELESS`.
+        Capability.MEETINGS_PROVIDER_REVIEW,
+        Capability.MEETINGS_PROVIDER_RECONCILE,
         # WP-RE-06: `record_events.list` names only the acting Principal's own
         # change feed and no `src_...` or `enr_...`; also in `_SCOPELESS`.
         Capability.RECORD_EVENTS_LIST,

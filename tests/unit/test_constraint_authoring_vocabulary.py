@@ -112,7 +112,8 @@ def test_the_two_vocabularies_are_the_sizes_this_package_states() -> None:
     # Schedule Scenarios S6-3: its 26 plane names and their 3 purposes.
     # Files workspace WP5: its 17 `files.*` names and their 2 purposes.
     # Communications intelligence WP2-W3: `meetings.provider.bind`, and no purpose.
-    assert len(Capability) == 299
+    # WP3b-S4: `meetings.provider.review` and `.reconcile`, and no purpose.
+    assert len(Capability) == 301
     assert len(Purpose) == 70
 
 

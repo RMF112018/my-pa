@@ -663,7 +663,7 @@ data profile `chatllm-data-v13`, which adds the 22 client-usable Schedule Scenar
 as `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_ENABLED` and `MY_PA_SCHEDULE_SCENARIOS_ENABLED`
 and keeps the 4 operator baseline decisions excluded (Schedule Scenarios S6-3; v13 with
 `MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires exactly the v12 set, so a pending Reports
-commissioning uses `chatllm-data-v15` after this build, which adds only `meetings.provider.bind` (communications intelligence WP2-W3, `DATA_REQUIRED` on the core plane, the profile to activate at the consolidated goal deploy (Manager ruling R-OP-4, operator delegation 2026-11-22), its grant to the operator profile only (R-OP-2)) to `chatllm-data-v14`, which adds only the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set), on top of `chatllm-data-v12`, which adds only
+commissioning uses `chatllm-data-v16` after this build, which adds only `meetings.provider.review` and `meetings.provider.reconcile` (communications intelligence WP3b-S4, both `DATA_REQUIRED` on the core plane, the profile to activate at the consolidated goal deploy instead of v15 (Manager ruling D13), their grants to the operator profile only (R-OP-2)) to `chatllm-data-v15`, which adds only `meetings.provider.bind` (WP2-W3, `DATA_REQUIRED` on the core plane) to `chatllm-data-v14`, which adds only the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set), on top of `chatllm-data-v12`, which adds only
 the 11 Reports Modernization names
 (`reports.publish`, `reports.update`, `reports.history`, `reports.archive`,
 `reports.delete`, `reports.restore` and the 5 `reports.transfer.*` names, all

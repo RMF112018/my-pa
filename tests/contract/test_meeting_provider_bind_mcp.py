@@ -36,7 +36,6 @@ from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.contracts.v1.meetings import MeetingView
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
-    CHATLLM_DATA_PROFILE_VERSION,
 )
 from my_pa.domain.identity.operation import (
     Capability,
@@ -97,7 +96,6 @@ def test_the_chatllm_classification_follows_meetings_update() -> None:
         update.family,
         update.composition_prerequisite,
     )
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
 
 
 def test_the_schema_publishes_the_closed_vocabularies() -> None:

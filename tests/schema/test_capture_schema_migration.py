@@ -75,6 +75,8 @@ from tests.schema.knowledge_schema_ahead_contract import (
 )
 from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES
+from tests.schema.vocabulary_admissions import SINCE as ADMISSIONS_SINCE
+from tests.schema.vocabulary_admissions import capabilities_admitted_after
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
@@ -736,8 +738,9 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         *S63_CAPABILITIES,
         # Files workspace WP4, admitted by its revision ahead of the domain (WP5).
         *FILES_CAPABILITIES,
-        # Communications intelligence WP2-W3, admitted by the WP2 provider-binding revision.
-        "meetings.provider.bind",
+        # Every family admitted after the files workspace revision (communications
+        # intelligence WP2-W3's `meetings.provider.bind` onward): `vocabulary_admissions.py`.
+        *capabilities_admitted_after(ADMISSIONS_SINCE),
     }
 )
 

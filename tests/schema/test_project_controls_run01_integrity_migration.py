@@ -27,8 +27,6 @@ from sqlalchemy import (
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
-from my_pa.domain.identity.operation import Capability
-from my_pa.domain.identity.purpose import Purpose
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.tables import (
     captures,
@@ -128,9 +126,8 @@ def test_revision_identity_and_frozen_vocabulary_are_exact() -> None:
     # `report_retention`, and WP06 its 5 transfer names, and Schedule Scenarios
     # S6-3 its 26 plane names and 3 purposes, and the files workspace WP5 its 17
     # `files.*` names and 2 purposes, and communications intelligence WP2-W3
-    # `meetings.provider.bind`.
-    assert len(Capability) == 299
-    assert len(Purpose) == 70
+    # `meetings.provider.bind`. The current sizes are `tests/pins.json`'s
+    # (`test_pins_are_current`); this revision's own figures above stay literal.
     assert "from my_pa.domain" not in MIGRATION.read_text(encoding="utf-8")
 
 

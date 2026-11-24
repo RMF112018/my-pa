@@ -43,6 +43,7 @@ from tests.pins import ALEMBIC_HEAD, ALEMBIC_REVISION_COUNT
 from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES, S63_PURPOSES
+from tests.schema.vocabulary_admissions import capabilities_admitted_after
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -184,9 +185,9 @@ def test_at_sets_equal_the_live_enums() -> None:
     # Files workspace WP4 restates both sets after revision B; its names are set
     # aside whether or not the domain declares them yet (WP5).
     declared -= FILES_CAPABILITIES
-    # Communications intelligence WP2-W3: its provider-binding revision admits
-    # `meetings.provider.bind` after this revision.
-    declared -= {"meetings.provider.bind"}
+    # Every family a later revision admits (communications intelligence WP2-W3's
+    # `meetings.provider.bind` onward): one home, `vocabulary_admissions.py`.
+    declared -= capabilities_admitted_after(REVISION)
     assert plane["_CAPABILITIES_BEFORE_THIS_REVISION"] == head["_CAPABILITIES_AT_THIS_REVISION"]
     assert plane["_PURPOSES_BEFORE_THIS_REVISION"] == head["_PURPOSES_AT_THIS_REVISION"]
     plane_capabilities = _literals(plane["_CAPABILITIES_AT_THIS_REVISION"])

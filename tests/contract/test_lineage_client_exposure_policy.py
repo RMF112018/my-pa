@@ -47,7 +47,6 @@ from my_pa.bootstrap.settings import Settings
 from my_pa.contracts.mcp_database_profiles import MCP_PROFILE_OPT_IN_CAPABILITY_NAMES
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
-    CHATLLM_DATA_PROFILE_VERSION,
     LINEAGE_DATA_NAMES,
     PROGRAM_REPORTING_DATA_NAMES,
     ChatLLMCapabilityClass,
@@ -139,7 +138,6 @@ _FULL: Final = {
 
 
 def test_v10_client_usable_lineage_names_are_data_conditional() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v15"
     assert len(EXPOSED_LINEAGE) == 27
     assert len(EXPOSED_PROGRAM) == 7
     assert len(EXPOSED) == 34

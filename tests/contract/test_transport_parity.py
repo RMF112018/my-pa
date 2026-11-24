@@ -2462,8 +2462,11 @@ def test_there_are_three_transports_to_compare() -> None:
     # The command union and `RequestMetadata` beside them.
     # Schedule Scenarios S6-3: 26 plane commands, 256 -> 282. Files workspace
     # WP5: 17 `files.*` commands, 282 -> 299. Communications intelligence
-    # WP2-W3: `BindMeetingProvider`, 299 -> 300.
-    assert len(REQUEST_VALUES) == 300, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # WP2-W3: `BindMeetingProvider`, 299 -> 300. One command per wired
+    # capability, plus `RequestMetadata`.
+    assert len(REQUEST_VALUES) == len(Capability) - len(FUTURE_CAPABILITIES) + 1, (
+        f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    )
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -3572,7 +3575,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 299
+    assert len(IMPLEMENTED_CAPABILITIES) == len(Capability) - len(FUTURE_CAPABILITIES)
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

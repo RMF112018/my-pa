@@ -5,8 +5,9 @@
   no `open`/`print`/dynamic code, and no clock read;
 * no `float` (name or literal) appears in any project-reports module, in any
   layer (PULSE-AC-05: money is `Decimal` only);
-* the domain names no export provider and no provider header string (those
-  live in the infrastructure reader alone);
+* the domain names no export provider and no provider header string, and no
+  project-reports module in any layer except the reader
+  `infrastructure/project_reports/pulse_csv.py` holds a header string;
 * no project-reports module imports a communications module, and no
   communications module imports a project-reports one;
 * no `Capability`, `Purpose`, `IdKind` or table name carries `pulse` or
@@ -184,6 +185,29 @@ def test_the_domain_names_no_provider_or_header_string(path: Path) -> None:
             assert not any(w in word.lower() for w in PROVIDER_WORDS), (path.name, word)
 
 
+#: The one module allowed to name the export provider's header strings.
+READER: Final = PACKAGE / "infrastructure" / "project_reports" / "pulse_csv.py"
+
+
+def _header_strings(source: str) -> list[int]:
+    return [
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and HEADER_STRING.search(node.value)
+    ]
+
+
+def test_only_the_reader_names_header_strings() -> None:
+    modules = _slice_modules()
+    assert READER in modules
+    assert _header_strings(_read(READER)) != []
+    for path in modules:
+        if path != READER:
+            assert _header_strings(_read(path)) == [], path.relative_to(PACKAGE)
+
+
 def test_project_reports_and_communications_do_not_import_each_other() -> None:
     for path in _slice_modules():
         hits = {n for n in _imports(_read(path)) if n.startswith(COMMUNICATIONS_NAMES)}
@@ -236,6 +260,11 @@ def test_a_planted_io_import_and_clock_read_are_caught() -> None:
 def test_a_planted_communications_import_is_caught() -> None:
     planted = "from my_pa.domain.communications.model import Publication\n"
     assert {n for n in _imports(planted) if n.startswith(COMMUNICATIONS_NAMES)}
+
+
+def test_a_planted_header_string_is_caught() -> None:
+    assert _header_strings('X = "RFI > Number"\n') == [1]
+    assert _header_strings('X = "a >= b"\n') == []
 
 
 def test_the_name_pattern_sees_a_planted_name() -> None:

@@ -39,7 +39,7 @@ import re
 import stat
 import sys
 import threading
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -92,6 +92,7 @@ from my_pa.contracts.ports import (
     ContextRunRepository,
     ContinuityAuthoringRepository,
     CounterpartyOption,
+    CoveredProviderBinding,
     DirectedReceipt,
     EnrollmentRepository,
     EntitiesRepository,
@@ -125,9 +126,15 @@ from my_pa.contracts.ports import (
     MeetingPrepRecord,
     MeetingPrepVersionRecord,
     MeetingProviderBindingRecord,
+    MeetingProviderKeyTombstoneRecord,
+    MeetingProviderReconciliationPassRecord,
+    MeetingProviderReviewMarkRecord,
     MeetingRecord,
     MeetingRepository,
     MeetingSeriesProviderBindingRecord,
+    MeetingSyncApplyOutcome,
+    MeetingSyncEventRecord,
+    MeetingSyncPublicationRecord,
     MeetingSyncRepository,
     MeetingWriteRequestRecord,
     MemoryDetail,
@@ -1249,6 +1256,24 @@ class World:
         default_factory=dict
     )
     meeting_series_provider_bindings: dict[tuple[str, str], MeetingSeriesProviderBindingRecord] = (
+        field(default_factory=dict)
+    )
+    #: WP3b ruling D8: the Principal of every binding-writer lock taken, in order.
+    provider_binding_writer_locks: list[str] = field(default_factory=list)
+    #: WP3b staging and reconciliation rows, keyed `(principal_id, id)`:
+    #: publications by snapshot id, events by event id, marks by Meeting id,
+    #: the latch by Principal, tombstones by the deleted binding's id.
+    meeting_sync_publications: dict[tuple[str, str], MeetingSyncPublicationRecord] = field(
+        default_factory=dict
+    )
+    meeting_sync_events: dict[tuple[str, str], MeetingSyncEventRecord] = field(default_factory=dict)
+    meeting_provider_review_marks: dict[tuple[str, str], MeetingProviderReviewMarkRecord] = field(
+        default_factory=dict
+    )
+    meeting_provider_reconciliation_passes: dict[str, MeetingProviderReconciliationPassRecord] = (
+        field(default_factory=dict)
+    )
+    meeting_provider_key_tombstones: dict[tuple[str, str], MeetingProviderKeyTombstoneRecord] = (
         field(default_factory=dict)
     )
     commits: int = 0
@@ -9583,6 +9608,42 @@ class _Meetings:
             if owner == principal_id
         ]
 
+    def lock_provider_binding_writers(self, principal_id: str) -> None:
+        self._world.provider_binding_writer_locks.append(principal_id)
+
+    def lock_provider_bindings_in_window(
+        self,
+        principal_id: str,
+        calendar_refs: Collection[str],
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> tuple[CoveredProviderBinding, ...]:
+        refs = set(calendar_refs)
+        found: list[CoveredProviderBinding] = []
+        for binding in self._bindings(principal_id):
+            meeting = self._world.meetings.get((principal_id, binding.meeting_id))
+            if (
+                meeting is not None
+                and binding.calendar_ref in refs
+                and start_utc <= meeting.start_at <= end_utc
+            ):
+                found.append(
+                    CoveredProviderBinding(binding=binding, meeting_start_at=meeting.start_at)
+                )
+        original_floor = datetime.min.replace(tzinfo=UTC)
+        return tuple(
+            sorted(
+                found,
+                key=lambda c: (
+                    c.binding.calendar_ref,
+                    c.binding.ical_uid,
+                    c.binding.occurrence_original_start_utc is not None,
+                    c.binding.occurrence_original_start_utc or original_floor,
+                    c.binding.binding_id,
+                ),
+            )
+        )
+
     def lock_provider_binding(
         self,
         principal_id: str,
@@ -9868,6 +9929,151 @@ def _fake_selected(
         return True
     state = _fake_lifecycle(world, capture_id, principal_id).state
     return state.value == selector.value
+
+
+class _MeetingSync(MeetingSyncRepository):
+    """The WP3b staging and reconciliation tables over the `World`.
+
+    Mirrors the revision's guards the applier and the unbind rely on: one
+    publication per snapshot, the apply columns written once from `None`, one
+    event per `(snapshot, ordinal)`, the latch once, a tombstone once per
+    deleted binding, a mark idempotent by Meeting. Publications are listed by
+    `(generated_at_utc, snapshot_id)`: the snapshot digest lives on the
+    ingestion plane, and the applier orders by it itself.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def insert_publication(
+        self, principal_id: str, publication: MeetingSyncPublicationRecord
+    ) -> None:
+        key = (principal_id, publication.snapshot_id)
+        if key in self._world.meeting_sync_publications:
+            raise RepositoryFailureError("one publication per snapshot")
+        self._world.meeting_sync_publications[key] = publication
+
+    def get_publication(
+        self, principal_id: str, snapshot_id: str
+    ) -> MeetingSyncPublicationRecord | None:
+        return self._world.meeting_sync_publications.get((principal_id, snapshot_id))
+
+    def list_publications(
+        self, principal_id: str, ingest_source_id: str, *, unapplied_only: bool = False
+    ) -> tuple[MeetingSyncPublicationRecord, ...]:
+        rows = [
+            publication
+            for (owner, _), publication in self._world.meeting_sync_publications.items()
+            if owner == principal_id
+            and publication.ingest_source_id == ingest_source_id
+            and (not unapplied_only or publication.applied_at is None)
+        ]
+        return tuple(sorted(rows, key=lambda p: (p.generated_at_utc, p.snapshot_id)))
+
+    def complete_publication(
+        self,
+        principal_id: str,
+        snapshot_id: str,
+        *,
+        applied_at: datetime,
+        apply_outcome: MeetingSyncApplyOutcome,
+        apply_counts: Mapping[str, int],
+    ) -> None:
+        key = (principal_id, snapshot_id)
+        current = self._world.meeting_sync_publications.get(key)
+        if current is None:
+            raise RepositoryFailureError("no publication to complete in this partition")
+        if current.applied_at is not None:
+            raise RepositoryFailureError("a publication is applied once")
+        self._world.meeting_sync_publications[key] = replace(
+            current,
+            applied_at=applied_at,
+            apply_outcome=apply_outcome,
+            apply_counts=dict(apply_counts),
+        )
+
+    def insert_events(self, principal_id: str, events: Sequence[MeetingSyncEventRecord]) -> None:
+        for event in events:
+            if (principal_id, event.snapshot_id) not in self._world.meeting_sync_publications:
+                raise RepositoryFailureError("an event names a staged publication")
+            if any(
+                owner == principal_id
+                and other.snapshot_id == event.snapshot_id
+                and other.record_ordinal == event.record_ordinal
+                for (owner, _), other in self._world.meeting_sync_events.items()
+            ):
+                raise RepositoryFailureError("one event per (snapshot, ordinal)")
+            self._world.meeting_sync_events[(principal_id, event.event_id)] = event
+
+    def list_events(
+        self, principal_id: str, snapshot_id: str
+    ) -> tuple[MeetingSyncEventRecord, ...]:
+        rows = [
+            event
+            for (owner, _), event in self._world.meeting_sync_events.items()
+            if owner == principal_id and event.snapshot_id == snapshot_id
+        ]
+        return tuple(sorted(rows, key=lambda e: e.record_ordinal))
+
+    def get_event(self, principal_id: str, event_id: str) -> MeetingSyncEventRecord | None:
+        return self._world.meeting_sync_events.get((principal_id, event_id))
+
+    def insert_review_mark(self, principal_id: str, mark: MeetingProviderReviewMarkRecord) -> bool:
+        key = (principal_id, mark.meeting_id)
+        if key in self._world.meeting_provider_review_marks:
+            return False
+        self._world.meeting_provider_review_marks[key] = mark
+        return True
+
+    def get_review_mark(
+        self, principal_id: str, meeting_id: str
+    ) -> MeetingProviderReviewMarkRecord | None:
+        return self._world.meeting_provider_review_marks.get((principal_id, meeting_id))
+
+    def list_review_marks(self, principal_id: str) -> tuple[MeetingProviderReviewMarkRecord, ...]:
+        rows = [
+            mark
+            for (owner, _), mark in self._world.meeting_provider_review_marks.items()
+            if owner == principal_id
+        ]
+        return tuple(sorted(rows, key=lambda m: m.meeting_id))
+
+    def insert_reconciliation_pass(
+        self, principal_id: str, completed: MeetingProviderReconciliationPassRecord
+    ) -> None:
+        if principal_id in self._world.meeting_provider_reconciliation_passes:
+            raise RepositoryFailureError("the latch is recorded once")
+        self._world.meeting_provider_reconciliation_passes[principal_id] = completed
+
+    def get_reconciliation_pass(
+        self, principal_id: str
+    ) -> MeetingProviderReconciliationPassRecord | None:
+        return self._world.meeting_provider_reconciliation_passes.get(principal_id)
+
+    def insert_key_tombstone(
+        self, principal_id: str, tombstone: MeetingProviderKeyTombstoneRecord
+    ) -> None:
+        key = (principal_id, tombstone.binding_id)
+        if key in self._world.meeting_provider_key_tombstones:
+            raise RepositoryFailureError("one tombstone per deleted binding")
+        self._world.meeting_provider_key_tombstones[key] = tombstone
+
+    def list_key_tombstones(
+        self,
+        principal_id: str,
+        calendar_ref: str,
+        ical_uid: str,
+        occurrence_original_start_utc: datetime | None,
+    ) -> tuple[MeetingProviderKeyTombstoneRecord, ...]:
+        rows = [
+            tombstone
+            for (owner, _), tombstone in self._world.meeting_provider_key_tombstones.items()
+            if owner == principal_id
+            and tombstone.calendar_ref == calendar_ref
+            and tombstone.ical_uid == ical_uid
+            and tombstone.occurrence_original_start_utc == occurrence_original_start_utc
+        ]
+        return tuple(sorted(rows, key=lambda t: (t.unbound_at, t.binding_id)))
 
 
 class _CaptureLifecycle(CaptureLifecycleRepository):
@@ -11606,8 +11812,8 @@ class FakeUnitOfWork(UnitOfWork):
 
     @property
     def meeting_sync(self) -> MeetingSyncRepository:
-        """The WP3b meeting sync staging: not modelled in FAST worlds, as `issues`."""
-        return cast("MeetingSyncRepository", _UnmodelledPlane("meeting_sync"))
+        """The WP3b meeting sync staging and reconciliation rows over this `World`."""
+        return _MeetingSync(self._world)
 
     @property
     def issues(self) -> IssueRepository:

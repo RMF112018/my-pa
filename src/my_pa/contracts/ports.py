@@ -479,6 +479,7 @@ __all__ = [
     "ContinuityReadRepository",
     "ContinuityRepository",
     "CounterpartyOption",
+    "CoveredProviderBinding",
     "DirectedReceipt",
     "EnrollmentRepository",
     "EntitiesRepository",
@@ -11277,6 +11278,14 @@ class MeetingProviderBindingRecord:
     last_seen_snapshot_id: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class CoveredProviderBinding:
+    """A binding a coverage window reaches, with its bound Meeting's current start (WP3b D7)."""
+
+    binding: MeetingProviderBindingRecord
+    meeting_start_at: datetime
+
+
 class MeetingRepository(ABC):
     """The Meeting records tables, on the general unit of work's connection.
 
@@ -11580,6 +11589,35 @@ class MeetingRepository(ABC):
         """One note version under that Meeting of this Principal, or `None`."""
 
     # --- provider bindings (communications intelligence WP2) -----------------
+
+    @abstractmethod
+    def lock_provider_binding_writers(self, principal_id: str) -> None:
+        """Serialize this Principal's binding writers until the transaction ends (WP3b D8).
+
+        `pg_advisory_xact_lock(MEETING_PROVIDER_BINDING_LOCK_CLASS,
+        hashtext(principal_id))`: every writer of a provider binding takes it
+        first -- the sync apply of a publication, its `not_seen` pass, the
+        `meetings.provider.bind` bind and unbind, and the WP3b-S4 reconcile --
+        so no two of them interleave row locks for one Principal. Re-entrant
+        within a transaction; released only by commit or rollback.
+        """
+
+    @abstractmethod
+    def lock_provider_bindings_in_window(
+        self,
+        principal_id: str,
+        calendar_refs: Collection[str],
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> tuple[CoveredProviderBinding, ...]:
+        """`SELECT … FOR UPDATE` the bindings a coverage window reaches (WP3b D7).
+
+        Every binding whose `calendar_ref` is one of `calendar_refs` and whose
+        bound Meeting's current `start_at` lies in `[start_utc, end_utc]`
+        (inclusive), with that start. Only the binding rows are locked, in key
+        order `(calendar_ref, ical_uid, occurrence_original_start_utc NULLS
+        FIRST)`; the Meeting is read, never locked or written.
+        """
 
     @abstractmethod
     def lock_provider_binding(

@@ -75,6 +75,7 @@ from my_pa.contracts.ports import (
     MeetingPrepRecord,
     MeetingPrepVersionRecord,
     MeetingProviderBindingRecord,
+    MeetingProviderKeyTombstoneRecord,
     MeetingRecord,
     MeetingRepository,
     MeetingSeriesProviderBindingRecord,
@@ -1222,7 +1223,8 @@ class MeetingApplication:
     ) -> MeetingProviderBindResult:
         """Bind an existing Meeting to a provider key, or unbind it (rule 4, D10).
 
-        The Meeting write order: digest, reserve, the binding row `FOR UPDATE`
+        The Meeting write order: digest, the Principal's binding-writer
+        advisory lock (WP3b ruling D8), reserve, the binding row `FOR UPDATE`
         (the Meeting's own binding for an unbind, the requested key's binding
         for a bind), Meeting `FOR UPDATE`, version gate, then the binding reads
         -- the Meeting's binding, whether the UID is bound as the other kind,
@@ -1231,7 +1233,8 @@ class MeetingApplication:
         the series binding to the Meeting's current series) or the binding
         delete, the Meeting version bump, one `update` receipt, completion, and
         one Meeting `updated` event naming `provider_binding`. The series
-        binding is append-only: an unbind leaves it. The receipt actor is always
+        binding is append-only: an unbind leaves it. An unbind also records the
+        key's tombstone naming the receipt (WP3b ruling D5). The receipt actor is always
         the Principal: only a client calls this.
         """
         key = _checked_idempotency_key(idempotency_key)
@@ -1242,6 +1245,10 @@ class MeetingApplication:
         )
         meetings = uow.meetings
 
+        # The Principal's binding-writer lock comes before anything else (WP3b
+        # ruling D8): a bind, an unbind, the sync apply and its `not_seen` pass
+        # never interleave their row locks.
+        meetings.lock_provider_binding_writers(principal_id)
         prior = meetings.reserve_write_request(
             principal_id, MEETINGS_PROVIDER_BIND_NAME, key, digest, created_at=at
         )
@@ -1280,10 +1287,12 @@ class MeetingApplication:
         if current.version != version:
             raise MeetingStaleVersionError()
 
+        unbound: MeetingProviderBindingRecord | None = None
         if request.action is ProviderBindAction.UNBIND:
             if locked is None:
                 raise MeetingInvalidRequestError(MeetingErrorField.MEETING_NOT_PROVIDER_BOUND)
             meetings.delete_provider_binding(principal_id, locked.binding_id)
+            unbound = locked
         else:
             existing = meetings.read_provider_binding_for_meeting(principal_id, current.meeting_id)
             self._bind(meetings, principal_id, request, current, existing is not None, locked, at)
@@ -1310,6 +1319,23 @@ class MeetingApplication:
             idempotency_key=key,
             request_digest=digest,
         )
+        if unbound is not None:
+            # WP3b ruling D5: the unbound key's tombstone, naming this receipt,
+            # in the same transaction, so the sync never re-creates the Meeting
+            # the Principal detached. A later bind of the key supersedes it.
+            uow.meeting_sync.insert_key_tombstone(
+                principal_id,
+                MeetingProviderKeyTombstoneRecord(
+                    binding_id=unbound.binding_id,
+                    meeting_id=current.meeting_id,
+                    calendar_ref=unbound.calendar_ref,
+                    ical_uid=unbound.ical_uid,
+                    occurrence_original_start_utc=unbound.occurrence_original_start_utc,
+                    series_ical_uid=unbound.series_ical_uid,
+                    unbound_at=at,
+                    meeting_history_id=receipt.history_id,
+                ),
+            )
         meetings.complete_write_request(
             principal_id,
             MEETINGS_PROVIDER_BIND_NAME,

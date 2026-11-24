@@ -103,7 +103,12 @@ class ProviderEventIdFormat(StrEnum):
 
 
 class ProviderBindingState(StrEnum):
-    """A binding's last observed provider state (C10). WP2 never writes `not_seen`."""
+    """A binding's last observed provider state (C10).
+
+    `not_seen` is written only by the WP3b applier, from a publication that
+    declares coverage (ruling D7); a later sighting restores `active` or
+    `cancelled`.
+    """
 
     ACTIVE = "active"
     CANCELLED = "cancelled"

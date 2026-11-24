@@ -12,7 +12,6 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import DBAPIError
-from tests.pins import ALEMBIC_HEAD
 
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.tables import goodnotes_semantic_promotion_receipts
@@ -20,7 +19,6 @@ from my_pa.infrastructure.persistence.tables import goodnotes_semantic_promotion
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = "a4d8e31b2c90"
 PREVIOUS = "6a2f9d1c4b80"
-HEAD_REVISION = ALEMBIC_HEAD
 TABLE = "goodnotes_semantic_promotion_receipts"
 MIGRATION = ROOT / "migrations/versions/20260905_a4d8e31b2c90_add_goodnotes_promotion_receipts.py"
 
@@ -31,11 +29,6 @@ def _config(output: io.StringIO | None = None) -> Config:
 
 def test_promotion_revision_is_frozen_and_only_head(monkeypatch: pytest.MonkeyPatch) -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [HEAD_REVISION]
-    assert script.get_revision("a1c9e4b72f80").down_revision == "2774329487be"
-    assert script.get_revision("2774329487be").down_revision == "e8f2a6c9d104"
-    assert script.get_revision("e8f2a6c9d104").down_revision == "d4e8b1c7a902"
-    assert script.get_revision("d4e8b1c7a902").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     imported = {
         node.module

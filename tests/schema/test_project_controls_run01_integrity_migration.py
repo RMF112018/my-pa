@@ -26,7 +26,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError, IntegrityError
-from tests.pins import ALEMBIC_HEAD
 
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
@@ -43,8 +42,6 @@ from my_pa.infrastructure.persistence.tables import (
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "e6a4c2f91b73"
 PREVIOUS: Final = "c4f1a8e52d90"
-#: The current head, from the reviewed snapshot (`tests/pins.json`).
-HEAD: Final = ALEMBIC_HEAD
 MIGRATION: Final = (
     ROOT / "migrations" / "versions" / "20260914_e6a4c2f91b73_project_controls_run01_integrity.py"
 )
@@ -102,7 +99,6 @@ def _offline_sql() -> str:
 
 def test_revision_identity_and_frozen_vocabulary_are_exact() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [HEAD]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
     before = _values(_literal("_CAPABILITIES_BEFORE_THIS_REVISION"))

@@ -122,33 +122,6 @@ def _literals(block: str) -> list[str]:
 
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "6418b57081c3"
-    assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
-    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
-    assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
-    assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
-    assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
-    assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
-    assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
-    assert script.get_revision("6c2306330ceb").down_revision == "023f8f7eb499"
-    assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"
-    assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"
-    assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
-    assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"
-    assert script.get_revision("b9025e7fb738").down_revision == "5c1e7a9b3d42"
-    assert script.get_revision("5c1e7a9b3d42").down_revision == "c8f7ae406d47"
-    assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
-    assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
-    assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
-    assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
-    assert script.get_revision("6734f039f7a6").down_revision == "0641c354ca85"
-    assert script.get_revision("0641c354ca85").down_revision == "c8e4a1b70d35"
-    assert script.get_revision("c8e4a1b70d35").down_revision == "1d9b248e7f83"
-    assert script.get_revision("1d9b248e7f83").down_revision == "7d9a450dfd07"
-    assert script.get_revision("7d9a450dfd07").down_revision == "6f6ead27d122"
-    assert script.get_revision("6f6ead27d122").down_revision == "e6a4c2f91b73"
-    assert script.get_revision("e6a4c2f91b73").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 

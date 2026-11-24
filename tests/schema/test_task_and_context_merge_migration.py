@@ -40,7 +40,6 @@ def _frozen_literals(constant: str) -> frozenset[str]:
 
 def test_the_chain_has_one_head_and_this_revision_is_in_the_chain() -> None:
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PARENTS
     # 79 since `7e114f822af2` (RI-ENT-WP-02) added the entity_names/

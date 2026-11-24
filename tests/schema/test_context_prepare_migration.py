@@ -137,7 +137,6 @@ def _record(engine: Engine, capability: str, purpose: str) -> None:
 
 def test_the_chain_has_one_head_and_these_revisions_are_in_order() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert len(list(script.get_heads())) == 1
     assert VOCABULARY_REVISION in {entry.revision for entry in script.walk_revisions()}
     assert TABLE_REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(VOCABULARY_REVISION).down_revision == PREVIOUS

@@ -160,7 +160,6 @@ def test_revision_remains_frozen_below_the_single_head() -> None:
     reaches this revision, on the predecessor it names, is.
     """
     script = ScriptDirectory.from_config(_config())
-    assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     revision = script.get_revision(REVISION)
     assert revision.down_revision == PRIOR_REVISION

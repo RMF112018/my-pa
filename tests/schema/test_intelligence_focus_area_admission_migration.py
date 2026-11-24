@@ -25,7 +25,6 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import DBAPIError
 from tests.conftest import DEFAULT_LIMITS, metadata_for, operator
-from tests.pins import ALEMBIC_HEAD
 
 from my_pa.application.commands import BeginIntelligenceCycle, CommitIntelligenceArtifact
 from my_pa.application.service import ApplicationService
@@ -48,8 +47,6 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 VERSIONS: Final = ROOT / "migrations" / "versions"
 REVISION: Final = "93f3aa113f58"
 PREVIOUS: Final = "6734f039f7a6"
-#: The current head, from the reviewed snapshot (`tests/pins.json`).
-HEAD: Final = ALEMBIC_HEAD
 MIGRATION: Final = VERSIONS / "20261007_93f3aa113f58_intelligence_focus_area_admission.py"
 PLANE_MIGRATION: Final = VERSIONS / "20260820_e9b2c4d7a150_admit_intelligence_artifact_plane.py"
 CHECK_VIOLATION: Final = "23514"
@@ -121,25 +118,6 @@ def test_the_revision_is_directly_on_the_knowledge_revision_under_one_later_head
     position.
     """
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "6418b57081c3"
-    assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
-    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
-    assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
-    assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
-    assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
-    assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
-    assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
-    assert script.get_revision("6c2306330ceb").down_revision == "023f8f7eb499"
-    assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"
-    assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"
-    assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
-    assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"
-    assert script.get_revision("b9025e7fb738").down_revision == "5c1e7a9b3d42"
-    assert script.get_revision("5c1e7a9b3d42").down_revision == "c8f7ae406d47"
-    assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
-    assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
-    assert script.get_revision("cc373834a485").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 

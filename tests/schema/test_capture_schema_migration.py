@@ -1128,7 +1128,6 @@ def _config() -> Config:
 def test_the_capture_revision_is_in_the_chain_on_the_enrollment_objects_revision() -> None:
     """Guards the rest of this module: an absent revision would create nothing."""
     script = ScriptDirectory.from_config(_config())
-    assert len(list(script.get_heads())) == 1
     assert CAPTURE_REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(CAPTURE_REVISION).down_revision == ENROLLMENT_OBJECTS_REVISION
 

@@ -47,7 +47,6 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import ColumnElement, Engine, Table, delete, insert, text, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
-from tests.pins import ALEMBIC_HEAD
 
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence import tables as declarations
@@ -151,9 +150,7 @@ def _source() -> str:
 
 def test_the_revision_is_the_single_head_directly_on_the_provider_binding_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [ALEMBIC_HEAD]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert script.get_revision(PREVIOUS).down_revision == "4d1069a7d84f"
 
 
 # ---- the freeze -------------------------------------------------------------

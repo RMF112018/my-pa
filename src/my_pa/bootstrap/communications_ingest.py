@@ -15,6 +15,11 @@ the lifecycle differently:
   configuration and a background step, not capabilities; their evidence is the
   lifecycle rows. The unit of work's audit sink refuses, so an attempt to audit
   is a defect that fails loudly rather than a row nobody asked for.
+* **Applying is the applier's (WP3b-S3).** `meeting_sync_applier()` builds
+  `MeetingSyncApplier` over the same refusing-audit transactions; the cycles
+  step calls it after `poll_enabled`, the CLI after `run-once` and `backfill`,
+  both under `COMMS_INGEST_LOCK_KEY`. It applies nothing until the
+  reconciliation latch exists (ruling D4).
 * **The workspace stores come from settings, once.** `MY_PA_FILES_WORKSPACES`
   (or the single-root form) composed by `bootstrap.gateway.files_workspace_stores`
   with every overlap root, so a `read_only` workspace is refused unless it is
@@ -37,6 +42,7 @@ from my_pa.application.communications_ingest import (
     ParsedPublication,
 )
 from my_pa.application.ingestion import IngestionLifecycle, StabilityMemory
+from my_pa.application.meeting_sync_apply import MeetingSyncApplier
 from my_pa.application.meeting_sync_ingest import MeetingSyncHandler, ParsedMeetingSync
 from my_pa.bootstrap.gateway import files_workspace_stores
 from my_pa.bootstrap.settings import Settings
@@ -57,6 +63,7 @@ __all__ = [
     "ingest_unit_of_work",
     "ingest_workspace_stores",
     "ingestion_lifecycle",
+    "meeting_sync_applier",
     "meeting_sync_handler",
     "parse_for_ingestion",
     "parse_meeting_sync_for_ingestion",
@@ -162,3 +169,10 @@ def coverage_reader(
 ) -> CommunicationsCoverageReader:
     """The coverage read over the same transactions."""
     return CommunicationsCoverageReader(unit_of_work=ingest_unit_of_work(engine), clock=clock)
+
+
+def meeting_sync_applier(
+    engine: Engine, *, clock: Callable[[], datetime] = utc_now
+) -> MeetingSyncApplier:
+    """The staged-publication applier over the ingestion transactions (no audit, D9)."""
+    return MeetingSyncApplier(unit_of_work=ingest_unit_of_work(engine), clock=clock)

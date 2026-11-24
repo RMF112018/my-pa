@@ -87,7 +87,10 @@ accept.
     enabled ingest source of the operator Principal. The lifecycle is built
     once and lives as long as the process, so its in-process stability memory
     (two consecutive polls with the same size and version token) survives
-    between polls. The workspace stores are composed from
+    between polls. After each poll the staged `meeting_sync_v1` publications
+    are applied (`MeetingSyncApplier.apply_pending`, WP3b-S3) under the same
+    step lock, once the reconciliation latch exists, with a second
+    counts-only line (`meeting_sync.apply`). The workspace stores are composed from
     `MY_PA_FILES_WORKSPACES` at start; a misconfigured root refuses the plane
     (exit 2, `plane cycles workspace_misconfigured`).
 
@@ -139,8 +142,9 @@ from sqlalchemy import select
 from my_pa.application.capture_lifecycle import always_eligible
 from my_pa.application.daily_cycle import DailyCycleRunner
 from my_pa.application.ingestion import IngestionLifecycle, IngestRunReport
+from my_pa.application.meeting_sync_apply import MeetingSyncApplier, MeetingSyncApplyReport
 from my_pa.application.service import ApplicationService
-from my_pa.bootstrap.communications_ingest import ingestion_lifecycle
+from my_pa.bootstrap.communications_ingest import ingestion_lifecycle, meeting_sync_applier
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.settings import AuthMode, load_settings
 from my_pa.contracts.ports import FileWorkspaceRootError, IngestRunOutcome
@@ -363,15 +367,31 @@ def comms_ingest_log_fields(reports: tuple[IngestRunReport, ...]) -> dict[str, o
     }
 
 
+def meeting_sync_apply_log_fields(report: MeetingSyncApplyReport) -> dict[str, object]:
+    """The applier's one log line after a poll: closed count names, never an id."""
+    return {"event": "meeting_sync.apply", "counts": dict(sorted(report.counts.items()))}
+
+
 def _comms_ingest_step(
-    lifecycle: IngestionLifecycle, principal_id: str, seconds: int
+    lifecycle: IngestionLifecycle,
+    applier: MeetingSyncApplier,
+    principal_id: str,
+    seconds: int,
 ) -> IntervalStep:
-    """The ingestion poll step over one long-lived lifecycle (its stability memory)."""
+    """The ingestion poll step over one long-lived lifecycle (its stability memory).
+
+    After the poll, the staged meeting-sync publications are applied (WP3b-S3,
+    ruling D1), under the same step lock; nothing applies before the latch.
+    """
 
     def poll() -> bool:
         reports = lifecycle.poll_enabled(principal_id)
         _log_line(comms_ingest_log_fields(reports))
-        return all(report.outcome is not IngestRunOutcome.FAILED for report in reports)
+        applied = applier.apply_pending(principal_id)
+        _log_line(meeting_sync_apply_log_fields(applied))
+        return all(
+            report.outcome is not IngestRunOutcome.FAILED for report in reports
+        ) and not applied.counts.get("publications_failed")
 
     return IntervalStep(
         name="comms_ingest",
@@ -439,6 +459,7 @@ def _run_cycles(args: argparse.Namespace) -> int:
             steps.append(
                 _comms_ingest_step(
                     lifecycle,
+                    meeting_sync_applier(engine),
                     local_principal().principal_id,
                     settings.communications_ingest_poll_seconds,
                 )

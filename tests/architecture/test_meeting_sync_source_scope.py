@@ -13,7 +13,8 @@
   the WP3b staging persistence (the staged event's closed vocabularies); and
   the WP3b-S2 staging consumer (`application/meeting_sync_ingest.py`, the
   domain publication) and its composition (`bootstrap/communications_ingest.py`,
-  which injects the parser);
+  which injects the parser); and the WP3b-S3 applier
+  (`application/meeting_sync_apply.py`, the staged event and `not_seen`);
 * the communications and meeting-sync slices do not import each other;
 * provider vocabulary stays out of the domain.
 """
@@ -52,6 +53,9 @@ CONSUMERS = frozenset(
         # infrastructure).
         "application/meeting_sync_ingest.py",
         "bootstrap/communications_ingest.py",
+        # WP3b-S3: the applier rebuilds the staged event and decides
+        # `not_seen` through the domain.
+        "application/meeting_sync_apply.py",
     }
 )
 

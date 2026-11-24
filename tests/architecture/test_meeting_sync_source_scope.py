@@ -10,7 +10,10 @@
   service, the Meeting port and its persistence (the binding vocabularies), and
   the `meetings.provider.bind` path (WP2-W3): its command, the Meeting
   application that arbitrates it and the binding view it answers with; and
-  the WP3b staging persistence (the staged event's closed vocabularies);
+  the WP3b staging persistence (the staged event's closed vocabularies); and
+  the WP3b-S2 staging consumer (`application/meeting_sync_ingest.py`, the
+  domain publication) and its composition (`bootstrap/communications_ingest.py`,
+  which injects the parser);
 * the communications and meeting-sync slices do not import each other;
 * provider vocabulary stays out of the domain.
 """
@@ -44,6 +47,11 @@ CONSUMERS = frozenset(
         # `ProviderEventIdFormat`.
         "infrastructure/persistence/meeting_sync.py",
         "infrastructure/persistence/tables.py",
+        # WP3b-S2: the staging consumer reads the parsed domain publication;
+        # its composition injects the parser (application imports no
+        # infrastructure).
+        "application/meeting_sync_ingest.py",
+        "bootstrap/communications_ingest.py",
     }
 )
 

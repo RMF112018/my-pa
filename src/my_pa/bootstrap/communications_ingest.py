@@ -1,9 +1,10 @@
-"""Composition of the communications ingestion consumer (WP3a, Manager ruling M5).
+"""Composition of the ingestion consumers (WP3a, Manager ruling M5; WP3b).
 
-The one place the `communications_evidence_v2` parser (infrastructure) meets
-its lifecycle handler (application): `communications_handler()` injects
-`parse_publication`, `PARSER_VERSION` and `MAX_PUBLICATION_BYTES` into
-`CommunicationsEvidenceHandler`.
+The one place each consumer's parser (infrastructure) meets its lifecycle
+handler (application): `communications_handler()` injects the
+`communications_evidence_v2` parser into `CommunicationsEvidenceHandler`, and
+`meeting_sync_handler()` injects the `meeting_sync_v1` parser (v2) into
+`MeetingSyncHandler`, which stages and never applies (WP3b, ruling D1).
 
 `ingestion_lifecycle()` and `coverage_reader()` are what the operator CLI
 (`apps/cli/communications_ingest.py`) and the cycles-plane poll step
@@ -36,6 +37,7 @@ from my_pa.application.communications_ingest import (
     ParsedPublication,
 )
 from my_pa.application.ingestion import IngestionLifecycle, StabilityMemory
+from my_pa.application.meeting_sync_ingest import MeetingSyncHandler, ParsedMeetingSync
 from my_pa.bootstrap.gateway import files_workspace_stores
 from my_pa.bootstrap.settings import Settings
 from my_pa.contracts.ports import AuditSink, FileWorkspaceStore, UnitOfWork
@@ -46,6 +48,7 @@ from my_pa.infrastructure.communications.evidence_v2 import (
     PARSER_VERSION,
     parse_publication,
 )
+from my_pa.infrastructure.meeting_sync import parser as meeting_sync_parser
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 __all__ = [
@@ -54,7 +57,9 @@ __all__ = [
     "ingest_unit_of_work",
     "ingest_workspace_stores",
     "ingestion_lifecycle",
+    "meeting_sync_handler",
     "parse_for_ingestion",
+    "parse_meeting_sync_for_ingestion",
 ]
 
 
@@ -74,6 +79,26 @@ def communications_handler() -> CommunicationsEvidenceHandler:
         parse=parse_for_ingestion,
         parser_version=PARSER_VERSION,
         max_bytes=MAX_PUBLICATION_BYTES,
+    )
+
+
+def parse_meeting_sync_for_ingestion(data: bytes) -> ParsedMeetingSync:
+    """The `meeting_sync_v1` `parse_publication`, as the handler's injected parser answer."""
+    parsed = meeting_sync_parser.parse_publication(data)
+    return ParsedMeetingSync(
+        publication=parsed.publication,
+        rejection=parsed.rejection,
+        diagnostic_counts=parsed.diagnostics.code_counts,
+    )
+
+
+def meeting_sync_handler(*, clock: Callable[[], datetime] = utc_now) -> MeetingSyncHandler:
+    """The `meeting_sync_v1` staging handler with the parser v2 wired in."""
+    return MeetingSyncHandler(
+        parse=parse_meeting_sync_for_ingestion,
+        parser_version=meeting_sync_parser.PARSER_VERSION,
+        max_bytes=meeting_sync_parser.MAX_PUBLICATION_BYTES,
+        clock=clock,
     )
 
 
@@ -122,11 +147,11 @@ def ingestion_lifecycle(
     stability: StabilityMemory | None = None,
     eager: bool = False,
 ) -> IngestionLifecycle:
-    """The lifecycle with the communications handler, the stores and no audit."""
+    """The lifecycle with the communications and meeting sync handlers, the stores, no audit."""
     return IngestionLifecycle(
         unit_of_work=ingest_unit_of_work(engine),
         stores=ingest_workspace_stores(settings, engine, eager=eager),
-        handlers=[communications_handler()],
+        handlers=[communications_handler(), meeting_sync_handler(clock=clock)],
         clock=clock,
         stability=stability,
     )

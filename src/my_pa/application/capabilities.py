@@ -210,7 +210,13 @@ def _limitations(
 #: Reports Modernization WP06 adds the third: `reports.transfer.read_chunk`
 #: takes `offset` and answers `next_offset` until `eof`, so it is a read a
 #: caller continues, and the readiness limitation names it with the others.
-CONTINUATION_FIELD_NAMES: Final[frozenset[str]] = frozenset({"after", "cursor", "offset"})
+#:
+#: Communications intelligence WP3b (R1 finding 2) adds the fourth:
+#: `meetings.provider.review` pages its staged events with `events_after`,
+#: independently of its Meetings' `after`.
+CONTINUATION_FIELD_NAMES: Final[frozenset[str]] = frozenset(
+    {"after", "cursor", "events_after", "offset"}
+)
 
 
 def _accepts_a_continuation(member: object) -> Capability | None:

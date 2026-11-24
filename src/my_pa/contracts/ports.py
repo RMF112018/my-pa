@@ -5992,6 +5992,14 @@ class RecordEventStager(ABC):
     def pending_count(self) -> int:
         """How many drafts this transaction has staged and not yet flushed."""
 
+    @abstractmethod
+    def truncate(self, count: int) -> None:
+        """Drop every draft staged after the first `count` (a SAVEPOINT rollback).
+
+        A caller that rolls back part of the transaction to a savepoint also
+        drops the drafts staged since, so no Record Event outlives its write.
+        """
+
 
 class RecordEventWriter(ABC):
     """The persistence half of a flush: allocate one batch, then insert it.
@@ -15068,7 +15076,9 @@ class MeetingSyncRepository(ABC):
         A block that raises rolls back only its own writes -- on every plane of
         the transaction -- and the exception propagates; one that ends normally
         releases the savepoint. `meetings.provider.reconcile` runs each item in
-        one, so a refused item never affects the others.
+        one, so a refused item never affects the others. The unit of work's
+        Record Event buffer is not rows: the caller truncates it back to its
+        count at the savepoint (`RecordEventStager.truncate`).
         """
 
     @abstractmethod

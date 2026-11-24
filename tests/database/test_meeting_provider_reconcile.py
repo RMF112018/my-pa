@@ -18,6 +18,9 @@ clock, so the review scope is deterministic). Proved here:
 * D6 adopt moving a Meeting into the bound provider series' MeetingSeries, and
   creating a series for a standalone Meeting;
 * whole-batch replay answering every item from its stored state;
+* the event cursor paging past the bound before the latch (R1 finding 2), and
+  two concurrent reconciles that both complete the pass writing the latch once
+  and both answering cleanly (R1 finding 3);
 * end to end: stage, review, reconcile every Meeting, the latch, then
   `MeetingSyncApplier.apply_pending` applies what waited behind it.
 
@@ -26,13 +29,15 @@ Every identifier, title and key here is synthetic.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 import pytest
-from sqlalchemy import Engine, Table, func, select
+from sqlalchemy import Engine, Table, func, select, text
 
 from my_pa.application.commands import (
     Command,
@@ -65,6 +70,7 @@ from my_pa.infrastructure.persistence.tables import (
 )
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from tests.contract.test_meeting_mcp import _insert_partition
+from tests.database.test_meeting_application import BLOCK_DEADLINE_SECONDS, JOIN_TIMEOUT_SECONDS
 from tests.database.test_meeting_sync_apply_application import Scene as StagingScene
 from tests.database.test_meeting_sync_apply_application import _event, _publication
 from tests.database.test_task_record_events import LIMITS
@@ -274,6 +280,46 @@ def test_the_unbound_event_list_is_bounded_over_the_newest_publication(world: Wo
     ][1:]
 
 
+def test_the_event_cursor_reaches_every_event_before_the_latch(world: World) -> None:
+    # R1 finding 2: past the bound, `unbound_provider_events_next` pages on.
+    staging = world.staging()
+    first = datetime(2026, 12, 1, 15, tzinfo=UTC)
+    events = [
+        _event(
+            f"uid-{n:04d}",
+            start_utc=f"{first + timedelta(minutes=n):%Y-%m-%dT%H:%M:%SZ}",
+            end_utc=f"{first + timedelta(minutes=n + 30):%Y-%m-%dT%H:%M:%SZ}",
+        )
+        for n in range(MAX_UNBOUND_PROVIDER_EVENTS + 1)
+    ]
+    staging.stage("20261123-meetings.json", _publication("2026-11-23T06:00:00Z", *reversed(events)))
+    page = world.review()
+    assert page["unbound_provider_events_truncated"] is True
+    cursor = page["unbound_provider_events_next"]
+    assert cursor == page["unbound_provider_events"][-1]["provider_event_ref"]
+    rest = world.review(events_after=cursor)
+    assert [e["ical_uid"] for e in rest["unbound_provider_events"]] == [events[-1]["ical_uid"]]
+    assert rest["unbound_provider_events_total"] == MAX_UNBOUND_PROVIDER_EVENTS + 1
+    assert rest["unbound_provider_events_truncated"] is False
+    assert rest["unbound_provider_events_next"] is None
+    every = [
+        e["ical_uid"] for e in (*page["unbound_provider_events"], *rest["unbound_provider_events"])
+    ]
+    assert every == [e["ical_uid"] for e in events]
+    assert rest["pass"]["state"] == "pending"
+    # Binding the cursor's own event leaves the cursor valid and the page unchanged.
+    meeting = world.meeting()
+    world.reconcile(bind(meeting, provider_event_ref=cursor))
+    again = world.review(events_after=cursor)
+    assert again["unbound_provider_events"] == rest["unbound_provider_events"]
+    unknown = world.invoke(ReviewMeetingProviders(events_after="msevt_reconciledbunknown1"))
+    assert unknown.error is not None
+    assert (unknown.error.code.value, unknown.error.safe_details) == (
+        "invalid_request",
+        ("cursor",),
+    )
+
+
 # ---- reconcile -------------------------------------------------------------------
 
 
@@ -332,6 +378,60 @@ def test_the_latch_waits_then_is_written_once(world: World) -> None:
         "unreviewed_count": 1,
     }
     assert world.rows(meeting_provider_reconciliation_passes) == [latch]
+
+
+def test_two_concurrent_reconciles_completing_the_pass_write_the_latch_once(
+    world: World,
+) -> None:
+    """R1 finding 3: both calls read no latch, then race to record it.
+
+    Another connection holds the latch table `SHARE` so neither can insert
+    until both have started. Under the reconcile's binding-writer lock the
+    second waits for the first to commit, then reads its latch: one row, and
+    both calls answer cleanly (never `internal_error` from the primary key).
+    """
+    world.meeting("Old", start=NOW - COLLECTOR_LOOKBACK - timedelta(days=1))
+    with ThreadPoolExecutor(max_workers=2) as pool, world.engine.connect() as holder:
+        holder.execute(
+            text("LOCK TABLE knowledge.meeting_provider_reconciliation_passes IN SHARE MODE")
+        )
+        futures = [
+            pool.submit(world.invoke, ReconcileMeetingProviders(items=(), idempotency_key=key))
+            for key in ("batch-race-0001", "batch-race-0002")
+        ]
+        try:
+            _wait_until_waiting(world.engine, futures, 2)
+        finally:
+            holder.rollback()
+        responses = [f.result(timeout=JOIN_TIMEOUT_SECONDS) for f in futures]
+    assert [r.error for r in responses] == [None, None]
+    for response in responses:
+        assert response.result is not None
+        assert response.result["pass"]["state"] == "complete"
+        assert response.result["sync_enabled"] is True
+    assert world.count(meeting_provider_reconciliation_passes) == 1
+
+
+def _wait_until_waiting(
+    engine: Engine, futures: list[Future[ResponseEnvelope]], count: int
+) -> None:
+    """Return once `count` other backends of this database wait on a lock."""
+    deadline = time.monotonic() + BLOCK_DEADLINE_SECONDS
+    with engine.connect() as observer:
+        while time.monotonic() < deadline:
+            assert not any(f.done() for f in futures), "a call did not wait"
+            waiting = observer.execute(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE datname = current_database() AND wait_event_type = 'Lock' "
+                    "AND pid <> pg_backend_pid()"
+                )
+            ).scalar_one()
+            observer.rollback()
+            if waiting >= count:
+                return
+            time.sleep(0.05)
+    pytest.fail(f"fewer than {count} calls blocked")
 
 
 def test_a_whole_batch_replay_answers_from_the_stored_state(world: World) -> None:

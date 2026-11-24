@@ -3556,6 +3556,11 @@ class FakeRecordEventStager(RecordEventStager):
     def pending_count(self) -> int:
         return len(self._pending)
 
+    def truncate(self, count: int) -> None:
+        if isinstance(count, bool) or not 0 <= count <= len(self._pending):
+            raise ValueError("a buffer is truncated to a count it has staged")
+        del self._pending[count:]
+
     def begin(self) -> None:
         """Start a transaction: nothing is pending."""
         self._pending.clear()

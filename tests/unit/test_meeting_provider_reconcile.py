@@ -14,6 +14,7 @@ value is synthetic.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
@@ -27,6 +28,7 @@ from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.meeting.model import (
     MeetingCreateRequest,
+    MeetingCursorError,
     MeetingErrorField,
     MeetingInvalidRequestError,
     MeetingStatus,
@@ -394,6 +396,45 @@ def test_at_the_bound_the_list_is_whole_and_not_truncated(scene: Scene) -> None:
     assert page.unbound_provider_events_truncated is False
 
 
+def test_the_event_cursor_pages_past_the_bound_in_a_stable_order(scene: Scene) -> None:
+    # R1 finding 2: events beyond the bound are reachable before the latch,
+    # through a keyset cursor independent of the Meetings' cursor.
+    starts = [SOON + timedelta(minutes=n // 2) for n in range(MAX_UNBOUND_PROVIDER_EVENTS + 1)]
+    events = [{"uid": f"uid-{n % 2}-{n:04d}", "start": start} for n, start in enumerate(starts)]
+    scene.stage(*reversed(events[: len(events) // 2]), source="isrc_reconcileunit001")
+    scene.stage(*reversed(events[len(events) // 2 :]), source="isrc_reconcileunit002")
+    first = scene.review()
+    assert len(first.unbound_provider_events) == MAX_UNBOUND_PROVIDER_EVENTS
+    assert first.unbound_provider_events_truncated is True
+    assert first.unbound_provider_events_next == first.unbound_provider_events[-1].event.event_id
+    second = scene.review(events_after=first.unbound_provider_events_next)
+    assert [e.event.ical_uid for e in second.unbound_provider_events] == [events[-1]["uid"]]
+    assert second.unbound_provider_events_total == MAX_UNBOUND_PROVIDER_EVENTS + 1
+    assert second.unbound_provider_events_truncated is False
+    assert second.unbound_provider_events_next is None
+    # Stable: the two pages are the whole ordered list, once each.
+    every = [*first.unbound_provider_events, *second.unbound_provider_events]
+    assert [e.event.ical_uid for e in every] == [e["uid"] for e in events]
+    assert [e.review_order for e in every] == sorted(e.review_order for e in every)
+    # Independent of the Meetings' cursor: the event cursor leaves them unchanged.
+    assert second.unreviewed_meetings == first.unreviewed_meetings
+
+
+def test_the_event_cursor_survives_its_anchor_being_bound(scene: Scene) -> None:
+    refs = scene.stage(*({"uid": f"uid-{n:04d}"} for n in range(3)))
+    meeting = scene.meeting()
+    scene.reconcile(bind(meeting, provider_event_ref=refs[0]))
+    page = scene.review(events_after=refs[0])
+    assert [e.event.event_id for e in page.unbound_provider_events] == refs[1:]
+    assert page.unbound_provider_events_total == 2
+
+
+def test_an_unknown_event_cursor_is_refused_cursor(scene: Scene) -> None:
+    scene.stage({"uid": "uid-a"})
+    with pytest.raises(MeetingCursorError):
+        scene.review(events_after="msevt_reconcileunknown01")
+
+
 def test_the_review_tool_description_states_the_event_bound() -> None:
     assert f"at most\n    {MAX_UNBOUND_PROVIDER_EVENTS}" in (ReviewMeetingProviders.__doc__ or "")
 
@@ -444,6 +485,62 @@ def test_a_mark_never_versions_the_meeting_and_is_idempotent(scene: Scene) -> No
     refused = scene.reconcile(mark(other), key="batch-0004").items[0]
     assert refused.outcome is ReconcileItemOutcome.REFUSED
     assert refused.refusal.safe_detail == "meeting_already_provider_bound"
+
+
+def test_a_mark_replays_after_its_meeting_was_bound_and_a_new_mark_is_refused(
+    scene: Scene,
+) -> None:
+    # R1 finding 5: an existing mark answers `replayed` before the binding check.
+    meeting = scene.meeting()
+    other = scene.meeting("Other")
+    assert scene.reconcile(mark(meeting)).items[0].outcome is ReconcileItemOutcome.MARKED
+    bound = scene.reconcile(bind(meeting), bind(other), key="batch-0002")
+    assert [i.outcome for i in bound.items] == [ReconcileItemOutcome.BOUND] * 2
+    replay = scene.reconcile(mark(meeting))
+    assert replay.items[0].outcome is ReconcileItemOutcome.REPLAYED
+    assert replay.items[0].refusal is None
+    fresh = scene.reconcile(mark(other), key="batch-0003").items[0]
+    assert fresh.outcome is ReconcileItemOutcome.REFUSED
+    assert fresh.refusal.safe_detail == "meeting_already_provider_bound"
+    assert (P, other) not in scene.world.meeting_provider_review_marks
+
+
+@dataclass(frozen=True, slots=True)
+class _RefusedAfterStaging(MeetingApplication):
+    """A bind that stages its Record Event and is then refused (R1 finding 4)."""
+
+    refused_meeting_id: str = ""
+
+    def bind_meeting_provider(self, uow: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        written = MeetingApplication.bind_meeting_provider(self, uow, *args, **kwargs)
+        if written.meeting_id == self.refused_meeting_id:
+            assert uow.record_events.pending_count > 0
+            raise MeetingInvalidRequestError(MeetingErrorField.MEETING_ID)
+        return written
+
+
+def test_a_refused_item_after_staging_leaves_no_record_event_draft(scene: Scene) -> None:
+    first, second, third = (scene.meeting(t) for t in ("First", "Second", "Third"))
+    feed_before = len(scene.world.record_events)
+    with scene.uow as unit:
+        result = MeetingProviderReconciliation(
+            _RefusedAfterStaging(refused_meeting_id=second)
+        ).reconcile(
+            unit,
+            P,
+            (bind(first), bind(second), bind(third)),
+            "batch-0001",
+            NOW,
+            correlation_id=CORRELATION,
+        )
+    assert [i.outcome for i in result.items] == [
+        ReconcileItemOutcome.BOUND,
+        ReconcileItemOutcome.REFUSED,
+        ReconcileItemOutcome.BOUND,
+    ]
+    published = scene.world.record_events[feed_before:]
+    assert sorted(e.record_id for e in published) == sorted([first, third])
+    assert scene.record(second).version == 1
 
 
 def test_the_latch_waits_for_every_in_scope_meeting_then_is_written_once(scene: Scene) -> None:

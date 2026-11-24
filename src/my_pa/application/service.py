@@ -4239,6 +4239,7 @@ def _meeting_provider_review_payload(page: ReviewPage) -> dict[str, Any]:
         ],
         "unbound_provider_events_total": page.unbound_provider_events_total,
         "unbound_provider_events_truncated": page.unbound_provider_events_truncated,
+        "unbound_provider_events_next": page.unbound_provider_events_next,
     }
 
 
@@ -14536,6 +14537,7 @@ class ApplicationService:
                 now=authorization.at,
                 page_size=command.page_size,
                 after=command.after,
+                events_after=command.events_after,
             )
         return _Result(
             payload=_meeting_provider_review_payload(page),

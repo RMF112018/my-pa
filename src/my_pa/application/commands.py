@@ -13630,11 +13630,13 @@ class ReviewMeetingProviders:
     neither a provider binding nor a `no_provider_event` mark, ordered by
     `(start_at, meeting_id)`, and the staged calendar events whose provider key
     is bound to no Meeting (a key you unbound is listed `suppressed`): at most
-    200, ordered by start then key, with `unbound_provider_events_total` and
-    `unbound_provider_events_truncated` -- binding an event's key shrinks it. The
-    two lists are never paired or ranked: you decide each match and send it to
-    `meetings.provider.reconcile`. Pass `next_after` back as `after` for the next
-    page of Meetings.
+    200 per page, ordered by start then key, with `unbound_provider_events_total`
+    and `unbound_provider_events_truncated` (more remain after this page) --
+    binding an event's key shrinks it. The two lists are never paired or ranked:
+    you decide each match and send it to `meetings.provider.reconcile`. Pass
+    `next_after` back as `after` for the next page of Meetings, and
+    `unbound_provider_events_next` back as `events_after` for the next page of
+    events; the two cursors are independent.
     """
 
     capability: ClassVar[Capability] = Capability.MEETINGS_PROVIDER_REVIEW
@@ -13650,11 +13652,17 @@ class ReviewMeetingProviders:
             "after": _meeting_id_schema(
                 IdKind.MEETING, "The previous page's next_after: list strictly after it."
             ),
+            "events_after": _meeting_id_schema(
+                IdKind.MEETING_SYNC_EVENT,
+                "The previous answer's unbound_provider_events_next: list events strictly "
+                "after it.",
+            ),
         }
     )
 
     page_size: int | None = None
     after: str | None = None
+    events_after: str | None = None
 
     def __post_init__(self) -> None:
         if self.page_size is not None and (
@@ -13663,6 +13671,8 @@ class ReviewMeetingProviders:
             raise InvalidRequestError(SafeDetail.PAGE_SIZE)
         if self.after is not None:
             _identifier(self.after, IdKind.MEETING, SafeDetail.CURSOR)
+        if self.events_after is not None:
+            _identifier(self.events_after, IdKind.MEETING_SYNC_EVENT, SafeDetail.CURSOR)
 
 
 @dataclass(frozen=True, slots=True)

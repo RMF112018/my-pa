@@ -10,10 +10,12 @@ with neither a binding nor a mark, and the staged provider events whose key is
 unbound: for each source with a staged publication, the events of its newest
 publication that is applied or still staged (a skipped one is not the
 provider's current view), tombstoned keys listed `suppressed`. That event list
-is bounded: ordered by `start_utc`, then key (`calendar_ref`, `ical_uid`,
-`occurrence_original_start_utc` with a series master first, then the staged
-id), at most `MAX_UNBOUND_PROVIDER_EVENTS` are answered with the full count
-and whether the list was truncated. The two lists
+is bounded and paged: ordered by `start_utc`, then key (`calendar_ref`,
+`ical_uid`, `occurrence_original_start_utc` with a series master first, then
+the staged id), at most `MAX_UNBOUND_PROVIDER_EVENTS` are answered per page
+with the full count, whether more remain after this page, and the keyset
+cursor for the next page (the last answered event's staged id, passed back as
+`events_after`; independent of the Meetings' cursor). The two lists
 are side by side. **Nothing here pairs, ranks or compares a Meeting with an
 event** -- no title, time or similarity is ever read against the other list
 (ruling D2; `tests/architecture/test_meeting_provider_review_no_pairing.py`).
@@ -22,7 +24,9 @@ The staged event fields are eligible for the operator's own connected clients
 
 **Reconcile** (a write) takes the Principal's binding-writer advisory lock
 first (ruling D8), then runs each item under its own SAVEPOINT, so an item
-refused with a closed token rolls back alone and the others stand:
+refused with a closed token rolls back alone and the others stand -- its
+database writes and the Record Event drafts it staged in the unit of work's
+buffer alike:
 
 * a `bind` is exactly `MeetingApplication.bind_meeting_provider` -- the same
   CAS, rules, receipt and Record Event -- reserving under the
@@ -31,8 +35,10 @@ refused with a closed token rolls back alone and the others stand:
   `source_capability` `meetings.provider.reconcile`; a staged reference
   resolves to the staged event's full key, series UID and provider event id;
 * a `no_provider_event` mark inserts one `meeting_provider_review_marks` row
-  (idempotent by Meeting) and never versions the Meeting; a Meeting that is
-  already provider-bound is refused `meeting_already_provider_bound`.
+  (idempotent by Meeting) and never versions the Meeting; an already-marked
+  Meeting answers `replayed` (even if it was bound since), and a new mark on a
+  Meeting that is already provider-bound is refused
+  `meeting_already_provider_bound`.
 
 Then, in the same transaction, when no in-scope Meeting is left unreviewed
 and the latch does not exist yet, the latch is recorded once with the in-scope
@@ -46,7 +52,8 @@ again. A changed bind item under the same batch key is refused
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
@@ -65,6 +72,7 @@ from my_pa.contracts.v1.meetings import MeetingProviderBindingView
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.meeting.model import (
+    MeetingCursorError,
     MeetingError,
     MeetingErrorField,
     MeetingIdempotencyConflictError,
@@ -115,12 +123,16 @@ class ReviewPage:
     unreviewed_meetings: tuple[UnreviewedMeetingRecord, ...]
     #: The last listed Meeting when the page is full (pass it back as `after`).
     next_after: str | None
-    #: At most `MAX_UNBOUND_PROVIDER_EVENTS`, ordered by start, then key.
+    #: At most `MAX_UNBOUND_PROVIDER_EVENTS`, ordered by start, then key, from
+    #: the `events_after` cursor on.
     unbound_provider_events: tuple[StagedProviderEvent, ...]
-    #: How many unbound events there are in all (before the bound).
+    #: How many unbound events there are in all (before the cursor and the bound).
     unbound_provider_events_total: int
-    #: Whether the list answered fewer than `unbound_provider_events_total`.
+    #: Whether more unbound events remain after this page.
     unbound_provider_events_truncated: bool
+    #: The last answered event's staged id when more remain (pass it back as
+    #: `events_after`), else `None`.
+    unbound_provider_events_next: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +181,23 @@ def _refusal(error: MeetingError) -> ReconcileRefusal:
     return ReconcileRefusal(ErrorCode.INVALID_REQUEST, error.field.value)
 
 
+@contextmanager
+def _item_savepoint(unit: UnitOfWork) -> Iterator[None]:
+    """One item's SAVEPOINT, covering the unit of work's Record Event buffer too.
+
+    The repository savepoint rolls back the item's rows; the drafts the item
+    staged in the buffer are not rows yet, so they are dropped here, back to the
+    count staged before the item began.
+    """
+    staged = unit.record_events.pending_count
+    try:
+        with unit.meeting_sync.savepoint():
+            yield
+    except BaseException:
+        unit.record_events.truncate(staged)
+        raise
+
+
 def _current_pass(unit: UnitOfWork, principal_id: str, now: datetime) -> ReconciliationPass:
     latch = unit.meeting_sync.get_reconciliation_pass(principal_id)
     counts = unit.meeting_sync.count_review_scope(principal_id, since=review_scope_start(now))
@@ -195,6 +224,7 @@ class MeetingProviderReconciliation:
         now: datetime,
         page_size: int | None = None,
         after: str | None = None,
+        events_after: str | None = None,
     ) -> ReviewPage:
         at = ensure_utc(now)
         limit = MAX_REVIEW_PAGE_SIZE if page_size is None else page_size
@@ -208,13 +238,26 @@ class MeetingProviderReconciliation:
         events = sorted(
             self._unbound_events(unit, principal_id), key=lambda staged: staged.review_order
         )
+        remaining = events
+        if events_after is not None:
+            # Keyset over the review order: strictly after the named staged
+            # event, which stays readable after its key is bound (staged events
+            # are retained), so binding never shifts a page.
+            anchor = unit.meeting_sync.get_event(principal_id, events_after)
+            if anchor is None:
+                raise MeetingCursorError()
+            position = StagedProviderEvent(event=anchor, suppressed=False).review_order
+            remaining = [staged for staged in events if staged.review_order > position]
+        page = remaining[:MAX_UNBOUND_PROVIDER_EVENTS]
+        more = len(remaining) > MAX_UNBOUND_PROVIDER_EVENTS
         return ReviewPage(
             reconciliation=_current_pass(unit, principal_id, at),
             unreviewed_meetings=meetings,
             next_after=meetings[-1].meeting_id if len(meetings) == limit else None,
-            unbound_provider_events=tuple(events[:MAX_UNBOUND_PROVIDER_EVENTS]),
+            unbound_provider_events=tuple(page),
             unbound_provider_events_total=len(events),
-            unbound_provider_events_truncated=len(events) > MAX_UNBOUND_PROVIDER_EVENTS,
+            unbound_provider_events_truncated=more,
+            unbound_provider_events_next=page[-1].event.event_id if more else None,
         )
 
     @staticmethod
@@ -257,7 +300,7 @@ class MeetingProviderReconciliation:
                 unit, principal_id, item, idempotency_key, index, at, correlation_id
             )
             try:
-                with unit.meeting_sync.savepoint():
+                with _item_savepoint(unit):
                     results.append(write())
             except MeetingError as error:
                 results.append(
@@ -309,6 +352,12 @@ class MeetingProviderReconciliation:
         meetings = unit.meetings
         if meetings.read_meeting(principal_id, item.meeting_id) is None:
             raise MeetingNotFoundError(MeetingErrorField.MEETING_ID)
+        # An existing mark is a replay first: the Meeting may have been bound
+        # since, and the mark it already has is still the answer.
+        if unit.meeting_sync.get_review_mark(principal_id, item.meeting_id) is not None:
+            return ReconcileItemResult(
+                index=index, meeting_id=item.meeting_id, outcome=ReconcileItemOutcome.REPLAYED
+            )
         if meetings.read_provider_binding_for_meeting(principal_id, item.meeting_id) is not None:
             raise MeetingInvalidRequestError(MeetingErrorField.MEETING_ALREADY_PROVIDER_BOUND)
         written = unit.meeting_sync.insert_review_mark(

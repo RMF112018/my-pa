@@ -106,6 +106,7 @@ def test_the_chatllm_v16_classification() -> None:
 def test_the_schemas_publish_the_closed_item_vocabulary() -> None:
     review = input_schema_for(ReviewMeetingProviders)["properties"]["payload"]
     assert review["properties"]["page_size"]["maximum"] == 100
+    assert review["properties"]["events_after"]["pattern"].startswith("^msevt_")
     assert not review.get("required")
     schema = input_schema_for(ReconcileMeetingProviders)
     payload = schema["properties"]["payload"]
@@ -286,9 +287,11 @@ def test_review_then_reconcile_over_the_service_completes_the_pass(scene: Scene)
         "unbound_provider_events",
         "unbound_provider_events_total",
         "unbound_provider_events_truncated",
+        "unbound_provider_events_next",
     }
     assert result["unbound_provider_events_total"] == 1
     assert result["unbound_provider_events_truncated"] is False
+    assert result["unbound_provider_events_next"] is None
     assert result["pass"]["state"] == "pending"
     meetings = result["unreviewed_meetings"]
     assert {m["meeting_id"] for m in meetings} >= {scene.meeting_id}
@@ -348,3 +351,25 @@ def test_review_then_reconcile_over_the_service_completes_the_pass(scene: Scene)
     assert refused["outcome"] == "refused"
     assert refused["refusal"] == {"code": "conflict", "detail": "stale_version"}
     assert "uid-never-echoed" not in str(stale.result)
+
+
+@pytest.mark.parametrize("cursor", ["mtg_reconcilemcp0001", "msevt_", "not-a-cursor", 7])
+def test_a_malformed_event_cursor_is_refused_cursor(cursor: object) -> None:
+    """R1 finding 2: `events_after` is an `msevt_` id or the request is refused `cursor`."""
+    with pytest.raises(InvalidRequestError) as refused:
+        normalize(
+            REVIEW.value,
+            document(REVIEW, "prn_reconcilemcp0001", {"events_after": cursor}),
+        )
+    assert tuple(d.value for d in refused.value.safe_details) == ("cursor",)
+
+
+def test_an_unknown_event_cursor_is_refused_cursor_over_the_service(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    _stage(scene)
+    answer = _invoke(
+        service, scene.principal, REVIEW, {"events_after": "msevt_reconcilemcpunknown1"}
+    )
+    assert answer.error is not None
+    assert answer.error.code.value == "invalid_request"
+    assert answer.error.safe_details == ("cursor",)

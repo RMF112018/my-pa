@@ -23,18 +23,32 @@ only ever grows at its end, and the hand-bumped ChatLLM profile version moves
 exactly when the policy table does. A change breaking either is refused, and
 `test_pins_are_current.py` names the same rule while the snapshot is stale.
 
+`regen` also keeps `tests/contract/v1_payload_digests.json` (phase P4, operator
+decision O3): the wire-compatibility tripwire for external clients. It records
+one digest per published tool's `payload` schema and per v1 view model's field
+names, plus a dated acceptance ledger. A new tool or view is recorded only by
+`regen --accept-new`; a changed or removed one only by
+`regen --accept-v1-change NAME --reason "<ADR ref>"`, which writes a ledger
+entry. `tests/contract/test_v1_payload_digests.py` compares and never writes.
+
 Not collected (no `test_` prefix), following `tests/ci_shard.py`.
 
 Usage, from the repository root::
 
     PYTHONPATH=src .venv/bin/python -m tests.pins regen   # rewrite tests/pins.json
     PYTHONPATH=src .venv/bin/python -m tests.pins check   # exit 1 if it is stale
+    PYTHONPATH=src .venv/bin/python -m tests.pins regen --accept-new
+    PYTHONPATH=src .venv/bin/python -m tests.pins regen \
+        --accept-v1-change reports.read --reason "ADR-0NN: why the v1 shape moves"
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
+import importlib
+import inspect
 import json
 import sys
 from collections.abc import Mapping
@@ -45,6 +59,7 @@ from typing import Any, Final
 ROOT: Final = Path(__file__).resolve().parents[1]
 PINS_PATH: Final = ROOT / "tests" / "pins.json"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
+DIGESTS_PATH: Final = ROOT / "tests" / "contract" / "v1_payload_digests.json"
 
 #: The sections `test_pins_are_current` compares with `derive()`, one test each.
 SECTIONS: Final = ("alembic", "vocabulary", "chatllm")
@@ -265,6 +280,188 @@ def spell(value: int) -> str:
     return f"{prefix}{' and ' if rest < 100 else ' '}{spell(rest)}"
 
 
+# --- v1 wire digests (D1) ----------------------------------------------------------------
+
+#: The digest file's sections: published tool name -> SHA-256 of its `payload`
+#: schema, and `module.Model` -> SHA-256 of its sorted field names.
+DIGEST_SECTIONS: Final = ("tools", "views")
+#: The `my_pa.contracts.v1` modules whose models are pinned, as the S3 view pin did.
+V1_VIEW_MODULES: Final = (
+    "tasks",
+    "commitments",
+    "meetings",
+    "record_events",
+    "capture",
+    "canvas_workspace",
+    "documents",
+    "reveal",
+    "status",
+    "capabilities",
+)
+
+
+def canonical_sha256(document: object) -> str:
+    """SHA-256 of compact, key-sorted JSON: the measure every v1 pin has used."""
+    return hashlib.sha256(
+        json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def v1_payloads() -> dict[str, Any]:
+    """Every published tool's `payload` input schema, by tool name."""
+    from my_pa.adapters.mcp.tools import TOOLS
+
+    return {tool.name: tool.input_schema["properties"]["payload"] for tool in TOOLS}
+
+
+def v1_view_fields() -> dict[str, list[str]]:
+    """Every v1 view model's sorted field names, by `module.Model`."""
+    from pydantic import BaseModel
+
+    views: dict[str, list[str]] = {}
+    for name in V1_VIEW_MODULES:
+        module = importlib.import_module(f"my_pa.contracts.v1.{name}")
+        for model_name, model in vars(module).items():
+            if (
+                inspect.isclass(model)
+                and issubclass(model, BaseModel)
+                and model.__module__ == module.__name__
+            ):
+                views[f"{name}.{model_name}"] = sorted(model.model_fields)
+    return views
+
+
+def derive_digests() -> dict[str, dict[str, str]]:
+    """The per-name digests the repository publishes now. Pure; writes nothing."""
+    return {
+        "tools": {name: canonical_sha256(payload) for name, payload in v1_payloads().items()},
+        "views": {name: canonical_sha256(fields) for name, fields in v1_view_fields().items()},
+    }
+
+
+def load_digests() -> dict[str, Any]:
+    """The committed `tests/contract/v1_payload_digests.json`."""
+    loaded = json.loads(DIGESTS_PATH.read_text(encoding="utf-8"))
+    assert isinstance(loaded, dict)
+    return loaded
+
+
+def digest_seal(document: Mapping[str, Any]) -> str:
+    """The seal `regen` writes over the accepted digests and the whole ledger.
+
+    A hand edit of a digest or of a ledger entry that skipped `regen` leaves the
+    seal stale, so it is caught even when the edited digest matches the source.
+    """
+    return canonical_sha256({key: document[key] for key in (*DIGEST_SECTIONS, "ledger")})
+
+
+def digest_drift(
+    committed: Mapping[str, Any], derived: Mapping[str, Mapping[str, str]]
+) -> dict[str, dict[str, list[str]]]:
+    """Per section: names `added` (unrecorded), `changed` and `removed` from the repository."""
+    drift: dict[str, dict[str, list[str]]] = {}
+    for section in DIGEST_SECTIONS:
+        accepted, now = committed[section], derived[section]
+        drift[section] = {
+            "added": sorted(set(now) - set(accepted)),
+            "changed": sorted(n for n in set(now) & set(accepted) if now[n] != accepted[n]),
+            "removed": sorted(set(accepted) - set(now)),
+        }
+    return drift
+
+
+def ledger_violation(committed: Mapping[str, Any]) -> str | None:
+    """Why the accepted digests are not what the ledger last accepted. `None` if they are.
+
+    The last `changed` entry naming a digest must record exactly the digest now
+    accepted for it (or none, for a removal).
+    """
+    last: dict[tuple[str, str], str | None] = {}
+    for entry in committed["ledger"]:
+        if entry["kind"] == "changed":
+            last[(entry["section"], entry["name"])] = entry["to"]
+    for (section, name), digest in last.items():
+        if committed[section].get(name) != digest:
+            return f"{section} {name!r} is not the digest its last ledger entry accepted"
+    return None
+
+
+def render_digests(document: Mapping[str, Any]) -> str:
+    sealed = {key: document[key] for key in (*DIGEST_SECTIONS, "ledger")}
+    sealed["seal"] = digest_seal(sealed)
+    sealed["about"] = (
+        "Written by `python -m tests.pins regen`; never edit by hand. A new name needs "
+        "`--accept-new`; a changed or removed one `--accept-v1-change NAME --reason`."
+    )
+    return json.dumps(sealed, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+
+
+def accept_digests(
+    committed: Mapping[str, Any],
+    derived: Mapping[str, Mapping[str, str]],
+    *,
+    accept_new: bool,
+    accept_change: list[str],
+    reason: str | None,
+    today: datetime.date,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """The digest document after accepting the named drift, or why it is refused."""
+    drift = digest_drift(committed, derived)
+    moved = {
+        name
+        for section in DIGEST_SECTIONS
+        for name in (*drift[section]["changed"], *drift[section]["removed"])
+    }
+    if accept_change and not (reason and reason.strip()):
+        return None, "--accept-v1-change needs --reason naming the ADR that allows it"
+    unmoved = sorted(set(accept_change) - moved)
+    if unmoved:
+        return None, f"--accept-v1-change names {unmoved}, whose digests did not move"
+    unaccepted = sorted(moved - set(accept_change))
+    if unaccepted:
+        return None, (
+            f"v1 digests changed or were removed for {unaccepted}: an external client "
+            'breaks; rerun with --accept-v1-change NAME --reason "<ADR ref>" for each'
+        )
+    new = {section: drift[section]["added"] for section in DIGEST_SECTIONS}
+    if any(new.values()) and not accept_new:
+        return None, f"new names {new} are not yet recorded; rerun with --accept-new"
+    document: dict[str, Any] = {
+        "ledger": list(committed["ledger"]),
+        **{section: dict(committed[section]) for section in DIGEST_SECTIONS},
+    }
+    for section in DIGEST_SECTIONS:
+        if new[section]:
+            document["ledger"].append(
+                {
+                    "date": today.isoformat(),
+                    "kind": "added",
+                    "names": new[section],
+                    "section": section,
+                }
+            )
+            for name in new[section]:
+                document[section][name] = derived[section][name]
+        for name in (*drift[section]["changed"], *drift[section]["removed"]):
+            digest = derived[section].get(name)
+            document["ledger"].append(
+                {
+                    "date": today.isoformat(),
+                    "from": committed[section][name],
+                    "kind": "changed",
+                    "name": name,
+                    "reason": (reason or "").strip(),
+                    "section": section,
+                    "to": digest,
+                }
+            )
+            if digest is None:
+                del document[section][name]
+            else:
+                document[section][name] = digest
+    return document, None
+
+
 # --- CLI ----------------------------------------------------------------------------------
 
 
@@ -277,8 +474,21 @@ def stale_sections(committed: dict[str, Any], derived: dict[str, Any]) -> list[s
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m tests.pins", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("regen", help="rewrite tests/pins.json from the repository")
-    commands.add_parser("check", help="exit 1 if tests/pins.json is stale")
+    regen = commands.add_parser(
+        "regen", help="rewrite tests/pins.json and accept v1 digest drift you name"
+    )
+    regen.add_argument(
+        "--accept-new", action="store_true", help="record new tools and views in the digest file"
+    )
+    regen.add_argument(
+        "--accept-v1-change",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="accept a changed or removed v1 digest (repeatable); needs --reason",
+    )
+    regen.add_argument("--reason", help="the ADR reference the ledger records")
+    commands.add_parser("check", help="exit 1 if tests/pins.json or the digest file is stale")
     arguments = parser.parse_args(argv)
     derived = derive()
     if arguments.command == "regen":
@@ -292,16 +502,34 @@ def main(argv: list[str] | None = None) -> int:
             if violation is not None:
                 print(f"refusing to regenerate: {violation}", file=sys.stderr)
                 return 1
+        digests, refusal = accept_digests(
+            load_digests(),
+            derive_digests(),
+            accept_new=arguments.accept_new,
+            accept_change=arguments.accept_v1_change,
+            reason=arguments.reason,
+            today=datetime.date.today(),
+        )
+        if digests is None:
+            print(f"refusing to regenerate: {refusal}", file=sys.stderr)
+            return 1
         PINS_PATH.write_text(render(derived), encoding="utf-8")
-        print(f"wrote {PINS_PATH.relative_to(ROOT)}")
+        DIGESTS_PATH.write_text(render_digests(digests), encoding="utf-8")
+        print(f"wrote {PINS_PATH.relative_to(ROOT)} and {DIGESTS_PATH.relative_to(ROOT)}")
         return 0
     stale = stale_sections(load(), derived)
     if PINS_PATH.read_text(encoding="utf-8") != render(load()):
         stale.append("(formatting)")
+    digests = load_digests()
+    drift = digest_drift(digests, derive_digests())
+    if any(names for section in drift.values() for names in section.values()):
+        stale.append(f"v1 digests {drift}")
+    if DIGESTS_PATH.read_text(encoding="utf-8") != render_digests(digests):
+        stale.append("v1 digests (hand edited: seal or formatting)")
     if stale:
-        print(f"tests/pins.json is stale in {stale}; run `python -m tests.pins regen`")
+        print(f"pins are stale in {stale}; run `python -m tests.pins regen`")
         return 1
-    print("tests/pins.json is current")
+    print("tests/pins.json and the v1 digests are current")
     return 0
 
 

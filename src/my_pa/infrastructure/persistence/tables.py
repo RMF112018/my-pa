@@ -340,6 +340,36 @@ from my_pa.domain.project_controls.constraint import (
     ConstraintRecordQuality,
 )
 from my_pa.domain.project_controls.party import PartyKind
+from my_pa.domain.project_reports.model import (
+    FAMILY_OF_VIEW,
+    UNCLASSIFIED_COUNT_KEY,
+    Additivity,
+    BindingReason,
+    BindingState,
+    CompletenessClass,
+    DerivationState,
+    DerivationTrigger,
+    FamilyView,
+    IdentityBasis,
+    LineKind,
+    ReconciliationOutcome,
+    RecordFamily,
+    RowReason,
+    RowRole,
+    StatusClass,
+    TotalScope,
+    ValueKind,
+)
+from my_pa.domain.project_reports.model import (
+    IdentityState as ReportIdentityState,
+)
+from my_pa.domain.project_reports.model import (
+    ObservationState as ReportObservationState,
+)
+from my_pa.domain.project_reports.model import (
+    QuarantineReason as ReportQuarantineReason,
+)
+from my_pa.domain.project_reports.reconciliation import CROSS_CHECK_KIND
 from my_pa.domain.record_events import (
     MAX_CHANGED_FIELDS,
     MAX_SOURCE_CAPABILITY_CHARACTERS,
@@ -537,6 +567,7 @@ from my_pa.domain.task.history import (
 from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskOriginKind, TaskPriority
 from my_pa.domain.task.recurrence import RecurrenceFrequency
 from my_pa.domain.task.role import TaskRole
+from my_pa.infrastructure.project_reports.pulse_csv import Terminator
 
 SCHEMA: Final = "knowledge"
 NATIVE_BASELINE_TERMINAL_CURSOR: Final = "__my_pa_native_baseline_complete__"
@@ -16989,6 +17020,1045 @@ MEETING_SYNC_TABLES: Final = (
     meeting_provider_review_marks,
     meeting_provider_reconciliation_passes,
     meeting_provider_key_tombstones,
+)
+
+# --- Project reports WP3P-S3: raw exports, derivations and bindings ----------
+#
+# Twelve Principal-partitioned tables of revision `0d4e247d03cb` (Manager
+# rulings D1, D2, D6, D10, D11, D13). Layer A (`project_report_snapshots`,
+# `project_report_rows`) is the classification-free, byte-exact image of one
+# lifecycle snapshot; every classification lives in an append-only, rebuildable
+# derivation (`project_report_derivations` and its row roles, lines, typed line
+# values and stated totals). The binding pointer is the only mutable row, and
+# only its revision, Project and state change. Every closed set below is
+# mirrored as a frozen literal in the revision, which
+# `tests/schema/test_project_report_evidence_migration.py` holds equal on a live
+# server.
+
+_PROJECT_REPORT_SHA256: Final = "^[0-9a-f]{64}$"
+_PROJECT_REPORT_TOKEN: Final = "^[a-z0-9][a-z0-9_.-]{0,63}$"  # noqa: S105 -- a version-token shape
+#: A closed per-family catalogue key, `<entity>.<field>` (ruling D2: the
+#: catalogue is code, so a new family or column needs no migration).
+_PROJECT_REPORT_FIELD_KEY: Final = "^[a-z][a-z0-9_]{0,63}[.][a-z][a-z0-9_]{0,63}$"
+#: The bindings-file bounds (`domain.project_reports.bindings`).
+MAX_PROJECT_REPORT_TEXT_CHARACTERS: Final = 200
+MAX_PROJECT_REPORT_FILTER_CHARACTERS: Final = 500
+MAX_PROJECT_REPORT_IDENTITY_KEY_CHARACTERS: Final = 2000
+#: Money and numbers are held at four decimal places (`more_than_4_decimals`
+#: is refused before a value is typed).
+PROJECT_REPORT_DECIMAL: Final = Numeric(20, 4)
+#: The header row roles: a header names its level and its raw key.
+_PROJECT_REPORT_HEADER_ROLES: Final = frozenset(
+    {RowRole.GROUP_HEADER.value, RowRole.GROUPING_ONLY.value}
+)
+_PROJECT_REPORT_TOTAL_ROLES: Final = frozenset(
+    {RowRole.GROUP_HEADER.value, RowRole.GRAND_TOTAL.value}
+)
+_PROJECT_REPORT_ROW_ROLE_REASONS: Final = frozenset({RowReason.WIDTH_MISMATCH.value})
+_PROJECT_REPORT_VALUE_REASONS: Final = frozenset(
+    {RowReason.TYPE_ERROR.value, RowReason.MORE_THAN_4_DECIMALS.value}
+)
+_PROJECT_REPORT_IDENTITY_REASONS: Final = frozenset(
+    {
+        RowReason.IDENTITY_MISSING.value,
+        RowReason.AMBIGUOUS_IDENTITY.value,
+        RowReason.AMBIGUOUS_COMMITMENT_CO.value,
+    }
+)
+_PROJECT_REPORT_CROSS_CHECK_KINDS: Final = frozenset({CROSS_CHECK_KIND})
+
+_PROJECT_REPORT_SOURCE: Final = (
+    f"{SCHEMA}.ingest_sources.ingest_source_id",
+    f"{SCHEMA}.ingest_sources.principal_id",
+)
+_PROJECT_REPORT_PROJECT: Final = (
+    f"{SCHEMA}.projects.project_id",
+    f"{SCHEMA}.projects.principal_id",
+)
+
+
+def _report_revision(*columns: str) -> list[str]:
+    return [f"{SCHEMA}.project_report_binding_revisions.{column}" for column in columns]
+
+
+def _report_derivation(*columns: str) -> list[str]:
+    return [f"{SCHEMA}.project_report_derivations.{column}" for column in columns]
+
+
+def _report_nullable_one_of(
+    column: str, values: type[StrEnum] | frozenset[str], *, name: str
+) -> CheckConstraint:
+    return CheckConstraint(f"{column} IS NULL OR {column} IN ({_literals(values)})", name=name)
+
+
+def _report_token(column: str, *, name: str, nullable: bool = False) -> CheckConstraint:
+    rule = f"{column} ~ '{_PROJECT_REPORT_TOKEN}'"
+    return CheckConstraint(f"{column} IS NULL OR {rule}" if nullable else rule, name=name)
+
+
+def _report_view_pairs() -> str:
+    return ", ".join(
+        f"('{family.value}', '{view.value}')" for view, family in FAMILY_OF_VIEW.items()
+    )
+
+
+#: One append-only revision of one folder's binding to one Project (D6: the
+#: revisions are the audit; no `audit_events` row). `supersedes_revision_id`
+#: names the revision of the same source it replaces, at most once, and each
+#: source has one first revision, so each source's chain is linear.
+project_report_binding_revisions = Table(
+    "project_report_binding_revisions",
+    METADATA,
+    Column("binding_revision_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("ingest_source_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("declared_project_number", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("supersedes_revision_id", Text),
+    Column("currency", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_by", Text, nullable=False),
+    Column("change_set_sha256", Text, nullable=False),
+    Column("reason_code", Text, nullable=False),
+    _is_identifier("binding_revision_id", IdKind.PROJECT_REPORT_BINDING_REVISION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("ingest_source_id", IdKind.INGEST_SOURCE),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("supersedes_revision_id", IdKind.PROJECT_REPORT_BINDING_REVISION),
+    CheckConstraint(
+        f"length(declared_project_number) BETWEEN 1 AND {MAX_PROJECT_REPORT_TEXT_CHARACTERS} "
+        "AND length(trim(declared_project_number)) > 0",
+        name="a_binding_revision_project_number_is_bounded",
+    ),
+    _one_of("state", BindingState, name="a_binding_revision_state_is_known"),
+    CheckConstraint(
+        "supersedes_revision_id IS NULL OR supersedes_revision_id <> binding_revision_id",
+        name="a_binding_revision_does_not_supersede_itself",
+    ),
+    CheckConstraint(
+        f"state <> '{BindingState.RETIRED.value}' OR supersedes_revision_id IS NOT NULL",
+        name="a_retired_binding_revision_supersedes_one",
+    ),
+    CheckConstraint("currency ~ '^[A-Z]{3}$'", name="a_binding_revision_currency_is_a_code"),
+    CheckConstraint(
+        "recorded_by = 'operator_cli'",
+        name="a_binding_revision_is_recorded_by_the_operator_cli",
+    ),
+    CheckConstraint(
+        f"change_set_sha256 ~ '{_PROJECT_REPORT_SHA256}'",
+        name="a_binding_revision_change_set_is_sha256",
+    ),
+    _one_of("reason_code", BindingReason, name="a_binding_revision_reason_is_known"),
+    UniqueConstraint(
+        "principal_id", "supersedes_revision_id", name="one_binding_revision_supersedes_each"
+    ),
+    UniqueConstraint(
+        "binding_revision_id",
+        "principal_id",
+        name="a_binding_revision_is_identified_within_its_principal",
+    ),
+    UniqueConstraint(
+        "binding_revision_id",
+        "principal_id",
+        "ingest_source_id",
+        name="a_binding_revision_is_identified_within_its_source",
+    ),
+    UniqueConstraint(
+        "binding_revision_id",
+        "principal_id",
+        "ingest_source_id",
+        "project_id",
+        name="a_binding_revision_is_identified_within_its_project",
+    ),
+    UniqueConstraint(
+        "binding_revision_id",
+        "principal_id",
+        "ingest_source_id",
+        "project_id",
+        "state",
+        name="a_binding_revision_is_identified_with_its_state",
+    ),
+    ForeignKeyConstraint(
+        ["ingest_source_id", "principal_id"],
+        list(_PROJECT_REPORT_SOURCE),
+        ondelete="RESTRICT",
+        name="a_binding_revision_names_a_source_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["project_id", "principal_id"],
+        list(_PROJECT_REPORT_PROJECT),
+        ondelete="RESTRICT",
+        name="a_binding_revision_names_a_project_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["supersedes_revision_id", "principal_id", "ingest_source_id"],
+        _report_revision("binding_revision_id", "principal_id", "ingest_source_id"),
+        ondelete="RESTRICT",
+        name="a_binding_revision_supersedes_a_revision_of_its_source",
+    ),
+    Index(
+        "one_first_binding_revision_per_source",
+        "principal_id",
+        "ingest_source_id",
+        unique=True,
+        postgresql_where=text("supersedes_revision_id IS NULL"),
+    ),
+    Index(
+        "project_report_binding_revisions_by_source",
+        "principal_id",
+        "ingest_source_id",
+        "recorded_at",
+    ),
+    Index("project_report_binding_revisions_by_project", "principal_id", "project_id"),
+)
+
+#: The operator's declaration of what one saved report filters (D8), against
+#: one revision. Append-only.
+project_report_filter_declarations = Table(
+    "project_report_filter_declarations",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("binding_revision_id", Text, nullable=False),
+    Column("slug_label", Text, nullable=False),
+    Column("description", Text, nullable=False),
+    Column("declared_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "binding_revision_id",
+        "slug_label",
+        name="project_report_filter_declarations_pkey",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("binding_revision_id", IdKind.PROJECT_REPORT_BINDING_REVISION),
+    CheckConstraint(
+        f"length(slug_label) BETWEEN 1 AND {MAX_PROJECT_REPORT_TEXT_CHARACTERS} "
+        "AND strpos(slug_label, '/') = 0 AND slug_label !~ '[[:cntrl:]]'",
+        name="a_filter_declaration_slug_is_bounded",
+    ),
+    CheckConstraint(
+        f"char_length(description) BETWEEN 1 AND {MAX_PROJECT_REPORT_FILTER_CHARACTERS} "
+        "AND length(trim(description)) > 0",
+        name="a_filter_declaration_description_is_bounded",
+    ),
+    ForeignKeyConstraint(
+        ["binding_revision_id", "principal_id"],
+        _report_revision("binding_revision_id", "principal_id"),
+        ondelete="RESTRICT",
+        name="a_filter_declaration_names_a_revision_of_its_principal",
+    ),
+)
+
+#: The one binding pointer per source. Only `binding_revision_id`, `project_id`
+#: and `state` change, and only to the revision that supersedes the one named
+#: (the revision's trigger); the composite foreign key holds the pointer equal
+#: to the revision it names. At most one `active` pointer per Project (v1: one
+#: folder per Project).
+project_report_bindings = Table(
+    "project_report_bindings",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("ingest_source_id", Text, nullable=False),
+    Column("binding_revision_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    PrimaryKeyConstraint("principal_id", "ingest_source_id", name="project_report_bindings_pkey"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("ingest_source_id", IdKind.INGEST_SOURCE),
+    _is_identifier("binding_revision_id", IdKind.PROJECT_REPORT_BINDING_REVISION),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _one_of("state", BindingState, name="a_binding_state_is_known"),
+    ForeignKeyConstraint(
+        ["ingest_source_id", "principal_id"],
+        list(_PROJECT_REPORT_SOURCE),
+        ondelete="RESTRICT",
+        name="a_binding_names_a_source_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["project_id", "principal_id"],
+        list(_PROJECT_REPORT_PROJECT),
+        ondelete="RESTRICT",
+        name="a_binding_names_a_project_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["binding_revision_id", "principal_id", "ingest_source_id", "project_id", "state"],
+        _report_revision(
+            "binding_revision_id", "principal_id", "ingest_source_id", "project_id", "state"
+        ),
+        ondelete="RESTRICT",
+        name="a_binding_equals_the_revision_it_names",
+    ),
+    Index(
+        "one_active_project_report_binding_per_project",
+        "principal_id",
+        "project_id",
+        unique=True,
+        postgresql_where=text(f"state = '{BindingState.ACTIVE.value}'"),
+    ),
+    Index("project_report_bindings_by_revision", "principal_id", "binding_revision_id"),
+)
+
+#: Layer A head (D1): the byte-exact header and reconstruction facts of one
+#: lifecycle snapshot. `file_sha256` is the lifecycle digest itself (the
+#: composite key onto `ingest_snapshots`), and the stored records must hash back
+#: to it (`reconstruction_sha256 = file_sha256`).
+project_report_snapshots = Table(
+    "project_report_snapshots",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("snapshot_id", Text, nullable=False),
+    Column("ingest_source_id", Text, nullable=False),
+    Column("file_sha256", Text, nullable=False),
+    Column("bom_present", Boolean, nullable=False),
+    Column("header_raw_record", Text, nullable=False),
+    Column("header_terminator", Text, nullable=False),
+    Column("header_cells", JSONB, nullable=False),
+    Column("header_signature", Text, nullable=False),
+    Column("signature_version", Text, nullable=False),
+    Column("reader_version", Text, nullable=False),
+    Column("data_row_count", Integer, nullable=False),
+    Column("embedded_line_break_count", Integer, nullable=False),
+    Column("reconstruction_sha256", Text, nullable=False),
+    PrimaryKeyConstraint("principal_id", "snapshot_id", name="project_report_snapshots_pkey"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("snapshot_id", IdKind.INGEST_SNAPSHOT),
+    _is_identifier("ingest_source_id", IdKind.INGEST_SOURCE),
+    CheckConstraint(
+        f"file_sha256 ~ '{_PROJECT_REPORT_SHA256}'", name="a_report_snapshot_digest_is_sha256"
+    ),
+    CheckConstraint(
+        f"header_signature ~ '{_PROJECT_REPORT_SHA256}'",
+        name="a_report_snapshot_signature_is_sha256",
+    ),
+    CheckConstraint(
+        f"reconstruction_sha256 ~ '{_PROJECT_REPORT_SHA256}'",
+        name="a_report_snapshot_reconstruction_is_sha256",
+    ),
+    CheckConstraint(
+        "reconstruction_sha256 = file_sha256", name="a_report_snapshot_reconstructs_its_file"
+    ),
+    CheckConstraint("length(header_raw_record) >= 1", name="a_report_snapshot_header_is_not_empty"),
+    _one_of("header_terminator", Terminator, name="a_report_snapshot_header_terminator_is_known"),
+    CheckConstraint(
+        f"header_terminator <> '{Terminator.NONE.value}' OR data_row_count = 0",
+        name="only_a_header_only_report_snapshot_lacks_a_terminator",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(header_cells) = 'array' AND jsonb_array_length(header_cells) >= 1",
+        name="a_report_snapshot_header_cells_is_a_non_empty_array",
+    ),
+    _report_token("signature_version", name="a_report_snapshot_signature_version_is_a_token"),
+    _report_token("reader_version", name="a_report_snapshot_reader_version_is_a_token"),
+    CheckConstraint(
+        "data_row_count >= 0 AND embedded_line_break_count >= 0",
+        name="a_report_snapshot_count_is_non_negative",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "snapshot_id",
+        "ingest_source_id",
+        name="a_report_snapshot_is_identified_within_its_source",
+    ),
+    ForeignKeyConstraint(
+        ["snapshot_id", "principal_id", "file_sha256"],
+        [
+            f"{SCHEMA}.ingest_snapshots.snapshot_id",
+            f"{SCHEMA}.ingest_snapshots.principal_id",
+            f"{SCHEMA}.ingest_snapshots.file_sha256",
+        ],
+        ondelete="RESTRICT",
+        name="a_report_snapshot_names_a_lifecycle_snapshot_of_its_digest",
+    ),
+    ForeignKeyConstraint(
+        ["snapshot_id", "principal_id", "ingest_source_id"],
+        list(_SNAPSHOT_OF_SOURCE),
+        ondelete="RESTRICT",
+        name="a_report_snapshot_names_a_lifecycle_snapshot_of_its_source",
+    ),
+    Index("project_report_snapshots_by_source", "principal_id", "ingest_source_id"),
+)
+
+#: Layer A raw rows, classification-free: the exact record text between record
+#: starts (terminator excluded), its terminator and its parsed cells (checked
+#: redundancy, so a re-derivation never re-parses).
+project_report_rows = Table(
+    "project_report_rows",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("snapshot_id", Text, nullable=False),
+    Column("row_ordinal", Integer, nullable=False),
+    Column("raw_record", Text, nullable=False),
+    Column("terminator", Text, nullable=False),
+    Column("cells", JSONB, nullable=False),
+    Column("width_matches", Boolean, nullable=False),
+    PrimaryKeyConstraint(
+        "principal_id", "snapshot_id", "row_ordinal", name="project_report_rows_pkey"
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("snapshot_id", IdKind.INGEST_SNAPSHOT),
+    CheckConstraint("row_ordinal >= 1", name="a_report_row_ordinal_is_positive"),
+    _one_of("terminator", Terminator, name="a_report_row_terminator_is_known"),
+    CheckConstraint(
+        "jsonb_typeof(cells) = 'array' AND jsonb_array_length(cells) >= 1",
+        name="a_report_row_cells_is_a_non_empty_array",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "snapshot_id"],
+        [
+            f"{SCHEMA}.project_report_snapshots.principal_id",
+            f"{SCHEMA}.project_report_snapshots.snapshot_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_report_row_names_a_snapshot_of_its_principal",
+    ),
+)
+
+_PROJECT_REPORT_CLASSIFIED_ROLES: Final = ", ".join(
+    f"'{role}'" for role in sorted(member.value for member in RowRole)
+)
+
+#: One append-only, rebuildable derivation of one snapshot under one adapter
+#: and one binding revision. A later derivation of the same snapshot names the
+#: one it supersedes, at most once; the current derivation is the one nothing
+#: supersedes (D10), which `project_report_current_derivations` selects. One
+#: first derivation per snapshot (a partial unique index) and one successor per
+#: derivation keep each snapshot's chain linear: exactly one is current.
+project_report_derivations = Table(
+    "project_report_derivations",
+    METADATA,
+    Column("derivation_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("snapshot_id", Text, nullable=False),
+    Column("ingest_source_id", Text, nullable=False),
+    Column("binding_revision_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("quarantine_reason", Text),
+    Column("record_family", Text),
+    Column("family_view", Text),
+    Column("adapter_version", Text),
+    Column("identity_version", Text, nullable=False),
+    Column("status_map_version", Text, nullable=False),
+    Column("completeness_class", Text),
+    Column("role_counts", JSONB, nullable=False),
+    Column("reconciliation", JSONB),
+    Column("trigger", Text, nullable=False),
+    Column("supersedes_derivation_id", Text),
+    Column("derived_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("derivation_id", IdKind.PROJECT_REPORT_DERIVATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("snapshot_id", IdKind.INGEST_SNAPSHOT),
+    _is_identifier("ingest_source_id", IdKind.INGEST_SOURCE),
+    _is_identifier("binding_revision_id", IdKind.PROJECT_REPORT_BINDING_REVISION),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("supersedes_derivation_id", IdKind.PROJECT_REPORT_DERIVATION),
+    _one_of("state", DerivationState, name="a_derivation_state_is_known"),
+    _report_nullable_one_of(
+        "quarantine_reason", ReportQuarantineReason, name="a_derivation_quarantine_reason_is_known"
+    ),
+    CheckConstraint(
+        f"(state = '{DerivationState.QUARANTINED.value}') = (quarantine_reason IS NOT NULL)",
+        name="a_quarantined_derivation_names_its_reason",
+    ),
+    _report_nullable_one_of("record_family", RecordFamily, name="a_derivation_family_is_known"),
+    _report_nullable_one_of("family_view", FamilyView, name="a_derivation_view_is_known"),
+    CheckConstraint(
+        f"family_view IS NULL OR (record_family, family_view) IN ({_report_view_pairs()})",
+        name="a_derivation_view_belongs_to_its_family",
+    ),
+    CheckConstraint(
+        "(record_family IS NULL) = (family_view IS NULL) "
+        "AND (family_view IS NULL) = (adapter_version IS NULL)",
+        name="a_derivation_adapter_is_whole",
+    ),
+    CheckConstraint(
+        "(record_family IS NULL) = coalesce(quarantine_reason = "
+        f"'{ReportQuarantineReason.UNKNOWN_HEADER_SIGNATURE.value}', false)",
+        name="a_derivation_names_its_adapter_unless_its_signature_is_unknown",
+    ),
+    _report_token("adapter_version", name="a_derivation_adapter_version_is_a_token", nullable=True),
+    _report_token("identity_version", name="a_derivation_identity_version_is_a_token"),
+    _report_token("status_map_version", name="a_derivation_status_map_version_is_a_token"),
+    _report_nullable_one_of(
+        "completeness_class", CompletenessClass, name="a_derivation_completeness_is_known"
+    ),
+    CheckConstraint(
+        f"(completeness_class IS NULL) = (state = '{DerivationState.QUARANTINED.value}')",
+        name="a_classified_derivation_names_its_completeness",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(role_counts) = 'object' AND NOT jsonb_path_exists(role_counts, "
+        "'$.* ? (@.type() != \"number\" || @ < 0 || @ != @.floor())')",
+        name="a_derivation_role_counts_are_counts",
+    ),
+    CheckConstraint(
+        f"(state = '{DerivationState.QUARANTINED.value}' "
+        f"AND role_counts ? '{UNCLASSIFIED_COUNT_KEY}' "
+        f"AND role_counts - '{UNCLASSIFIED_COUNT_KEY}' = '{{}}'::jsonb) "
+        f"OR (state = '{DerivationState.CLASSIFIED.value}' "
+        f"AND role_counts - ARRAY[{_PROJECT_REPORT_CLASSIFIED_ROLES}]::text[] = '{{}}'::jsonb)",
+        name="a_derivation_role_counts_name_its_roles",
+    ),
+    CheckConstraint(
+        f"(reconciliation IS NULL) = (state = '{DerivationState.QUARANTINED.value}') "
+        "AND (reconciliation IS NULL OR jsonb_typeof(reconciliation) = 'object')",
+        name="a_derivation_reconciliation_is_an_object_when_classified",
+    ),
+    _one_of("trigger", DerivationTrigger, name="a_derivation_trigger_is_known"),
+    CheckConstraint(
+        f"(supersedes_derivation_id IS NULL) = (trigger = '{DerivationTrigger.INGEST.value}')",
+        name="only_a_first_derivation_is_an_ingest",
+    ),
+    CheckConstraint(
+        "supersedes_derivation_id IS NULL OR supersedes_derivation_id <> derivation_id",
+        name="a_derivation_does_not_supersede_itself",
+    ),
+    UniqueConstraint(
+        "principal_id", "supersedes_derivation_id", name="one_derivation_supersedes_each"
+    ),
+    UniqueConstraint(
+        "derivation_id", "principal_id", name="a_derivation_is_identified_within_its_principal"
+    ),
+    UniqueConstraint(
+        "derivation_id",
+        "principal_id",
+        "snapshot_id",
+        name="a_derivation_is_identified_within_its_snapshot",
+    ),
+    UniqueConstraint(
+        "derivation_id",
+        "principal_id",
+        "project_id",
+        name="a_derivation_is_identified_within_its_project",
+    ),
+    UniqueConstraint(
+        "derivation_id",
+        "principal_id",
+        "project_id",
+        "record_family",
+        "family_view",
+        name="a_derivation_is_identified_with_its_view",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "snapshot_id", "ingest_source_id"],
+        [
+            f"{SCHEMA}.project_report_snapshots.principal_id",
+            f"{SCHEMA}.project_report_snapshots.snapshot_id",
+            f"{SCHEMA}.project_report_snapshots.ingest_source_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_derivation_names_a_report_snapshot_of_its_source",
+    ),
+    ForeignKeyConstraint(
+        ["binding_revision_id", "principal_id", "ingest_source_id", "project_id"],
+        _report_revision("binding_revision_id", "principal_id", "ingest_source_id", "project_id"),
+        ondelete="RESTRICT",
+        name="a_derivation_names_a_binding_revision_of_its_source",
+    ),
+    ForeignKeyConstraint(
+        ["supersedes_derivation_id", "principal_id", "snapshot_id"],
+        _report_derivation("derivation_id", "principal_id", "snapshot_id"),
+        ondelete="RESTRICT",
+        name="a_derivation_supersedes_a_derivation_of_its_snapshot",
+    ),
+    Index(
+        "one_first_derivation_per_report_snapshot",
+        "principal_id",
+        "snapshot_id",
+        unique=True,
+        postgresql_where=text("supersedes_derivation_id IS NULL"),
+    ),
+    Index("project_report_derivations_by_snapshot", "principal_id", "snapshot_id"),
+    Index(
+        "project_report_derivations_by_view",
+        "principal_id",
+        "project_id",
+        "record_family",
+        "family_view",
+    ),
+    Index("project_report_derivations_by_state", "principal_id", "state", "quarantine_reason"),
+    Index("project_report_derivations_by_revision", "principal_id", "binding_revision_id"),
+)
+
+#: Each data row's role in one derivation. A quarantined derivation writes none.
+project_report_row_roles = Table(
+    "project_report_row_roles",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("derivation_id", Text, nullable=False),
+    Column("row_ordinal", Integer, nullable=False),
+    Column("snapshot_id", Text, nullable=False),
+    Column("row_role", Text, nullable=False),
+    Column("row_reason", Text),
+    Column("group_level", SmallInteger),
+    Column("group_key", Text),
+    Column("group_path", JSONB, nullable=False),
+    Column("parent_header_ordinal", Integer),
+    PrimaryKeyConstraint(
+        "principal_id", "derivation_id", "row_ordinal", name="project_report_row_roles_pkey"
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("derivation_id", IdKind.PROJECT_REPORT_DERIVATION),
+    _is_identifier("snapshot_id", IdKind.INGEST_SNAPSHOT),
+    CheckConstraint("row_ordinal >= 1", name="a_row_role_ordinal_is_positive"),
+    _one_of("row_role", RowRole, name="a_row_role_is_known"),
+    CheckConstraint(
+        f"row_reason IS NULL OR (row_role = '{RowRole.MALFORMED.value}' "
+        f"AND row_reason IN ({_literals(_PROJECT_REPORT_ROW_ROLE_REASONS)}))",
+        name="a_row_role_reason_is_a_malformed_width",
+    ),
+    CheckConstraint(
+        "group_level IS NULL OR group_level IN (1, 2)",
+        name="a_row_role_group_level_is_one_or_two",
+    ),
+    CheckConstraint(
+        f"(group_level IS NOT NULL) = (row_role IN ({_literals(_PROJECT_REPORT_HEADER_ROLES)})) "
+        f"AND (group_key IS NOT NULL) = (row_role IN ({_literals(_PROJECT_REPORT_HEADER_ROLES)}))",
+        name="a_row_role_header_names_its_level_and_key",
+    ),
+    CheckConstraint("jsonb_typeof(group_path) = 'array'", name="a_row_role_group_path_is_an_array"),
+    CheckConstraint(
+        "parent_header_ordinal IS NULL OR "
+        "(parent_header_ordinal >= 1 AND parent_header_ordinal < row_ordinal)",
+        name="a_row_role_parent_header_precedes_it",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "derivation_id",
+        "row_ordinal",
+        "row_role",
+        name="a_row_role_is_identified_with_its_role",
+    ),
+    ForeignKeyConstraint(
+        ["derivation_id", "principal_id", "snapshot_id"],
+        _report_derivation("derivation_id", "principal_id", "snapshot_id"),
+        ondelete="RESTRICT",
+        name="a_row_role_names_a_derivation_of_its_snapshot",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "snapshot_id", "row_ordinal"],
+        [
+            f"{SCHEMA}.project_report_rows.principal_id",
+            f"{SCHEMA}.project_report_rows.snapshot_id",
+            f"{SCHEMA}.project_report_rows.row_ordinal",
+        ],
+        ondelete="RESTRICT",
+        name="a_row_role_names_a_raw_row_of_its_snapshot",
+    ),
+    Index("project_report_row_roles_by_role", "principal_id", "derivation_id", "row_role"),
+    Index("project_report_row_roles_by_raw_row", "principal_id", "snapshot_id", "row_ordinal"),
+)
+
+#: The family-local record identities (plan 6.3), keyed by Project, family,
+#: identity key and identity version. Append-only: no mutable projection (D10).
+project_report_records = Table(
+    "project_report_records",
+    METADATA,
+    Column("record_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("record_family", Text, nullable=False),
+    Column("identity_key", Text, nullable=False),
+    Column("identity_version", Text, nullable=False),
+    Column("identity_basis", Text, nullable=False),
+    Column("created_by_derivation_id", Text, nullable=False),
+    _is_identifier("record_id", IdKind.PROJECT_REPORT_RECORD),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("created_by_derivation_id", IdKind.PROJECT_REPORT_DERIVATION),
+    _one_of("record_family", RecordFamily, name="a_report_record_family_is_known"),
+    CheckConstraint(
+        f"length(identity_key) BETWEEN 3 AND {MAX_PROJECT_REPORT_IDENTITY_KEY_CHARACTERS} "
+        "AND identity_key ~ '^[a-z][a-z_]{0,31}[:]'",
+        name="a_report_record_identity_key_is_bounded",
+    ),
+    _report_token("identity_version", name="a_report_record_identity_version_is_a_token"),
+    _one_of("identity_basis", IdentityBasis, name="a_report_record_identity_basis_is_known"),
+    UniqueConstraint(
+        "principal_id",
+        "project_id",
+        "record_family",
+        "identity_key",
+        "identity_version",
+        name="one_report_record_per_identity",
+    ),
+    UniqueConstraint(
+        "record_id",
+        "principal_id",
+        "project_id",
+        "record_family",
+        name="a_report_record_is_identified_within_its_project",
+    ),
+    ForeignKeyConstraint(
+        ["project_id", "principal_id"],
+        list(_PROJECT_REPORT_PROJECT),
+        ondelete="RESTRICT",
+        name="a_report_record_names_a_project_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["created_by_derivation_id", "principal_id", "project_id"],
+        _report_derivation("derivation_id", "principal_id", "project_id"),
+        ondelete="RESTRICT",
+        name="a_report_record_names_a_derivation_of_its_project",
+    ),
+    Index("project_report_records_by_derivation", "principal_id", "created_by_derivation_id"),
+)
+
+#: Layer B head (D2): one generic line per detail row of a derivation.
+project_report_lines = Table(
+    "project_report_lines",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("derivation_id", Text, nullable=False),
+    Column("row_ordinal", Integer, nullable=False),
+    Column("row_role", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("record_family", Text, nullable=False),
+    Column("family_view", Text, nullable=False),
+    Column("line_kind", Text, nullable=False),
+    Column("record_id", Text),
+    Column("identity_state", Text, nullable=False),
+    Column("identity_reason", Text),
+    Column("observation_state", Text, nullable=False),
+    Column("degraded_reasons", ARRAY(Text), nullable=False),
+    Column("status_raw", Text),
+    Column("status_class", Text),
+    Column("identifier_prefix", Text),
+    Column("identifier_numeric_suffix", BigInteger),
+    PrimaryKeyConstraint(
+        "principal_id", "derivation_id", "row_ordinal", name="project_report_lines_pkey"
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("derivation_id", IdKind.PROJECT_REPORT_DERIVATION),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("record_id", IdKind.PROJECT_REPORT_RECORD),
+    CheckConstraint(f"row_role = '{RowRole.DETAIL.value}'", name="a_report_line_is_a_detail_row"),
+    _one_of("record_family", RecordFamily, name="a_report_line_family_is_known"),
+    _one_of("family_view", FamilyView, name="a_report_line_view_is_known"),
+    _one_of("line_kind", LineKind, name="a_report_line_kind_is_known"),
+    _one_of("identity_state", ReportIdentityState, name="a_report_line_identity_state_is_known"),
+    _report_nullable_one_of(
+        "identity_reason",
+        _PROJECT_REPORT_IDENTITY_REASONS,
+        name="a_report_line_identity_reason_is_known",
+    ),
+    CheckConstraint(
+        f"(record_id IS NOT NULL) = (identity_state = '{ReportIdentityState.IDENTIFIED.value}')",
+        name="an_identified_report_line_names_its_record",
+    ),
+    _one_of(
+        "observation_state", ReportObservationState, name="a_report_line_observation_state_is_known"
+    ),
+    _each_one_of(
+        "degraded_reasons",
+        _PROJECT_REPORT_VALUE_REASONS,
+        name="a_report_line_degraded_reason_is_known",
+    ),
+    CheckConstraint(
+        f"(observation_state = '{ReportObservationState.DEGRADED.value}') = "
+        "(cardinality(degraded_reasons) > 0)",
+        name="a_degraded_report_line_names_its_reasons",
+    ),
+    _report_nullable_one_of(
+        "status_class", StatusClass, name="a_report_line_status_class_is_known"
+    ),
+    CheckConstraint(
+        "status_raw IS NULL OR status_class IS NOT NULL",
+        name="a_report_line_status_text_has_a_class",
+    ),
+    CheckConstraint(
+        "identifier_numeric_suffix IS NULL OR identifier_numeric_suffix >= 0",
+        name="a_report_line_identifier_suffix_is_non_negative",
+    ),
+    CheckConstraint(
+        "identifier_prefix IS NULL OR identifier_numeric_suffix IS NOT NULL",
+        name="a_report_line_identifier_prefix_has_a_suffix",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "derivation_id", "row_ordinal", "row_role"],
+        [
+            f"{SCHEMA}.project_report_row_roles.principal_id",
+            f"{SCHEMA}.project_report_row_roles.derivation_id",
+            f"{SCHEMA}.project_report_row_roles.row_ordinal",
+            f"{SCHEMA}.project_report_row_roles.row_role",
+        ],
+        ondelete="RESTRICT",
+        name="a_report_line_names_a_detail_row_of_its_derivation",
+    ),
+    ForeignKeyConstraint(
+        ["derivation_id", "principal_id", "project_id", "record_family", "family_view"],
+        _report_derivation(
+            "derivation_id", "principal_id", "project_id", "record_family", "family_view"
+        ),
+        ondelete="RESTRICT",
+        name="a_report_line_names_a_derivation_of_its_view",
+    ),
+    ForeignKeyConstraint(
+        ["record_id", "principal_id", "project_id", "record_family"],
+        [
+            f"{SCHEMA}.project_report_records.record_id",
+            f"{SCHEMA}.project_report_records.principal_id",
+            f"{SCHEMA}.project_report_records.project_id",
+            f"{SCHEMA}.project_report_records.record_family",
+        ],
+        ondelete="RESTRICT",
+        name="a_report_line_names_a_record_of_its_project",
+    ),
+    Index("project_report_lines_by_record", "principal_id", "record_id", "derivation_id"),
+    Index(
+        "project_report_lines_by_status",
+        "principal_id",
+        "project_id",
+        "record_family",
+        "status_class",
+    ),
+    Index(
+        "project_report_lines_by_identifier",
+        "principal_id",
+        "project_id",
+        "identifier_numeric_suffix",
+        "identifier_prefix",
+    ),
+)
+
+_PROJECT_REPORT_DECIMAL_KINDS: Final = frozenset({ValueKind.MONEY.value, ValueKind.NUMBER.value})
+_PROJECT_REPORT_TEXT_KINDS: Final = frozenset({ValueKind.IDENTIFIER.value, ValueKind.TEXT.value})
+
+#: The typed cells of one line over the closed per-family field catalogue: the
+#: raw text always, and exactly the column of its value kind -- or none when the
+#: cell is empty or failed its type (`value_reason`).
+project_report_line_values = Table(
+    "project_report_line_values",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("derivation_id", Text, nullable=False),
+    Column("row_ordinal", Integer, nullable=False),
+    Column("field_key", Text, nullable=False),
+    Column("value_kind", Text, nullable=False),
+    Column("raw_text", Text, nullable=False),
+    Column("value_reason", Text),
+    Column("value_decimal", PROJECT_REPORT_DECIMAL),
+    Column("value_date", Date),
+    Column("value_boolean", Boolean),
+    Column("value_text", Text),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "derivation_id",
+        "row_ordinal",
+        "field_key",
+        name="project_report_line_values_pkey",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("derivation_id", IdKind.PROJECT_REPORT_DERIVATION),
+    CheckConstraint(
+        f"field_key ~ '{_PROJECT_REPORT_FIELD_KEY}'",
+        name="a_line_value_field_key_is_a_catalogue_key",
+    ),
+    _one_of("value_kind", ValueKind, name="a_line_value_kind_is_known"),
+    _report_nullable_one_of(
+        "value_reason", _PROJECT_REPORT_VALUE_REASONS, name="a_line_value_reason_is_known"
+    ),
+    CheckConstraint(
+        "value_reason IS NULL OR raw_text <> ''", name="a_line_value_reason_needs_its_text"
+    ),
+    CheckConstraint(
+        f"(value_kind IN ({_literals(_PROJECT_REPORT_DECIMAL_KINDS)}) OR value_decimal IS NULL) "
+        f"AND (value_kind = '{ValueKind.DATE.value}' OR value_date IS NULL) "
+        f"AND (value_kind = '{ValueKind.BOOLEAN.value}' OR value_boolean IS NULL) "
+        f"AND (value_kind IN ({_literals(_PROJECT_REPORT_TEXT_KINDS)}) OR value_text IS NULL)",
+        name="a_line_value_is_held_only_by_its_kinds_column",
+    ),
+    CheckConstraint(
+        "(num_nonnulls(value_decimal, value_date, value_boolean, value_text) = 1) = "
+        "(raw_text <> '' AND value_reason IS NULL)",
+        name="a_line_value_is_typed_exactly_when_its_text_parses",
+    ),
+    CheckConstraint(
+        "value_text IS NULL OR value_text = raw_text", name="a_line_text_value_is_its_raw_text"
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "derivation_id", "row_ordinal"],
+        [
+            f"{SCHEMA}.project_report_lines.principal_id",
+            f"{SCHEMA}.project_report_lines.derivation_id",
+            f"{SCHEMA}.project_report_lines.row_ordinal",
+        ],
+        ondelete="RESTRICT",
+        name="a_line_value_names_a_line_of_its_derivation",
+    ),
+    Index("project_report_line_values_by_date", "principal_id", "field_key", "value_date"),
+    Index("project_report_line_values_by_decimal", "principal_id", "field_key", "value_decimal"),
+)
+
+#: Each group or grand total cell of a catalogued numeric column, with the
+#: recomputed sum of its detail rows and the reconciliation outcome (D15).
+project_report_stated_totals = Table(
+    "project_report_stated_totals",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("derivation_id", Text, nullable=False),
+    Column("row_ordinal", Integer, nullable=False),
+    Column("column_index", Integer, nullable=False),
+    Column("row_role", Text, nullable=False),
+    Column("scope", Text, nullable=False),
+    Column("group_level", SmallInteger),
+    Column("group_key", Text),
+    Column("field_key", Text, nullable=False),
+    Column("raw_text", Text, nullable=False),
+    Column("value", PROJECT_REPORT_DECIMAL),
+    Column("additivity", Text, nullable=False),
+    Column("computed_value", PROJECT_REPORT_DECIMAL),
+    Column("outcome", Text, nullable=False),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "derivation_id",
+        "row_ordinal",
+        "column_index",
+        name="project_report_stated_totals_pkey",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("derivation_id", IdKind.PROJECT_REPORT_DERIVATION),
+    _one_of("row_role", _PROJECT_REPORT_TOTAL_ROLES, name="a_stated_total_row_is_a_total_row"),
+    _one_of("scope", TotalScope, name="a_stated_total_scope_is_known"),
+    CheckConstraint(
+        f"(scope = '{TotalScope.GRAND.value}') = (row_role = '{RowRole.GRAND_TOTAL.value}')",
+        name="a_stated_total_scope_matches_its_row",
+    ),
+    CheckConstraint(
+        f"(group_level IS NOT NULL) = (scope = '{TotalScope.GROUP.value}') "
+        f"AND (group_key IS NOT NULL) = (scope = '{TotalScope.GROUP.value}') "
+        "AND (group_level IS NULL OR group_level IN (1, 2))",
+        name="a_stated_total_names_its_group_exactly_in_group_scope",
+    ),
+    CheckConstraint("column_index >= 0", name="a_stated_total_column_is_non_negative"),
+    CheckConstraint(
+        f"field_key ~ '{_PROJECT_REPORT_FIELD_KEY}'",
+        name="a_stated_total_field_key_is_a_catalogue_key",
+    ),
+    _one_of("additivity", Additivity, name="a_stated_total_additivity_is_known"),
+    _one_of("outcome", ReconciliationOutcome, name="a_stated_total_outcome_is_known"),
+    CheckConstraint(
+        f"(additivity = '{Additivity.ADDITIVE.value}') = "
+        f"(outcome <> '{ReconciliationOutcome.NOT_CHECKED.value}')",
+        name="a_stated_total_is_checked_exactly_when_additive",
+    ),
+    CheckConstraint(
+        f"outcome <> '{ReconciliationOutcome.MATCH.value}' "
+        "OR (value IS NOT NULL AND computed_value = value)",
+        name="a_matched_stated_total_equals_its_sum",
+    ),
+    CheckConstraint(
+        f"outcome <> '{ReconciliationOutcome.BOTH_EMPTY.value}' "
+        "OR (value IS NULL AND computed_value IS NULL)",
+        name="a_both_empty_stated_total_holds_no_value",
+    ),
+    CheckConstraint(
+        f"outcome <> '{ReconciliationOutcome.NOT_CHECKED.value}' OR computed_value IS NULL",
+        name="an_unchecked_stated_total_holds_no_sum",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "derivation_id", "row_ordinal", "row_role"],
+        [
+            f"{SCHEMA}.project_report_row_roles.principal_id",
+            f"{SCHEMA}.project_report_row_roles.derivation_id",
+            f"{SCHEMA}.project_report_row_roles.row_ordinal",
+            f"{SCHEMA}.project_report_row_roles.row_role",
+        ],
+        ondelete="RESTRICT",
+        name="a_stated_total_names_a_total_row_of_its_derivation",
+    ),
+)
+
+_PROJECT_REPORT_UNCHECKED: Final = frozenset(
+    {ReconciliationOutcome.BOTH_EMPTY.value, ReconciliationOutcome.NOT_CHECKED.value}
+)
+
+#: One cross-report check between two derivations of one Project (the buyout
+#: approved prime-change total against the change-order reconciliation).
+project_report_cross_checks = Table(
+    "project_report_cross_checks",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("check_kind", Text, nullable=False),
+    Column("left_derivation_id", Text, nullable=False),
+    Column("right_derivation_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("date_label", Text),
+    Column("left_value", PROJECT_REPORT_DECIMAL),
+    Column("right_value", PROJECT_REPORT_DECIMAL),
+    Column("outcome", Text, nullable=False),
+    Column("checked_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "check_kind",
+        "left_derivation_id",
+        "right_derivation_id",
+        name="project_report_cross_checks_pkey",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("left_derivation_id", IdKind.PROJECT_REPORT_DERIVATION),
+    _is_identifier("right_derivation_id", IdKind.PROJECT_REPORT_DERIVATION),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _one_of("check_kind", _PROJECT_REPORT_CROSS_CHECK_KINDS, name="a_cross_check_kind_is_known"),
+    CheckConstraint(
+        "date_label IS NULL OR date_label ~ '^[0-9]{8}$'",
+        name="a_cross_check_date_label_is_a_date_prefix",
+    ),
+    _one_of("outcome", ReconciliationOutcome, name="a_cross_check_outcome_is_known"),
+    CheckConstraint(
+        "left_derivation_id <> right_derivation_id", name="a_cross_check_names_two_derivations"
+    ),
+    CheckConstraint(
+        f"outcome <> '{ReconciliationOutcome.MATCH.value}' "
+        "OR (left_value IS NOT NULL AND left_value = right_value)",
+        name="a_matched_cross_check_agrees",
+    ),
+    CheckConstraint(
+        f"outcome NOT IN ({_literals(_PROJECT_REPORT_UNCHECKED)}) "
+        "OR (left_value IS NULL AND right_value IS NULL)",
+        name="an_unchecked_cross_check_holds_no_value",
+    ),
+    ForeignKeyConstraint(
+        ["left_derivation_id", "principal_id", "project_id"],
+        _report_derivation("derivation_id", "principal_id", "project_id"),
+        ondelete="RESTRICT",
+        name="a_cross_check_left_names_a_derivation_of_its_project",
+    ),
+    ForeignKeyConstraint(
+        ["right_derivation_id", "principal_id", "project_id"],
+        _report_derivation("derivation_id", "principal_id", "project_id"),
+        ondelete="RESTRICT",
+        name="a_cross_check_right_names_a_derivation_of_its_project",
+    ),
+    Index("project_report_cross_checks_by_project", "principal_id", "project_id", "date_label"),
+    Index("project_report_cross_checks_by_right", "principal_id", "right_derivation_id"),
+)
+
+#: The twelve WP3P tables, parent before child (the revision's creation order).
+PROJECT_REPORT_TABLES: Final = (
+    project_report_binding_revisions,
+    project_report_filter_declarations,
+    project_report_bindings,
+    project_report_snapshots,
+    project_report_rows,
+    project_report_derivations,
+    project_report_row_roles,
+    project_report_records,
+    project_report_lines,
+    project_report_line_values,
+    project_report_stated_totals,
+    project_report_cross_checks,
+)
+
+#: The view the revision creates over `project_report_derivations`: every
+#: derivation no later derivation supersedes. Declared on its own metadata so
+#: `create_all` over `METADATA` never builds it as a table; its columns are
+#: exactly the derivation table's, which the migration suite asserts.
+PROJECT_REPORT_VIEW_METADATA: Final = MetaData(schema=SCHEMA)
+project_report_current_derivations = Table(
+    "project_report_current_derivations",
+    PROJECT_REPORT_VIEW_METADATA,
+    *(Column(column.name, column.type) for column in project_report_derivations.c),
 )
 
 # --- WP-RE-01: the Record Event feed -----------------------------------------

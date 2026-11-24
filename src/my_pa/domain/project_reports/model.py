@@ -19,6 +19,7 @@ __all__ = [
     "Additivity",
     "BindingReason",
     "BindingRefusal",
+    "BindingState",
     "CompletenessClass",
     "DerivationState",
     "DerivationTrigger",
@@ -259,6 +260,13 @@ class BindingRefusal(StrEnum):
     CURRENCY_INVALID = "currency_invalid"
     FILTER_DESCRIPTION_INVALID = "filter_description_invalid"
     LOCK_HELD = "lock_held"
+
+
+class BindingState(StrEnum):
+    """A folder's binding to a Project: in force, or retired (rows kept, source disabled)."""
+
+    ACTIVE = "active"
+    RETIRED = "retired"
 
 
 class BindingReason(StrEnum):

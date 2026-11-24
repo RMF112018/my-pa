@@ -646,6 +646,17 @@ class IdKind(StrEnum):
     #: `tests/unit/test_identifiers.py`): none collides, none is a prefix of a
     #: prior member and no prior member is a prefix of it.
     MEETING_SYNC_EVENT = "msevt"
+    #: Project reports WP3P-S3 (Manager rulings D1, D2): one project-report
+    #: binding revision (`knowledge.project_report_binding_revisions`), one
+    #: project-report record identity (`knowledge.project_report_records`) and
+    #: one derivation of a stored export (`knowledge.project_report_derivations`).
+    #: Checked against every prior member (a grep of each prefix over `src`,
+    #: `tests`, `web/src` and `migrations`, and the uniqueness assertion in
+    #: `tests/unit/test_identifiers.py`): none collides, none is a prefix of a
+    #: prior member and no prior member is a prefix of one.
+    PROJECT_REPORT_BINDING_REVISION = "prbnd"
+    PROJECT_REPORT_RECORD = "prrec"
+    PROJECT_REPORT_DERIVATION = "prdrv"
 
 
 class InvalidIdentifierError(ValueError):

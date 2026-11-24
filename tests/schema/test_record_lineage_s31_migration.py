@@ -45,6 +45,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, Table, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
+from tests.pins import ALEMBIC_HEAD, ALEMBIC_REVISION_COUNT
 from tests.schema import lineage_s31_schema_ahead_contract as gap
 from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES
@@ -68,8 +69,8 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "023f8f7eb499"
 PREVIOUS: Final = "c5260943d933"
-#: CPM Workbench S5b-1 (`6c2306330ceb`) is additive on this revision.
-HEAD: Final = "52a829ef718a"
+#: The current head, from the reviewed snapshot (`tests/pins.json`).
+HEAD: Final = ALEMBIC_HEAD
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261025_023f8f7eb499_record_lineage_s31.py"
 EARLIER: Final = (
@@ -275,7 +276,7 @@ def test_the_revision_is_the_single_head_on_c5260943d933() -> None:
     assert script.get_revision(PREVIOUS).down_revision == "6f1476b8da52"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert MIGRATION.name.endswith("_record_lineage_s31.py")
-    assert len(list(MIGRATIONS.glob("*.py"))) == 132
+    assert len(list(MIGRATIONS.glob("*.py"))) == ALEMBIC_REVISION_COUNT
 
 
 # ---- the freeze -------------------------------------------------------------

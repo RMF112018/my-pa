@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 
 from my_pa.domain.identity.operation import Capability
 from my_pa.infrastructure.database.engine import create_database_engine
+from tests.pins import ALEMBIC_HEAD
 
 pytestmark = pytest.mark.database
 
@@ -35,7 +36,7 @@ REVISION: Final = "c3f8a1d07e94"
 PREVIOUS_REVISION: Final = "b8e4d1a6c073"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-HEAD_REVISION: Final = "52a829ef718a"
+HEAD_REVISION: Final = ALEMBIC_HEAD
 ADMITTED_CAPABILITY: Final = "entities.graph"
 SETTLED_CAPABILITY: Final = "capabilities.get"
 SETTLED_PURPOSE: Final = "status_observation"

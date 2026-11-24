@@ -21,6 +21,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError
+from tests.pins import ALEMBIC_HEAD
 
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.tables import commitments
@@ -29,10 +30,8 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 VERSIONS: Final = ROOT / "migrations" / "versions"
 REVISION: Final = "5c1e7a9b3d42"
 PREVIOUS: Final = "c8f7ae406d47"
-#: `b9025e7fb738` (WP-MCP-PROJ-05, legacy Project-Entity bridge reconciliation)
-#: is additive directly on this revision, and `264310e0416a` (record lineage S1)
-#: on that; the latter is now the chain's sole head.
-HEAD: Final = "52a829ef718a"
+#: The current head, from the reviewed snapshot (`tests/pins.json`).
+HEAD: Final = ALEMBIC_HEAD
 MIGRATION: Final = VERSIONS / "20261014_5c1e7a9b3d42_commitment_counterparty_entity.py"
 RESTRICT_VIOLATION: Final = "23001"
 FOREIGN_KEY_VIOLATION: Final = "23503"

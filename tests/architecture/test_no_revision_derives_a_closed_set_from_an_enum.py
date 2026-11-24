@@ -169,6 +169,7 @@ from typing import Final
 
 import pytest
 from sqlalchemy import CheckConstraint, MetaData, Table
+from tests.pins import ALEMBIC_REVISION_COUNT
 
 import my_pa
 
@@ -807,44 +808,9 @@ def _declared_frozen(module: ModuleType) -> dict[str, str]:
 def test_the_chain_is_readable_and_non_empty() -> None:
     """Guards every other test here: an empty chain would make them all vacuous."""
     revisions = list(_revisions())
-    # Ninety-one, counted on the reconciled GoodNotes tree. The merged main
-    # chain contributes `c3f8a1d07e94` as the ninetieth revision directly on
-    # `b8e4d1a6c073`, and GoodNotes contributes `6a2f9d1c4b80` as the
-    # ninety-first revision directly on `c3f8a1d07e94`.
-    # Two earlier branches had corrected this
-    # from eighty-five to eighty-seven from the same baseline -- RI-ENT-WP-10/11
-    # for `16f05c46b8c3`, which admitted the twenty new `entities.` capability
-    # names and the five new record families, and UI-IMP-WP02 for
-    # `2c00c9ac64bc`, which added the WebAuthn and auth-session tables -- and the
-    # base merge counted eighty-eight because neither figure was true of a tree
-    # carrying both. RI-ENT-WP-12's `b8e4d1a6c073` (backfilling legacy display
-    # names into `entity_names`, re-parented onto `16f05c46b8c3` under
-    # RULING-M11) is the eighty-ninth, again counted rather than picked
-    # (RULING-M2). This is a derived fact about the tree; the deny rule, the
-    # allowlist and the freeze ledger are untouched.
-    # R8 adds immutable promotion receipts as revision92 on the existing head.
-    # `cc373834a485` adds the Continuity Project 16-field admission as revision
-    # 114, `a591b81f10a2` the Intelligence report type registry as 115, and
-    # `c8f7ae406d47` the MCP interaction log as 116, `5c1e7a9b3d42` (the
-    # Commitment counterparty Entity cutover) as 117, and `b9025e7fb738`
-    # (WP-MCP-PROJ-05, legacy Project-Entity bridge reconciliation) as 118,
-    # and `264310e0416a` (record lineage S1, ADR-015) as 119, and
-    # `d020b532ad7d` (record lineage S2, ADR-015) as 120, and `6f1476b8da52`
-    # (record lineage S3, ADR-015) as 121, and `c5260943d933` (record lineage
-    # S4, ADR-015) as 122, and `023f8f7eb499` (record lineage S3.1, ADR-015
-    # decision 15) as 123, and `6c2306330ceb` (CPM Workbench S5b-1, the
-    # Schedule foundation) as 124, and `621ef6786c64` (CPM Workbench S5b-2, the
-    # Schedule audit and worker-plane vocabulary) as 125, and `2a90f91dd786`
-    # (Schedule Scenarios S6-2, the scenario and baseline plane) as 126, and
-    # `4c37731671fc` (Reports Modernization WP01, the general report plane) as 127,
-    # and `b77334135653` (Schedule Scenarios S6-3 revision B) as 128, and
-    # the files workspace WP4 revision (the files plane) as 129, and
-    # the ADR-020 revision (the Meeting prep version chain) as 130, and
-    # the communications intelligence WP2 revision (the Meeting provider
-    # bindings) as 131, and the communications intelligence WP3a revision (the
-    # ingestion lifecycle and the communications tables) as 132.
-    assert len(revisions) == 132
-    assert len({revision for revision, _ in revisions}) == 132
+    # The revision count, from the reviewed snapshot (`tests/pins.json`).
+    assert len(revisions) == ALEMBIC_REVISION_COUNT
+    assert len({revision for revision, _ in revisions}) == ALEMBIC_REVISION_COUNT
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

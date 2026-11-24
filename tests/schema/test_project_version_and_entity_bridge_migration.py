@@ -19,6 +19,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
+from tests.pins import ALEMBIC_HEAD
 
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.tables import project_entity_links, projects
@@ -26,7 +27,7 @@ from my_pa.infrastructure.persistence.tables import project_entity_links, projec
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "9f2c8a1d4e70"
-CURRENT_HEAD: Final = "52a829ef718a"
+CURRENT_HEAD: Final = ALEMBIC_HEAD
 PREVIOUS_REVISION: Final = "de5ec1c65857"
 MIGRATION: Final = (
     ROOT / "migrations" / "versions" / "20260913_9f2c8a1d4e70_project_version_and_entity_bridge.py"

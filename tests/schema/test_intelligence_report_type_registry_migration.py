@@ -35,6 +35,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.schema import CreateIndex
 from tests.conftest import DEFAULT_LIMITS, metadata_for, operator
+from tests.pins import ALEMBIC_HEAD
 
 from my_pa.application.commands import BeginIntelligenceCycle, CommitIntelligenceArtifact
 from my_pa.application.service import ApplicationService
@@ -145,7 +146,7 @@ def test_the_revision_is_the_single_head_directly_on_the_project_fields_revision
     no longer the head; the chain holds one head two links above it.
     """
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == ["52a829ef718a"]
+    assert script.get_heads() == [ALEMBIC_HEAD]
     assert script.get_revision("52a829ef718a").down_revision == "6418b57081c3"
     assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
     assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"

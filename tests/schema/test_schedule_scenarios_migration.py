@@ -52,6 +52,7 @@ from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from sqlalchemy import CheckConstraint, Engine, MetaData, Table, text
 from sqlalchemy.exc import DBAPIError
+from tests.pins import ALEMBIC_HEAD, ALEMBIC_REVISION_COUNT
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.lineage.vocabulary import ATTESTED_DECISION_CHANNELS, CLIENT_DECISION_CHANNELS
@@ -73,9 +74,8 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "2a90f91dd786"
 PREVIOUS: Final = "621ef6786c64"
-#: Reports Modernization WP01 (`4c37731671fc`) is additive on this revision, and
-#: Schedule Scenarios S6-3's revision B (`b77334135653`) on it is the head.
-HEAD: Final = "52a829ef718a"
+#: The current head, from the reviewed snapshot (`tests/pins.json`).
+HEAD: Final = ALEMBIC_HEAD
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261103_2a90f91dd786_schedule_scenarios_persistence.py"
 
@@ -194,7 +194,7 @@ def test_the_revision_is_the_single_head_on_621ef6786c64() -> None:
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "6c2306330ceb"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 132
+    assert len(list(MIGRATIONS.glob("*.py"))) == ALEMBIC_REVISION_COUNT
 
 
 # ---- the freeze -------------------------------------------------------------

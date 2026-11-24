@@ -40,6 +40,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
+from tests.pins import ALEMBIC_HEAD
 
 from my_pa.domain.capture.version import digest_of
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -55,10 +56,8 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "0641c354ca85"
 PREVIOUS: Final = "c8e4a1b70d35"
-#: The chain's head since KLP-WP-02, directly on this revision. The refusal and
-#: round-trip tests below upgrade to this revision rather than to the head, so
-#: they keep measuring this revision's own downgrade.
-HEAD: Final = "52a829ef718a"
+#: The current head, from the reviewed snapshot (`tests/pins.json`).
+HEAD: Final = ALEMBIC_HEAD
 MIGRATION: Final = ROOT / "migrations" / "versions" / "20261001_0641c354ca85_capture_lifecycle.py"
 TABLE_NAMES: Final = frozenset({"capture_lifecycle_events", "capture_lifecycle_receipts"})
 TRIGGERS: Final = frozenset(

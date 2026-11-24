@@ -43,6 +43,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, Table, delete, insert, text, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError, IntegrityError
+from tests.pins import ALEMBIC_HEAD
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.meeting.model import MEETING_WRITE_REQUEST_NAMES
@@ -126,7 +127,7 @@ def test_the_revision_is_directly_on_the_meeting_prep_head() -> None:
     script = ScriptDirectory.from_config(_config())
     # Communications intelligence WP3a's ingestion revision is additive on this
     # revision, so this revision is the head's parent rather than the head.
-    assert script.get_heads() == ["52a829ef718a"]
+    assert script.get_heads() == [ALEMBIC_HEAD]
     assert script.get_revision("52a829ef718a").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "640aaacc78e8"

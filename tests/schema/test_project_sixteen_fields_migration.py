@@ -22,6 +22,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Connection, Engine, inspect, text
 from sqlalchemy.exc import DBAPIError
+from tests.pins import ALEMBIC_HEAD
 
 from my_pa.domain.situation.situation import ProjectSector, ProjectType
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -30,9 +31,8 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 VERSIONS: Final = ROOT / "migrations" / "versions"
 REVISION: Final = "cc373834a485"
 PREVIOUS: Final = "93f3aa113f58"
-#: The chain head: `a591b81f10a2` (Intelligence report type registry) is additive
-#: on `REVISION`.
-HEAD: Final = "52a829ef718a"
+#: The current head, from the reviewed snapshot (`tests/pins.json`).
+HEAD: Final = ALEMBIC_HEAD
 MIGRATION: Final = VERSIONS / "20261011_cc373834a485_project_sixteen_fields.py"
 PRINCIPAL_A: Final = "prn_aaaa0001aaaa0001aaaa0001"
 PRINCIPAL_B: Final = "prn_bbbb0002bbbb0002bbbb0002"

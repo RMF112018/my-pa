@@ -19,13 +19,11 @@ restores the previous vocabulary exactly -- proved by writing an audit row the
 new vocabulary admits and the old one refuses, which is the only thing that
 distinguishes a restated CHECK from a dropped one.
 
-**The head pins.** Advancing a head means editing every file that names the old
-one, and `W4-F02` recorded what that costs when a file names it twice:
-`tests/schema/test_webauthn_auth_persistence_migration.py` declared
-`CURRENT_HEAD_REVISION` on two consecutive lines, so an edit to one silently did
-nothing. The duplicate is gone and the recurrence guard below is deliberately
-minimal -- one parametrized check over the fixed file list, not a repository-wide
-lint.
+**The head pins.** The head is pinned once, in the reviewed `tests/pins.json`,
+and `tests/architecture/test_no_test_spells_the_current_head.py` keeps every
+other test from spelling it. That replaces this module's former 56-file head-pin
+registry and its three guards, which `W4-F02` prompted after a file declared
+`CURRENT_HEAD_REVISION` twice so that an edit to one silently did nothing.
 """
 
 from __future__ import annotations
@@ -46,13 +44,14 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
+from tests.pins import ALEMBIC_CHAIN, ALEMBIC_HEAD, ALEMBIC_REVISION_COUNT
 
 from my_pa.infrastructure.database.engine import create_database_engine
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "52a829ef718a"
+CURRENT_HEAD: Final = ALEMBIC_HEAD
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -73,95 +72,6 @@ MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = (
     MIGRATIONS / "20260907_f7a2c9d51e64_admit_the_constraint_authoring_capabilities.py"
 )
-CURRENT_HEAD_MIGRATION: Final = (
-    MIGRATIONS / "20260913_c4f1a8e52d90_admit_continuity_projects_update_and_close.py"
-)
-RUN01_MIGRATION: Final = MIGRATIONS / "20260914_e6a4c2f91b73_project_controls_run01_integrity.py"
-CCA005_MIGRATION: Final = (
-    MIGRATIONS / "20260922_6f6ead27d122_reconcile_legacy_direct_principal_task_origin.py"
-)
-#: WP-MTG-04's additive head (`7d9a450dfd07`, Meeting records), registered as
-#: this branch's additive head on the `CCA005_MIGRATION` precedent (#278).
-MEETING_RECORDS_MIGRATION: Final = MIGRATIONS / "20260927_7d9a450dfd07_meeting_records.py"
-#: WP-RE-01's additive head (`1d9b248e7f83`, Record Events), registered on the
-#: same precedent.
-RECORD_EVENTS_MIGRATION: Final = MIGRATIONS / "20260929_1d9b248e7f83_record_events.py"
-#: CRL-WP-03's additive head (`0641c354ca85`, Capture lifecycle), registered on
-#: the same precedent.
-CAPTURE_LIFECYCLE_MIGRATION: Final = MIGRATIONS / "20261001_0641c354ca85_capture_lifecycle.py"
-#: The Intelligence focus-area admission (`93f3aa113f58`), registered as an
-#: additive head on the same precedent.
-INTELLIGENCE_FOCUS_AREA_MIGRATION: Final = (
-    MIGRATIONS / "20261007_93f3aa113f58_intelligence_focus_area_admission.py"
-)
-#: The Continuity Project sixteen-field admission (`cc373834a485`), registered
-#: as an additive head on the same precedent.
-PROJECT_SIXTEEN_FIELDS_MIGRATION: Final = (
-    MIGRATIONS / "20261011_cc373834a485_project_sixteen_fields.py"
-)
-#: The Intelligence report type registry (`a591b81f10a2`), registered as an
-#: additive head on the same precedent.
-INTELLIGENCE_REPORT_TYPE_MIGRATION: Final = (
-    MIGRATIONS / "20261011_a591b81f10a2_intelligence_report_type_registry.py"
-)
-#: The MCP interaction log (`c8f7ae406d47`), registered as an additive head on
-#: the same precedent.
-MCP_INTERACTION_LOG_MIGRATION: Final = MIGRATIONS / "20261011_c8f7ae406d47_mcp_interaction_log.py"
-#: The Commitment counterparty Entity cutover (`5c1e7a9b3d42`), registered as an
-#: additive head on the same precedent.
-COMMITMENT_COUNTERPARTY_ENTITY_MIGRATION: Final = (
-    MIGRATIONS / "20261014_5c1e7a9b3d42_commitment_counterparty_entity.py"
-)
-#: WP-MCP-PROJ-05's additive head (`b9025e7fb738`, legacy Project-Entity
-#: bridge reconciliation), registered as this branch's additive head on the
-#: same precedent.
-RECONCILE_LEGACY_PROJECT_ENTITY_LINKS_MIGRATION: Final = (
-    MIGRATIONS / "20261015_b9025e7fb738_reconcile_legacy_project_entity_links.py"
-)
-#: Record lineage S1's additive head (`264310e0416a`, ADR-015), registered on
-#: the same precedent.
-RECORD_LINEAGE_S1_MIGRATION: Final = MIGRATIONS / "20261017_264310e0416a_record_lineage_s1.py"
-#: Record lineage S2's additive head (`d020b532ad7d`, ADR-015), on the same precedent.
-RECORD_LINEAGE_S2_MIGRATION: Final = MIGRATIONS / "20261018_d020b532ad7d_record_lineage_s2.py"
-#: Record lineage S3's additive head (`6f1476b8da52`, ADR-015), on the same precedent.
-RECORD_LINEAGE_S3_MIGRATION: Final = MIGRATIONS / "20261019_6f1476b8da52_record_lineage_s3.py"
-#: Record lineage S4's additive head (`c5260943d933`, ADR-015), on the same precedent.
-RECORD_LINEAGE_S4_MIGRATION: Final = MIGRATIONS / "20261024_c5260943d933_record_lineage_s4.py"
-#: Record lineage S3.1's additive head (`023f8f7eb499`, ADR-015 decision 15), on
-#: the same precedent.
-RECORD_LINEAGE_S31_MIGRATION: Final = MIGRATIONS / "20261025_023f8f7eb499_record_lineage_s31.py"
-#: CPM Workbench S5b-1's additive head (`6c2306330ceb`), on the same precedent.
-CPM_WORKBENCH_FOUNDATION_MIGRATION: Final = (
-    MIGRATIONS / "20261027_6c2306330ceb_cpm_workbench_foundation.py"
-)
-#: CPM Workbench S5b-2's additive head (`621ef6786c64`), on the same precedent.
-CPM_WORKBENCH_VOCABULARY_MIGRATION: Final = (
-    MIGRATIONS / "20261028_621ef6786c64_cpm_workbench_vocabulary.py"
-)
-#: Schedule Scenarios S6-2's additive head (`2a90f91dd786`), on the same precedent.
-SCHEDULE_SCENARIOS_MIGRATION: Final = (
-    MIGRATIONS / "20261103_2a90f91dd786_schedule_scenarios_persistence.py"
-)
-#: Reports Modernization WP01's additive head (`4c37731671fc`), on the same precedent.
-GENERAL_REPORT_PLANE_MIGRATION: Final = MIGRATIONS / "20261104_4c37731671fc_general_report_plane.py"
-#: Schedule Scenarios S6-3's additive head (`b77334135653`, revision B), on the same precedent.
-SCHEDULE_SCENARIOS_VOCABULARY_MIGRATION: Final = (
-    MIGRATIONS / "20261111_b77334135653_schedule_scenarios_vocabulary.py"
-)
-#: Files workspace WP4's additive head (`640aaacc78e8`), on the same precedent.
-FILES_WORKSPACE_MIGRATION: Final = MIGRATIONS / "20261113_640aaacc78e8_files_workspace.py"
-#: ADR-020's additive head (`4d1069a7d84f`, Meeting prep versions), on the same precedent.
-MEETING_PREP_MIGRATION: Final = MIGRATIONS / "20261120_4d1069a7d84f_meeting_prep_versions.py"
-#: Communications intelligence WP2's additive head (`6418b57081c3`, Meeting
-#: provider bindings), on the same precedent.
-MEETING_PROVIDER_BINDINGS_MIGRATION: Final = (
-    MIGRATIONS / "20261121_6418b57081c3_meeting_provider_bindings.py"
-)
-#: Communications intelligence WP3a's additive head (the ingestion lifecycle and
-#: the communications tables), on the same precedent.
-COMMUNICATIONS_INGESTION_MIGRATION: Final = (
-    MIGRATIONS / "20261122_52a829ef718a_communications_ingestion.py"
-)
 #: The one sanctioned edit to a historical revision (operator ruling
 #: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
 #: work freezes `a_managed_document_is_identified_within_its_owner` out of
@@ -170,12 +80,6 @@ COMMUNICATIONS_INGESTION_MIGRATION: Final = (
 #: exempt; an edit to any other historical revision still fails the guard below.
 SANCTIONED_HISTORICAL_EDIT: Final = (
     MIGRATIONS / "20260811_4c7b2e91d8a5_create_the_managed_document_tables.py"
-)
-WP_MCP_PROJ_02_MIGRATION: Final = (
-    MIGRATIONS / "20260913_b3e9d7a41c25_admit_continuity_projects_read.py"
-)
-WP_MCP_PROJ_01_MIGRATION: Final = (
-    MIGRATIONS / "20260913_9f2c8a1d4e70_project_version_and_entity_bridge.py"
 )
 PREVIOUS_MIGRATION: Final = (
     MIGRATIONS / "20260906_c5b71e0a8d43_admit_the_constraint_read_capabilities.py"
@@ -225,105 +129,6 @@ CONSTRAINT_TABLES: Final[frozenset[str]] = frozenset(
         "constraint_sync_conflicts",
         "constraint_workbook_imports",
     }
-)
-
-#: Every file that pins the chain's current head, and the constant each uses.
-#: Fixed and written out, so the recurrence guard below is a bounded check over a
-#: named list rather than a repository-wide scan.
-HEAD_PIN_FILES: Final[tuple[str, ...]] = (
-    "tests/database/test_cli_auth.py",
-    "tests/database/test_entities_graph_vocabulary_migration.py",
-    "tests/database/test_legacy_entity_backfill_migration.py",
-    "tests/database/test_phase_b_audit_vocabulary_migration.py",
-    "tests/database/test_ri_ent_wp_10_11_vocabulary_migration.py",
-    "tests/schema/test_auth_identity_and_grants_migration.py",
-    "tests/schema/test_canvas_workspace_migration.py",
-    "tests/schema/test_capture_lifecycle_migration.py",
-    # The Commitment counterparty Entity cutover's own revision module names
-    # the head as the revision it tests.
-    "tests/schema/test_commitment_counterparty_entity_migration.py",
-    "tests/schema/test_constraint_management_migration.py",
-    "tests/schema/test_constraint_read_capability_migration.py",
-    "tests/schema/test_constraint_sync_migration.py",
-    # CPM Workbench S5b-1's own revision module names the head (S5b-2's revision)
-    # as the one directly on it.
-    "tests/schema/test_cpm_workbench_migration.py",
-    # CPM Workbench S5b-2's own revision module names the head as the revision it tests.
-    "tests/schema/test_cpm_workbench_vocabulary_migration.py",
-    "tests/schema/test_continuity_projects_mutation_migration.py",
-    "tests/schema/test_continuity_projects_read_capability_migration.py",
-    "tests/schema/test_goodnotes_browser_contract_migration.py",
-    "tests/schema/test_goodnotes_client_resume_migration.py",
-    "tests/schema/test_goodnotes_content_and_durable_note_stages.py",
-    "tests/schema/test_goodnotes_delivery_attempt_migration.py",
-    "tests/schema/test_goodnotes_delivery_migration.py",
-    "tests/schema/test_goodnotes_entity_kind_migration.py",
-    "tests/schema/test_goodnotes_exact_render_migration.py",
-    "tests/schema/test_goodnotes_lineage_migration.py",
-    "tests/schema/test_goodnotes_note_occurrence_migration.py",
-    "tests/schema/test_goodnotes_occurrence_grounding_migration.py",
-    "tests/schema/test_goodnotes_promotion_receipt_migration.py",
-    "tests/schema/test_goodnotes_pull_migration.py",
-    "tests/schema/test_goodnotes_semantic_proposal_migration.py",
-    # The Intelligence focus-area revision module names the head it now sits under.
-    "tests/schema/test_intelligence_focus_area_admission_migration.py",
-    # KLP-WP-02's own revision module names the head as the revision it tests.
-    # The Intelligence report type registry module names the head it now sits under.
-    "tests/schema/test_intelligence_report_type_registry_migration.py",
-    "tests/schema/test_knowledge_assertion_migration.py",
-    "tests/schema/test_legacy_direct_principal_task_origin_migration.py",
-    # The MCP interaction log revision module names the head it now sits under.
-    "tests/schema/test_mcp_interaction_log_migration.py",
-    "tests/schema/test_meeting_records_migration.py",
-    # WP-MCP-PROJ-05's own revision module names the head as the revision it tests.
-    "tests/schema/test_reconcile_legacy_project_entity_links_migration.py",
-    # Record lineage S1's own revision module names the head as the revision it tests.
-    "tests/schema/test_record_lineage_s1_migration.py",
-    # Record lineage S2's suite names the head the S3 revision now sits at.
-    "tests/schema/test_record_lineage_s2_migration.py",
-    # Record lineage S3's suite names the head the S4 revision now sits at.
-    "tests/schema/test_record_lineage_s3_migration.py",
-    # Record lineage S4's suite names the head the S3.1 revision now sits at.
-    "tests/schema/test_record_lineage_s4_migration.py",
-    # Record lineage S3.1's own revision module names the head as the revision it tests.
-    "tests/schema/test_record_lineage_s31_migration.py",
-    "tests/schema/test_record_event_truncate_refusal_migration.py",
-    # Reports Modernization WP01's own revision module names the head as the revision it tests.
-    "tests/schema/test_reports_general_migration.py",
-    "tests/schema/test_schedule_scenarios_migration.py",
-    "tests/schema/test_record_events_migration.py",
-    "tests/schema/test_oauth_refresh_migration.py",
-    "tests/schema/test_project_controls_run01_integrity_migration.py",
-    # The Continuity Project sixteen-field revision module names the head it now sits under.
-    "tests/schema/test_project_sixteen_fields_migration.py",
-    "tests/schema/test_project_version_and_entity_bridge_migration.py",
-    "tests/schema/test_webauthn_auth_persistence_migration.py",
-    "tests/schema/test_work_task_commitment_migration.py",
-    "tests/unit/test_cli_auth.py",
-    # Schedule Scenarios S6-3's revision B module names the head now on it.
-    "tests/schema/test_schedule_scenarios_vocabulary_migration.py",
-    # Files workspace WP4's own revision module names the head as the one on it.
-    "tests/schema/test_files_workspace_migration.py",
-    # ADR-020's revision module names the head now on it.
-    "tests/schema/test_meeting_prep_versions_migration.py",
-    # Communications intelligence WP2's revision module names the head now on it.
-    "tests/schema/test_meeting_provider_bindings_migration.py",
-    # Communications intelligence WP3a's own revision module names the head as
-    # the revision it tests.
-    "tests/schema/test_communications_ingestion_migration.py",
-    # The extraction suite's table registry names the files workspace revision.
-    "tests/schema/test_extraction_schema_migration.py",
-)
-
-#: The constant names those files use for the chain's head.
-HEAD_CONSTANTS: Final[tuple[str, ...]] = (
-    "CURRENT_HEAD_REVISION",
-    # `CURRENT_HEAD` is a fourth spelling, and omitting it let a pin escape the
-    # advance once. The guards below read this tuple, so a spelling absent here
-    # is a spelling they do not check.
-    "CURRENT_HEAD",
-    "HEAD_REVISION",
-    "HEAD",
 )
 
 
@@ -426,7 +231,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 132
+    assert len(list(MIGRATIONS.glob("*.py"))) == ALEMBIC_REVISION_COUNT
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -551,93 +356,54 @@ def test_the_revision_touches_only_the_audit_events_table() -> None:
     assert tables == {"audit_events"}
 
 
-def test_no_historical_revision_was_edited() -> None:
-    """The chain below this revision is untouched, measured against git."""
-    changed = subprocess.run(
-        ["git", "diff", "--name-only", "origin/main...HEAD", "--", "migrations/"],  # noqa: S607
+def _git_migrations_diff(*options: str) -> subprocess.CompletedProcess[str]:
+    command = ["git", "diff", "--name-only", "--no-renames", *options, "origin/main...HEAD"]
+    return subprocess.run(  # noqa: S603
+        [*command, "--", "migrations/"],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+def _revision_id(relative: str) -> str:
+    """The `revision = "..."` an added revision file declares."""
+    source = (ROOT / relative).read_text(encoding="utf-8")
+    found = re.search(r"^revision(?::\s*str)?\s*=\s*[\"']([^\"']+)[\"']", source, re.M)
+    assert found is not None, f"{relative} declares no `revision`"
+    return found.group(1)
+
+
+def test_no_historical_revision_was_edited() -> None:
+    """The chain below the head is untouched, measured against git.
+
+    Derived rather than listed: a branch may only add revision files, and only
+    ones that extend the chain at its head (the last `len(added)` entries of
+    the reviewed `tests.pins.ALEMBIC_CHAIN`). Any other modified, deleted or
+    renamed path must be the one `SANCTIONED_HISTORICAL_EDIT`.
+    """
+    changed = _git_migrations_diff()
     if changed.returncode != 0:
         pytest.skip("no merge base available in this checkout")
+    added_run = _git_migrations_diff("--diff-filter=A")
+    assert added_run.returncode == 0, added_run.stderr
     touched = {line for line in changed.stdout.splitlines() if line.strip()}
-    assert touched <= {
-        CCA005_MIGRATION.relative_to(ROOT).as_posix(),
-        RUN01_MIGRATION.relative_to(ROOT).as_posix(),
-        CURRENT_HEAD_MIGRATION.relative_to(ROOT).as_posix(),
-        WP_MCP_PROJ_02_MIGRATION.relative_to(ROOT).as_posix(),
-        WP_MCP_PROJ_01_MIGRATION.relative_to(ROOT).as_posix(),
-        MEETING_RECORDS_MIGRATION.relative_to(ROOT).as_posix(),
-        RECORD_EVENTS_MIGRATION.relative_to(ROOT).as_posix(),
-        CAPTURE_LIFECYCLE_MIGRATION.relative_to(ROOT).as_posix(),
-        INTELLIGENCE_FOCUS_AREA_MIGRATION.relative_to(ROOT).as_posix(),
-        PROJECT_SIXTEEN_FIELDS_MIGRATION.relative_to(ROOT).as_posix(),
-        INTELLIGENCE_REPORT_TYPE_MIGRATION.relative_to(ROOT).as_posix(),
-        MCP_INTERACTION_LOG_MIGRATION.relative_to(ROOT).as_posix(),
-        COMMITMENT_COUNTERPARTY_ENTITY_MIGRATION.relative_to(ROOT).as_posix(),
-        RECONCILE_LEGACY_PROJECT_ENTITY_LINKS_MIGRATION.relative_to(ROOT).as_posix(),
-        RECORD_LINEAGE_S1_MIGRATION.relative_to(ROOT).as_posix(),
-        RECORD_LINEAGE_S2_MIGRATION.relative_to(ROOT).as_posix(),
-        RECORD_LINEAGE_S3_MIGRATION.relative_to(ROOT).as_posix(),
-        RECORD_LINEAGE_S4_MIGRATION.relative_to(ROOT).as_posix(),
-        RECORD_LINEAGE_S31_MIGRATION.relative_to(ROOT).as_posix(),
-        CPM_WORKBENCH_FOUNDATION_MIGRATION.relative_to(ROOT).as_posix(),
-        CPM_WORKBENCH_VOCABULARY_MIGRATION.relative_to(ROOT).as_posix(),
-        SCHEDULE_SCENARIOS_MIGRATION.relative_to(ROOT).as_posix(),
-        GENERAL_REPORT_PLANE_MIGRATION.relative_to(ROOT).as_posix(),
-        SCHEDULE_SCENARIOS_VOCABULARY_MIGRATION.relative_to(ROOT).as_posix(),
-        FILES_WORKSPACE_MIGRATION.relative_to(ROOT).as_posix(),
-        MEETING_PREP_MIGRATION.relative_to(ROOT).as_posix(),
-        MEETING_PROVIDER_BINDINGS_MIGRATION.relative_to(ROOT).as_posix(),
-        COMMUNICATIONS_INGESTION_MIGRATION.relative_to(ROOT).as_posix(),
-        # Not an additive head: the one sanctioned historical edit (see
-        # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).
-        SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix(),
-    }, f"a revision other than this branch's additive heads changed: {sorted(touched)}"
-
-
-# ---- the head pins, and W4-F02's recurrence guard ---------------------------
-
-
-@pytest.mark.parametrize("relative", HEAD_PIN_FILES)
-def test_no_head_pin_file_declares_its_head_constant_more_than_once(relative: str) -> None:
-    """`W4-F02`: two identical declarations mean an edit to one changes nothing.
-
-    Deliberately bounded to the files that pin the head. The underlying blind
-    spot — mypy excludes tests, and the selected pyflakes rules do not cover
-    module-level rebinding — is recorded as an observation rather than answered
-    with a repository-wide lint.
-    """
-    source = (ROOT / relative).read_text(encoding="utf-8")
-    for constant in HEAD_CONSTANTS:
-        declarations = re.findall(rf"^{constant}(?::\s*Final)?\s*=", source, re.M)
-        assert len(declarations) <= 1, f"{relative} declares {constant} {len(declarations)} times"
-
-
-@pytest.mark.parametrize("relative", HEAD_PIN_FILES)
-def test_no_head_pin_file_still_names_the_previous_head_as_the_head(relative: str) -> None:
-    """The pin advanced; the historical edges below it did not have to move.
-
-    `tests/schema/test_constraint_read_capability_migration.py` still names
-    `c5b71e0a8d43` — as the revision *it* tests — so the check is on the head
-    constants rather than on the string.
-    """
-    source = (ROOT / relative).read_text(encoding="utf-8")
-    for constant in HEAD_CONSTANTS:
-        for line in re.findall(rf"^{constant}(?::\s*Final)?\s*=.*$", source, re.M):
-            assert REVISION not in line, f"{relative} still pins {REVISION} as the head"
-
-
-def test_the_head_pin_list_is_the_files_that_actually_pin_the_head() -> None:
-    """The list above cannot quietly shrink while a file still names the head."""
-    naming = sorted(
-        path.relative_to(ROOT).as_posix()
-        for path in (ROOT / "tests").rglob("test_*.py")
-        if CURRENT_HEAD in path.read_text(encoding="utf-8") and path.name != Path(__file__).name
+    added = {line for line in added_run.stdout.splitlines() if line.strip()}
+    edited = touched - added
+    assert edited <= {SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix()}, (
+        f"a historical revision changed: {sorted(edited)}"
     )
-    assert naming == sorted(HEAD_PIN_FILES)
+    revision_files = sorted(
+        path for path in added if path.startswith("migrations/versions/") and path.endswith(".py")
+    )
+    added_revisions = {_revision_id(path) for path in revision_files}
+    tail = (
+        set(ALEMBIC_CHAIN[len(ALEMBIC_CHAIN) - len(revision_files) :]) if revision_files else set()
+    )
+    assert added_revisions <= tail, (
+        f"an added revision does not extend the chain at its head: {sorted(added_revisions)}"
+    )
 
 
 # ---- the database -----------------------------------------------------------

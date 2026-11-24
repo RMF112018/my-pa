@@ -12,6 +12,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import DBAPIError
+from tests.pins import ALEMBIC_HEAD
 
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.tables import goodnotes_semantic_promotion_receipts
@@ -19,7 +20,7 @@ from my_pa.infrastructure.persistence.tables import goodnotes_semantic_promotion
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = "a4d8e31b2c90"
 PREVIOUS = "6a2f9d1c4b80"
-HEAD_REVISION = "52a829ef718a"
+HEAD_REVISION = ALEMBIC_HEAD
 TABLE = "goodnotes_semantic_promotion_receipts"
 MIGRATION = ROOT / "migrations/versions/20260905_a4d8e31b2c90_add_goodnotes_promotion_receipts.py"
 

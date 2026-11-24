@@ -32,6 +32,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
+from tests.pins import ALEMBIC_HEAD
 
 from my_pa.application.authorization import Authorization
 from my_pa.application.context.providers import ContextPlane, _search_continuity
@@ -50,11 +51,8 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "6f6ead27d122"
 PREVIOUS: Final = "e6a4c2f91b73"
-#: The chain head this revision's tests run against. `7d9a450dfd07` (WP-MTG-04,
-#: Meeting records) is additive on `REVISION`, and `1d9b248e7f83` (WP-RE-01, Record
-#: Events) is additive on that, and `0641c354ca85` (CRL-WP-03, Capture lifecycle)
-#: on that, so `REVISION` is no longer the head.
-HEAD: Final = "52a829ef718a"
+#: The current head, from the reviewed snapshot (`tests/pins.json`).
+HEAD: Final = ALEMBIC_HEAD
 
 PRINCIPAL: Final = "prn_aaaaaaaa11111111"
 TASK_LEGACY: Final = "tsk_aaaaaaaa11111111"

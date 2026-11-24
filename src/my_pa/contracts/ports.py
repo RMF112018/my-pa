@@ -170,6 +170,7 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
+from my_pa.domain.project_reports import model as report_model
 from my_pa.domain.record_events import (
     EntityEventShape,
     RecordEventActorClass,
@@ -6525,6 +6526,16 @@ class UnitOfWork(ABC):
         On the general unit of work so a staged publication commits with its
         snapshot's lifecycle rows, and a review mark, the latch or a tombstone
         with the Meeting write that records it.
+        """
+
+    @property
+    @abstractmethod
+    def project_reports(self) -> ProjectReportsRepository:
+        """The project-report rows, inside this transaction (project reports WP3P).
+
+        On the general unit of work so a snapshot's Layer A rows and its
+        derivation commit or roll back with its lifecycle rows (`ingestion`),
+        and a binding revision with the source admission that it binds.
         """
 
     @property
@@ -14431,6 +14442,16 @@ class IngestionRepository(ABC):
         """Every path row of one source, ordered by path, then `first_seen_at`."""
 
     @abstractmethod
+    def list_paths_of_snapshot(
+        self, principal_id: str, snapshot_id: str
+    ) -> tuple[IngestSnapshotPathRecord, ...]:
+        """Every path row of one snapshot, superseded or not (project reports, ruling D4).
+
+        Ordered by `first_seen_at`, then path: a consumer derives a snapshot's
+        series labels from its earliest-first-seen path at read time.
+        """
+
+    @abstractmethod
     def find_snapshot_path(
         self, principal_id: str, snapshot_id: str, relative_path: str
     ) -> IngestSnapshotPathRecord | None:
@@ -15156,3 +15177,372 @@ class MeetingSyncRepository(ABC):
 
         `occurrence_original_start_utc is None` names the single-meeting key.
         """
+
+
+# --- Project reports WP3P-S3: raw exports, derivations and bindings (revision
+# `0d4e247d03cb`; Manager rulings D1, D2, D6, D10, D11).
+#
+# Plain records over the twelve tables. The Principal is a parameter on every
+# method, the authenticated partition, never a record field. Closed vocabularies
+# travel as the project-reports domain's `StrEnum` members, except the CSV
+# record terminator, which belongs to the reader and travels as its value
+# (`cr`, `crlf`, `lf`, `none`).
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportBindingRevisionRecord:
+    """One append-only revision of one folder's binding to one Project (D6)."""
+
+    binding_revision_id: str
+    ingest_source_id: str
+    project_id: str
+    declared_project_number: str
+    state: report_model.BindingState
+    currency: str
+    recorded_at: datetime
+    change_set_sha256: str
+    reason_code: report_model.BindingReason
+    supersedes_revision_id: str | None = None
+    recorded_by: str = INGEST_ADMITTED_BY_OPERATOR_CLI
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportFilterDeclarationRecord:
+    binding_revision_id: str
+    slug_label: str
+    description: str
+    declared_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportBindingRecord:
+    """The binding pointer of one source: always equal to the revision it names."""
+
+    ingest_source_id: str
+    binding_revision_id: str
+    project_id: str
+    state: report_model.BindingState
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportRowRecord:
+    """One Layer A raw data row (`row_ordinal` from 1)."""
+
+    row_ordinal: int
+    raw_record: str
+    #: `cr`, `crlf`, `lf` or `none` (only the last record of a file).
+    terminator: str
+    cells: tuple[str, ...]
+    width_matches: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportSnapshotRecord:
+    """The Layer A head of one lifecycle snapshot (D1)."""
+
+    snapshot_id: str
+    ingest_source_id: str
+    file_sha256: str
+    bom_present: bool
+    header_raw_record: str
+    header_terminator: str
+    header_cells: tuple[str, ...]
+    header_signature: str
+    signature_version: str
+    reader_version: str
+    data_row_count: int
+    embedded_line_break_count: int
+    reconstruction_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportDerivationRecord:
+    """One append-only derivation of one snapshot under one adapter and binding revision."""
+
+    derivation_id: str
+    snapshot_id: str
+    ingest_source_id: str
+    binding_revision_id: str
+    project_id: str
+    state: report_model.DerivationState
+    identity_version: str
+    status_map_version: str
+    #: Role name (or `unclassified`) to a non-negative count, never content.
+    role_counts: Mapping[str, int]
+    trigger: report_model.DerivationTrigger
+    derived_at: datetime
+    quarantine_reason: report_model.QuarantineReason | None = None
+    record_family: report_model.RecordFamily | None = None
+    family_view: report_model.FamilyView | None = None
+    adapter_version: str | None = None
+    completeness_class: report_model.CompletenessClass | None = None
+    #: Outcome counts by unit, never content; `None` exactly when quarantined.
+    reconciliation: Mapping[str, object] | None = None
+    supersedes_derivation_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportRowRoleRecord:
+    derivation_id: str
+    row_ordinal: int
+    snapshot_id: str
+    row_role: report_model.RowRole
+    #: `[level, key, header_ordinal]` steps, outermost first.
+    group_path: tuple[tuple[int, str, int], ...] = ()
+    row_reason: report_model.RowReason | None = None
+    group_level: int | None = None
+    group_key: str | None = None
+    parent_header_ordinal: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportRecordEntry:
+    """One family-local record identity (`project_report_records`)."""
+
+    record_id: str
+    project_id: str
+    record_family: report_model.RecordFamily
+    identity_key: str
+    identity_version: str
+    identity_basis: report_model.IdentityBasis
+    created_by_derivation_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportLineValueRecord:
+    """One typed cell: the raw text always, and the value of its kind or none."""
+
+    field_key: str
+    value_kind: report_model.ValueKind
+    raw_text: str
+    value: Decimal | date | bool | str | None = None
+    value_reason: report_model.RowReason | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportLineRecord:
+    """One Layer B line: one detail row of a derivation (D2)."""
+
+    derivation_id: str
+    row_ordinal: int
+    project_id: str
+    record_family: report_model.RecordFamily
+    family_view: report_model.FamilyView
+    line_kind: report_model.LineKind
+    identity_state: report_model.IdentityState
+    observation_state: report_model.ObservationState
+    record_id: str | None = None
+    identity_reason: report_model.RowReason | None = None
+    degraded_reasons: tuple[report_model.RowReason, ...] = ()
+    status_raw: str | None = None
+    status_class: report_model.StatusClass | None = None
+    identifier_prefix: str | None = None
+    identifier_numeric_suffix: int | None = None
+    values: tuple[ProjectReportLineValueRecord, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportStatedTotalRecord:
+    derivation_id: str
+    row_ordinal: int
+    column_index: int
+    row_role: report_model.RowRole
+    scope: report_model.TotalScope
+    field_key: str
+    raw_text: str
+    additivity: report_model.Additivity
+    outcome: report_model.ReconciliationOutcome
+    group_level: int | None = None
+    group_key: str | None = None
+    value: Decimal | None = None
+    computed_value: Decimal | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportCrossCheckRecord:
+    check_kind: str
+    left_derivation_id: str
+    right_derivation_id: str
+    project_id: str
+    outcome: report_model.ReconciliationOutcome
+    checked_at: datetime
+    date_label: str | None = None
+    left_value: Decimal | None = None
+    right_value: Decimal | None = None
+
+
+class ProjectReportsRepository(ABC):
+    """The WP3P project-report tables, inside one transaction.
+
+    Every method takes the authenticated Principal's capture-plane identifier
+    and reaches the partition through `principal_scope`. Nothing here commits.
+    A write the guards refuse (any change to an append-only row, a pointer moved
+    anywhere but to its superseding revision, a second active binding for a
+    Project) raises the database error rather than being absorbed. Every list is
+    ordered, so a caller never depends on arrival order.
+    """
+
+    # --- bindings ---------------------------------------------------------------
+
+    @abstractmethod
+    def insert_binding_revision(
+        self, principal_id: str, revision: ProjectReportBindingRevisionRecord
+    ) -> None:
+        """Record one binding revision."""
+
+    @abstractmethod
+    def get_binding_revision(
+        self, principal_id: str, binding_revision_id: str
+    ) -> ProjectReportBindingRevisionRecord | None:
+        """One revision, or `None`."""
+
+    @abstractmethod
+    def list_binding_revisions(
+        self, principal_id: str, ingest_source_id: str
+    ) -> tuple[ProjectReportBindingRevisionRecord, ...]:
+        """Every revision of one source, ordered by `recorded_at`, then id."""
+
+    @abstractmethod
+    def insert_filter_declarations(
+        self, principal_id: str, declarations: Sequence[ProjectReportFilterDeclarationRecord]
+    ) -> None:
+        """Record the filter declarations of one or more revisions."""
+
+    @abstractmethod
+    def list_filter_declarations(
+        self, principal_id: str, binding_revision_id: str
+    ) -> tuple[ProjectReportFilterDeclarationRecord, ...]:
+        """Every declaration of one revision, ordered by slug label."""
+
+    @abstractmethod
+    def insert_binding(self, principal_id: str, binding: ProjectReportBindingRecord) -> None:
+        """Create a source's binding pointer (its first revision)."""
+
+    @abstractmethod
+    def move_binding(self, principal_id: str, binding: ProjectReportBindingRecord) -> None:
+        """Point a source's binding at the revision superseding its current one.
+
+        `RepositoryFailureError` when the source has no pointer; the trigger
+        refuses any other move.
+        """
+
+    @abstractmethod
+    def get_binding(
+        self, principal_id: str, ingest_source_id: str
+    ) -> ProjectReportBindingRecord | None:
+        """One source's binding pointer, or `None` (the source is unbound)."""
+
+    @abstractmethod
+    def list_bindings(
+        self, principal_id: str, *, active_only: bool = False
+    ) -> tuple[ProjectReportBindingRecord, ...]:
+        """Every binding pointer, ordered by `ingest_source_id`."""
+
+    # --- Layer A ----------------------------------------------------------------
+
+    @abstractmethod
+    def insert_snapshot(
+        self,
+        principal_id: str,
+        snapshot: ProjectReportSnapshotRecord,
+        rows: Sequence[ProjectReportRowRecord],
+    ) -> None:
+        """Record one snapshot's Layer A head and every raw row."""
+
+    @abstractmethod
+    def get_snapshot(
+        self, principal_id: str, snapshot_id: str
+    ) -> ProjectReportSnapshotRecord | None:
+        """One Layer A head, or `None`."""
+
+    @abstractmethod
+    def list_rows(self, principal_id: str, snapshot_id: str) -> tuple[ProjectReportRowRecord, ...]:
+        """Every raw row of one snapshot, ordered by `row_ordinal`."""
+
+    # --- derivations ------------------------------------------------------------
+
+    @abstractmethod
+    def insert_derivation(
+        self,
+        principal_id: str,
+        derivation: ProjectReportDerivationRecord,
+        *,
+        row_roles: Sequence[ProjectReportRowRoleRecord] = (),
+        lines: Sequence[ProjectReportLineRecord] = (),
+        stated_totals: Sequence[ProjectReportStatedTotalRecord] = (),
+    ) -> None:
+        """Record one derivation with its row roles, lines (and their values) and totals.
+
+        A quarantined derivation passes none of the three. Every line naming a
+        record must name one `get_or_create_record` returned in this transaction.
+        """
+
+    @abstractmethod
+    def get_derivation(
+        self, principal_id: str, derivation_id: str
+    ) -> ProjectReportDerivationRecord | None:
+        """One derivation, current or superseded, or `None`."""
+
+    @abstractmethod
+    def current_derivation(
+        self, principal_id: str, snapshot_id: str
+    ) -> ProjectReportDerivationRecord | None:
+        """The snapshot's current derivation (the one nothing supersedes), or `None`."""
+
+    @abstractmethod
+    def list_current_derivations(
+        self,
+        principal_id: str,
+        *,
+        ingest_source_id: str | None = None,
+        state: report_model.DerivationState | None = None,
+    ) -> tuple[ProjectReportDerivationRecord, ...]:
+        """Every current derivation, read through `project_report_current_derivations`.
+
+        Ordered by `snapshot_id`; a superseded derivation is never returned.
+        """
+
+    @abstractmethod
+    def list_row_roles(
+        self, principal_id: str, derivation_id: str
+    ) -> tuple[ProjectReportRowRoleRecord, ...]:
+        """Every row role of one derivation, ordered by `row_ordinal`."""
+
+    @abstractmethod
+    def list_lines(
+        self, principal_id: str, derivation_id: str
+    ) -> tuple[ProjectReportLineRecord, ...]:
+        """Every line of one derivation with its values, ordered by `row_ordinal`.
+
+        Values are ordered by `field_key`.
+        """
+
+    @abstractmethod
+    def list_stated_totals(
+        self, principal_id: str, derivation_id: str
+    ) -> tuple[ProjectReportStatedTotalRecord, ...]:
+        """Every stated total of one derivation, ordered by row, then column."""
+
+    # --- records and cross-checks -----------------------------------------------
+
+    @abstractmethod
+    def get_or_create_record(self, principal_id: str, entry: ProjectReportRecordEntry) -> str:
+        """The `record_id` of the entry's identity, creating `entry` when absent.
+
+        Keyed by `(project_id, record_family, identity_key, identity_version)`;
+        an existing record keeps its id and creating derivation.
+        """
+
+    @abstractmethod
+    def get_record(self, principal_id: str, record_id: str) -> ProjectReportRecordEntry | None:
+        """One record identity, or `None`."""
+
+    @abstractmethod
+    def insert_cross_check(self, principal_id: str, check: ProjectReportCrossCheckRecord) -> None:
+        """Record one cross-report check."""
+
+    @abstractmethod
+    def list_cross_checks(
+        self, principal_id: str, project_id: str
+    ) -> tuple[ProjectReportCrossCheckRecord, ...]:
+        """Every cross-check of one Project, ordered by kind, then left, then right."""

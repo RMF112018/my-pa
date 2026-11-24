@@ -46,7 +46,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Final, cast
+from typing import Any, Final, NoReturn, cast
 from urllib.parse import quote
 
 import pytest
@@ -148,6 +148,18 @@ from my_pa.contracts.ports import (
     PortError,
     PreferenceConflictError,
     ProgramReadUnitOfWork,
+    ProjectReportBindingRecord,
+    ProjectReportBindingRevisionRecord,
+    ProjectReportCrossCheckRecord,
+    ProjectReportDerivationRecord,
+    ProjectReportFilterDeclarationRecord,
+    ProjectReportLineRecord,
+    ProjectReportRecordEntry,
+    ProjectReportRowRecord,
+    ProjectReportRowRoleRecord,
+    ProjectReportSnapshotRecord,
+    ProjectReportsRepository,
+    ProjectReportStatedTotalRecord,
     ProjectRepository,
     ProposalAdmissionConflictError,
     PulseRepository,
@@ -353,6 +365,8 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
+from my_pa.domain.project_reports.model import BindingState as ProjectReportBindingState
+from my_pa.domain.project_reports.model import DerivationState as ProjectReportDerivationState
 from my_pa.domain.record_events import (
     CaptureVersionFacts,
     EntityEventShape,
@@ -872,6 +886,40 @@ class _WorldLock:
 
 
 @dataclass
+class ProjectReportsWorld:
+    """The WP3P project-report rows a FAST world holds, keyed `(principal_id, ...)`.
+
+    Mirrors the revision's guards the S4 and S5 services rely on: every table is
+    append-only (a duplicate key is refused); the binding pointer moves only to
+    the revision superseding its own, and at most one pointer per Project is
+    `active`; a derivation is superseded at most once; a record identity is
+    get-or-create; current derivations are the ones nothing supersedes.
+    """
+
+    revisions: dict[tuple[str, str], ProjectReportBindingRevisionRecord] = field(
+        default_factory=dict
+    )
+    declarations: dict[tuple[str, str, str], ProjectReportFilterDeclarationRecord] = field(
+        default_factory=dict
+    )
+    bindings: dict[tuple[str, str], ProjectReportBindingRecord] = field(default_factory=dict)
+    snapshots: dict[tuple[str, str], ProjectReportSnapshotRecord] = field(default_factory=dict)
+    rows: dict[tuple[str, str], tuple[ProjectReportRowRecord, ...]] = field(default_factory=dict)
+    derivations: dict[tuple[str, str], ProjectReportDerivationRecord] = field(default_factory=dict)
+    row_roles: dict[tuple[str, str], tuple[ProjectReportRowRoleRecord, ...]] = field(
+        default_factory=dict
+    )
+    lines: dict[tuple[str, str], tuple[ProjectReportLineRecord, ...]] = field(default_factory=dict)
+    stated_totals: dict[tuple[str, str], tuple[ProjectReportStatedTotalRecord, ...]] = field(
+        default_factory=dict
+    )
+    records: dict[tuple[str, str], ProjectReportRecordEntry] = field(default_factory=dict)
+    cross_checks: dict[tuple[str, str, str, str], ProjectReportCrossCheckRecord] = field(
+        default_factory=dict
+    )
+
+
+@dataclass
 class World:
     """Everything the fake repositories know, in one mutable place."""
 
@@ -1280,6 +1328,8 @@ class World:
     meeting_provider_key_tombstones: dict[tuple[str, str], MeetingProviderKeyTombstoneRecord] = (
         field(default_factory=dict)
     )
+    #: WP3P project-report rows (`ProjectReportsWorld`).
+    project_reports: ProjectReportsWorld = field(default_factory=ProjectReportsWorld)
     commits: int = 0
     rollbacks: int = 0
     #: WP-RE-01: Record Event drafts the fake units of work committed, in commit
@@ -10316,6 +10366,283 @@ class _CaptureLifecycle(CaptureLifecycleRepository):
         return CaptureLifecycleJobResumption(resumed=0, still_paused=0)
 
 
+class _ProjectReports(ProjectReportsRepository):
+    """The WP3P project-report tables over the `World` (`ProjectReportsWorld`)."""
+
+    def __init__(self, world: World) -> None:
+        self._w = world.project_reports
+
+    @staticmethod
+    def _refuse(reason: str) -> NoReturn:
+        raise RepositoryFailureError(reason)
+
+    # --- bindings ---------------------------------------------------------------
+
+    def insert_binding_revision(
+        self, principal_id: str, revision: ProjectReportBindingRevisionRecord
+    ) -> None:
+        key = (principal_id, revision.binding_revision_id)
+        if key in self._w.revisions:
+            self._refuse("a binding revision is append-only")
+        if revision.supersedes_revision_id is not None:
+            prior = self._w.revisions.get((principal_id, revision.supersedes_revision_id))
+            if prior is None or prior.ingest_source_id != revision.ingest_source_id:
+                self._refuse("a revision supersedes a revision of its own source")
+            if any(
+                owner == principal_id and other.supersedes_revision_id == prior.binding_revision_id
+                for (owner, _), other in self._w.revisions.items()
+            ):
+                self._refuse("a revision is superseded at most once")
+        self._w.revisions[key] = revision
+
+    def get_binding_revision(
+        self, principal_id: str, binding_revision_id: str
+    ) -> ProjectReportBindingRevisionRecord | None:
+        return self._w.revisions.get((principal_id, binding_revision_id))
+
+    def list_binding_revisions(
+        self, principal_id: str, ingest_source_id: str
+    ) -> tuple[ProjectReportBindingRevisionRecord, ...]:
+        rows = [
+            revision
+            for (owner, _), revision in self._w.revisions.items()
+            if owner == principal_id and revision.ingest_source_id == ingest_source_id
+        ]
+        return tuple(sorted(rows, key=lambda r: (r.recorded_at, r.binding_revision_id)))
+
+    def insert_filter_declarations(
+        self, principal_id: str, declarations: Sequence[ProjectReportFilterDeclarationRecord]
+    ) -> None:
+        for declaration in declarations:
+            if (principal_id, declaration.binding_revision_id) not in self._w.revisions:
+                self._refuse("a declaration names a revision of its Principal")
+            key = (principal_id, declaration.binding_revision_id, declaration.slug_label)
+            if key in self._w.declarations:
+                self._refuse("one declaration per revision and slug")
+            self._w.declarations[key] = declaration
+
+    def list_filter_declarations(
+        self, principal_id: str, binding_revision_id: str
+    ) -> tuple[ProjectReportFilterDeclarationRecord, ...]:
+        rows = [
+            declaration
+            for (owner, revision, _), declaration in self._w.declarations.items()
+            if owner == principal_id and revision == binding_revision_id
+        ]
+        return tuple(sorted(rows, key=lambda d: d.slug_label))
+
+    def _check_pointer(self, principal_id: str, binding: ProjectReportBindingRecord) -> None:
+        revision = self._w.revisions.get((principal_id, binding.binding_revision_id))
+        if revision is None or (
+            revision.ingest_source_id,
+            revision.project_id,
+            revision.state,
+        ) != (binding.ingest_source_id, binding.project_id, binding.state):
+            self._refuse("a binding equals the revision it names")
+        if binding.state is ProjectReportBindingState.ACTIVE and any(
+            owner == principal_id
+            and other.ingest_source_id != binding.ingest_source_id
+            and other.project_id == binding.project_id
+            and other.state is ProjectReportBindingState.ACTIVE
+            for (owner, _), other in self._w.bindings.items()
+        ):
+            self._refuse("one active binding per Project")
+
+    def insert_binding(self, principal_id: str, binding: ProjectReportBindingRecord) -> None:
+        key = (principal_id, binding.ingest_source_id)
+        if key in self._w.bindings:
+            self._refuse("one binding pointer per source")
+        self._check_pointer(principal_id, binding)
+        self._w.bindings[key] = binding
+
+    def move_binding(self, principal_id: str, binding: ProjectReportBindingRecord) -> None:
+        key = (principal_id, binding.ingest_source_id)
+        current = self._w.bindings.get(key)
+        if current is None:
+            raise RepositoryFailureError
+        self._check_pointer(principal_id, binding)
+        if binding.binding_revision_id != current.binding_revision_id:
+            revision = self._w.revisions[(principal_id, binding.binding_revision_id)]
+            if revision.supersedes_revision_id != current.binding_revision_id:
+                self._refuse("a pointer moves only to the revision superseding its own")
+        self._w.bindings[key] = binding
+
+    def get_binding(
+        self, principal_id: str, ingest_source_id: str
+    ) -> ProjectReportBindingRecord | None:
+        return self._w.bindings.get((principal_id, ingest_source_id))
+
+    def list_bindings(
+        self, principal_id: str, *, active_only: bool = False
+    ) -> tuple[ProjectReportBindingRecord, ...]:
+        rows = [
+            binding
+            for (owner, _), binding in self._w.bindings.items()
+            if owner == principal_id
+            and (not active_only or binding.state is ProjectReportBindingState.ACTIVE)
+        ]
+        return tuple(sorted(rows, key=lambda b: b.ingest_source_id))
+
+    # --- Layer A ----------------------------------------------------------------
+
+    def insert_snapshot(
+        self,
+        principal_id: str,
+        snapshot: ProjectReportSnapshotRecord,
+        rows: Sequence[ProjectReportRowRecord],
+    ) -> None:
+        key = (principal_id, snapshot.snapshot_id)
+        if key in self._w.snapshots:
+            self._refuse("one Layer A head per snapshot")
+        if snapshot.reconstruction_sha256 != snapshot.file_sha256:
+            self._refuse("a report snapshot reconstructs its file")
+        ordinals = [row.row_ordinal for row in rows]
+        if len(set(ordinals)) != len(ordinals) or any(o < 1 for o in ordinals):
+            self._refuse("one raw row per ordinal, from 1")
+        self._w.snapshots[key] = snapshot
+        self._w.rows[key] = tuple(sorted(rows, key=lambda r: r.row_ordinal))
+
+    def get_snapshot(
+        self, principal_id: str, snapshot_id: str
+    ) -> ProjectReportSnapshotRecord | None:
+        return self._w.snapshots.get((principal_id, snapshot_id))
+
+    def list_rows(self, principal_id: str, snapshot_id: str) -> tuple[ProjectReportRowRecord, ...]:
+        return self._w.rows.get((principal_id, snapshot_id), ())
+
+    # --- derivations ------------------------------------------------------------
+
+    def insert_derivation(
+        self,
+        principal_id: str,
+        derivation: ProjectReportDerivationRecord,
+        *,
+        row_roles: Sequence[ProjectReportRowRoleRecord] = (),
+        lines: Sequence[ProjectReportLineRecord] = (),
+        stated_totals: Sequence[ProjectReportStatedTotalRecord] = (),
+    ) -> None:
+        key = (principal_id, derivation.derivation_id)
+        if key in self._w.derivations:
+            self._refuse("a derivation is append-only")
+        if (principal_id, derivation.snapshot_id) not in self._w.snapshots:
+            self._refuse("a derivation names a report snapshot of its Principal")
+        if (principal_id, derivation.binding_revision_id) not in self._w.revisions:
+            self._refuse("a derivation names a binding revision of its Principal")
+        prior_id = derivation.supersedes_derivation_id
+        if prior_id is not None:
+            prior = self._w.derivations.get((principal_id, prior_id))
+            if prior is None or prior.snapshot_id != derivation.snapshot_id:
+                self._refuse("a derivation supersedes a derivation of its snapshot")
+            if any(
+                owner == principal_id and other.supersedes_derivation_id == prior_id
+                for (owner, _), other in self._w.derivations.items()
+            ):
+                self._refuse("a derivation is superseded at most once")
+        for line in lines:
+            if line.record_id is not None and (principal_id, line.record_id) not in self._w.records:
+                self._refuse("a line names a record of its Principal")
+        self._w.derivations[key] = derivation
+        self._w.row_roles[key] = tuple(sorted(row_roles, key=lambda r: r.row_ordinal))
+        self._w.lines[key] = tuple(sorted(lines, key=lambda line: line.row_ordinal))
+        self._w.stated_totals[key] = tuple(
+            sorted(stated_totals, key=lambda t: (t.row_ordinal, t.column_index))
+        )
+
+    def get_derivation(
+        self, principal_id: str, derivation_id: str
+    ) -> ProjectReportDerivationRecord | None:
+        return self._w.derivations.get((principal_id, derivation_id))
+
+    def _current(self, principal_id: str) -> list[ProjectReportDerivationRecord]:
+        mine = [d for (owner, _), d in self._w.derivations.items() if owner == principal_id]
+        superseded = {d.supersedes_derivation_id for d in mine}
+        return [d for d in mine if d.derivation_id not in superseded]
+
+    def current_derivation(
+        self, principal_id: str, snapshot_id: str
+    ) -> ProjectReportDerivationRecord | None:
+        found = [d for d in self._current(principal_id) if d.snapshot_id == snapshot_id]
+        return found[0] if found else None
+
+    def list_current_derivations(
+        self,
+        principal_id: str,
+        *,
+        ingest_source_id: str | None = None,
+        state: ProjectReportDerivationState | None = None,
+    ) -> tuple[ProjectReportDerivationRecord, ...]:
+        rows = [
+            d
+            for d in self._current(principal_id)
+            if (ingest_source_id is None or d.ingest_source_id == ingest_source_id)
+            and (state is None or d.state is state)
+        ]
+        return tuple(sorted(rows, key=lambda d: d.snapshot_id))
+
+    def list_row_roles(
+        self, principal_id: str, derivation_id: str
+    ) -> tuple[ProjectReportRowRoleRecord, ...]:
+        return self._w.row_roles.get((principal_id, derivation_id), ())
+
+    def list_lines(
+        self, principal_id: str, derivation_id: str
+    ) -> tuple[ProjectReportLineRecord, ...]:
+        return tuple(
+            replace(line, values=tuple(sorted(line.values, key=lambda v: v.field_key)))
+            for line in self._w.lines.get((principal_id, derivation_id), ())
+        )
+
+    def list_stated_totals(
+        self, principal_id: str, derivation_id: str
+    ) -> tuple[ProjectReportStatedTotalRecord, ...]:
+        return self._w.stated_totals.get((principal_id, derivation_id), ())
+
+    # --- records and cross-checks -----------------------------------------------
+
+    def get_or_create_record(self, principal_id: str, entry: ProjectReportRecordEntry) -> str:
+        for (owner, _), record in self._w.records.items():
+            if owner == principal_id and (
+                record.project_id,
+                record.record_family,
+                record.identity_key,
+                record.identity_version,
+            ) == (
+                entry.project_id,
+                entry.record_family,
+                entry.identity_key,
+                entry.identity_version,
+            ):
+                return record.record_id
+        key = (principal_id, entry.record_id)
+        if key in self._w.records:
+            self._refuse("a record id names one identity")
+        self._w.records[key] = entry
+        return entry.record_id
+
+    def get_record(self, principal_id: str, record_id: str) -> ProjectReportRecordEntry | None:
+        return self._w.records.get((principal_id, record_id))
+
+    def insert_cross_check(self, principal_id: str, check: ProjectReportCrossCheckRecord) -> None:
+        key = (principal_id, check.check_kind, check.left_derivation_id, check.right_derivation_id)
+        if key in self._w.cross_checks:
+            self._refuse("one cross-check per pair")
+        if check.left_derivation_id == check.right_derivation_id:
+            self._refuse("a cross-check names two derivations")
+        self._w.cross_checks[key] = check
+
+    def list_cross_checks(
+        self, principal_id: str, project_id: str
+    ) -> tuple[ProjectReportCrossCheckRecord, ...]:
+        rows = [
+            check
+            for (owner, *_), check in self._w.cross_checks.items()
+            if owner == principal_id and check.project_id == project_id
+        ]
+        return tuple(
+            sorted(rows, key=lambda c: (c.check_kind, c.left_derivation_id, c.right_derivation_id))
+        )
+
+
 class _UnmodelledPlane:
     """A repository a FAST `World` does not model; any use is a test defect."""
 
@@ -11967,6 +12294,11 @@ class FakeUnitOfWork(UnitOfWork):
     def meeting_sync(self) -> MeetingSyncRepository:
         """The WP3b meeting sync staging and reconciliation rows over this `World`."""
         return _MeetingSync(self._world)
+
+    @property
+    def project_reports(self) -> ProjectReportsRepository:
+        """The WP3P project-report rows over this `World`."""
+        return _ProjectReports(self._world)
 
     @property
     def issues(self) -> IssueRepository:

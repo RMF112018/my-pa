@@ -780,11 +780,16 @@ def test_v12_profile_diff_plan_and_apply_show_exactly_the_reports_delta(
             assert converged["outcomes"][name] == "IMPLEMENTED_COMPOSED_GRANTED"  # type: ignore[index]
 
 
-#: The version after v14, which must not exist. Assembled, not spelled, so a
-#: repository search for the literal finds nothing. (Reports was one bump,
+#: The version after the current one, which must not exist. Derived from the
+#: hand-bumped constant (SCOPE row C1), so a bump moves it with no edit here and
+#: a repository search for the literal finds nothing. (Reports was one bump,
 #: v11 -> v12; Schedule Scenarios S6-3 one, v12 -> v13; the files workspace
 #: WP5 one, v13 -> v14.)
-_NONEXISTENT_NEXT_VERSION: Final = "chatllm-data-v" + str(16)
+_PROFILE_VERSION_PREFIX: Final = "chatllm-data-v"
+assert CHATLLM_DATA_PROFILE_VERSION.startswith(_PROFILE_VERSION_PREFIX)
+_NONEXISTENT_NEXT_VERSION: Final = _PROFILE_VERSION_PREFIX + str(
+    int(CHATLLM_DATA_PROFILE_VERSION.removeprefix(_PROFILE_VERSION_PREFIX)) + 1
+)
 
 
 @pytest.mark.parametrize(

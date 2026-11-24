@@ -842,9 +842,12 @@ def test_the_chain_is_readable_and_non_empty() -> None:
     # the ADR-020 revision (the Meeting prep version chain) as 130, and
     # the communications intelligence WP2 revision (the Meeting provider
     # bindings) as 131, and the communications intelligence WP3a revision (the
-    # ingestion lifecycle and the communications tables) as 132.
-    assert len(revisions) == 133
-    assert len({revision for revision, _ in revisions}) == 133
+    # ingestion lifecycle and the communications tables) as 132, the
+    # communications intelligence WP3b revision (meeting sync staging) as 133,
+    # and the project reports WP3P revision (raw exports, derivations and
+    # bindings) as 134.
+    assert len(revisions) == 134
+    assert len({revision for revision, _ in revisions}) == 134
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

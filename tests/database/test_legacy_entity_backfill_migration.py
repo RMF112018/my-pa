@@ -68,7 +68,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "b8e4d1a6c073"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-HEAD_REVISION: Final = "61fafdfd2986"
+HEAD_REVISION: Final = "0d4e247d03cb"
 CURRENT_HEAD_REVISION: Final = HEAD_REVISION
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: What was head until `REVISION` stacked on it, and therefore the revision
@@ -95,7 +95,7 @@ PREVIOUS_REVISION: Final = "16f05c46b8c3"
 #: revision B 128, and the files workspace WP4 plane 129. (130 counted the
 #: ADR-020 meeting prep revision.) Communications intelligence WP2's provider
 #: bindings revision makes it 131, and WP3a's ingestion revision 132.
-REVISION_FILE_COUNT: Final = 133
+REVISION_FILE_COUNT: Final = 134
 
 #: The revision's frozen salt, restated. If this and the revision ever disagree
 #: the expectations below stop matching, which is the point of restating it.
@@ -452,7 +452,8 @@ def test_the_revision_is_the_single_head_and_revises_the_prior_head() -> None:
     # labels), then `de5ec1c65857` (WP-TUX-01). Every edge below is retained
     # and the new ones are asserted, so the chain is still checked link by
     # link rather than loosened.
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "52a829ef718a"
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "61fafdfd2986"
+    assert script.get_revision("61fafdfd2986").down_revision == "52a829ef718a"
     assert script.get_revision("52a829ef718a").down_revision == "6418b57081c3"
     assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
     assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"

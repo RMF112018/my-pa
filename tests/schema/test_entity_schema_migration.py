@@ -466,6 +466,20 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         "meeting_provider_review_marks",
         "meeting_provider_reconciliation_passes",
         "meeting_provider_key_tombstones",
+        # Project reports WP3P stacks the raw-export, derivation and binding
+        # tables.
+        "project_report_binding_revisions",
+        "project_report_filter_declarations",
+        "project_report_bindings",
+        "project_report_snapshots",
+        "project_report_rows",
+        "project_report_derivations",
+        "project_report_row_roles",
+        "project_report_records",
+        "project_report_lines",
+        "project_report_line_values",
+        "project_report_stated_totals",
+        "project_report_cross_checks",
     }
 )
 

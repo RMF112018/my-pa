@@ -86,6 +86,20 @@ LATER_TRUNCATE_GUARDED: Final = (
     "meeting_provider_bindings",
     "meeting_sync_publications",
     "meeting_sync_events",
+    # Project reports WP3P (`0d4e247d03cb`): every table reaches the lifecycle
+    # tables through a composite key, directly or through its parent.
+    "project_report_binding_revisions",
+    "project_report_filter_declarations",
+    "project_report_bindings",
+    "project_report_snapshots",
+    "project_report_rows",
+    "project_report_derivations",
+    "project_report_row_roles",
+    "project_report_records",
+    "project_report_lines",
+    "project_report_line_values",
+    "project_report_stated_totals",
+    "project_report_cross_checks",
 )
 INDEXES: Final = frozenset(
     {
@@ -162,8 +176,10 @@ def _source() -> str:
 def test_the_revision_is_directly_on_the_provider_binding_head() -> None:
     script = ScriptDirectory.from_config(_config())
     # Communications intelligence WP3b's meeting sync revision is additive on
-    # this revision, so this revision is the head's parent rather than the head.
-    assert script.get_heads() == ["61fafdfd2986"]
+    # this revision and project reports WP3P's revision on that, so this
+    # revision is the head's grandparent rather than the head.
+    assert script.get_heads() == ["0d4e247d03cb"]
+    assert script.get_revision("0d4e247d03cb").down_revision == "61fafdfd2986"
     assert script.get_revision("61fafdfd2986").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "4d1069a7d84f"

@@ -103,7 +103,8 @@ def test_the_eight_prefixes_are_s61s_patterns() -> None:
     # Communications intelligence WP3a: eight more (`isrc`, `isnp`, `irun`,
     # `icov`, `cmsg`, `cmitm`, `cobs`, `cqrn`).
     # Communications intelligence WP3b: one more (`msevt`).
-    assert len(IdKind) == 192
+    # Project reports WP3P-S3: three more (`prbnd`, `prrec`, `prdrv`).
+    assert len(IdKind) == 195
     new = [
         IdKind.SCHEDULE_SCENARIO,
         IdKind.SCHEDULE_SCENARIO_VERSION,

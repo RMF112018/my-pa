@@ -92,7 +92,8 @@ def test_the_inventory_is_the_17_appended_names_and_the_2_purposes() -> None:
     # Communications intelligence WP3b: one more (`msevt`, a staged sync event).
     # Communications intelligence WP3b-S4: two more capabilities, declared before
     # the files names (`meetings.provider.review` and `.reconcile`).
-    assert (len(Capability), len(Purpose), len(IdKind)) == (301, 70, 192)
+    # Project reports WP3P-S3: three more kinds (`prbnd`, `prrec`, `prdrv`).
+    assert (len(Capability), len(Purpose), len(IdKind)) == (301, 70, 195)
     assert frozenset(members[-17:]) == FILE_WORKSPACE_CAPABILITIES
     assert set(FILES_WORKSPACE_COMMAND_TYPES) == FILE_WORKSPACE_CAPABILITIES
     # WP4's frozen audit vocabulary names exactly these (contract section 13).
@@ -103,10 +104,12 @@ def test_the_inventory_is_the_17_appended_names_and_the_2_purposes() -> None:
 def test_the_id_kinds_are_the_contract_prefixes() -> None:
     # ADR-020 C1 appended one Meeting kind (`mprep`) after the files kinds,
     # communications intelligence WP2 the two provider binding kinds after it,
-    # WP3a the eight ingestion and communications kinds after those, and WP3b
-    # the one staged sync event kind after those.
-    assert list(IdKind)[-1:] == [IdKind.MEETING_SYNC_EVENT]
-    assert [kind.value for kind in list(IdKind)[-9:-1]] == [
+    # WP3a the eight ingestion and communications kinds after those, WP3b the
+    # one staged sync event kind after those, and project reports WP3P the
+    # three project-report kinds after that.
+    assert [kind.value for kind in list(IdKind)[-3:]] == ["prbnd", "prrec", "prdrv"]
+    assert list(IdKind)[-4:-3] == [IdKind.MEETING_SYNC_EVENT]
+    assert [kind.value for kind in list(IdKind)[-12:-4]] == [
         "isrc",
         "isnp",
         "irun",
@@ -116,12 +119,12 @@ def test_the_id_kinds_are_the_contract_prefixes() -> None:
         "cobs",
         "cqrn",
     ]
-    assert list(IdKind)[-12:-9] == [
+    assert list(IdKind)[-15:-12] == [
         IdKind.MEETING_PREP_VERSION,
         IdKind.MEETING_PROVIDER_BINDING,
         IdKind.MEETING_SERIES_PROVIDER_BINDING,
     ]
-    assert [kind.value for kind in list(IdKind)[-18:-12]] == [
+    assert [kind.value for kind in list(IdKind)[-21:-15]] == [
         "fwupl",
         "fwdnl",
         "fwver",

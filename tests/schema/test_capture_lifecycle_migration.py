@@ -58,7 +58,7 @@ PREVIOUS: Final = "c8e4a1b70d35"
 #: The chain's head since KLP-WP-02, directly on this revision. The refusal and
 #: round-trip tests below upgrade to this revision rather than to the head, so
 #: they keep measuring this revision's own downgrade.
-HEAD: Final = "61fafdfd2986"
+HEAD: Final = "0d4e247d03cb"
 MIGRATION: Final = ROOT / "migrations" / "versions" / "20261001_0641c354ca85_capture_lifecycle.py"
 TABLE_NAMES: Final = frozenset({"capture_lifecycle_events", "capture_lifecycle_receipts"})
 TRIGGERS: Final = frozenset(
@@ -106,7 +106,8 @@ def test_the_revision_is_the_single_head_directly_on_c8e4a1b70d35() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert script.get_revision(HEAD).down_revision == "52a829ef718a"
+    assert script.get_revision(HEAD).down_revision == "61fafdfd2986"
+    assert script.get_revision("61fafdfd2986").down_revision == "52a829ef718a"
     assert script.get_revision("52a829ef718a").down_revision == "6418b57081c3"
     assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
     assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"

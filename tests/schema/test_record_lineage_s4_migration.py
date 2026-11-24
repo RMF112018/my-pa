@@ -61,7 +61,7 @@ REVISION: Final = "c5260943d933"
 PREVIOUS: Final = "6f1476b8da52"
 #: Record lineage S3.1 (`023f8f7eb499`, ADR-015 decision 15) is additive on
 #: this revision, and CPM Workbench S5b-1 (`6c2306330ceb`) on it is the head.
-HEAD: Final = "61fafdfd2986"
+HEAD: Final = "0d4e247d03cb"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261024_c5260943d933_record_lineage_s4.py"
 S3_MIGRATION: Final = MIGRATIONS / "20261019_6f1476b8da52_record_lineage_s3.py"
@@ -115,7 +115,8 @@ def _flat(value: str) -> str:
 def test_the_revision_is_the_single_head_on_6f1476b8da52() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "52a829ef718a"
+    assert script.get_revision(HEAD).down_revision == "61fafdfd2986"
+    assert script.get_revision("61fafdfd2986").down_revision == "52a829ef718a"
     assert script.get_revision("52a829ef718a").down_revision == "6418b57081c3"
     assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
     assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
@@ -130,7 +131,7 @@ def test_the_revision_is_the_single_head_on_6f1476b8da52() -> None:
     assert script.get_revision(PREVIOUS).down_revision == "d020b532ad7d"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert MIGRATION.name.endswith("_record_lineage_s4.py")
-    assert len(list(MIGRATIONS.glob("*.py"))) == 133
+    assert len(list(MIGRATIONS.glob("*.py"))) == 134
 
 
 # ---- the freeze -------------------------------------------------------------

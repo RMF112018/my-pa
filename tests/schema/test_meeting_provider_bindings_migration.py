@@ -137,9 +137,10 @@ def _offline(target: str, *, down: bool = False) -> str:
 def test_the_revision_is_directly_on_the_meeting_prep_head() -> None:
     script = ScriptDirectory.from_config(_config())
     # Communications intelligence WP3a's ingestion revision is additive on this
-    # revision and WP3b's meeting sync revision on that, so this revision is the
-    # head's grandparent rather than the head.
-    assert script.get_heads() == ["61fafdfd2986"]
+    # revision, WP3b's meeting sync revision on that and project reports WP3P's
+    # revision on that, so this revision is below the head rather than the head.
+    assert script.get_heads() == ["0d4e247d03cb"]
+    assert script.get_revision("0d4e247d03cb").down_revision == "61fafdfd2986"
     assert script.get_revision("61fafdfd2986").down_revision == "52a829ef718a"
     assert script.get_revision("52a829ef718a").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS

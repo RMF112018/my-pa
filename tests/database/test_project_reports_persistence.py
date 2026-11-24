@@ -7,7 +7,9 @@ partitioned, so another Principal's row answers as an absent one; the binding
 pointer moves to the superseding revision and the guard refuses any other move;
 the record identity is get-or-create; current derivations are read through the
 view, so a superseded derivation is never returned; the guards surface
-unabsorbed; the lifecycle lists a snapshot's paths in first-seen order; and the
+unabsorbed, as `ProjectReportsWriteRefusedError` carrying no cell text (S2);
+a supersedes cycle, a new pointer on a superseded revision and a cross-check
+in reversed roles are refused (B1, N2, N1); the lifecycle lists a snapshot's paths in first-seen order; and the
 general unit of work exposes the repository on its connection.
 
 Every identifier and text here is synthetic.
@@ -24,7 +26,6 @@ from typing import Final
 import pytest
 from sqlalchemy import Engine, insert
 from sqlalchemy.engine import Connection
-from sqlalchemy.exc import DBAPIError
 
 from my_pa.contracts.ports import (
     IngestConsumer,
@@ -43,6 +44,7 @@ from my_pa.contracts.ports import (
     ProjectReportRowRoleRecord,
     ProjectReportSnapshotRecord,
     ProjectReportStatedTotalRecord,
+    ProjectReportsWriteRefusedError,
     RepositoryFailureError,
 )
 from my_pa.domain.project_reports.model import (
@@ -89,12 +91,15 @@ PROJECT: Final = "prj_prrepo0001"
 PROJECT_2: Final = "prj_prrepo0002"
 SNAP: Final = "isnp_prrepo0001"
 SNAP_2: Final = "isnp_prrepo0002"
+SNAP_3: Final = "isnp_prrepo0003"
 R1: Final = "prbnd_prrepo0001"
 R2: Final = "prbnd_prrepo0002"
 R3: Final = "prbnd_prrepo0003"
 D1: Final = "prdrv_prrepo0001"
 D2: Final = "prdrv_prrepo0002"
 D3: Final = "prdrv_prrepo0003"
+D_BUY: Final = "prdrv_prrepobuy1"
+D_REC: Final = "prdrv_prreporec1"
 REC: Final = "prrec_prrepo0001"
 
 
@@ -285,7 +290,7 @@ def repository(connection: Connection) -> SqlProjectReportsRepository:
                 admitted_at=WHEN,
             ),
         )
-    for snapshot_id, digest in ((SNAP, "a" * 64), (SNAP_2, "b" * 64)):
+    for snapshot_id, digest in ((SNAP, "a" * 64), (SNAP_2, "b" * 64), (SNAP_3, "c" * 64)):
         ingestion.insert_snapshot(
             P,
             IngestSnapshotRecord(
@@ -311,20 +316,24 @@ def repository(connection: Connection) -> SqlProjectReportsRepository:
     return SqlProjectReportsRepository(connection)
 
 
-def _sqlstate(error: DBAPIError) -> str | None:
-    return getattr(error.orig, "sqlstate", None)
-
-
-def _refused(connection: Connection, call: Callable[[], object]) -> str | None:
-    """Run `call` under a savepoint; return its SQLSTATE (and undo the failure)."""
+def _refusal(
+    connection: Connection, call: Callable[[], object]
+) -> ProjectReportsWriteRefusedError | None:
+    """Run `call` under a savepoint; return its refusal (and undo the failure)."""
     savepoint = connection.begin_nested()
     try:
         call()
-    except DBAPIError as error:
+    except ProjectReportsWriteRefusedError as error:
         savepoint.rollback()
-        return _sqlstate(error)
+        return error
     savepoint.commit()
     return None
+
+
+def _refused(connection: Connection, call: Callable[[], object]) -> str | None:
+    """The SQLSTATE `call` is refused with, or `None`."""
+    refusal = _refusal(connection, call)
+    return None if refusal is None else refusal.sqlstate
 
 
 def _bound(repository: SqlProjectReportsRepository) -> None:
@@ -517,12 +526,37 @@ def test_a_record_identity_is_get_or_create(repository: SqlProjectReportsReposit
     assert other == "prrec_prrepo0010"
 
 
+def _cross_check_sides(repository: SqlProjectReportsRepository) -> None:
+    """`D_BUY` (buyout summary) and `D_REC` (reconciliation), each on its own snapshot."""
+    for snapshot_id, digest in ((SNAP_2, "b" * 64), (SNAP_3, "c" * 64)):
+        repository.insert_snapshot(P, _snapshot(snapshot_id, digest, 0), ())
+    repository.insert_derivation(
+        P,
+        _derivation(
+            D_BUY,
+            snapshot_id=SNAP_2,
+            record_family=RecordFamily.BUYOUT,
+            family_view=FamilyView.BUYOUT_SUMMARY,
+        ),
+    )
+    repository.insert_derivation(
+        P,
+        _derivation(
+            D_REC,
+            snapshot_id=SNAP_3,
+            record_family=RecordFamily.CHANGE_ORDER_RECONCILIATION,
+            family_view=FamilyView.RECONCILIATION,
+        ),
+    )
+
+
 def test_a_cross_check_round_trips(repository: SqlProjectReportsRepository) -> None:
     _classified(repository)
+    _cross_check_sides(repository)
     check = ProjectReportCrossCheckRecord(
         check_kind=CROSS_CHECK_KIND,
-        left_derivation_id=D1,
-        right_derivation_id=D2,
+        left_derivation_id=D_BUY,
+        right_derivation_id=D_REC,
         project_id=PROJECT,
         outcome=ReconciliationOutcome.MATCH,
         checked_at=WHEN,
@@ -535,6 +569,28 @@ def test_a_cross_check_round_trips(repository: SqlProjectReportsRepository) -> N
     assert repository.list_cross_checks(OTHER, PROJECT) == ()
 
 
+def test_a_cross_check_in_the_other_role_order_is_refused(
+    repository: SqlProjectReportsRepository, connection: Connection
+) -> None:
+    """N1: `(A, B)` and `(B, A)` cannot both be recorded; the sides keep their roles."""
+    _classified(repository)
+    _cross_check_sides(repository)
+    reversed_check = ProjectReportCrossCheckRecord(
+        check_kind=CROSS_CHECK_KIND,
+        left_derivation_id=D_REC,
+        right_derivation_id=D_BUY,
+        project_id=PROJECT,
+        outcome=ReconciliationOutcome.NOT_CHECKED,
+        checked_at=WHEN,
+    )
+    refusal = _refusal(connection, lambda: repository.insert_cross_check(P, reversed_check))
+    assert refusal is not None
+    assert (refusal.sqlstate, refusal.constraint) == (
+        RESTRICT_VIOLATION,
+        "project_report_cross_checks_keep_their_roles",
+    )
+
+
 def test_append_only_rows_refuse_a_second_write(
     repository: SqlProjectReportsRepository, connection: Connection
 ) -> None:
@@ -543,6 +599,112 @@ def test_append_only_rows_refuse_a_second_write(
         _refused(connection, lambda: repository.insert_derivation(P, _derivation(D1)))
         == UNIQUE_VIOLATION
     )
+
+
+# ---- refusals carry no cell text (S2) and the insert guards (B1, N2) ------------------
+
+#: A distinctive synthetic cell, so any leak of the refused row is unmistakable.
+_CANARY: Final = "SYNTHETIC-CANARY-7f3c1e"
+
+
+def _chain(error: BaseException) -> list[BaseException]:
+    """`error` and everything on its `__cause__`/`__context__` chain, cycle-safe."""
+    seen: list[BaseException] = []
+    pending: list[BaseException] = [error]
+    while pending:
+        current = pending.pop()
+        if any(current is known for known in seen):
+            continue
+        seen.append(current)
+        pending.extend(e for e in (current.__cause__, current.__context__) if e is not None)
+    return seen
+
+
+def test_a_refused_write_carries_no_cell_text(
+    repository: SqlProjectReportsRepository, connection: Connection
+) -> None:
+    """S2: the server's "Failing row contains ..." and the bound parameters never leave."""
+    canary_row = ProjectReportRowRecord(1, _CANARY, "lf", (_CANARY,), True)
+    cases = (
+        # A CHECK refusal: the server's DETAIL quotes the whole row.
+        (
+            SNAP_2,
+            "b" * 64,
+            (replace(canary_row, terminator="bogus"),),
+            CHECK_VIOLATION,
+            "a_report_row_terminator_is_known",
+        ),
+        # A duplicate key: the bound parameters carry the cell.
+        (
+            SNAP_3,
+            "c" * 64,
+            (canary_row, canary_row),
+            UNIQUE_VIOLATION,
+            "project_report_rows_pkey",
+        ),
+    )
+    for snapshot_id, digest, rows, sqlstate, constraint in cases:
+        head = _snapshot(snapshot_id, digest, len(rows))
+        refusal = _refusal(connection, lambda h=head, r=rows: repository.insert_snapshot(P, h, r))
+        assert refusal is not None
+        assert (refusal.sqlstate, refusal.constraint) == (sqlstate, constraint)
+        assert refusal.__cause__ is None
+        assert refusal.__context__ is None
+        for linked in _chain(refusal):
+            assert _CANARY not in str(linked)
+            assert _CANARY not in repr(linked)
+            assert _CANARY not in repr(linked.args)
+
+
+def test_a_supersedes_cycle_is_refused_through_the_repository(
+    repository: SqlProjectReportsRepository, connection: Connection
+) -> None:
+    """B1: a revision or derivation may supersede only a row that already exists."""
+    _bound(repository)
+    _layer_a(repository)
+    ahead = _revision(
+        R2, supersedes_revision_id=R3, reason_code=BindingReason.CORRECTION, recorded_at=LATER
+    )
+    refusal = _refusal(connection, lambda: repository.insert_binding_revision(P, ahead))
+    assert refusal is not None
+    assert (refusal.sqlstate, refusal.constraint) == (
+        RESTRICT_VIOLATION,
+        "project_report_binding_revisions_supersede_an_existing_one",
+    )
+    repository.insert_derivation(P, _derivation(D1))
+    early = _derivation(D2, trigger=DerivationTrigger.REDERIVE_ADAPTER, supersedes_derivation_id=D3)
+    refusal = _refusal(connection, lambda: repository.insert_derivation(P, early))
+    assert refusal is not None
+    assert (refusal.sqlstate, refusal.constraint) == (
+        RESTRICT_VIOLATION,
+        "project_report_derivations_supersede_an_existing_one",
+    )
+
+
+def test_a_new_pointer_naming_a_superseded_revision_is_refused(
+    repository: SqlProjectReportsRepository, connection: Connection
+) -> None:
+    """N2: only an unsuperseded revision can be named by a new pointer."""
+    repository.insert_binding_revision(P, _revision(R1))
+    repository.insert_binding_revision(
+        P,
+        _revision(
+            R2,
+            supersedes_revision_id=R1,
+            reason_code=BindingReason.CORRECTION,
+            recorded_at=LATER,
+        ),
+    )
+    stale = ProjectReportBindingRecord(SOURCE, R1, PROJECT, BindingState.ACTIVE)
+    refusal = _refusal(connection, lambda: repository.insert_binding(P, stale))
+    assert refusal is not None
+    assert (refusal.sqlstate, refusal.constraint) == (
+        RESTRICT_VIOLATION,
+        "project_report_bindings_name_an_unsuperseded_revision",
+    )
+    current = ProjectReportBindingRecord(SOURCE, R2, PROJECT, BindingState.ACTIVE)
+    repository.insert_binding(P, current)
+    assert repository.get_binding(P, SOURCE) == current
 
 
 # ---- the lifecycle read and the unit of work -----------------------------------------

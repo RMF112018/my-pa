@@ -16,18 +16,28 @@ parameter; nothing here reads it back from a row or a record.
 
 **The database guards are the authority.** Any change to an append-only row,
 a pointer moved anywhere but to the revision superseding its own, a second
-active binding for one Project, a snapshot whose reconstruction digest is not
-its lifecycle digest, and a value held by the wrong column are refused by the
-revision's triggers, keys and CHECKs; this module does not pre-check and
-absorb them, so the caller sees the refusal. The one exception is the record
-identity, which is get-or-create by contract (`ON CONFLICT DO NOTHING`, then a
-read). A missing pointer on a move is `RepositoryFailureError`.
+active binding for one Project, a supersedes cycle, a snapshot whose
+reconstruction digest is not its lifecycle digest, and a value held by the
+wrong column are refused by the revision's triggers, keys and CHECKs; this
+module does not pre-check and absorb them, so the caller sees the refusal. The
+one exception is the record identity, which is get-or-create by contract (`ON
+CONFLICT DO NOTHING`, then a read). A missing pointer on a move is
+`RepositoryFailureError`.
+
+**A refusal leaves without the row.** A driver error's text quotes the refused
+row ("Failing row contains ...") and SQLAlchemy's adds the bound parameters,
+both raw export cells. Every write therefore translates a `DBAPIError` at this
+boundary into `ProjectReportsWriteRefusedError` carrying only the SQLSTATE and
+the constraint (or guard trigger) name -- a deadlock or serialization victim
+into `TransactionConflictError` -- raised outside the handler, so neither
+`__cause__` nor `__context__` holds the driver error.
 
 Nothing here logs: rows hold raw export text (names, descriptions, minutes).
 """
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable, Sequence
 from datetime import date
 from decimal import Decimal
@@ -36,6 +46,7 @@ from typing import Any, Final
 from sqlalchemy import ColumnElement, Table, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Row
+from sqlalchemy.exc import DBAPIError
 
 from my_pa.contracts.ports import (
     ProjectReportBindingRecord,
@@ -51,7 +62,10 @@ from my_pa.contracts.ports import (
     ProjectReportSnapshotRecord,
     ProjectReportsRepository,
     ProjectReportStatedTotalRecord,
+    ProjectReportsWriteRefusedError,
     RepositoryFailureError,
+    TransactionConflictError,
+    is_transaction_conflict,
 )
 from my_pa.domain.project_reports.model import (
     Additivity,
@@ -109,6 +123,36 @@ def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[s
 def _columns(table: Table) -> tuple[Any, ...]:
     """Every column but the partition, which is never read back into a record."""
     return tuple(column for column in table.c if column.name != "principal_id")
+
+
+def _refusal(error: DBAPIError) -> ProjectReportsWriteRefusedError | TransactionConflictError:
+    """The port error for a driver refusal: its SQLSTATE and constraint name only."""
+    if is_transaction_conflict(error):
+        return TransactionConflictError()
+    original = error.orig
+    diag = getattr(original, "diag", None)
+    constraint = getattr(diag, "constraint_name", None)
+    sqlstate = getattr(original, "sqlstate", None)
+    return ProjectReportsWriteRefusedError(
+        sqlstate if isinstance(sqlstate, str) else None,
+        constraint if isinstance(constraint, str) else None,
+    )
+
+
+def _refusals_translated[**P, R](write: Callable[P, R]) -> Callable[P, R]:
+    """`write`, with a `DBAPIError` raised as its port error and no chain (S2)."""
+
+    @functools.wraps(write)
+    def translated(*args: P.args, **kwargs: P.kwargs) -> R:
+        try:
+            return write(*args, **kwargs)
+        except DBAPIError as error:
+            refused = _refusal(error)
+        # Raised outside the handler: `__context__` stays empty, and `from None`
+        # would only suppress, not drop, the driver error that quotes the row.
+        raise refused
+
+    return translated
 
 
 def _optional[T](value: str | None, kind: Callable[[str], T]) -> T | None:
@@ -432,6 +476,7 @@ class SqlProjectReportsRepository(ProjectReportsRepository):
 
     # --- bindings ---------------------------------------------------------------
 
+    @_refusals_translated
     def insert_binding_revision(
         self, principal_id: str, revision: ProjectReportBindingRevisionRecord
     ) -> None:
@@ -476,6 +521,7 @@ class SqlProjectReportsRepository(ProjectReportsRepository):
         )
         return tuple(_to_revision(row) for row in rows)
 
+    @_refusals_translated
     def insert_filter_declarations(
         self, principal_id: str, declarations: Sequence[ProjectReportFilterDeclarationRecord]
     ) -> None:
@@ -512,6 +558,7 @@ class SqlProjectReportsRepository(ProjectReportsRepository):
             for row in rows
         )
 
+    @_refusals_translated
     def insert_binding(self, principal_id: str, binding: ProjectReportBindingRecord) -> None:
         values: dict[str, object] = {
             "ingest_source_id": binding.ingest_source_id,
@@ -525,6 +572,7 @@ class SqlProjectReportsRepository(ProjectReportsRepository):
             )
         )
 
+    @_refusals_translated
     def move_binding(self, principal_id: str, binding: ProjectReportBindingRecord) -> None:
         table = project_report_bindings
         changed = self._connection.execute(
@@ -563,6 +611,7 @@ class SqlProjectReportsRepository(ProjectReportsRepository):
 
     # --- Layer A ----------------------------------------------------------------
 
+    @_refusals_translated
     def insert_snapshot(
         self,
         principal_id: str,
@@ -627,6 +676,7 @@ class SqlProjectReportsRepository(ProjectReportsRepository):
 
     # --- derivations ------------------------------------------------------------
 
+    @_refusals_translated
     def insert_derivation(
         self,
         principal_id: str,
@@ -739,6 +789,7 @@ class SqlProjectReportsRepository(ProjectReportsRepository):
 
     # --- records and cross-checks -----------------------------------------------
 
+    @_refusals_translated
     def get_or_create_record(self, principal_id: str, entry: ProjectReportRecordEntry) -> str:
         table = project_report_records
         values: dict[str, object] = {
@@ -775,6 +826,7 @@ class SqlProjectReportsRepository(ProjectReportsRepository):
         ).one_or_none()
         return None if row is None else _to_record(row)
 
+    @_refusals_translated
     def insert_cross_check(self, principal_id: str, check: ProjectReportCrossCheckRecord) -> None:
         values: dict[str, object] = {
             "check_kind": check.check_kind,

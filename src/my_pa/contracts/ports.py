@@ -15189,6 +15189,31 @@ class MeetingSyncRepository(ABC):
 # (`cr`, `crlf`, `lf`, `none`).
 
 
+#: `NUMERIC(20,4)`: at most 4 decimals and 16 integer digits.
+_PROJECT_REPORT_AMOUNT_SCALE: Final = 4
+_PROJECT_REPORT_AMOUNT_INTEGER_DIGITS: Final = 16
+
+
+def _require_storable_amount(value: object) -> None:
+    """Refuse an amount `NUMERIC(20,4)` would round or overflow (WP3P-F1 S3).
+
+    The column silently rounds a fifth decimal (`1.23456` is stored as
+    `1.2346`), and no CHECK can see the value before that rounding, so the
+    record is the guard. `None` passes. The message names the rule, never the
+    value: amounts are source evidence.
+    """
+    if value is None:
+        return
+    if type(value) is not Decimal:
+        raise TypeError("a project-report amount is a Decimal")
+    if not value.is_finite():
+        raise ValueError("a project-report amount is finite")
+    if int(value.as_tuple().exponent) < -_PROJECT_REPORT_AMOUNT_SCALE:
+        raise ValueError("a project-report amount has at most 4 decimals")
+    if not value.is_zero() and value.adjusted() >= _PROJECT_REPORT_AMOUNT_INTEGER_DIGITS:
+        raise ValueError("a project-report amount has at most 16 integer digits")
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectReportBindingRevisionRecord:
     """One append-only revision of one folder's binding to one Project (D6)."""
@@ -15318,6 +15343,10 @@ class ProjectReportLineValueRecord:
     value: Decimal | date | bool | str | None = None
     value_reason: report_model.RowReason | None = None
 
+    def __post_init__(self) -> None:
+        if isinstance(self.value, Decimal):
+            _require_storable_amount(self.value)
+
 
 @dataclass(frozen=True, slots=True)
 class ProjectReportLineRecord:
@@ -15357,6 +15386,10 @@ class ProjectReportStatedTotalRecord:
     value: Decimal | None = None
     computed_value: Decimal | None = None
 
+    def __post_init__(self) -> None:
+        _require_storable_amount(self.value)
+        _require_storable_amount(self.computed_value)
+
 
 @dataclass(frozen=True, slots=True)
 class ProjectReportCrossCheckRecord:
@@ -15370,6 +15403,26 @@ class ProjectReportCrossCheckRecord:
     left_value: Decimal | None = None
     right_value: Decimal | None = None
 
+    def __post_init__(self) -> None:
+        _require_storable_amount(self.left_value)
+        _require_storable_amount(self.right_value)
+
+
+class ProjectReportsWriteRefusedError(PortError):
+    """A project-report write the database refused (WP3P-F1 S2).
+
+    Carries only the SQLSTATE and the refusing constraint's (or guard
+    trigger's) name, never the statement, its parameters or the driver's text:
+    a refused row's message would otherwise quote raw export cells ("Failing
+    row contains ..."). Raised with no cause and no context, so nothing on its
+    chain holds them either.
+    """
+
+    def __init__(self, sqlstate: str | None, constraint: str | None) -> None:
+        super().__init__(f"project-report write refused: {sqlstate} {constraint}")
+        self.sqlstate = sqlstate
+        self.constraint = constraint
+
 
 class ProjectReportsRepository(ABC):
     """The WP3P project-report tables, inside one transaction.
@@ -15378,8 +15431,10 @@ class ProjectReportsRepository(ABC):
     and reaches the partition through `principal_scope`. Nothing here commits.
     A write the guards refuse (any change to an append-only row, a pointer moved
     anywhere but to its superseding revision, a second active binding for a
-    Project) raises the database error rather than being absorbed. Every list is
-    ordered, so a caller never depends on arrival order.
+    Project, a supersedes cycle) is not absorbed: it raises
+    `ProjectReportsWriteRefusedError` (a deadlock or serialization victim,
+    `TransactionConflictError`), with no driver text. Every list is ordered, so
+    a caller never depends on arrival order.
     """
 
     # --- bindings ---------------------------------------------------------------

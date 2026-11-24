@@ -595,6 +595,25 @@ def test_coverage_reports_intervals_gaps_freshness_and_the_rolling_window(
     )[1] == {"command": "coverage", "refused": "invalid_range"}
 
 
+def test_coverage_of_an_admitted_source_with_no_snapshot_prints_rolling_none(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """W1 nit: nothing ingested, so the rolling read has no anchor and prints `none`."""
+    scene = _Scene(monkeypatch)
+    source = scene.admit(capsys)
+    code, out = run(capsys, "coverage", "--source", source)
+    assert code == cli.EXIT_OK
+    assert out["snapshots"] == 0
+    assert out["rolling_30d"] == {
+        "start": None,
+        "end": None,
+        "state": "none",
+        "covered_seconds": 0,
+        "gap_count": 0,
+        "gap_seconds": 0,
+    }
+
+
 # ---- the governed rules (operator-commands EXEMPT entry) ---------------------------
 
 

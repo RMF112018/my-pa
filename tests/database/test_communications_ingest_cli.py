@@ -19,6 +19,7 @@ import json
 import os
 import stat
 from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
@@ -220,7 +221,13 @@ def test_the_operator_sequence_admit_backfill_rerun_coverage_aggregate(
     assert coverage["snapshots"] == len(CANONICAL_FILES)
     assert coverage["interval_count"] >= 1
     assert coverage["range"]["state"] in {"partial", "complete"}
-    assert coverage["rolling_30d"]["state"] in {"complete", "partial", "none"}
+    # W1 nit: the canonical fixture covers a few days of the 30, so the rolling
+    # window is `partial`, and its covered and gap seconds fill the window.
+    rolling = coverage["rolling_30d"]
+    assert rolling["state"] == "partial", rolling
+    assert rolling["gap_count"] >= 1
+    window = datetime.fromisoformat(rolling["end"]) - datetime.fromisoformat(rolling["start"])
+    assert rolling["covered_seconds"] + rolling["gap_seconds"] == window.total_seconds() + 1
 
     # The aggregate over the three sources reconciles with the tables.
     argv = ["aggregate"]

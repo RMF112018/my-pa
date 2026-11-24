@@ -349,6 +349,69 @@ def test_identity_kinds_never_merge_by_provider_id(d17_first: bool) -> None:
         assert list(kinds.values()) == ["provider_returned"]
 
 
+def _kind_split_two_record_publications(d17_first: bool) -> list[tuple[str, bytes]]:
+    """W1 nit (F1 multi-record): the second publication carries provider id 1
+    in two records (the second in another folder), both in the other identity
+    kind from the stored message."""
+    d17, d18 = _kind_split_publications()
+    if d17_first:
+        sent_copy = s.message(
+            2, folder="sent", selected=at(18), selected_field="sentDateTime", imid=MESSAGE_ID_ONE
+        )
+        twice = [
+            s.message(1, selected=at(18), imid=MESSAGE_ID_ONE),
+            s.message(1, folder="archive", selected=at(18), imid=MESSAGE_ID_ONE),
+            sent_copy,
+        ]
+        return [("20261117-comms.json", d17), ("20261118-comms.json", pub(18, twice))]
+    twice = [
+        s.message(1, selected=at(17), imid=None),
+        s.message(1, folder="archive", selected=at(17), imid=None),
+    ]
+    return [("20261118-comms.json", d18), ("20261117-comms.json", pub(17, twice))]
+
+
+@pytest.mark.parametrize("d17_first", [True, False], ids=["d17_then_d18", "d18_then_d17"])
+def test_identity_kinds_never_merge_when_one_provider_id_carries_two_records(
+    d17_first: bool,
+) -> None:
+    """Check (e), ruling (a), per record: each of provider id 1's two records in
+    the second publication is quarantined `identity_kind_mismatch`; the totals
+    reconcile and the stored message is untouched."""
+    scene = Scene()
+    first, second = _kind_split_two_record_publications(d17_first)
+    scene.ingest(*first)
+    (first_snapshot,) = (sid for _, sid in scene.world.snapshots)
+    stored_before = dict(scene.world.messages)
+    report = scene.ingest(*second)
+    (second_snapshot,) = (sid for _, sid in scene.world.snapshots if sid != first_snapshot)
+
+    assert report.counts["records_identity_kind_mismatch"] == 2
+    assert report.counts["records_quarantined"] == 2
+    assert "records_identity_joined_by_provider_id" not in report.counts
+    quarantined = sorted(scene.world.quarantine.values(), key=lambda q: q.record_ordinal)
+    assert [(q.snapshot_id, q.record_ordinal) for q in quarantined] == [
+        (second_snapshot, 0),
+        (second_snapshot, 1),
+    ]
+    for row in quarantined:
+        assert "identity_kind_mismatch" in row.reasons
+        assert "identity_conflict" not in row.reasons
+    assert report.counts["records_total"] == (3 if d17_first else 2)
+    assert scene.rows_for(second_snapshot) == report.counts["records_total"]
+
+    # The stored messages are untouched: not rewritten, not flagged.
+    for message_id, before in stored_before.items():
+        assert scene.world.messages[message_id] == before
+    assert not any(m.identity_conflict for m in scene.world.messages.values())
+    returned = [
+        m
+        for m in scene.world.messages.values()
+        if (m.identity_kind, m.identity_value) == ("provider_returned", MESSAGE_ID_ONE)
+    ]
+    assert len(returned) == 1
+
+
 def test_a_second_provider_id_under_one_message_id_is_a_second_item() -> None:
     scene = Scene()
     scene.ingest("20261117-comms.json", pub(17, [s.message(1, selected=at(17))]))

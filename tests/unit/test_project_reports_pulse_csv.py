@@ -600,3 +600,16 @@ def test_the_fixture_bytes_are_protected_from_line_ending_normalization() -> Non
     assert b"\n" not in (FIXTURES / "rfc" / "cr_only.csv").read_bytes()
     assert (FIXTURES / "rfc" / "bom.csv").read_bytes().startswith(b"\xef\xbb\xbf")
     assert not (FIXTURES / "rfc" / "no_trailing_terminator.csv").read_bytes().endswith(b"\n")
+
+
+def test_a_vendor_beside_only_the_original_budget_cell_is_vendor_only() -> None:
+    # Buyout columns: 0 code, 1 original budget, 2 budget change, 3 prime CO,
+    # 4 commitment number, 5 vendor, 6 commitment amount, 7 commitment CO.
+    from my_pa.infrastructure.project_reports.pulse_csv import _buyout_line
+
+    budget_only = ("", "$0.00", "", "", "", "", "", "")
+    with_vendor = ("", "$0.00", "", "", "", "Synthetic Vendor A", "", "")
+    vendor_only = ("", "", "", "", "", "Synthetic Vendor A", "", "")
+    assert _buyout_line(budget_only) is LineKind.BUDGET_LINE
+    assert _buyout_line(with_vendor) is LineKind.VENDOR_ONLY
+    assert _buyout_line(vendor_only) is LineKind.VENDOR_ONLY

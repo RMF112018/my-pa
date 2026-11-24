@@ -517,8 +517,10 @@ def _buyout_line(cells: Cells) -> LineKind:
         return LineKind.PRIME_CHANGE_ORDER
     if cells[2] != "":
         return LineKind.BUDGET_CHANGE
-    if cells[1] != "":
+    if cells[1] != "" and cells[5] == "":
         return LineKind.BUDGET_LINE
+    # A vendor with nothing but the (never loaded) original-budget cell is a
+    # vendor-only line: a budget line carries no vendor (evidence inventory s3).
     return LineKind.VENDOR_ONLY
 
 

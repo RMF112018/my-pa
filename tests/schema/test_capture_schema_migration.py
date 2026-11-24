@@ -1676,7 +1676,9 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "meeting_provider_binding_origin_is_immutable",
             # Project reports WP3P. The project report evidence revision installs
             # an append-only guard on eleven tables, the binding pointer's
-            # named-mutable guard and a TRUNCATE refusal on all twelve.
+            # named-mutable guard, four BEFORE INSERT guards (the two
+            # supersede-an-existing-row guards, the pointer's insert guard and
+            # the cross-check role guard) and a TRUNCATE refusal on all twelve.
             "project_report_binding_revisions_are_append_only",
             "project_report_filter_declarations_are_append_only",
             "project_report_snapshots_are_append_only",
@@ -1689,6 +1691,10 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "project_report_stated_totals_are_append_only",
             "project_report_cross_checks_are_append_only",
             "project_report_bindings_move_only_forward",
+            "project_report_binding_revisions_supersede_an_existing_one",
+            "project_report_derivations_supersede_an_existing_one",
+            "project_report_bindings_name_an_unsuperseded_revision",
+            "project_report_cross_checks_keep_their_roles",
             "project_report_binding_revisions_refuse_truncate",
             "project_report_filter_declarations_refuse_truncate",
             "project_report_bindings_refuse_truncate",

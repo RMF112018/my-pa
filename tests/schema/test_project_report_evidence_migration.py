@@ -16,7 +16,12 @@ nothing that existed before it. This module proves:
   round trip on empty; the downgrade refusal while any row exists; every
   CHECK, UNIQUE, FOREIGN KEY and trigger case; the binding pointer's named
   mutable columns; the view's current-derivation semantics; the NUMERIC(20,4)
-  round trip.
+  round trip;
+* the WP3P-F1 insert guards: a supersedes 2-cycle in one multi-row INSERT is
+  refused on both chained tables (B1) while a first-then-successor chain in
+  one statement is accepted, so the binding pointer cannot oscillate; a new
+  pointer names only an unsuperseded revision (N2); a cross-check keeps its
+  sides in their roles (N1); each `group_path` step is `[level, key, header]`.
 
 **Every guard case is isolated** (the `52a829ef718a` suite's method): each
 refused case is refused with its own named constraint (or by its trigger), and
@@ -81,10 +86,25 @@ VIEW: Final = "project_report_current_derivations"
 POINTER: Final = "project_report_bindings"
 APPEND_ONLY_TABLES: Final = tuple(name for name in TABLES if name != POINTER)
 POINTER_TRIGGER: Final = "project_report_bindings_move_only_forward"
+#: B1: a row supersedes only a row that already exists (trigger = function name).
+REVISION_SUPERSEDES: Final = "project_report_binding_revisions_supersede_an_existing_one"
+DERIVATION_SUPERSEDES: Final = "project_report_derivations_supersede_an_existing_one"
+#: N2: a new pointer names an unsuperseded revision.
+POINTER_INSERT: Final = "project_report_bindings_name_an_unsuperseded_revision"
+#: N1: a cross-check's sides keep their roles (left buyout, right reconciliation).
+CROSS_CHECK_ROLES: Final = "project_report_cross_checks_keep_their_roles"
+#: `(table, trigger)` of each BEFORE INSERT guard, which is also its function.
+INSERT_GUARDS: Final = (
+    ("project_report_binding_revisions", REVISION_SUPERSEDES),
+    ("project_report_derivations", DERIVATION_SUPERSEDES),
+    (POINTER, POINTER_INSERT),
+    ("project_report_cross_checks", CROSS_CHECK_ROLES),
+)
 TRIGGERS: Final = frozenset(
     {f"{t}_are_append_only" for t in APPEND_ONLY_TABLES}
     | {f"{t}_refuse_truncate" for t in TABLES}
     | {POINTER_TRIGGER}
+    | {trigger for _table, trigger in INSERT_GUARDS}
 )
 FUNCTIONS: Final = frozenset(
     {
@@ -92,6 +112,7 @@ FUNCTIONS: Final = frozenset(
         "project_reports_rows_are_append_only",
         "project_reports_refuse_truncate",
     }
+    | {trigger for _table, trigger in INSERT_GUARDS}
 )
 INDEXES: Final = frozenset(index.name for table in PROJECT_REPORT_TABLES for index in table.indexes)
 #: The existing tables the revision touches, only as foreign-key targets.
@@ -104,6 +125,8 @@ SHA_A: Final = "a" * 64
 SHA_B: Final = "b" * 64
 SHA_C: Final = "c" * 64
 SHA_D: Final = "d" * 64
+SHA_E: Final = "f" * 64
+SHA_F: Final = "1" * 64
 SIGNATURE: Final = "e" * 64
 _WHITESPACE: Final = re.compile(r"\s+")
 
@@ -256,6 +279,10 @@ def test_the_frozen_literals() -> None:
     assert {(f.value, v.value) for v, f in model.FAMILY_OF_VIEW.items()} <= pairs
     # Money and numbers at four decimal places.
     assert flat.count("NUMERIC(20, 4)") == 5
+    # The cross-check role guard names the kind and the two views by their values.
+    assert f"NEW.check_kind = '{CROSS_CHECK_KIND}'" in flat
+    for view in (model.FamilyView.BUYOUT_SUMMARY, model.FamilyView.RECONCILIATION):
+        assert f"d.family_view IS DISTINCT FROM '{view.value}'" in flat
     # No capability, purpose or audit restatement; no lifecycle vocabulary change.
     code = _source().split('"""', 2)[2]
     for word in ("audit_events", "capability_is_known", "purpose_is_known", "GRANT"):
@@ -531,6 +558,8 @@ class _Seed:
     sn2: str = _id("isnp", "snp0002")
     sn3: str = _id("isnp", "snp0003")
     sn4: str = _id("isnp", "snp0004")
+    sn5: str = _id("isnp", "snp0005")
+    sn6: str = _id("isnp", "snp0006")
     other_snapshot: str = _id("isnp", "snp0009")
     r1: str = _id("prbnd", "rev0001")
     r2: str = _id("prbnd", "rev0002")
@@ -539,6 +568,10 @@ class _Seed:
     other_revision: str = _id("prbnd", "rev0009")
     d1: str = _id("prdrv", "drv0001")
     d2: str = _id("prdrv", "drv0002")
+    #: The cross-check sides: a buyout summary and a reconciliation (and its successor).
+    d_buy: str = _id("prdrv", "buy0001")
+    d_rec: str = _id("prdrv", "rec0001")
+    d_rec2: str = _id("prdrv", "rec0002")
     rec: str = _id("prrec", "rec0001")
     rec_buyout: str = _id("prrec", "rec0002")
     counter: list[int] = field(default_factory=lambda: [100])
@@ -783,8 +816,8 @@ class _Seed:
         row: dict[str, object] = {
             "principal_id": P,
             "check_kind": CROSS_CHECK_KIND,
-            "left_derivation_id": self.d1,
-            "right_derivation_id": self.d2,
+            "left_derivation_id": self.d_buy,
+            "right_derivation_id": self.d_rec,
             "project_id": self.pj,
             "date_label": "20261124",
             "left_value": None,
@@ -807,9 +840,10 @@ class _Seed:
             connection.execute(
                 insert(ingest_snapshots).values(**self.lifecycle(snapshot, self.s, sha))
             )
-        connection.execute(
-            insert(ingest_snapshots).values(**self.lifecycle(self.sn4, self.s, SHA_D))
-        )
+        for snapshot, sha in ((self.sn4, SHA_D), (self.sn5, SHA_E), (self.sn6, SHA_F)):
+            connection.execute(
+                insert(ingest_snapshots).values(**self.lifecycle(snapshot, self.s, sha))
+            )
         connection.execute(
             insert(ingest_snapshots).values(
                 **self.lifecycle(self.other_snapshot, self.other_source, SHA_A, OTHER)
@@ -821,6 +855,15 @@ class _Seed:
         t = _TABLE
         rev = t["project_report_binding_revisions"]
         connection.execute(insert(rev).values(**self.revision(self.r1)))
+        pointer = t[POINTER]
+        # The pointer is planted on `r1` before `r2` supersedes it (N2).
+        connection.execute(
+            insert(pointer).values(
+                **self.binding(
+                    ingest_source_id=self.s, binding_revision_id=self.r1, project_id=self.pj
+                )
+            )
+        )
         connection.execute(
             insert(rev).values(
                 **self.revision(self.r2, supersedes_revision_id=self.r1, reason_code="correction")
@@ -848,14 +891,6 @@ class _Seed:
         )
         connection.execute(
             insert(t["project_report_filter_declarations"]).values(**self.declaration())
-        )
-        pointer = t[POINTER]
-        connection.execute(
-            insert(pointer).values(
-                **self.binding(
-                    ingest_source_id=self.s, binding_revision_id=self.r1, project_id=self.pj
-                )
-            )
         )
         connection.execute(
             insert(pointer).values(
@@ -892,6 +927,39 @@ class _Seed:
         )
         del quarantine["reconciliation"]
         connection.execute(insert(derivations).values(**quarantine))
+        # The cross-check sides, each on its own report snapshot.
+        for snapshot, sha in ((self.sn5, SHA_E), (self.sn6, SHA_F)):
+            connection.execute(
+                insert(snapshots).values(**self.snapshot(snapshot, sha, data_row_count=0))
+            )
+        connection.execute(
+            insert(derivations).values(
+                **self.derivation(
+                    self.d_buy,
+                    snapshot_id=self.sn5,
+                    record_family="buyout",
+                    family_view="buyout_summary",
+                )
+            )
+        )
+        reconciliation = {
+            "snapshot_id": self.sn6,
+            "record_family": "change_order_reconciliation",
+            "family_view": "reconciliation",
+        }
+        connection.execute(
+            insert(derivations).values(**self.derivation(self.d_rec, **reconciliation))
+        )
+        connection.execute(
+            insert(derivations).values(
+                **self.derivation(
+                    self.d_rec2,
+                    trigger="rederive_adapter",
+                    supersedes_derivation_id=self.d_rec,
+                    **reconciliation,
+                )
+            )
+        )
         roles = t["project_report_row_roles"]
         header = [[1, "Group A", 1]]
         connection.execute(
@@ -1032,9 +1100,15 @@ def _inserting(table: str, *rows: dict[str, object]) -> Callable[[Connection], A
     return run
 
 
+_INSERT_GUARD_NAMES: Final = frozenset(trigger for _table, trigger in INSERT_GUARDS)
+
+
 def _drop(table: str, *constraints: str) -> str:
+    """DROP each named constraint; DISABLE each named BEFORE INSERT guard trigger."""
     return "; ".join(
-        f"ALTER TABLE knowledge.{table} DROP CONSTRAINT {constraint} CASCADE"
+        f"ALTER TABLE knowledge.{table} DISABLE TRIGGER {constraint}"
+        if constraint in _INSERT_GUARD_NAMES
+        else f"ALTER TABLE knowledge.{table} DROP CONSTRAINT {constraint} CASCADE"
         for constraint in constraints
     )
 
@@ -1092,7 +1166,7 @@ def _check_cases(s: _Seed) -> list[_CheckCase]:
             rev,
             "a_binding_revision_does_not_supersede_itself",
             s.revision(_id("prbnd", "self0001"), supersedes_revision_id=_id("prbnd", "self0001")),
-            (),
+            (REVISION_SUPERSEDES,),
         ),
         (
             rev,
@@ -1286,7 +1360,7 @@ def _check_cases(s: _Seed) -> list[_CheckCase]:
                 trigger="rederive_adapter",
                 supersedes_derivation_id=_id("prdrv", "self0001"),
             ),
-            (),
+            (DERIVATION_SUPERSEDES,),
         ),
         (
             role,
@@ -1308,7 +1382,18 @@ def _check_cases(s: _Seed) -> list[_CheckCase]:
             (),
         ),
         (role, "a_row_role_header_names_its_level_and_key", s.role(5, row_role="group_header"), ()),
-        (role, "a_row_role_group_path_is_an_array", s.role(5, group_path={"level": 1}), ()),
+        (
+            role,
+            "a_row_role_group_path_is_an_array",
+            s.role(5, group_path={"level": 1}),
+            (),
+        ),
+        (
+            role,
+            "a_row_role_group_path_steps_are_level_key_and_header",
+            s.role(5, group_path=[[1, "Group A"]]),
+            (),
+        ),
         (role, "a_row_role_parent_header_precedes_it", s.role(5, parent_header_ordinal=9), ()),
         (rec, "a_report_record_family_is_known", fresh_record(record_family="x"), ()),
         (rec, "a_report_record_identity_key_is_bounded", fresh_record(identity_key="nocolon"), ()),
@@ -1461,22 +1546,26 @@ def _check_cases(s: _Seed) -> list[_CheckCase]:
         (
             cc,
             "a_cross_check_date_label_is_a_date_prefix",
-            s.cross_check(left_derivation_id=s.d2, right_derivation_id=s.d1, date_label="2026-11"),
+            s.cross_check(right_derivation_id=s.d_rec2, date_label="2026-11"),
             (),
         ),
         (
             cc,
             "a_cross_check_outcome_is_known",
-            s.cross_check(left_derivation_id=s.d2, right_derivation_id=s.d1, outcome="x"),
+            s.cross_check(right_derivation_id=s.d_rec2, outcome="x"),
             (),
         ),
-        (cc, "a_cross_check_names_two_derivations", s.cross_check(right_derivation_id=s.d1), ()),
+        (
+            cc,
+            "a_cross_check_names_two_derivations",
+            s.cross_check(right_derivation_id=s.d_buy),
+            (CROSS_CHECK_ROLES,),
+        ),
         (
             cc,
             "a_matched_cross_check_agrees",
             s.cross_check(
-                left_derivation_id=s.d2,
-                right_derivation_id=s.d1,
+                right_derivation_id=s.d_rec2,
                 outcome="match",
                 left_value=Decimal(1),
                 right_value=Decimal(2),
@@ -1486,7 +1575,7 @@ def _check_cases(s: _Seed) -> list[_CheckCase]:
         (
             cc,
             "an_unchecked_cross_check_holds_no_value",
-            s.cross_check(left_derivation_id=s.d2, right_derivation_id=s.d1, left_value=Decimal(1)),
+            s.cross_check(right_derivation_id=s.d_rec2, left_value=Decimal(1)),
             (),
         ),
     ]
@@ -1546,9 +1635,7 @@ def _identifier_cases(s: _Seed) -> list[tuple[str, str, dict[str, object]]]:
         "project_report_lines": s.line(3),
         "project_report_line_values": s.value("rfi.title"),
         "project_report_stated_totals": s.total(),
-        "project_report_cross_checks": s.cross_check(
-            left_derivation_id=s.d2, right_derivation_id=s.d1
-        ),
+        "project_report_cross_checks": s.cross_check(right_derivation_id=s.d_rec2),
     }
     cases = []
     for table in PROJECT_REPORT_TABLES:
@@ -1571,9 +1658,22 @@ def test_every_identifier_check_refuses_its_case_first(seeded: tuple[Engine, _Se
     engine, seed = seeded
     cases = _identifier_cases(seed)
     assert len(cases) == 42
+
+    # A row whose `supersedes_*` (or, for a revision, whose Principal or source)
+    # is malformed names no existing row, which the B1 guard refuses before any
+    # CHECK runs (BEFORE triggers precede constraints): the guard is disabled
+    # there so the CHECK is the one proved.
+    def prelude_of(table: str, constraint: str) -> str:
+        if table == "project_report_binding_revisions":
+            return _drop(table, REVISION_SUPERSEDES)
+        if constraint == "supersedes_derivation_id_is_an_opaque_identifier":
+            return _drop(table, DERIVATION_SUPERSEDES)
+        return ""
+
     failures = []
     for table, constraint, row in cases:
-        refused = _attempt(engine, _inserting(table, row))
+        prelude = prelude_of(table, constraint)
+        refused = _attempt(engine, _inserting(table, row), prelude=prelude)
         if refused is None or (_sqlstate(refused), _constraint(refused)) != (CHECK, constraint):
             failures.append((table, constraint, None if refused is None else _constraint(refused)))
     assert failures == []
@@ -1765,7 +1865,7 @@ def _foreign_cases(s: _Seed) -> list[tuple[str, str, dict[str, object], tuple[st
             rev,
             "a_binding_revision_supersedes_a_revision_of_its_source",
             s.revision(s.fresh("prbnd"), supersedes_revision_id=s.r3, reason_code="correction"),
-            (),
+            (REVISION_SUPERSEDES,),
         ),
         (
             decl,
@@ -1823,7 +1923,7 @@ def _foreign_cases(s: _Seed) -> list[tuple[str, str, dict[str, object], tuple[st
                 trigger="rederive_adapter",
                 supersedes_derivation_id=s.d1,
             ),
-            (),
+            (DERIVATION_SUPERSEDES,),
         ),
         (
             role,
@@ -2149,6 +2249,209 @@ def test_the_binding_pointer_changes_only_its_named_mutable_columns(
     assert deleted is None
     # The three named columns move together to the superseding revision.
     assert _attempt(engine, _move(seed, seed.r2, project_id=seed.pj, state="active")) is None
+
+
+# ---- the insert guards: supersedes cycles (B1), the pointer (N2), the roles (N1) ----
+
+
+def _one_statement(table: str, *rows: dict[str, object]) -> Callable[[Connection], Any]:
+    """Every row in ONE multi-row INSERT (a self-referencing key is checked at its end)."""
+
+    def run(connection: Connection) -> None:
+        connection.execute(insert(_TABLE[table]).values(list(rows)))
+
+    return run
+
+
+def _cycle_of_revisions(s: _Seed) -> tuple[str, dict[str, object], dict[str, object]]:
+    x, y = _id("prbnd", "cycx0001"), _id("prbnd", "cycy0001")
+    on_s3 = {"ingest_source_id": s.s3, "project_id": s.pj3, "reason_code": "correction"}
+    return (
+        x,
+        s.revision(x, supersedes_revision_id=y, **on_s3),
+        s.revision(y, supersedes_revision_id=x, **on_s3),
+    )
+
+
+@pytest.mark.database
+def test_a_two_cycle_of_binding_revisions_in_one_statement_is_refused(
+    seeded: tuple[Engine, _Seed],
+) -> None:
+    """`(X supersedes Y), (Y supersedes X)` in one INSERT passes every key; the guard alone
+    refuses it."""
+    engine, seed = seeded
+    table = "project_report_binding_revisions"
+    _x, first, second = _cycle_of_revisions(seed)
+    problem = _isolated(
+        engine,
+        _one_statement(table, first, second),
+        sqlstate=RESTRICT_VIOLATION,
+        constraint=REVISION_SUPERSEDES,
+        lift=_drop(table, REVISION_SUPERSEDES),
+    )
+    assert problem is None
+    # A successor of a revision that does not exist, alone, is refused too.
+    alone = _attempt(engine, _one_statement(table, first))
+    assert alone is not None
+    assert _constraint(alone) == REVISION_SUPERSEDES
+
+
+@pytest.mark.database
+def test_a_two_cycle_of_derivations_in_one_statement_is_refused(
+    seeded: tuple[Engine, _Seed],
+) -> None:
+    """Unguarded, the cycle leaves its snapshot with no current derivation."""
+    engine, seed = seeded
+    table = "project_report_derivations"
+    x, y = _id("prdrv", "cycx0001"), _id("prdrv", "cycy0001")
+    successor = {"snapshot_id": seed.sn4, "trigger": "rederive_binding"}
+    cycle = _one_statement(
+        table,
+        seed.derivation(x, supersedes_derivation_id=y, **successor),
+        seed.derivation(y, supersedes_derivation_id=x, **successor),
+    )
+    problem = _isolated(
+        engine,
+        cycle,
+        sqlstate=RESTRICT_VIOLATION,
+        constraint=DERIVATION_SUPERSEDES,
+        lift=_drop(table, DERIVATION_SUPERSEDES),
+    )
+    assert problem is None
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.execute(text(_drop(table, DERIVATION_SUPERSEDES)))
+            cycle(connection)
+            assert _current(connection, seed.sn4) == []  # the hazard the guard closes
+        finally:
+            transaction.rollback()
+
+
+@pytest.mark.database
+def test_a_first_then_successor_chain_in_one_statement_is_accepted(
+    seeded: tuple[Engine, _Seed],
+) -> None:
+    """Each row sees the rows its statement inserted before it; order is significant."""
+    engine, seed = seeded
+    a, b = _id("prbnd", "chna0001"), _id("prbnd", "chnb0001")
+    on_s3 = {"ingest_source_id": seed.s3, "project_id": seed.pj3, "reason_code": "correction"}
+    after_r5 = seed.revision(a, supersedes_revision_id=seed.r5, **on_s3)
+    after_a = seed.revision(b, supersedes_revision_id=a, **on_s3)
+    revisions = "project_report_binding_revisions"
+    assert _attempt(engine, _one_statement(revisions, after_r5, after_a)) is None
+    backwards = _attempt(engine, _one_statement(revisions, after_a, after_r5))
+    assert backwards is not None
+    assert _constraint(backwards) == REVISION_SUPERSEDES
+    f, g = _id("prdrv", "chnf0001"), _id("prdrv", "chng0001")
+    head = seed.derivation(f, snapshot_id=seed.sn4)
+    successor = seed.derivation(
+        g, snapshot_id=seed.sn4, trigger="rederive_adapter", supersedes_derivation_id=f
+    )
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            _one_statement("project_report_derivations", head, successor)(connection)
+            assert _current(connection, seed.sn4) == [g]
+        finally:
+            transaction.rollback()
+    backwards = _attempt(engine, _one_statement("project_report_derivations", successor, head))
+    assert backwards is not None
+    assert _constraint(backwards) == DERIVATION_SUPERSEDES
+
+
+@pytest.mark.database
+def test_the_binding_pointer_cannot_oscillate(seeded: tuple[Engine, _Seed]) -> None:
+    """Only a cycle lets a forward-only pointer return; with the guards there is none."""
+    engine, seed = seeded
+    x, first, second = _cycle_of_revisions(seed)
+    p = project_report_bindings
+
+    def oscillate(connection: Connection) -> None:
+        _one_statement("project_report_binding_revisions", first, second)(connection)
+        connection.execute(
+            insert(p).values(
+                **seed.binding(ingest_source_id=seed.s3, binding_revision_id=x, project_id=seed.pj3)
+            )
+        )
+        for target in (str(second["binding_revision_id"]), x, str(second["binding_revision_id"])):
+            connection.execute(
+                update(p)
+                .where(p.c.principal_id == P, p.c.ingest_source_id == seed.s3)
+                .values(binding_revision_id=target)
+            )
+
+    refused = _attempt(engine, oscillate)
+    assert refused is not None
+    assert _constraint(refused) == REVISION_SUPERSEDES
+    unguarded = "; ".join(
+        (
+            _drop("project_report_binding_revisions", REVISION_SUPERSEDES),
+            _drop(POINTER, POINTER_INSERT),
+        )
+    )
+    assert _attempt(engine, oscillate, prelude=unguarded) is None  # the hazard
+
+
+@pytest.mark.database
+def test_a_new_pointer_names_only_an_unsuperseded_revision(seeded: tuple[Engine, _Seed]) -> None:
+    engine, seed = seeded
+    six = _id("prbnd", "rev0006")
+
+    def bind(revision: str) -> Callable[[Connection], Any]:
+        def run(connection: Connection) -> None:
+            connection.execute(
+                insert(project_report_binding_revisions).values(
+                    **seed.revision(
+                        six,
+                        ingest_source_id=seed.s3,
+                        project_id=seed.pj3,
+                        supersedes_revision_id=seed.r5,
+                        reason_code="correction",
+                    )
+                )
+            )
+            connection.execute(
+                insert(project_report_bindings).values(**seed.binding(binding_revision_id=revision))
+            )
+
+        return run
+
+    problem = _isolated(
+        engine,
+        bind(seed.r5),
+        sqlstate=RESTRICT_VIOLATION,
+        constraint=POINTER_INSERT,
+        lift=_drop(POINTER, POINTER_INSERT),
+    )
+    assert problem is None
+    assert _attempt(engine, bind(six)) is None
+
+
+@pytest.mark.database
+def test_a_cross_check_keeps_its_sides_in_their_roles(seeded: tuple[Engine, _Seed]) -> None:
+    """Left is the buyout summary, right the reconciliation: `(B, A)` beside `(A, B)` is
+    refused, and so is a side of any other view."""
+    engine, seed = seeded
+    table = "project_report_cross_checks"
+    for row in (
+        seed.cross_check(left_derivation_id=seed.d_rec, right_derivation_id=seed.d_buy),
+        seed.cross_check(right_derivation_id=seed.d1),
+        seed.cross_check(left_derivation_id=seed.d1, right_derivation_id=seed.d_rec2),
+        seed.cross_check(right_derivation_id=seed.d2),  # a quarantine of no view
+    ):
+        problem = _isolated(
+            engine,
+            _inserting(table, row),
+            sqlstate=RESTRICT_VIOLATION,
+            constraint=CROSS_CHECK_ROLES,
+            lift=_drop(table, CROSS_CHECK_ROLES),
+        )
+        assert problem is None, (row["left_derivation_id"], row["right_derivation_id"], problem)
+    assert (
+        _attempt(engine, _inserting(table, seed.cross_check(right_derivation_id=seed.d_rec2)))
+        is None
+    )
 
 
 @pytest.mark.database

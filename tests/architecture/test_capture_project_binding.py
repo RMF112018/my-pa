@@ -94,8 +94,10 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: the snapshot digest key; `captures` is untouched. Moved again by the
 #: project reports WP3P revision, which declares the twelve project-report
 #: tables and imports their vocabularies from `domain.project_reports` and the
-#: reader's `Terminator`; purely additive, `captures` is untouched.
-TABLES_SHA256: Final = "5781e0d2c7585b7d7966707fefbc74f0bd3c90fdebbbd892178755fbe9a8fd4d"
+#: reader's `Terminator`; purely additive, `captures` is untouched. Moved again
+#: by its corrective cycle (WP3P-F1), which adds the row-role `group_path`
+#: step CHECK and guard comments; `captures` is untouched.
+TABLES_SHA256: Final = "afcf2da5a2732b3340c4cb90058c193b77917ade0e2df6c1b644387ef1384dd0"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

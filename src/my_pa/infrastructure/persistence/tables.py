@@ -17104,8 +17104,9 @@ def _report_view_pairs() -> str:
 
 #: One append-only revision of one folder's binding to one Project (D6: the
 #: revisions are the audit; no `audit_events` row). `supersedes_revision_id`
-#: names the revision of the same source it replaces, at most once, and each
-#: source has one first revision, so each source's chain is linear.
+#: names the revision of the same source it replaces, at most once, and only
+#: one that already exists (the revision's BEFORE INSERT trigger), and each
+#: source has one first revision, so each source's chain is linear and acyclic.
 project_report_binding_revisions = Table(
     "project_report_binding_revisions",
     METADATA,
@@ -17253,7 +17254,8 @@ project_report_filter_declarations = Table(
 #: and `state` change, and only to the revision that supersedes the one named
 #: (the revision's trigger); the composite foreign key holds the pointer equal
 #: to the revision it names. At most one `active` pointer per Project (v1: one
-#: folder per Project).
+#: folder per Project). A new pointer names an unsuperseded revision (the
+#: revision's BEFORE INSERT trigger).
 project_report_bindings = Table(
     "project_report_bindings",
     METADATA,
@@ -17422,7 +17424,9 @@ _PROJECT_REPORT_CLASSIFIED_ROLES: Final = ", ".join(
 #: one it supersedes, at most once; the current derivation is the one nothing
 #: supersedes (D10), which `project_report_current_derivations` selects. One
 #: first derivation per snapshot (a partial unique index) and one successor per
-#: derivation keep each snapshot's chain linear: exactly one is current.
+#: derivation keep each snapshot's chain linear, and the revision's BEFORE
+#: INSERT trigger (a successor names an existing derivation) keeps it acyclic:
+#: exactly one is current.
 project_report_derivations = Table(
     "project_report_derivations",
     METADATA,
@@ -17580,7 +17584,8 @@ project_report_derivations = Table(
     Index("project_report_derivations_by_revision", "principal_id", "binding_revision_id"),
 )
 
-#: Each data row's role in one derivation. A quarantined derivation writes none.
+#: Each data row's role in one derivation. A quarantined derivation writes none
+#: (application-enforced). Each `group_path` step is `[level, key, header]`.
 project_report_row_roles = Table(
     "project_report_row_roles",
     METADATA,
@@ -17617,6 +17622,14 @@ project_report_row_roles = Table(
         name="a_row_role_header_names_its_level_and_key",
     ),
     CheckConstraint("jsonb_typeof(group_path) = 'array'", name="a_row_role_group_path_is_an_array"),
+    CheckConstraint(
+        # Strict, silent: a non-array path is `a_row_role_group_path_is_an_array`'s.
+        'NOT jsonb_path_exists(group_path, \'strict $[*] ? (@.type() != "array" || '
+        '@.size() != 3 || @[0].type() != "number" || @[1].type() != "string" || '
+        '@[2].type() != "number" || (@[0] != 1 && @[0] != 2) || @[2] < 1 || '
+        "@[2] != @[2].floor())', '{}', true)",
+        name="a_row_role_group_path_steps_are_level_key_and_header",
+    ),
     CheckConstraint(
         "parent_header_ordinal IS NULL OR "
         "(parent_header_ordinal >= 1 AND parent_header_ordinal < row_ordinal)",
@@ -17974,7 +17987,9 @@ _PROJECT_REPORT_UNCHECKED: Final = frozenset(
 )
 
 #: One cross-report check between two derivations of one Project (the buyout
-#: approved prime-change total against the change-order reconciliation).
+#: approved prime-change total against the change-order reconciliation). The
+#: sides keep fixed roles: left is the buyout summary derivation, right the
+#: reconciliation (the revision's BEFORE INSERT trigger).
 project_report_cross_checks = Table(
     "project_report_cross_checks",
     METADATA,

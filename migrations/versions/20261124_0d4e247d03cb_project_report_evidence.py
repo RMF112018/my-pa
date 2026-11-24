@@ -21,15 +21,19 @@ section 3.2). It alters nothing that existed before it. In order it:
      `active` or `retired`, the currency, the change set's SHA-256, the reason
      code and `recorded_by = operator_cli` (D6: the revisions are the audit).
      `supersedes_revision_id` names the revision of the same source it
-     replaces, at most once, and each source has one first revision (a
-     partial unique index), so each source's chain is linear;
+     replaces, at most once, and only one that already exists when the row is
+     inserted (a BEFORE INSERT trigger: the B1 cycle fix); each source has one
+     first revision (a partial unique index), so each source's chain is
+     linear and acyclic and exactly one revision of it is unsuperseded;
    * `project_report_filter_declarations` -- an operator's declaration of what
      one saved report filters, against one revision (append-only);
    * `project_report_bindings` -- the one binding pointer per source. Only
      `binding_revision_id`, `project_id` and `state` change, and only to the
      revision that supersedes the current one; the pointer always equals the
      revision it names (one composite foreign key); DELETE is refused; at most
-     one `active` pointer per Project (a partial unique index);
+     one `active` pointer per Project (a partial unique index); a new pointer
+     names a revision nothing supersedes (a BEFORE INSERT trigger, N2). As the
+     chain is acyclic the pointer can only ever move forward, never oscillate;
    * `project_report_snapshots` -- Layer A head (D1): the byte-exact header and
      reconstruction facts of one lifecycle snapshot, whose `file_sha256` is the
      lifecycle digest through `(snapshot_id, principal_id, file_sha256)` and
@@ -39,11 +43,15 @@ section 3.2). It alters nothing that existed before it. In order it:
    * `project_report_derivations` -- one append-only, rebuildable derivation of
      a snapshot (`prdrv_`) under one adapter and one binding revision;
      `classified` or `quarantined` (D11), superseded at most once by a later
-     derivation of the same snapshot. "Current" is the one nothing supersedes
-     (D10: no mutable latest pointer). Each snapshot has one first derivation
-     (a partial unique index), so its chain is linear and exactly one
-     derivation of it is current;
+     derivation of the same snapshot, and only by one inserted after it (a
+     BEFORE INSERT trigger: the B1 cycle fix). "Current" is the one nothing
+     supersedes (D10: no mutable latest pointer). Each snapshot has one first
+     derivation (a partial unique index), so its chain is linear and acyclic
+     and exactly one derivation of it is current;
    * `project_report_row_roles` -- each data row's role in one derivation;
+     each `group_path` step is `[level (1 or 2), key text, header ordinal >= 1]`
+     (a CHECK). That a quarantined derivation holds no row roles is enforced
+     by the application, not here;
    * `project_report_records` -- the family-local record identities
      (`prrec_`), keyed by Project, family, identity key and identity version;
    * `project_report_lines` -- Layer B head (D2): one generic line per detail
@@ -54,15 +62,24 @@ section 3.2). It alters nothing that existed before it. In order it:
    * `project_report_stated_totals` -- each group or grand total cell with its
      recomputed detail sum and its reconciliation outcome;
    * `project_report_cross_checks` -- one cross-report check between two
-     derivations of one Project;
+     derivations of one Project, in fixed roles: the left side is the buyout
+     summary derivation and the right the change-order reconciliation (a
+     BEFORE INSERT trigger, N1), so `(A, B)` and `(B, A)` cannot both exist.
+     A `mismatch` may carry two equal values (a refused part is excluded from
+     the computed sum, the domain `compare` rule), as may a stated total's, so
+     no CHECK requires a mismatch's values to differ;
 3. creates the indexes of design section 3.2 and the foreign-key lookups. No
    trigram index (the WP3a M1 precedent: the text index belongs to the read
    package);
 4. creates the view `project_report_current_derivations`: every derivation no
    later derivation supersedes, so a reader cannot count a superseded one;
-5. creates the guards: one shared append-only refusal on the eleven tables
-   other than the binding pointer, the pointer's named-mutable guard, and
-   `TRUNCATE` refusal on all twelve (the `c8e4a1b70d35` precedent).
+5. creates the guards: the pointer's named-mutable guard; the two
+   supersede-an-existing-row guards (binding revisions and derivations); the
+   pointer's insert guard; the cross-check role guard; one shared append-only
+   refusal on the eleven tables other than the binding pointer; and
+   `TRUNCATE` refusal on all twelve (the `c8e4a1b70d35` precedent). Every
+   refusal is `restrict_violation`; the four insert guards name themselves as
+   the error's constraint.
 
 Every foreign key is composite with `principal_id` and `ON DELETE RESTRICT`.
 Raw export text (names, descriptions, minutes) is held in the Layer A rows and
@@ -451,6 +468,10 @@ _ROW_ROLES_DDL: Final = """
           (row_role IN ('group_header', 'grouping_only'))),
       CONSTRAINT a_row_role_group_path_is_an_array CHECK (jsonb_typeof(group_path) =
           'array'),
+      CONSTRAINT a_row_role_group_path_steps_are_level_key_and_header CHECK (NOT
+          jsonb_path_exists(group_path, 'strict $[*] ? (@.type() != "array" || @.size() != 3
+          || @[0].type() != "number" || @[1].type() != "string" || @[2].type() != "number" ||
+          (@[0] != 1 && @[0] != 2) || @[2] < 1 || @[2] != @[2].floor())', '{}', true)),
       CONSTRAINT a_row_role_parent_header_precedes_it CHECK (parent_header_ordinal IS NULL OR
           (parent_header_ordinal >= 1 AND parent_header_ordinal < row_ordinal)),
       CONSTRAINT a_row_role_is_identified_with_its_role UNIQUE (principal_id, derivation_id,
@@ -952,6 +973,116 @@ _BINDING_GUARD: Final = """
       FOR EACH ROW EXECUTE FUNCTION knowledge.project_report_bindings_move_only_forward()
     """
 
+#: B1: a row supersedes only a row that already exists, of its Principal and
+#: source (a revision) or snapshot (a derivation), so no INSERT -- not even one
+#: multi-row statement -- can close a cycle. A self-referencing foreign key
+#: is checked at the end of its statement, so `(X supersedes Y), (Y supersedes
+#: X)` in one INSERT satisfies both keys; a row-level BEFORE INSERT trigger runs
+#: per row and sees exactly the rows the statement inserted before it (the
+#: function is VOLATILE), so a first-then-successor chain in one statement is
+#: still accepted. By induction every row names an earlier row: each chain is
+#: acyclic, and its head -- the one row nothing supersedes -- always exists.
+_REVISION_SUPERSEDES: Final = "project_report_binding_revisions_supersede_an_existing_one"
+_DERIVATION_SUPERSEDES: Final = "project_report_derivations_supersede_an_existing_one"
+
+_REVISION_SUPERSEDES_GUARD: Final = """
+    CREATE FUNCTION knowledge.project_report_binding_revisions_supersede_an_existing_one()
+    RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.supersedes_revision_id IS NOT NULL AND NOT EXISTS (
+           SELECT 1 FROM knowledge.project_report_binding_revisions o
+            WHERE o.principal_id = NEW.principal_id
+              AND o.binding_revision_id = NEW.supersedes_revision_id
+              AND o.ingest_source_id = NEW.ingest_source_id) THEN
+        RAISE EXCEPTION 'project_report_binding_revisions supersedes only an existing revision'
+          USING ERRCODE = 'restrict_violation',
+                CONSTRAINT = 'project_report_binding_revisions_supersede_an_existing_one';
+      END IF;
+      RETURN NEW;
+    END; $$;
+    CREATE TRIGGER project_report_binding_revisions_supersede_an_existing_one
+      BEFORE INSERT ON knowledge.project_report_binding_revisions
+      FOR EACH ROW EXECUTE FUNCTION
+        knowledge.project_report_binding_revisions_supersede_an_existing_one()
+    """
+
+_DERIVATION_SUPERSEDES_GUARD: Final = """
+    CREATE FUNCTION knowledge.project_report_derivations_supersede_an_existing_one()
+    RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.supersedes_derivation_id IS NOT NULL AND NOT EXISTS (
+           SELECT 1 FROM knowledge.project_report_derivations o
+            WHERE o.principal_id = NEW.principal_id
+              AND o.derivation_id = NEW.supersedes_derivation_id
+              AND o.snapshot_id = NEW.snapshot_id) THEN
+        RAISE EXCEPTION 'project_report_derivations supersedes only an existing derivation'
+          USING ERRCODE = 'restrict_violation',
+                CONSTRAINT = 'project_report_derivations_supersede_an_existing_one';
+      END IF;
+      RETURN NEW;
+    END; $$;
+    CREATE TRIGGER project_report_derivations_supersede_an_existing_one
+      BEFORE INSERT ON knowledge.project_report_derivations
+      FOR EACH ROW EXECUTE FUNCTION
+        knowledge.project_report_derivations_supersede_an_existing_one()
+    """
+
+
+#: N2: a new pointer names a revision nothing supersedes yet (an UPDATE is held
+#: to the superseding revision by `_BINDING_GUARD`).
+_POINTER_INSERT: Final = "project_report_bindings_name_an_unsuperseded_revision"
+
+_POINTER_INSERT_GUARD: Final = """
+    CREATE FUNCTION knowledge.project_report_bindings_name_an_unsuperseded_revision()
+    RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF EXISTS (
+           SELECT 1 FROM knowledge.project_report_binding_revisions r
+            WHERE r.principal_id = NEW.principal_id
+              AND r.supersedes_revision_id = NEW.binding_revision_id) THEN
+        RAISE EXCEPTION 'project_report_bindings names only an unsuperseded revision'
+          USING ERRCODE = 'restrict_violation',
+                CONSTRAINT = 'project_report_bindings_name_an_unsuperseded_revision';
+      END IF;
+      RETURN NEW;
+    END; $$;
+    CREATE TRIGGER project_report_bindings_name_an_unsuperseded_revision
+      BEFORE INSERT ON knowledge.project_report_bindings
+      FOR EACH ROW EXECUTE FUNCTION
+        knowledge.project_report_bindings_name_an_unsuperseded_revision()
+    """
+
+#: N1: a cross-check's sides have fixed roles -- the left side is the buyout
+#: summary derivation, the right the change-order reconciliation derivation
+#: (the S2 `pair_cross_report(buyout, reconciliation)` order) -- so `(A, B)` and
+#: `(B, A)` cannot both be recorded. A side that names no derivation is left to
+#: its foreign key; an unknown kind to `a_cross_check_kind_is_known`.
+_CROSS_CHECK_ROLES: Final = "project_report_cross_checks_keep_their_roles"
+
+_CROSS_CHECK_ROLES_GUARD: Final = """
+    CREATE FUNCTION knowledge.project_report_cross_checks_keep_their_roles()
+    RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.check_kind = 'buyout_prime_co_vs_co_reconciliation_v1' AND (
+           EXISTS (SELECT 1 FROM knowledge.project_report_derivations d
+                    WHERE d.principal_id = NEW.principal_id
+                      AND d.derivation_id = NEW.left_derivation_id
+                      AND d.family_view IS DISTINCT FROM 'buyout_summary')
+           OR EXISTS (SELECT 1 FROM knowledge.project_report_derivations d
+                       WHERE d.principal_id = NEW.principal_id
+                         AND d.derivation_id = NEW.right_derivation_id
+                         AND d.family_view IS DISTINCT FROM 'reconciliation')) THEN
+        RAISE EXCEPTION 'project_report_cross_checks keeps its sides in their roles'
+          USING ERRCODE = 'restrict_violation',
+                CONSTRAINT = 'project_report_cross_checks_keep_their_roles';
+      END IF;
+      RETURN NEW;
+    END; $$;
+    CREATE TRIGGER project_report_cross_checks_keep_their_roles
+      BEFORE INSERT ON knowledge.project_report_cross_checks
+      FOR EACH ROW EXECUTE FUNCTION knowledge.project_report_cross_checks_keep_their_roles()
+    """
+
 _APPEND_ONLY_FUNCTION: Final = "project_reports_rows_are_append_only"
 _APPEND_ONLY_TABLES: Final = (
     "project_report_binding_revisions",
@@ -1038,6 +1169,10 @@ def upgrade() -> None:
         op.execute(ddl)
     op.execute(_VIEW_DDL)
     op.execute(_BINDING_GUARD)
+    op.execute(_REVISION_SUPERSEDES_GUARD)
+    op.execute(_DERIVATION_SUPERSEDES_GUARD)
+    op.execute(_POINTER_INSERT_GUARD)
+    op.execute(_CROSS_CHECK_ROLES_GUARD)
     op.execute(_APPEND_ONLY)
     for table in _APPEND_ONLY_TABLES:
         op.execute(
@@ -1068,6 +1203,14 @@ def downgrade() -> None:
     for table in reversed(_APPEND_ONLY_TABLES):
         op.execute(f"DROP TRIGGER {table}_are_append_only ON {SCHEMA}.{table}")
     op.execute(f"DROP FUNCTION {SCHEMA}.{_APPEND_ONLY_FUNCTION}()")
+    op.execute(f"DROP TRIGGER {_CROSS_CHECK_ROLES} ON {SCHEMA}.project_report_cross_checks")
+    op.execute(f"DROP FUNCTION {SCHEMA}.{_CROSS_CHECK_ROLES}()")
+    op.execute(f"DROP TRIGGER {_POINTER_INSERT} ON {SCHEMA}.project_report_bindings")
+    op.execute(f"DROP FUNCTION {SCHEMA}.{_POINTER_INSERT}()")
+    op.execute(f"DROP TRIGGER {_DERIVATION_SUPERSEDES} ON {SCHEMA}.project_report_derivations")
+    op.execute(f"DROP FUNCTION {SCHEMA}.{_DERIVATION_SUPERSEDES}()")
+    op.execute(f"DROP TRIGGER {_REVISION_SUPERSEDES} ON {SCHEMA}.project_report_binding_revisions")
+    op.execute(f"DROP FUNCTION {SCHEMA}.{_REVISION_SUPERSEDES}()")
     op.execute(f"DROP TRIGGER {_BINDING_TRIGGER} ON {SCHEMA}.project_report_bindings")
     op.execute(f"DROP FUNCTION {SCHEMA}.{_BINDING_FUNCTION}()")
     op.execute(f"DROP VIEW {SCHEMA}.{_VIEW} RESTRICT")

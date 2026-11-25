@@ -61,9 +61,13 @@ pytestmark = pytest.mark.database
 OTHER_PRINCIPAL: Final = "prn_synotherreads01"
 #: The second Principal's Project: its own id, the first Principal's number.
 OTHER_PROJECT: Final = ("rfis", "prj_synreadsother1x", RFI_PROJECT[2])
-#: Answers meant to be empty: no Project named, a text across two fields, and
-#: every read of the first Principal over the second Principal's identifiers.
-_EMPTY: Final = frozenset({"no_projects", "lines:boundary", "foreign"})
+#: Answers meant to be empty: no Project named, a text across two fields,
+#: every read of the first Principal over the second Principal's identifiers,
+#: and every child read over a derivation the step superseded (R2-04).
+_SUPERSEDED: Final = ("totals", "checks", "rfi_candidates", "lines")
+_EMPTY: Final = frozenset(
+    {"no_projects", "lines:boundary", "foreign", *(f"superseded:{k}" for k in _SUPERSEDED)}
+)
 _ISSUED: Final = re.compile(r"\A(isrc|isnp|prdrv|prbnd|prrec|prser)_[A-Za-z0-9]+\Z")
 
 
@@ -230,6 +234,29 @@ def _foreign(scene: ReadsScene) -> tuple[object, ...]:
         )
 
 
+def _child_reads(scene: ReadsScene, derivations: tuple[str, ...]) -> dict[str, tuple[object, ...]]:
+    """The child reads over named derivations, raw (identifiers as each side issued them)."""
+    with scene.unit() as unit:
+        reads = unit.project_report_reads
+        mine = scene.principal
+        return {
+            "totals": tuple(reads.stated_totals_of(mine, derivations)),
+            "checks": tuple(reads.cross_checks_of(mine, derivations)),
+            "rfi_candidates": tuple(reads.rfi_candidates(mine, derivations, [174, 17, 9])),
+            "lines": tuple(
+                reads.query_lines(
+                    mine, ProjectReportLineQuery(derivation_ids=derivations, limit=1000)
+                )
+            ),
+        }
+
+
+def _derivation_ids(scene: ReadsScene) -> tuple[str, ...]:
+    with scene.unit() as unit:
+        versions = unit.project_report_reads.list_report_versions(scene.principal)
+        return tuple(v.derivation_id for v in versions)
+
+
 def _other_world(scene: ReadsScene) -> ReadsScene:
     """A second Principal's RFI world over the same unit of work and clock."""
     other = ReadsScene(
@@ -253,13 +280,40 @@ def _both(
         build_world(scene)
         extend_world(scene)
         other = _other_world(scene)
+        before = _derivation_ids(scene)
+        held = _child_reads(scene, before)
         if step is not None:
             step(scene)
+        current = set(_derivation_ids(scene))
+        # Ruling R2-04: the child reads are also called with the derivation ids the
+        # step superseded, so a fake that ignores "current" answers them and differs.
+        superseded = tuple(d for d in before if d not in current)
         answers = _answers(scene, scene.principal)
+        if superseded:
+            stale = set(superseded)
+            for key, answer in _child_reads(scene, superseded).items():
+                answers[f"superseded:{key}"] = answer
+                # What those derivations held before the step (a count, so both sides compare).
+                answers[f"superseded_held:{key}"] = sum(
+                    1 for entry in held[key] if stale & set(map(str, _strings(entry)))
+                )
         answers["foreign"] = _foreign(scene)
         answers["other"] = _answers(other, OTHER_PRINCIPAL)
         answered.append(answers)
     return answered[0], answered[1]
+
+
+def _strings(entry: object) -> tuple[str, ...]:
+    """Every string field of a dataclass answer, one level deep."""
+    assert dataclasses.is_dataclass(entry) and not isinstance(entry, type)
+    found: list[str] = []
+    for f in dataclasses.fields(entry):
+        value = getattr(entry, f.name)
+        if isinstance(value, str):
+            found.append(value)
+        elif isinstance(value, tuple):
+            found.extend(item for item in value if isinstance(item, str))
+    return tuple(found)
 
 
 def _assert_equal(fast: dict[str, Any], database: dict[str, Any]) -> None:
@@ -267,6 +321,8 @@ def _assert_equal(fast: dict[str, Any], database: dict[str, Any]) -> None:
     for key in fast:
         assert fast[key] == database[key], key
     for key, answer in fast.items():
+        if key.startswith("superseded_held:"):
+            continue
         assert (not answer) is (key in _EMPTY), key
     other = fast["other"]
     assert other["versions"] and other["lines:all"] and other["records"]
@@ -300,4 +356,9 @@ def test_the_fake_reads_what_the_database_reads_after_rederivation(
         scene.rederive()
         scene.rederive(unknown_adapter_registry())
 
-    _assert_equal(*_both(migrated_engine, rederive))
+    fast, database = _both(migrated_engine, rederive)
+    _assert_equal(fast, database)
+    # R2-04: the superseded derivations held lines, stated totals and RFI
+    # candidates before the step, so their empty answers are not vacuous.
+    for key in ("totals", "rfi_candidates", "lines"):
+        assert fast[f"superseded_held:{key}"] > 0, key

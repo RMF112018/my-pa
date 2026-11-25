@@ -778,15 +778,12 @@ OPTIONAL_TABLE_ROWS: Final[tuple[tuple[str, ...], ...]] = (
     ),
     (
         (
-            "RSRC, TASKRSRC, ROLES, ACCOUNT, PROJCOST, TASKMEMO, MEMOTYPE, TASKPROC, "
-            "PCATTYPE, PCATVAL, PROJPCAT, RCATTYPE, RCATVAL, RSRCRCAT, UMEASURE, SHIFT, "
-            "SHIFTPER, COSTTYPE, EXPTYPE"
+            "ROLES, ACCOUNT, PROJCOST, TASKMEMO, MEMOTYPE, TASKPROC, PCATTYPE, PCATVAL, "
+            "PROJPCAT, RCATTYPE, RCATVAL, RSRCRCAT, UMEASURE, SHIFT, SHIFTPER, COSTTYPE, "
+            "EXPTYPE"
         ),
-        "per the P6 documentation [D]",
-        (
-            "entity `resource` / `assignment` for `RSRC` / `TASKRSRC`, else `project`; "
-            "catalogued in S7-1 from documentation, marked `documented`"
-        ),
+        "none listed [D]",
+        "entity `project`; catalogued in S7-1 from documentation without fields",
     ),
 )
 

@@ -160,8 +160,12 @@ def test_derived_attributes_follow_the_cells() -> None:
 
 
 def test_documented_tables_are_catalogued_without_fields() -> None:
-    assert "RSRC" in catalogue.DOCUMENTED_TABLES
-    assert "TASKRSRC" in catalogue.DOCUMENTED_TABLES
+    assert "SHIFTPER" in catalogue.DOCUMENTED_TABLES
     assert catalogue.is_catalogued_table("SHIFTPER")
-    assert catalogue.table_fields("RSRC") == ()
+    assert catalogue.table_fields("SHIFTPER") == ()
+    # RSRC and TASKRSRC are tolerated (5.1), not documentation-only, and list no field yet.
+    for name in ("RSRC", "TASKRSRC"):
+        assert name in catalogue.TOLERATED_TABLES
+        assert name not in catalogue.DOCUMENTED_TABLES
+        assert catalogue.table_fields(name) == ()
     assert not catalogue.is_catalogued_table("SYNEXTRA")

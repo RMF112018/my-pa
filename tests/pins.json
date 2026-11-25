@@ -144,9 +144,9 @@
   },
   "census": {
     "architecture": 10198,
-    "database": 7374,
+    "database": 7378,
     "evaluation": 2,
-    "fast_collected": 53118,
+    "fast_collected": 53119,
     "fast_skipped": 138,
     "mypy_files": 791,
     "src_modules": 592,

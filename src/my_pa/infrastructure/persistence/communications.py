@@ -54,7 +54,7 @@ from sqlalchemy import (
     union_all,
     update,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, REGCONFIG, TSQUERY, aggregate_order_by
+from sqlalchemy.dialects.postgresql import ARRAY, REGCONFIG, TSQUERY
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Result, Row
 from sqlalchemy.sql.base import ReadOnlyColumnCollection
@@ -744,7 +744,7 @@ class SqlCommunicationsRepository(CommunicationsRepository):
                 tier=row.tier,
                 rank=row.rank,
                 overlap=row.overlap,
-                matched_identifier_kinds=tuple(row.id_kinds),
+                matched_identifier_kinds=tuple(sorted(set(row.id_kinds))),
                 conversation_hits=row.conversation_hits,
                 snippet=row.snippet,
             )
@@ -993,9 +993,7 @@ def _search_statement(principal_id: str, query: CommunicationSearchQuery) -> Sel
             select(
                 identifiers.c.message_id,
                 func.count(tuple_(identifiers.c.kind, identifiers.c.value).distinct()).label("hit"),
-                func.array_agg(
-                    aggregate_order_by(identifiers.c.kind.distinct(), identifiers.c.kind)
-                ).label("kinds"),
+                func.array_agg(identifiers.c.kind.distinct()).label("kinds"),
             )
             .where(
                 _mine(identifiers, principal_id),

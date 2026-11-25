@@ -14,8 +14,9 @@ one-line wrapper over `principal_bound_values`), and the one join (a provider
 id's item to its message) composes `matching_partition_criterion`.
 
 **Only the projection moves.** The revision's trigger refuses an UPDATE of any
-column but the projection group, `latest_snapshot_id` and the three flags; the
-update methods here name only those columns. A provider id is matched, never
+column but the projection group, `latest_snapshot_id`, the three flags and (since
+`fa18ef3d9bc0`) `source_unavailable` and `identifiers_version`; the update
+methods here name only those columns. A provider id is matched, never
 rekeyed (Manager ruling M6): there is no method that changes an item.
 
 **The operator aggregate.** `communications_aggregate` is the one read outside
@@ -101,6 +102,8 @@ _MESSAGE_COLUMNS: Final = (
     communication_messages.c.identity_conflict,
     communication_messages.c.participants_reconciled,
     communication_messages.c.participants_disagreed,
+    communication_messages.c.source_unavailable,
+    communication_messages.c.identifiers_version,
 )
 
 _ITEM_COLUMNS: Final = (
@@ -179,6 +182,8 @@ def _to_message(row: Row[Any]) -> CommunicationMessageRecord:
         identity_conflict=row.identity_conflict,
         participants_reconciled=row.participants_reconciled,
         participants_disagreed=row.participants_disagreed,
+        source_unavailable=row.source_unavailable,
+        identifiers_version=row.identifiers_version,
     )
 
 
@@ -344,6 +349,8 @@ class SqlCommunicationsRepository(CommunicationsRepository):
                         "identity_conflict": message.identity_conflict,
                         "participants_reconciled": message.participants_reconciled,
                         "participants_disagreed": message.participants_disagreed,
+                        "source_unavailable": message.source_unavailable,
+                        "identifiers_version": message.identifiers_version,
                     },
                 )
             )
@@ -402,6 +409,14 @@ class SqlCommunicationsRepository(CommunicationsRepository):
         if not values:
             raise ValueError("set_message_flags names no flag")
         self._update_message(principal_id, message_id, values)
+
+    def set_source_unavailable(
+        self, principal_id: str, message_id: str, *, source_unavailable: bool
+    ) -> None:
+        self._update_message(principal_id, message_id, {"source_unavailable": source_unavailable})
+
+    def set_identifiers_version(self, principal_id: str, message_id: str, version: str) -> None:
+        self._update_message(principal_id, message_id, {"identifiers_version": version})
 
     # --- items, observations, quarantine -------------------------------------
 
@@ -625,7 +640,10 @@ def communications_aggregate(
       WP1 aggregate summed over publications; `multi_lane_items` the distinct
       items among them;
     * `messages_identity_conflict` -- scoped messages flagged `identity_conflict`;
-    * `identifiers` -- per kind, stored identifier rows and distinct messages.
+    * `identifiers` -- per extractor version, then per kind, stored identifier
+      rows and distinct messages. Versions are kept apart because the rows of
+      every version stay side by side (the table is append-only, WP4 ruling R4),
+      so a kind's count summed over versions would count one message twice.
     """
     ids = sorted(set(ingest_source_ids))
     observations = communication_observations
@@ -679,19 +697,23 @@ def communications_aggregate(
         _mine(communication_identifiers, principal_id),
         communication_identifiers.c.message_id.in_(select(message_ids.c.message_id)),
     )
-    identifiers: dict[str, dict[str, int]] = {
-        str(kind): {"rows": int(rows), "messages": int(distinct)}
-        for kind, rows, distinct in connection.execute(
-            select(
-                communication_identifiers.c.kind,
-                func.count(),
-                func.count(func.distinct(communication_identifiers.c.message_id)),
-            )
-            .where(*identifier_scope)
-            .group_by(communication_identifiers.c.kind)
-            .order_by(communication_identifiers.c.kind)
+    version, kind = communication_identifiers.c.extractor_version, communication_identifiers.c.kind
+    identifiers: dict[str, dict[str, dict[str, int]]] = {}
+    for extractor_version, identifier_kind, rows, distinct in connection.execute(
+        select(
+            version,
+            kind,
+            func.count(),
+            func.count(func.distinct(communication_identifiers.c.message_id)),
         )
-    }
+        .where(*identifier_scope)
+        .group_by(version, kind)
+        .order_by(version, kind)
+    ):
+        identifiers.setdefault(str(extractor_version), {})[str(identifier_kind)] = {
+            "rows": int(rows),
+            "messages": int(distinct),
+        }
     return {
         "observations": {
             "total": int(total),

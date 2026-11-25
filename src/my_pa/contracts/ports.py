@@ -14632,6 +14632,12 @@ class CommunicationMessageRecord:
     identity_conflict: bool = False
     participants_reconciled: bool = False
     participants_disagreed: bool = False
+    #: The source file of the text pointer was missing or its digest differed at
+    #: the last rederive (WP4 ruling R3); the stored projection was kept.
+    source_unavailable: bool = False
+    #: The extractor version the identifier rows were last written under (WP4
+    #: ruling R2); `None` when never recorded.
+    identifiers_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -14781,6 +14787,19 @@ class CommunicationsRepository(ABC):
         participants_disagreed: bool | None = None,
     ) -> None:
         """Set the named flags (`None` leaves one unchanged).
+
+        `RepositoryFailureError` when the message does not exist.
+        """
+
+    @abstractmethod
+    def set_source_unavailable(
+        self, principal_id: str, message_id: str, *, source_unavailable: bool
+    ) -> None:
+        """Set or clear `source_unavailable`; `RepositoryFailureError` when absent."""
+
+    @abstractmethod
+    def set_identifiers_version(self, principal_id: str, message_id: str, version: str) -> None:
+        """Record the extractor version of the message's identifier rows.
 
         `RepositoryFailureError` when the message does not exist.
         """

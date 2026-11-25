@@ -66,6 +66,11 @@ class IdentifierKind(StrEnum):
     GMP = "gmp"
     FPL = "fpl"
     SPEC_SECTION = "spec"
+    #: Admitted by revision `fa18ef3d9bc0` (WP4 ruling R5). A potential (or
+    #: proposed) change order and a change order request are numbered
+    #: independently of the executed change order, so neither folds into `co`.
+    POTENTIAL_CHANGE_ORDER = "pco"
+    CHANGE_ORDER_REQUEST = "cor"
 
 
 @dataclass(frozen=True, slots=True, order=True)

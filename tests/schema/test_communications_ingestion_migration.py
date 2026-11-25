@@ -79,7 +79,16 @@ MIGRATION: Final = (
 TABLES: Final = tuple(table.name for table in COMMUNICATIONS_INGESTION_TABLES)
 #: Constraints `tables.py` declares on these tables that a later revision adds:
 #: the WP3b meeting sync revision keys `ingest_snapshots` by its digest too.
-LATER_CONSTRAINTS: Final = frozenset({"an_ingest_snapshot_is_identified_with_its_digest"})
+LATER_CONSTRAINTS: Final = frozenset(
+    {
+        "an_ingest_snapshot_is_identified_with_its_digest",
+        # Communications WP4 (`fa18ef3d9bc0`): the identifiers version marker.
+        "a_communication_identifiers_version_is_a_token",
+    }
+)
+#: Columns `tables.py` declares on these tables that a later revision adds: the
+#: communications WP4 revision's rederive markers (rulings R2, R3).
+LATER_COLUMNS: Final = frozenset({"source_unavailable", "identifiers_version"})
 #: Tables of later revisions that reference these (so a `TRUNCATE ... CASCADE`
 #: reaches them) and refuse TRUNCATE by their own `<table>_refuse_truncate`.
 LATER_TRUNCATE_GUARDED: Final = (
@@ -207,7 +216,8 @@ def test_the_frozen_ddl_names_every_declared_column_constraint_and_index(table: 
     flat = _WHITESPACE.sub(" ", source)
     assert f"CREATE TABLE knowledge.{table.name} (" in source
     for column in table.c:
-        assert re.search(rf"\b{column.name}\b", source), column.name
+        if column.name not in LATER_COLUMNS:
+            assert re.search(rf"\b{column.name}\b", source), column.name
     for constraint in table.constraints:
         if constraint.name is not None and constraint.name not in LATER_CONSTRAINTS:
             assert str(constraint.name) in source, constraint.name
@@ -1272,7 +1282,8 @@ def _check_cases(seed: _Seed) -> list[tuple[str, str, dict[str, object]]]:
         (
             "communication_identifiers",
             "a_communication_identifier_kind_is_known",
-            s.identifier(kind="pco"),
+            # `pco` was the case until the WP4 revision admitted it (ruling R5).
+            s.identifier(kind="pcox"),
         ),
         (
             "communication_identifiers",
@@ -1340,7 +1351,8 @@ def test_every_check_refuses_its_case_alone(seeded: tuple[Engine, _Seed]) -> Non
     uncovered = {
         (table, name)
         for table, name in declared - covered
-        if not name.endswith("_is_an_opaque_identifier")
+        # A later revision's CHECK is isolated by that revision's own module.
+        if not name.endswith("_is_an_opaque_identifier") and name not in LATER_CONSTRAINTS
     }
     assert uncovered == _HELD_ALSO_BY_A_FOREIGN_KEY
     # Those are refused by their CHECK first, but not by it alone.

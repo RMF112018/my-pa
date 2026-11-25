@@ -208,6 +208,23 @@ def test_a_backfill_ingests_every_fixture_oldest_window_first(scene: Scene) -> N
         )
         >= 1
     )
+    # WP4 ruling R2: every message records the version its identifier rows were
+    # written under, and ingestion writes that one version only (R10).
+    assert (
+        scene.scalar(
+            "SELECT count(*) FROM knowledge.communication_messages "
+            "WHERE identifiers_version IS DISTINCT FROM 'comms_identifiers_v1'"
+        )
+        == 0
+    )
+    assert (
+        scene.scalar(
+            "SELECT count(*) FROM knowledge.communication_identifiers "
+            "WHERE extractor_version <> 'comms_identifiers_v1'"
+        )
+        == 0
+    )
+    assert scene.scalar("SELECT count(*) FROM knowledge.communication_messages") > 0
 
 
 def test_a_rerun_is_idempotent(scene: Scene) -> None:

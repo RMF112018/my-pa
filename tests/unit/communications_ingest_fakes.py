@@ -468,6 +468,16 @@ class FakeCommunications(CommunicationsRepository):
             raise ValueError("set_message_flags names no flag")
         self._change(principal_id, message_id, **changes)
 
+    def set_source_unavailable(
+        self, principal_id: str, message_id: str, *, source_unavailable: bool
+    ) -> None:
+        self.w.write("set_source_unavailable")
+        self._change(principal_id, message_id, source_unavailable=source_unavailable)
+
+    def set_identifiers_version(self, principal_id: str, message_id: str, version: str) -> None:
+        self.w.write("set_identifiers_version")
+        self._change(principal_id, message_id, identifiers_version=version)
+
     def insert_item(self, principal_id: str, item: CommunicationMailboxItemRecord) -> None:
         self.w.write("insert_item")
         if self.find_item_by_provider_id(principal_id, item.mailbox_ref, item.provider_id):

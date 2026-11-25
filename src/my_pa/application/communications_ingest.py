@@ -60,7 +60,9 @@ time, conversation) are set once, by the snapshot that created it.
 
 **Identifiers** are `extract_identifiers(subject + "\\n" + search_text)`
 (`comms_identifiers_v1`), added whenever a message is created or its text is
-replaced; set-like, so earlier versions' rows stay.
+replaced; set-like, so earlier versions' rows stay. The message's
+`identifiers_version` then records that version (WP4 ruling R2), so a rederive
+can tell in SQL which messages still lack the current version's rows.
 
 **Coverage.** `prepare` declares the window and one lane object per declared
 source: `key_kind` (`inbox`, `sent`, `procore_rfis`, else `other` -- the
@@ -513,6 +515,8 @@ class _Apply:
                     for identifier in identifiers
                 ],
             )
+            if record.identifiers_version != IDENTIFIER_VERSION:
+                self.repo.set_identifiers_version(self.principal_id, message_id, IDENTIFIER_VERSION)
 
 
 class CommunicationsEvidenceHandler(IngestConsumerHandler):

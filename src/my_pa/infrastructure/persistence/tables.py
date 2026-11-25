@@ -16339,6 +16339,12 @@ communication_messages = Table(
     Column("identity_conflict", Boolean, nullable=False, server_default=text("false")),
     Column("participants_reconciled", Boolean, nullable=False, server_default=text("false")),
     Column("participants_disagreed", Boolean, nullable=False, server_default=text("false")),
+    # Communications WP4 (revision `fa18ef3d9bc0`, rulings R2 and R3): set by the
+    # rederive when the source file is missing or its digest differs, cleared by a
+    # later successful rederive; and the extractor version the message's
+    # identifier rows were last written under (NULL: never recorded).
+    Column("source_unavailable", Boolean, nullable=False, server_default=text("false")),
+    Column("identifiers_version", Text),
     Column(
         "search_document",
         TSVECTOR,
@@ -16394,6 +16400,10 @@ communication_messages = Table(
     CheckConstraint(
         f"search_text_version ~ '{_INGEST_CODE_SHAPE}'",
         name="a_communication_search_text_version_is_a_token",
+    ),
+    CheckConstraint(
+        f"identifiers_version ~ '{_INGEST_CODE_SHAPE}'",
+        name="a_communication_identifiers_version_is_a_token",
     ),
     _one_of(
         "search_text_basis", SearchTextBasis, name="a_communication_search_text_basis_is_known"

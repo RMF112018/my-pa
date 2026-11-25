@@ -88,6 +88,12 @@ MISMATCH_PROJECT: Final = ("mismatch", "prj_synreads0008x", "SYN-7108")
 PRIME: Final = "reconciliation.prime_co_line.amount"
 COMMITMENT: Final = "reconciliation.commitment_co_line.amount"
 
+#: A later readable `qxrfiq` version (ruling B2: its quarantined predecessor is the `from` side).
+QUARANTINE_ROWS_LATER: Final = (
+    ("GMP-201", "Synthetic hotel", "", "", "11/1/2026", "", ""),
+    ("GMP-203", "Synthetic kilo", "", "", "11/2/2026", "", ""),
+)
+
 LINKED: Final = "20261121-qxrfilinks.csv"
 CLOSED: Final = "20261122-qxrficlosed.csv"
 NEXT_RFI: Final = "20261125-qxrfis.csv"
@@ -542,6 +548,41 @@ def case_a_quarantined_latest_version_is_latest_unreadable(scene: ReadsScene) ->
     assert (series["presence"], series["reasons"]) == ("not_observed_in_latest", [])
 
 
+def _assert_not_compared(compared: dict[str, Any], states: list[str]) -> None:
+    """Ruling B2: a quarantined side is `comparable: false`, with nothing inferred."""
+    assert compared["comparable"] is False
+    assert [compared[section] for section in ("added", "not_observed", "changed", "lines")] == [
+        [],
+        [],
+        [],
+        [],
+    ]
+    assert compared["measures_delta"] == []
+    assert [v["derivation_state"] for v in compared["versions"]] == states
+    assert compared["next_cursor"] is None and compared["cursor_state"] is None
+
+
+def case_a_quarantined_side_is_never_compared(scene: ReadsScene) -> None:
+    """Ruling B2: either side quarantined answers `comparable: false` and nothing else."""
+    reads = service(scene)
+    series = _series_of(scene, "qxrfiq")
+    to_quarantined = compare_payload(reads.compare(scene.principal, CompareRequest(series)))
+    _assert_not_compared(to_quarantined, ["classified", "quarantined"])
+    first, quarantined = (v["version"] for v in to_quarantined["versions"])
+    # A later readable version: the quarantined one is now the `from` side.
+    scene.ingest("rfis", "20261130-qxrfiq.csv", rfi_export(QUARANTINE_ROWS_LATER))
+    from_quarantined = compare_payload(reads.compare(scene.principal, CompareRequest(series)))
+    _assert_not_compared(from_quarantined, ["quarantined", "classified"])
+    assert from_quarantined["versions"][0]["version"] == quarantined
+    # The control: the two readable versions on either side of it compare.
+    readable = compare_payload(
+        reads.compare(scene.principal, CompareRequest(series, from_version=first))
+    )
+    assert readable["comparable"] is True
+    assert readable["added"] == [{"identity_key": "rfi:GMP-203"}]
+    assert readable["not_observed"] == []
+
+
 def case_not_found_is_indistinguishable_for_foreign_and_unknown(scene: ReadsScene) -> None:
     reads = service(scene)
     foreign = _refusal(lambda: reads.query(OTHER_PRINCIPAL, _rfi_query(scene)))
@@ -846,6 +887,7 @@ CASES: Final = (
     case_record_history_spans_three_rfi_views,
     case_an_absent_record_is_not_observed_never_closed,
     case_a_quarantined_latest_version_is_latest_unreadable,
+    case_a_quarantined_side_is_never_compared,
     case_not_found_is_indistinguishable_for_foreign_and_unknown,
     case_the_facade_answers_absent_unbound_and_quarantined_projects,
     case_coverage_carries_per_version_filter_semantics,

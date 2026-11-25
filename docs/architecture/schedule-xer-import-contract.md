@@ -1,8 +1,9 @@
 # P6 XER/XML schedule import — whole-slice contract (S7-0 to S7-6)
 
-**Status:** proposed implementation contract. S7-0 is merged (#384) and S7-1 is implemented
-on `feat/schedule-xer-parser`, not merged; nothing else in it is implemented, and nothing is
-migrated, granted, switched on or deployed. The decision record is
+**Status:** proposed implementation contract. S7-0 is merged (#384), S7-1 is merged (#386)
+and S7-2 (revision `d8383150cf72`) is implemented on `feat/schedule-xer-storage`, not merged;
+nothing else in it is implemented, and nothing is migrated on a shared database, granted,
+switched on or deployed. The decision record is
 [`ADR-023`](../decisions/ADR-023-p6-xer-xml-schedule-import.md), which loosens
 [`ADR-016`](../decisions/ADR-016-cpm-workbench-schedule-evidence.md) decision 4 for the P6
 XER and XML formats only and leaves
@@ -737,10 +738,13 @@ as `ordinal`. `ordinal` > 0 only for multi-valued keys (several codes of one
 type are not allowed by P6 [D]; ordinal stays for `TASKRSRC`-style repetition). Entity kinds:
 `project`, `wbs`, `activity`, `relationship`, `calendar`, `resource`, `assignment`.
 
-Indexes: `(principal_id, parser_run_id, field_key, value_text)`,
-`(principal_id, parser_run_id, field_key, value_number)`,
-`(principal_id, parser_run_id, field_key, value_ts)` (filter and sort within a publication);
-`(principal_id, series_id, schedule_activity_id, field_key)` (history across versions).
+Indexes: `(parser_run_id, field_key, left(value_text, 256))`,
+`(parser_run_id, field_key, value_number)`, `(parser_run_id, field_key, value_ts)` (filter and
+sort within a publication; led by `parser_run_id`, section 8.4); `(principal_id, series_id,
+schedule_activity_id, field_key)` (history across versions). Corrected in S7-2: the text index
+keys the first 256 characters, because a whole 4,000-character value can exceed PostgreSQL's
+B-tree entry limit (about 2,704 bytes) and the index would refuse a legal value (proven in
+`tests/schema/test_schedule_p6_storage_migration.py`); a text filter rechecks the full value.
 
 ### 7.4 Observed-fields record
 

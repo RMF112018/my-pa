@@ -46,6 +46,7 @@ COMMUNICATIONS_NAMES: Final = (
     "my_pa.domain.communications",
     "my_pa.infrastructure.communications",
     "my_pa.application.communications_ingest",
+    "my_pa.application.communications_search",
     "my_pa.bootstrap.communications_ingest",
 )
 
@@ -156,6 +157,9 @@ def test_the_domain_slice_exists() -> None:
         "bindings.py",
         "labels.py",
         "versions.py",
+        "catalogue.py",
+        "cursor.py",
+        "reads.py",
     }
     assert set(_domain_modules()) <= set(_slice_modules())
 
@@ -216,6 +220,7 @@ def test_project_reports_and_communications_do_not_import_each_other() -> None:
         *sorted((PACKAGE / "domain" / "communications").rglob("*.py")),
         *sorted((PACKAGE / "infrastructure" / "communications").rglob("*.py")),
         PACKAGE / "application" / "communications_ingest.py",
+        PACKAGE / "application" / "communications_search.py",
         PACKAGE / "bootstrap" / "communications_ingest.py",
     ]
     assert len(communications) > 4

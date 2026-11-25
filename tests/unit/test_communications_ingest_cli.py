@@ -29,6 +29,7 @@ from typing import Any, Final
 
 import pytest
 from apps.cli import communications_ingest as cli
+from sqlalchemy.exc import OperationalError
 
 from my_pa.application import communications_ingest as ingest_module
 from my_pa.application.communications_ingest import CommunicationsCoverageReader
@@ -807,3 +808,32 @@ def test_measure_fts_prints_the_measurement_under_its_command(
         "ingest_source_id": None,
         "limit": 7,
     }
+
+
+@pytest.mark.parametrize(
+    ("sqlstate", "refused"),
+    [("57014", "statement_timeout"), ("08006", "database_unreachable")],
+)
+def test_measure_fts_maps_a_statement_timeout_to_its_own_code(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    sqlstate: str,
+    refused: str,
+) -> None:
+    """WP4-R1 F7: a cancelled measurement is not an unreachable database."""
+    _Scene(monkeypatch)
+
+    class _DriverError(Exception):
+        pass
+
+    orig = _DriverError("cancelled")
+    orig.sqlstate = sqlstate  # type: ignore[attr-defined]
+
+    def cancelled(_connection: object, _principal_id: str, **_kwargs: object) -> object:
+        raise OperationalError("SELECT", {}, orig)
+
+    monkeypatch.setattr(cli, "communications_fts_measurement", cancelled)
+    assert run(capsys, "measure-fts") == (
+        cli.EXIT_REFUSED,
+        {"command": "measure-fts", "refused": refused},
+    )

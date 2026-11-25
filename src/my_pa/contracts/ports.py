@@ -469,6 +469,7 @@ __all__ = [
     "CommunicationParticipantRecord",
     "CommunicationProjection",
     "CommunicationQuarantineRecord",
+    "CommunicationRederiveDueRecord",
     "CommunicationSnapshotTally",
     "CommunicationsRepository",
     "ConstraintManagementRepository",
@@ -14641,6 +14642,17 @@ class CommunicationMessageRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class CommunicationRederiveDueRecord:
+    """The columns a rederive groups a due message by (WP4-R1 F7), never its text."""
+
+    message_id: str
+    search_text_version: str
+    identifiers_version: str | None
+    source_unavailable: bool
+    text_snapshot_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class CommunicationMailboxItemRecord:
     item_id: str
     message_id: str
@@ -14867,8 +14879,11 @@ class CommunicationsRepository(ABC):
         identifiers_version: str,
         ingest_source_id: str | None = None,
         limit: int,
-    ) -> tuple[CommunicationMessageRecord, ...]:
+    ) -> tuple[CommunicationRederiveDueRecord, ...]:
         """The first `limit` messages a rederive must visit, by `message_id` (WP4 ruling D2).
+
+        Only the grouping columns are read (WP4-R1 F7): each group re-reads its
+        messages whole, `FOR UPDATE`, in its own transaction.
 
         Due: `search_text_version` differs from the given one, `identifiers_version`
         is distinct from the given one, or `source_unavailable` is set. With

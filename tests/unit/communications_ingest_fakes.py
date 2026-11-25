@@ -35,6 +35,7 @@ from my_pa.contracts.ports import (
     CommunicationParticipantRecord,
     CommunicationProjection,
     CommunicationQuarantineRecord,
+    CommunicationRederiveDueRecord,
     CommunicationSnapshotTally,
     CommunicationsRepository,
     FileWorkspaceEntry,
@@ -611,11 +612,20 @@ class FakeCommunications(CommunicationsRepository):
         identifiers_version: str,
         ingest_source_id: str | None = None,
         limit: int,
-    ) -> tuple[CommunicationMessageRecord, ...]:
+    ) -> tuple[CommunicationRederiveDueRecord, ...]:
         due = self._rederive_due(
             principal_id, search_text_version, identifiers_version, ingest_source_id
         )
-        return tuple(due[:limit])
+        return tuple(
+            CommunicationRederiveDueRecord(
+                message_id=m.message_id,
+                search_text_version=m.projection.search_text_version,
+                identifiers_version=m.identifiers_version,
+                source_unavailable=m.source_unavailable,
+                text_snapshot_id=m.projection.text_snapshot_id,
+            )
+            for m in due[:limit]
+        )
 
     def count_rederive_due(
         self,

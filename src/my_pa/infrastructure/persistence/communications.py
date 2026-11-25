@@ -60,6 +60,7 @@ from my_pa.contracts.ports import (
     CommunicationParticipantRecord,
     CommunicationProjection,
     CommunicationQuarantineRecord,
+    CommunicationRederiveDueRecord,
     CommunicationSnapshotTally,
     CommunicationsRepository,
     RepositoryFailureError,
@@ -653,18 +654,34 @@ class SqlCommunicationsRepository(CommunicationsRepository):
         identifiers_version: str,
         ingest_source_id: str | None = None,
         limit: int,
-    ) -> tuple[CommunicationMessageRecord, ...]:
+    ) -> tuple[CommunicationRederiveDueRecord, ...]:
+        messages = communication_messages
         rows = self._connection.execute(
-            select(*_MESSAGE_COLUMNS)
+            select(
+                messages.c.message_id,
+                messages.c.search_text_version,
+                messages.c.identifiers_version,
+                messages.c.source_unavailable,
+                messages.c.text_snapshot_id,
+            )
             .where(
                 *_rederive_due(
                     principal_id, search_text_version, identifiers_version, ingest_source_id
                 )
             )
-            .order_by(communication_messages.c.message_id)
+            .order_by(messages.c.message_id)
             .limit(limit)
         )
-        return tuple(_to_message(row) for row in rows)
+        return tuple(
+            CommunicationRederiveDueRecord(
+                message_id=row.message_id,
+                search_text_version=row.search_text_version,
+                identifiers_version=row.identifiers_version,
+                source_unavailable=row.source_unavailable,
+                text_snapshot_id=row.text_snapshot_id,
+            )
+            for row in rows
+        )
 
     def count_rederive_due(
         self,

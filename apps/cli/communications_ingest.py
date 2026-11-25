@@ -48,7 +48,9 @@ Exit status (closed):
 
 Refusal codes: the lifecycle's `IngestRefusalCode` values, plus
 `target_mismatch`, `settings_invalid`, `workspace_misconfigured`,
-`invalid_range`, `lock_held`, `database_unreachable` and `database_unavailable`.
+`invalid_range`, `lock_held`, `database_unreachable` and `database_unavailable`;
+`measure-fts` also refuses `statement_timeout` when the statement timeout
+cancels it (lower `--limit`).
 `coverage` and `aggregate` refuse `source_not_found` for a source id that names
 no admitted source of the operator.
 
@@ -145,6 +147,10 @@ STATEMENT_TIMEOUT_MS: Final = 60_000
 #: `measure-fts` measures at most this many messages per invocation.
 DEFAULT_MEASURE_LIMIT: Final = 20_000
 MAX_MEASURE_LIMIT: Final = 100_000
+
+
+#: SQLSTATE `query_canceled`, raised when `statement_timeout` cancels a statement.
+_QUERY_CANCELED: Final = "57014"
 
 
 class _RefusalError(Exception):
@@ -393,14 +399,21 @@ def _rederive(
 def _measure_fts(engine: Engine, principal_id: str, args: argparse.Namespace) -> int:
     if args.source is not None:
         _require_source(engine, principal_id, args.source)
-    with engine.connect() as connection:
-        measured = communications_fts_measurement(
-            connection,
-            principal_id,
-            identifiers_version=IDENTIFIER_VERSION,
-            ingest_source_id=args.source,
-            limit=args.limit,
-        )
+    try:
+        with engine.connect() as connection:
+            measured = communications_fts_measurement(
+                connection,
+                principal_id,
+                identifiers_version=IDENTIFIER_VERSION,
+                ingest_source_id=args.source,
+                limit=args.limit,
+            )
+    except OperationalError as error:
+        # The statement timeout cancels the measurement (SQLSTATE 57014): the
+        # database answered, so it is not `database_unreachable` (WP4-R1 F7).
+        if getattr(error.orig, "sqlstate", None) == _QUERY_CANCELED:
+            raise _RefusalError("statement_timeout") from None
+        raise
     _emit({"command": "measure-fts", "ingest_source_id": args.source, **measured})
     return EXIT_OK
 

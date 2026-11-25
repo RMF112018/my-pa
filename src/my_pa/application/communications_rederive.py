@@ -64,6 +64,7 @@ from my_pa.application.communications_ingest import ParsedPublication, message_p
 from my_pa.contracts.ports import (
     CommunicationIdentifierRecord,
     CommunicationMessageRecord,
+    CommunicationRederiveDueRecord,
     FileWorkspaceStore,
     FileWorkspaceUnavailableError,
     IngestSnapshotPathRecord,
@@ -124,6 +125,11 @@ def _text_due(message: CommunicationMessageRecord) -> bool:
 
 def _due(message: CommunicationMessageRecord) -> bool:
     return _text_due(message) or message.identifiers_version != IDENTIFIER_VERSION
+
+
+def _due_text(row: CommunicationRederiveDueRecord) -> bool:
+    """`_text_due` over the due read's trimmed row (WP4-R1 F7)."""
+    return row.search_text_version != SEARCH_TEXT_VERSION or row.source_unavailable
 
 
 def _batches(items: Sequence[str], size: int) -> Iterator[Sequence[str]]:
@@ -188,11 +194,9 @@ class CommunicationsRederiver:
         groups: dict[str, list[str]] = {}
         identifier_only: list[str] = []
         for message in due:
-            if _text_due(message):
+            if _due_text(message):
                 counts["messages_due_text"] += 1
-                groups.setdefault(message.projection.text_snapshot_id, []).append(
-                    message.message_id
-                )
+                groups.setdefault(message.text_snapshot_id, []).append(message.message_id)
             else:
                 counts["messages_due_identifiers"] += 1
                 identifier_only.append(message.message_id)

@@ -14,3 +14,4 @@ New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy ide
 | --- | --- |
 | [`inspect_entity_plane.py`](inspect_entity_plane.py) | Read-only counts report for the relationship-intelligence entity plane (`--principal` required). |
 | [`my_pa_files.py`](my_pa_files.py) | Stdlib reference client for the files byte routes (contract §10): resumable upload with SHA-256 finalize and verified, resumable download. The ticket comes from `MY_PA_FILES_TICKET` or `--token-file`, never the command line. Runbook [`ops/runbooks/files-workspace.md`](../ops/runbooks/files-workspace.md). |
+| [`sdcc_publish.py`](sdcc_publish.py) | Bounded SDCR session publisher for Issue #365, using existing `my_pa.read`/`my_pa.write` and `my_pa_files.py` byte tickets; reference [SDCR publication instructions](SDCR_PUBLISHER_README.md). Implementation candidate only; no live client/grant/cutover activation. |

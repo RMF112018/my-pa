@@ -14,7 +14,7 @@ At 00:00 `America/New_York` every day, the `cycles` worker plane (`apps/worker.p
 
 When the process starts, it runs at once for the current local date. That is the catch-up rule. Missed earlier dates are never backfilled. Rerunning for the same date writes nothing new. A session advisory lock admits one run at a time across processes.
 
-The same plane also runs the communications ingestion poll when `MY_PA_COMMUNICATIONS_INGEST_ENABLED` is on, as a separate step with its own lock and interval ([`communications-ingestion.md`](communications-ingestion.md)). Either switch alone starts the plane; with both off it exits 2.
+The same plane also runs the communications ingestion poll when `MY_PA_COMMUNICATIONS_INGEST_ENABLED` is on ([`communications-ingestion.md`](communications-ingestion.md)) and the project-reports ingestion poll when `MY_PA_PROJECT_REPORTS_INGEST_ENABLED` is on ([`project-reports-ingestion.md`](project-reports-ingestion.md)), each as a separate step with its own lock and interval. The plane has three switches (these two and `MY_PA_CYCLE_SCHEDULER_ENABLED`): any one of them alone starts the plane, and only the steps whose switch is on run; with all three off it exits 2.
 
 A new `reports.commit` or `reports.record_run_state` to a closed cycle is refused with `conflict` and the details `cycle_run_id` and `cycle_closed`. ChatLLM producers should call `reports.begin_cycle` for the new date and use the `cycle_run_id` it returns.
 
@@ -22,7 +22,7 @@ A new `reports.commit` or `reports.record_run_state` to a closed cycle is refuse
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `MY_PA_CYCLE_SCHEDULER_ENABLED` | `false` | Off: the plane exits 2 with `plane cycles disabled` before touching the database. It withholds no capability. |
+| `MY_PA_CYCLE_SCHEDULER_ENABLED` | `false` | Off: the daily close-and-begin step does not run. With it and both ingestion switches off, the plane exits 2 with `plane cycles disabled` before touching the database. It withholds no capability. |
 | `MY_PA_CYCLE_SCHEDULER_TIMEZONE` | `America/New_York` | IANA zone for local midnight. An unknown zone fails settings load. |
 
 The run time (local 00:00) is fixed and not configurable. Neither variable is a secret. The process reads `MY_PA_DATABASE_URL` from the same owner-only env file the remote MCP app uses.
@@ -59,7 +59,7 @@ Expect exactly one `open` row for today and no `open` or `running` row dated bef
 
 ## 5. Rollback
 
-- **Stop scheduling.** Run `docker compose -p my-pa-remote-mcp ... rm -sf my-pa-cycle-scheduler` and drop the overlay from the `-f` list. Setting `MY_PA_CYCLE_SCHEDULER_ENABLED=false` instead makes it exit 2. With `restart: unless-stopped`, remove the service rather than leaving it to restart. ChatLLM's `reports.begin_cycle` keeps working.
+- **Stop scheduling.** Run `docker compose -p my-pa-remote-mcp ... rm -sf my-pa-cycle-scheduler` and drop the overlay from the `-f` list. Setting `MY_PA_CYCLE_SCHEDULER_ENABLED=false` instead stops the daily step; the plane exits 2 only when both ingestion switches are off too. With `restart: unless-stopped`, remove the service rather than leaving it to restart. ChatLLM's `reports.begin_cycle` keeps working.
 - **Closed cycles stay closed.** Nothing reopens a cycle. A ChatLLM begin for a date with no open cycle creates a new one.
 - **Full code rollback.** Deploying the previous image restores the old `reports.begin_cycle` behaviour (a new key always creates a cycle) and accepts writes to closed cycles again. The rows written meanwhile are valid under both versions.
 

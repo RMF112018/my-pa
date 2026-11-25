@@ -214,8 +214,8 @@ retires an omitted folder (its source disabled, its rows kept); re-applying
 the same file writes nothing. Each revision records the reason its change
 kind names; there is no reason argument. `run-once` and `backfill` run the
 project-reports lifecycle (Layer A rows and a derivation per new snapshot;
-`--dry-run` writes nothing; a retired source's snapshots fail
-`source_unbound`); `rederive` runs the re-derivation sweep now, rebuilding
+`--dry-run` writes nothing); both refuse `source_unbound` up front, writing
+nothing, when the source has no active binding (a retired folder); `rederive` runs the re-derivation sweep now, rebuilding
 every current derivation; `coverage` prints each source's series (an index,
 never a slug); `aggregate` prints the PULSE-AC-17 figures from stored rows
 under the file-level `aggregate_cli` keys, `--expect` comparing them exactly
@@ -228,7 +228,8 @@ governed by `tests/unit/test_project_reports_cli.py` and
 identifiers, closed codes, counts, UTC timestamps and project numbers only
 (never a folder, path, file name, slug or filter text); exit `0` done, `1`
 refused with a closed code, `2` usage, `3` a run `partial` or `failed` or a
-failed re-derivation, `4` an `--expect` difference.
+failed re-derivation, `4` an `--expect` difference. The operator procedure is
+[`ops/runbooks/project-reports-ingestion.md`](../../ops/runbooks/project-reports-ingestion.md).
 
 ## `sources.py` — the source configuration plane
 

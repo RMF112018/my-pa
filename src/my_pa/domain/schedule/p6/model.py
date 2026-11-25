@@ -159,7 +159,7 @@ class P6Limits:
     value_characters: int = 65_536
     calendar_data_characters: int = 1_048_576
     calendar_tree_depth: int = 16
-    calendar_tree_nodes: int = 200_000
+    calendar_tree_nodes: int = 100_000
     wbs_depth: int = 64
     captured_fields: int = 300
     captured_values_per_entity: int = 300

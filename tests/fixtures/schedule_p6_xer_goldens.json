@@ -646,6 +646,21 @@
    "outcome": "complete",
    "verdict": "pass"
   },
+  "no_project_node": {
+   "frame_sha256": "bff46cb4a9235693ca3fbe811543f8c91e98e683319c969950f024b99e5c83bc",
+   "input_sha256": "cbd8d02ed2c626c9bc4133fd5190e3795e5b14a8889931d3093f45833e15e7d4",
+   "issues": [
+    [
+     "p6_structure_invalid",
+     "fatal",
+     "PROJWBS",
+     9,
+     "proj_node_flag"
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
   "over_length_tolerated": {
    "frame_sha256": "a7ca7628c060e1cb562c26846f5a675857f84cef1eec3dd8ca0ba8302af8b235",
    "input_sha256": "a04d6846484179ae0b4532cd9b9a84f258c5de2c93dc8bdddf03a744322ec5c5",
@@ -733,6 +748,21 @@
    "issues": [],
    "outcome": "complete",
    "verdict": "pass"
+  },
+  "two_project_nodes": {
+   "frame_sha256": "15ee5b004c345d1399d3a7cd371a16ec85d98914a156e0683102d2e1c30b1ca8",
+   "input_sha256": "097bab4d4736b2b20bd9aea61894e8d2e40f8c8f43276f70d31eee4693f28b28",
+   "issues": [
+    [
+     "p6_structure_invalid",
+     "fatal",
+     "PROJWBS",
+     14,
+     "proj_node_flag"
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
   },
   "udf_all_types": {
    "frame_sha256": "9f891d797190e9915309e3da634a6a830bb057cc5be7b49b35550da0e21f88c5",

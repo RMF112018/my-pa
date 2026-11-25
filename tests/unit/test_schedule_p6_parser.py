@@ -149,7 +149,7 @@ def test_each_cap_passes_at_its_limit_and_fails_one_past_it(bound: str) -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("bound", sorted(set(fixtures.TIGHTENED_CAPS) - {"calendar_tree_nodes"}))
+@pytest.mark.parametrize("bound", sorted(fixtures.TIGHTENED_CAPS))
 def test_record_caps_at_production_size(bound: str) -> None:
     data, changes = fixtures.cap_case(bound, past=False, production=True)
     assert not changes

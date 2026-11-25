@@ -1363,6 +1363,38 @@ def _wbs_cycle() -> FixtureCase:
     )
 
 
+def _no_project_node() -> FixtureCase:
+    """No `PROJWBS` row is the project node: the issue names the table's `%T` line."""
+    model = _with(_std(), "PROJWBS", 0, proj_node_flag="N")
+    return _case(
+        "no_project_node",
+        model,
+        outcome=FAILED,
+        verdict=VERDICT_FAIL,
+        issues=lambda lay: [
+            (
+                "p6_structure_invalid",
+                FATAL,
+                "PROJWBS",
+                lay.table_line["PROJWBS"],
+                "proj_node_flag",
+            )
+        ],
+    )
+
+
+def _two_project_nodes() -> FixtureCase:
+    """A second project node: the issue names the second node's line."""
+    model = _with(_std(), "PROJWBS", 3, proj_node_flag="Y")
+    return _case(
+        "two_project_nodes",
+        model,
+        outcome=FAILED,
+        verdict=VERDICT_FAIL,
+        issues=_row_issue("p6_structure_invalid", FATAL, "PROJWBS", 3, "proj_node_flag"),
+    )
+
+
 def _unknown_enum_tolerated() -> FixtureCase:
     model = _with(_std(), "TASK", 1, duration_type="DT_Synthetic")
     return _case(
@@ -1466,6 +1498,8 @@ CASES: Mapping[str, Callable[[], FixtureCase]] = {
         pred_task_id="3999",
     ),
     "wbs_cycle": _wbs_cycle,
+    "no_project_node": _no_project_node,
+    "two_project_nodes": _two_project_nodes,
     "unknown_enum_required": lambda: _fatal_row(
         "unknown_enum_required",
         "TASK",
@@ -1528,7 +1562,7 @@ CONTRACT_CAPS: Mapping[str, int] = {
     "value_characters": 65_536,
     "calendar_data_characters": 1_048_576,
     "calendar_tree_depth": 16,
-    "calendar_tree_nodes": 200_000,
+    "calendar_tree_nodes": 100_000,
     "wbs_depth": 64,
 }
 #: Bounds whose production size is exercised only by the `slow` test; FAST uses these.
@@ -1539,7 +1573,7 @@ TIGHTENED_CAPS: Mapping[str, int] = {
     "taskactv_records": 40,
     "taskrsrc_records": 40,
     "total_records": 60,
-    # 200,000 nodes cannot fit in a 1,048,576-character blob (a node is at least 9).
+    # 100,000 nodes fill most of the 1,048,576-character blob; the slow test runs them.
     "calendar_tree_nodes": 100,
 }
 
@@ -1635,16 +1669,16 @@ def cap_case(
             nested = f"(0||SYN()({nested}))"
         _with(model, "CALENDAR", 0, clndr_data=calendar_blob(FIVE_DAY_WEEK, extra=nested))
     elif bound == "calendar_tree_nodes":
-        if not tightened:
-            raise ValueError("200,000 calendar nodes do not fit the calendar data cap")
-        limits["calendar_tree_nodes"] = cap
+        if tightened:
+            limits["calendar_tree_nodes"] = cap
         blob = calendar_blob(FIVE_DAY_WEEK)
         used = blob.count("(0||")
+        # 10 characters a node: 100,000 of them stay inside the calendar data cap.
         _with(
             model,
             "CALENDAR",
             0,
-            clndr_data=calendar_blob(FIVE_DAY_WEEK, extra="(0||SYN()())" * (cap - used + extra)),
+            clndr_data=calendar_blob(FIVE_DAY_WEEK, extra="(0||S()())" * (cap - used + extra)),
         )
     elif bound == "wbs_depth":
         rows = model.table("PROJWBS").rows

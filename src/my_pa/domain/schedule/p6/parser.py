@@ -13,6 +13,8 @@ S7-1 report and in the docstrings of the helpers that take them:
 * a repeated entity id (`task_id`, `wbs_id`, `clndr_id`, `task_pred_id`) is
   `p6_structure_invalid` (two rows cannot share a key);
 * a non-project WBS row whose parent names no row is `p6_reference_dangling`;
+* a file whose `PROJWBS` has no or several rows with `proj_node_flag = Y` is
+  `p6_structure_invalid` (section 5.5: exactly 1 project node);
 * `wbs_path` holds `wbs_short_name` labels below the project node, and the WBS
   depth bound counts those levels;
 * an empty `task_code` is `p6_duplicate_activity_id` (5.5: "repeated or empty").
@@ -383,6 +385,16 @@ class _Mapper:
                 )
             codes.add(code)
 
+    def check_project_node(self) -> None:
+        """Exactly 1 `PROJWBS` row is the project node (5.5); the issue names no value."""
+        nodes = [row for row in self.rows["PROJWBS"] if row.values["proj_node_flag"] is True]
+        if len(nodes) == 1:
+            return
+        line = nodes[1].line if nodes else self.tables["PROJWBS"].line
+        raise _fatal(
+            P6IssueCode.STRUCTURE_INVALID, table="PROJWBS", line=line, field="proj_node_flag"
+        )
+
     @property
     def project_id(self) -> P6Value:
         return self.rows["PROJECT"][0].values["proj_id"]
@@ -543,8 +555,8 @@ class _Mapper:
         ]
         option_row = options[0] if options else _Row(0, 0, {})
         columns += self._columns("SCHEDOPTIONS", option_row)
-        nodes = [row for row in self.rows["PROJWBS"] if row.values["proj_node_flag"] is True]
-        project_name = nodes[0].values["wbs_name"] if len(nodes) == 1 else None
+        node = next(row for row in self.rows["PROJWBS"] if row.values["proj_node_flag"] is True)
+        project_name = node.values["wbs_name"]
         columns += [
             ("project_name", project_name),
             ("export_version", header.export_version),
@@ -1193,6 +1205,7 @@ def parse_xer(
             mapper.require()
             mapper.read_typed()
             mapper.check_keys()
+            mapper.check_project_node()
             mapper.check_references()
             paths = mapper.wbs_paths()
         except _StopError as stop:

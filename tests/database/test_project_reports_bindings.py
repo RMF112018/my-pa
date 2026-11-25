@@ -395,8 +395,12 @@ def test_a_correction_a_filter_update_a_retire_and_a_rebind(operator: Operator) 
         s=source_b,
     ) == [("isnp_synbindkeep1",)]
 
-    # B bound again: the retired source is enabled, not admitted twice.
-    code, out = operator.apply(operator.file(_document(_a(currency="CAD"), _b()), "four.json"))
+    # B bound again, with the filter it had before its retire: the retired
+    # source is enabled, not admitted twice.
+    rebind = _document(
+        _a(currency="CAD"), _b(reports=[{"slug": SLUG, "filter": FILTER + " (bravo)"}])
+    )
+    code, out = operator.apply(operator.file(rebind, "four.json"))
     assert code == cli.EXIT_OK, out
     assert out["project_numbers"]["add"] == [PROJECTS[PB]]
     assert (out["writes"]["sources_admitted"], out["writes"]["sources_enabled"]) == (0, 1)
@@ -408,6 +412,15 @@ def test_a_correction_a_filter_update_a_retire_and_a_rebind(operator: Operator) 
     )
     assert operator.source_of(FOLDER_B).enabled is True
     assert operator.counts()["ingest_sources"] == 2
+    # Ruling D8 (i): the re-added declaration is of this apply, not the one
+    # retired with B, so its instant is later than the original's.
+    readded = operator.rows(
+        "SELECT description, declared_at FROM knowledge.project_report_filter_declarations "
+        "WHERE binding_revision_id = :r",
+        r=rebound.binding_revision_id,
+    )
+    assert [row.description for row in readded] == [FILTER + " (bravo)"]
+    assert readded[0].declared_at > declared_at[b.binding_revision_id]
 
 
 def test_a_project_moved_between_folders_is_ordered_and_a_swap_is_refused(

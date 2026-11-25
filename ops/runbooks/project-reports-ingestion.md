@@ -161,6 +161,10 @@ snapshots, 0 failed, 0 quarantined; project-number check `match` 3; cross-report
   the interval. Lines hold codes and counts only.
 - `coverage` per source: `freshness_seconds` per series (now minus the latest version's first
   seen), `versions`, `completeness` and `quarantined`.
+- The stored cross-report check pairs a buyout summary with a reconciliation only when both
+  exports carry the same `YYYYMMDD-` date label: an export without one is never cross-report
+  paired in the stored derivations (the stored aggregate records `not_checked`), while the
+  file-level `aggregate` pairs one buyout summary with one reconciliation per folder regardless.
 - Read-only checks (the operator's read-only `psql` route):
 
 ```sql

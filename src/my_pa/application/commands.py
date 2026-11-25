@@ -60,6 +60,9 @@ from my_pa.application.communications_search import (
     MAX_CONVERSATION_ID_CHARACTERS as COMMUNICATIONS_MAX_CONVERSATION_ID_CHARACTERS,
 )
 from my_pa.application.communications_search import (
+    MAX_CURSOR_CHARACTERS as COMMUNICATIONS_MAX_CURSOR_CHARACTERS,
+)
+from my_pa.application.communications_search import (
     MAX_QUERY_CHARACTERS as COMMUNICATIONS_MAX_QUERY_CHARACTERS,
 )
 from my_pa.application.communications_search import (
@@ -169,9 +172,6 @@ from my_pa.domain.common.identifiers import (
     validate_identifier,
 )
 from my_pa.domain.common.time import NaiveDatetimeError, ensure_utc
-from my_pa.domain.communications.cursor import (
-    MAX_CURSOR_CHARACTERS as COMMUNICATIONS_MAX_CURSOR_CHARACTERS,
-)
 from my_pa.domain.context import (
     MAX_SUBJECT_HINTS,
     ContextPlane,

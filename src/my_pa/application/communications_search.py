@@ -81,6 +81,7 @@ from my_pa.domain.communications.coverage import (
     summarize_coverage,
 )
 from my_pa.domain.communications.cursor import (
+    MAX_CURSOR_CHARACTERS,
     CommunicationsCursor,
     CursorMalformedError,
     SearchPosition,
@@ -118,6 +119,7 @@ __all__ = [
     "MAX_ANSWER_TEXT_CHARACTERS",
     "MAX_CONVERSATION_ID_CHARACTERS",
     "MAX_COVERAGE_DAYS",
+    "MAX_CURSOR_CHARACTERS",
     "MAX_MESSAGE_TEXT_CHARACTERS",
     "MAX_QUERY_CHARACTERS",
     "MAX_READ_IDS",

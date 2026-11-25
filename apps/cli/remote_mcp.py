@@ -164,6 +164,9 @@ def _planes_from_settings(settings: Settings) -> ChatLLMCompositionPlanes:
         # Files workspace (chatllm-data-v14): the 17 `files.*` names, composed
         # exactly when `MY_PA_FILES_WORKSPACE_ROOT` composes the store.
         files_workspace=settings.files_workspace_is_composed(),
+        # Communications intelligence WP4-S5 (chatllm-data-v17): the 3
+        # `communications.*` reads, composed exactly when the read switch is on.
+        communications=settings.communications_enabled,
     )
 
 

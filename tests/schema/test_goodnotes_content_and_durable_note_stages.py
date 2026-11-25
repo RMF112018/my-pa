@@ -15,10 +15,6 @@ from typing import Final
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from tests.pins import ALEMBIC_REVISION_COUNT
-from tests.schema.communications_reads_vocabulary_contract import (
-    COMMUNICATIONS_READ_CAPABILITIES,
-    COMMUNICATIONS_READ_PURPOSES,
-)
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.knowledge_schema_ahead_contract import admitted_ahead
 from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
@@ -245,7 +241,6 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
         <= declared
         | (admitted_ahead("capability") | lineage_admitted_ahead("capability"))
         | FILES_CAPABILITIES
-        | COMMUNICATIONS_READ_CAPABILITIES
     )
     # This module's own revision, kept separate from the head's. `admitted` is
     # the *latest* admitting revision's vocabulary; subtracting this revision's
@@ -274,7 +269,6 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
         declared
         | (admitted_ahead("capability") | lineage_admitted_ahead("capability"))
         | FILES_CAPABILITIES
-        | COMMUNICATIONS_READ_CAPABILITIES
     )
     assert admitted == ahead, (
         f"the last admitting revision {admitting.name} freezes a capability vocabulary "
@@ -293,7 +287,6 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
         {member.value for member in Purpose}
         | (admitted_ahead("purpose") | lineage_admitted_ahead("purpose"))
         | FILES_PURPOSES
-        | COMMUNICATIONS_READ_PURPOSES
     )
     assert purposes == purposes_ahead, (
         f"the last purpose-freezing revision {purposes_at.name} freezes a purpose "

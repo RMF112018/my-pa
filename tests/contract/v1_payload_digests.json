@@ -24,9 +24,19 @@
       "reason": "ADR-022 ruling D6 (WP3b-S4): optional occurrence-only adopt_provider_series on bind, additive, default false",
       "section": "tools",
       "to": "6d71474937529164398b0dfebabd7f54bd45b90adcd08200a45a341ba9544243"
+    },
+    {
+      "date": "2026-11-25",
+      "kind": "added",
+      "names": [
+        "communications.coverage",
+        "communications.read",
+        "communications.search"
+      ],
+      "section": "tools"
     }
   ],
-  "seal": "fa545dd9b79d41412c023a9f7d12ebf610a0abc9178cf84bfa547168bffdfb6e",
+  "seal": "ceb992dbdb04f60e3d0591282378105e010271bcfb97812eca669d5cb74e944d",
   "tools": {
     "canvas.workspace.get": "65876ad8f7197a4e8465b3a9019dd234b782f605dfda37d10c1026b660941fb3",
     "canvas.workspace.put": "985bbd6cd28bbaffe0520daa1883b0503a592f4369171a366ca14de8b43a5a8b",
@@ -50,6 +60,9 @@
     "commitments.v2.search": "d3294a20627fd7528e810439e0936c387e907e9c2c324ba8f66d648637613f54",
     "commitments.v2.waiting_on": "056f8b696246aaed5336e50afb38bcecedb5fc7f3a7108c949b2a9585f827743",
     "commitments.waiting_on": "bc218ddd5d3f8241f86eebf3ff40abd870066e2790d37f6bd2ffe1cb38793360",
+    "communications.coverage": "52d40b147526c06f93cfcdae745e87e713784355d247419850518de00df1336c",
+    "communications.read": "4e34fc71fcbf1ffc3e9844bac156f0d271fddc059eabaea203e200b904bf1ffa",
+    "communications.search": "1db684af436b47993e02ddbe55038204bba7a80e47e184883e89882de3d67d35",
     "constraint_categories.create": "bb1b5439c85d65f1c3a794bea5d08882eab161bae6340b59463bab7194b0a680",
     "constraint_categories.deactivate": "fc26e7aba5203032175e0d08571352af41e91ed539371bf05870b299d1673b9a",
     "constraint_categories.list": "3eae328f415522d78455ddecabfafcd5e1dde94f92b548897b29dfee7fb1967f",

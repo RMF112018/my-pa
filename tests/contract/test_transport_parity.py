@@ -67,6 +67,10 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from tests.communications_reads_samples import (
+    COMMUNICATIONS_READ_CAPABILITIES,
+    communications_payloads,
+)
 from tests.conftest import (
     DEFAULT_LIMITS,
     WHEN,
@@ -2331,6 +2335,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         **scenario_payloads("parity"),
         # Files workspace WP5: synthetic plane samples.
         **files_payloads("parity"),
+        **communications_payloads("parity"),
     }
 
 
@@ -2880,6 +2885,8 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         *SCHEDULE_SCENARIO_CAPABILITIES,
         # Files workspace WP5: the 17 `files.*` names (no workspace root here).
         *FILES_WORKSPACE_CAPABILITIES,
+        # Communications intelligence WP4-S5: the 3 reads (scopeless, read switch off).
+        *COMMUNICATIONS_READ_CAPABILITIES,
     }
 )
 

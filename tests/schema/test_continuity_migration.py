@@ -38,9 +38,6 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, Table, text
-from tests.schema.communications_reads_vocabulary_contract import (
-    COMMUNICATIONS_READ_CAPABILITIES,
-)
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES
 from tests.schema.knowledge_schema_ahead_contract import admitted_ahead
 from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
@@ -243,7 +240,6 @@ def test_downgrading_this_revision_restores_exactly_the_previous_vocabulary(
                 admitted_ahead("capability")
                 | lineage_admitted_ahead("capability")
                 | FILES_CAPABILITIES
-                | COMMUNICATIONS_READ_CAPABILITIES
             )
         )
 
@@ -368,7 +364,6 @@ def test_head_admits_exactly_the_capability_vocabulary_the_domain_declares(
                 admitted_ahead("capability")
                 | lineage_admitted_ahead("capability")
                 | FILES_CAPABILITIES
-                | COMMUNICATIONS_READ_CAPABILITIES
             )
         )
         # And the Pulse reason vocabulary, which the revision also freezes.

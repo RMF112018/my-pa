@@ -50,6 +50,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final
@@ -68,7 +69,7 @@ from my_pa.contracts.ports import (
     UnitOfWork,
 )
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
-from my_pa.domain.common.time import utc_now
+from my_pa.domain.common.time import format_rfc3339, utc_now
 from my_pa.domain.communications.corpus import Interval
 from my_pa.domain.communications.coverage import (
     CoverageSummary,
@@ -101,17 +102,21 @@ from my_pa.domain.communications.model import FolderRole
 from my_pa.domain.communications.search_query import quoted_phrases, unnegated_text
 
 __all__ = [
+    "COLLAPSE_MODES",
     "COMMUNICATIONS_COVERAGE",
     "COMMUNICATIONS_READ",
     "COMMUNICATIONS_SEARCH",
     "DEFAULT_SEARCH_LIMIT",
+    "FOLDER_ROLES",
     "MAX_ANSWER_TEXT_CHARACTERS",
+    "MAX_CONVERSATION_ID_CHARACTERS",
     "MAX_COVERAGE_DAYS",
     "MAX_MESSAGE_TEXT_CHARACTERS",
     "MAX_QUERY_CHARACTERS",
     "MAX_READ_IDS",
     "MAX_SEARCH_LIMIT",
     "MAX_TERMS",
+    "PARTICIPANT_MODES",
     "SCOPE_CHANGED_RESTART_REQUIRED",
     "SNIPPET_CHARACTERS",
     "TEXT_FALLBACK_SIMPLE_STOPWORDS",
@@ -131,6 +136,12 @@ __all__ = [
     "SearchRequest",
     "SearchResult",
     "Versions",
+    "check_coverage_request",
+    "check_read_request",
+    "coverage_payload",
+    "normalize_search",
+    "read_payload",
+    "search_payload",
 ]
 
 COMMUNICATIONS_SEARCH: Final = "communications.search"
@@ -162,9 +173,9 @@ TEXT_NOT_REQUESTED: Final = "not_requested"
 TEXT_NONE: Final = "no_text"
 TEXT_ANSWER_CAP: Final = "answer_cap"
 _NO_TEXT_BODY_STATES: Final = frozenset({"withheld", "truncated"})
-_PARTICIPANT_MODES: Final = ("any", "all")
-_COLLAPSE: Final = ("conversation", "none")
-_FOLDER_ROLES: Final = tuple(role.value for role in FolderRole)
+PARTICIPANT_MODES: Final = ("any", "all")
+COLLAPSE_MODES: Final = ("conversation", "none")
+FOLDER_ROLES: Final = tuple(role.value for role in FolderRole)
 _ADDRESS: Final = re.compile(r"\A[^\s@]+@[^\s@]+\Z")
 
 
@@ -439,8 +450,13 @@ class _Search:
         }
 
 
-def normalize_search(request: SearchRequest, identifier_version: str) -> _Search:
-    """Section 16 bounds and the R6/R11 identifier rules; `invalid_request` otherwise."""
+def normalize_search(request: SearchRequest, identifier_version: str | None) -> _Search:
+    """Section 16 bounds and the R6/R11 identifier rules; `invalid_request` otherwise.
+
+    With `identifier_version` `None` (the command's shape check, before the
+    configured read version is known) the identifier items are checked as
+    strings only: none is normalized and nothing is merged from the query.
+    """
     raw: object = request.query  # typed by the dataclass, checked as received
     query: str | None = None
     if raw is not None:
@@ -449,11 +465,13 @@ def normalize_search(request: SearchRequest, identifier_version: str) -> _Search
         query = raw.strip() or None
     requested: set[TechnicalIdentifier] = set()
     for item in _strings(request.identifiers, SafeDetail.IDENTIFIERS):
+        if identifier_version is None:
+            continue
         identifier = normalize_identifier_query(item, version=identifier_version)
         if identifier is None:  # R11: zero or several identifiers
             raise InvalidRequestError(SafeDetail.IDENTIFIERS)
         requested.add(identifier)
-    if query is not None:  # R6: what the query names is asked for too
+    if query is not None and identifier_version is not None:  # R6: the query's, too
         requested.update(extract_identifiers(unnegated_text(query), version=identifier_version))
     if len(requested) > MAX_TERMS:
         raise InvalidRequestError(SafeDetail.IDENTIFIERS)
@@ -463,16 +481,16 @@ def normalize_search(request: SearchRequest, identifier_version: str) -> _Search
         if len(address) > MAX_ADDRESS_CHARACTERS or _ADDRESS.fullmatch(address) is None:
             raise InvalidRequestError(SafeDetail.PARTICIPANTS)
         participants.add(address)
-    mode = _choice(request.participant_mode, _PARTICIPANT_MODES, SafeDetail.PARTICIPANT_MODE)
+    mode = _choice(request.participant_mode, PARTICIPANT_MODES, SafeDetail.PARTICIPANT_MODE)
     from_utc = _instant(request.from_utc, SafeDetail.FROM_UTC)
     to_utc = _instant(request.to_utc, SafeDetail.TO_UTC)
     if from_utc is not None and to_utc is not None and from_utc > to_utc:
         raise InvalidRequestError(SafeDetail.TO_UTC)
     folder_role = None
     if request.folder_role is not None:
-        folder_role = _choice(request.folder_role, _FOLDER_ROLES, SafeDetail.FOLDER_ROLE)
+        folder_role = _choice(request.folder_role, FOLDER_ROLES, SafeDetail.FOLDER_ROLE)
     conversation_id = _conversation_id(request.conversation_id)
-    collapse = _choice(request.collapse, _COLLAPSE, SafeDetail.COLLAPSE)
+    collapse = _choice(request.collapse, COLLAPSE_MODES, SafeDetail.COLLAPSE)
     if conversation_id is not None:  # one conversation: nothing to collapse
         collapse = "none"
     limit = request.limit
@@ -492,6 +510,47 @@ def normalize_search(request: SearchRequest, identifier_version: str) -> _Search
         collapse=collapse,
         limit=limit,
     )
+
+
+def check_read_request(request: ReadRequest) -> tuple[str | None, tuple[str, ...]]:
+    """Section 16 shape of a read: the conversation, or the deduplicated ids.
+
+    Exactly one of `message_ids` and `conversation_id`; a cursor only with a
+    conversation; `invalid_request` with one SafeDetail field token otherwise.
+    """
+    if type(request.include_text) is not bool:
+        raise InvalidRequestError(SafeDetail.INCLUDE_TEXT)
+    conversation_id = _conversation_id(request.conversation_id)
+    ids: object = request.message_ids
+    has_ids = not (isinstance(ids, Sequence) and not isinstance(ids, str) and len(ids) == 0)
+    if (conversation_id is None) == (not has_ids):  # exactly one of the two
+        raise InvalidRequestError(
+            SafeDetail.MESSAGE_IDS if conversation_id is None else SafeDetail.CONVERSATION_ID
+        )
+    if conversation_id is not None:
+        if request.cursor is not None and not isinstance(request.cursor, str):
+            raise InvalidRequestError(SafeDetail.CURSOR)
+        return conversation_id, ()
+    if request.cursor is not None:
+        raise InvalidRequestError(SafeDetail.CURSOR)
+    return None, _message_ids(request.message_ids)
+
+
+def check_coverage_request(request: CoverageRequest) -> tuple[datetime, datetime, str | None]:
+    """Section 16 shape of a coverage read: the range (at most 366 days) and the source."""
+    start = _instant(request.from_utc, SafeDetail.FROM_UTC)
+    end = _instant(request.to_utc, SafeDetail.TO_UTC)
+    if start is None:
+        raise InvalidRequestError(SafeDetail.FROM_UTC)
+    if end is None or end < start or end - start > timedelta(days=MAX_COVERAGE_DAYS):
+        raise InvalidRequestError(SafeDetail.TO_UTC)
+    source = request.source
+    if source is not None:
+        try:
+            validate_identifier(source, IdKind.INGEST_SOURCE)
+        except InvalidIdentifierError:
+            raise InvalidRequestError(SafeDetail.SOURCE) from None
+    return start, end, source
 
 
 def _message_ids(value: object) -> tuple[str, ...]:
@@ -569,7 +628,7 @@ class CommunicationsReads:
     def __init__(
         self,
         *,
-        unit_of_work: Callable[[], UnitOfWork],
+        unit_of_work: Callable[[], AbstractContextManager[UnitOfWork]],
         identifier_version: str = IDENTIFIER_VERSION,
         clock: Callable[[], datetime] = utc_now,
     ) -> None:
@@ -729,19 +788,9 @@ class CommunicationsReads:
         *,
         grants: Iterable[tuple[str, str | None]] | None = None,
     ) -> ReadAnswer:
-        if type(request.include_text) is not bool:
-            raise InvalidRequestError(SafeDetail.INCLUDE_TEXT)
-        conversation_id = _conversation_id(request.conversation_id)
-        ids: object = request.message_ids
-        has_ids = not (isinstance(ids, Sequence) and not isinstance(ids, str) and len(ids) == 0)
-        if (conversation_id is None) == (not has_ids):  # exactly one of the two
-            raise InvalidRequestError(
-                SafeDetail.MESSAGE_IDS if conversation_id is None else SafeDetail.CONVERSATION_ID
-            )
+        conversation_id, message_ids = check_read_request(request)
         if conversation_id is None:
-            if request.cursor is not None:
-                raise InvalidRequestError(SafeDetail.CURSOR)
-            return self._read_ids(principal_id, _message_ids(request.message_ids), request)
+            return self._read_ids(principal_id, message_ids, request)
         return self._read_thread(principal_id, conversation_id, request, grants)
 
     def _read_ids(
@@ -930,18 +979,7 @@ class CommunicationsReads:
     # --- coverage -------------------------------------------------------------------------
 
     def coverage(self, principal_id: str, request: CoverageRequest) -> CoverageAnswer:
-        start = _instant(request.from_utc, SafeDetail.FROM_UTC)
-        end = _instant(request.to_utc, SafeDetail.TO_UTC)
-        if start is None:
-            raise InvalidRequestError(SafeDetail.FROM_UTC)
-        if end is None or end < start or end - start > timedelta(days=MAX_COVERAGE_DAYS):
-            raise InvalidRequestError(SafeDetail.TO_UTC)
-        source = request.source
-        if source is not None:
-            try:
-                validate_identifier(source, IdKind.INGEST_SOURCE)
-            except InvalidIdentifierError:
-                raise InvalidRequestError(SafeDetail.SOURCE) from None
+        start, end, source = check_coverage_request(request)
         with self._unit_of_work() as unit:
             sources = communications_source_ids(unit, principal_id)
             if source is not None:
@@ -985,3 +1023,174 @@ def _result(row: CommunicationSearchRow, lanes: Sequence[tuple[str, str]]) -> Se
         ),
         lanes=tuple(Lane(role, verification) for role, verification in lanes),
     )
+
+
+# --- answers as payloads (WP4-S5) ----------------------------------------------------------
+#
+# What the three capabilities answer on every transport. Instants are RFC 3339
+# UTC; every answer states its versions and coverage (ruling D8), the cursor
+# state (C2: `scope_changed_restart_required` is an answer, not a refusal) and,
+# for a search, the D4-final `text_fallback` and the R8 `query_state`. Derived
+# text only: a withheld or truncated body has `snippet`/`search_text` null and
+# no raw body exists to render (R-OP-3).
+
+
+def _when(value: datetime | None) -> str | None:
+    return None if value is None else format_rfc3339(value)
+
+
+def _interval(interval: Interval) -> dict[str, object]:
+    return {"start": format_rfc3339(interval.start), "end": format_rfc3339(interval.end)}
+
+
+def _flags(flags: Flags) -> dict[str, object]:
+    return {
+        "identity_conflict": flags.identity_conflict,
+        "participants_reconciled": flags.participants_reconciled,
+        "participants_disagreed": flags.participants_disagreed,
+        "source_unavailable": flags.source_unavailable,
+        "search_text_flags": list(flags.search_text_flags),
+    }
+
+
+def _range_coverage(view: RangeCoverageView) -> dict[str, object]:
+    return {
+        "state": view.state,
+        "start": _when(view.start),
+        "end": _when(view.end),
+        "intervals": [_interval(interval) for interval in view.intervals],
+        "intervals_total": view.intervals_total,
+        "gaps": [_interval(gap) for gap in view.gaps],
+        "gaps_total": view.gaps_total,
+        "freshness_seconds": view.freshness_seconds,
+        "earliest_covered": _when(view.earliest_covered),
+        "latest_covered": _when(view.latest_covered),
+        "snapshot_count": view.snapshot_count,
+        "lanes": [
+            {
+                "key_kind": lane.key_kind,
+                "role": lane.role,
+                "lane": lane.lane,
+                "latest_state": lane.latest_state,
+                "latest_authorized": lane.latest_authorized,
+            }
+            for lane in view.lanes
+        ],
+    }
+
+
+def search_payload(answer: SearchAnswer) -> dict[str, object]:
+    """What `communications.search` answers."""
+    return {
+        "results": [
+            {
+                "message_id": result.message_id,
+                "message_time": format_rfc3339(result.message_time),
+                "subject": result.subject,
+                "sender_address": result.sender_address,
+                "conversation_id": result.conversation_id,
+                "conversation_hits": result.conversation_hits,
+                "has_attachments": result.has_attachments,
+                "body_state": result.body_state,
+                "tier": result.tier,
+                "rank": result.rank,
+                "participant_overlap": result.participant_overlap,
+                "matched_identifier_kinds": list(result.matched_identifier_kinds),
+                "snippet": result.snippet,
+                "search_text_version": result.search_text_version,
+                "flags": _flags(result.flags),
+                "lanes": [
+                    {"folder_role": lane.folder_role, "lane_verification": lane.lane_verification}
+                    for lane in result.lanes
+                ],
+            }
+            for result in answer.results
+        ],
+        "next_cursor": answer.next_cursor,
+        "cursor_state": answer.cursor_state,
+        "query_state": answer.query_state,
+        "text_fallback": answer.text_fallback,
+        "identifiers": list(answer.identifiers),
+        "versions": {
+            "search_text_versions": list(answer.versions.search_text_versions),
+            "identifier_version": answer.versions.identifier_version,
+            "identifier_version_pending": answer.versions.identifier_version_pending,
+        },
+        "coverage": _range_coverage(answer.coverage),
+    }
+
+
+def _read_message(message: ReadMessage) -> dict[str, object]:
+    observations = message.observations
+    coverage = message.coverage
+    return {
+        "message_id": message.message_id,
+        "message_time": format_rfc3339(message.message_time),
+        "message_time_basis": message.message_time_basis,
+        "subject": message.subject,
+        "sender_address": message.sender_address,
+        "conversation_id": message.conversation_id,
+        "has_attachments": message.has_attachments,
+        "body_state": message.body_state,
+        "content_type": message.content_type,
+        "body_utf8_bytes": message.body_utf8_bytes,
+        "flags": _flags(message.flags),
+        "participants": [
+            {
+                "field": participant.field,
+                "address": participant.address,
+                "sources": [
+                    {
+                        "observation_id": source.observation_id,
+                        "folder_role": source.folder_role,
+                        "lane_verification": source.lane_verification,
+                    }
+                    for source in participant.sources
+                ],
+            }
+            for participant in message.participants
+        ],
+        "observations": {
+            "count": observations.count,
+            "by_classification": dict(observations.by_classification),
+            "by_folder_role": dict(observations.by_folder_role),
+            "by_lane_verification": dict(observations.by_lane_verification),
+            "selected_utc": _when(observations.selected_utc),
+            "received_utc": _when(observations.received_utc),
+            "sent_utc": _when(observations.sent_utc),
+        },
+        "source_pointer": {
+            "text_snapshot_id": message.text_snapshot_id,
+            "text_record_ordinal": message.text_record_ordinal,
+            "first_snapshot_id": message.first_snapshot_id,
+            "latest_snapshot_id": message.latest_snapshot_id,
+        },
+        "coverage": {
+            "snapshot_id": coverage.snapshot_id,
+            "start": _when(coverage.start),
+            "end": _when(coverage.end),
+            "coverage_state": coverage.coverage_state,
+            "lanes": [dict(lane) for lane in coverage.lanes],
+        },
+        "identifiers": list(message.identifiers),
+        "search_text_version": message.search_text_version,
+        "search_text": message.search_text,
+        "truncated": message.truncated,
+        "text_omitted": message.text_omitted,
+    }
+
+
+def read_payload(answer: ReadAnswer) -> dict[str, object]:
+    """What `communications.read` answers (a batch, or one conversation page)."""
+    return {
+        "messages": [_read_message(message) for message in answer.messages],
+        "not_found": list(answer.not_found),
+        "next_cursor": answer.next_cursor,
+        "cursor_state": answer.cursor_state,
+        "identifier_version": answer.identifier_version,
+    }
+
+
+def coverage_payload(answer: CoverageAnswer) -> dict[str, object]:
+    """What `communications.coverage` answers."""
+    return {"source": answer.source, "coverage": _range_coverage(answer.coverage)}

@@ -321,8 +321,13 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     # and Reports Modernization WP03 its `report_lifecycle` after those, and
     # WP05b `report_hold` and `report_retention` after that.
     # Files workspace WP5 appends its 2 purposes after S6-3's (contract 1.2).
-    assert published[-2:] == ["file_workspace_read", "file_workspace_authoring"]
-    assert published[-15:-2] == [
+    # Communications intelligence WP4-S5 appends `communications_read` after them.
+    assert published[-3:] == [
+        "file_workspace_read",
+        "file_workspace_authoring",
+        "communications_read",
+    ]
+    assert published[-16:-3] == [
         *basis_tail,
         "lineage_backfill",
         "program_reporting_read",

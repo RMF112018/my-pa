@@ -41,10 +41,6 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, MetaData, insert, text
 from sqlalchemy.exc import DBAPIError
 from tests.pins import ALEMBIC_REVISION_COUNT
-from tests.schema.communications_reads_vocabulary_contract import (
-    COMMUNICATIONS_READ_CAPABILITIES,
-    COMMUNICATIONS_READ_PURPOSES,
-)
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES, S63_PURPOSES
 from tests.schema.vocabulary_admissions import capabilities_admitted_after, purposes_admitted_after
@@ -402,8 +398,8 @@ def test_runtime_metadata_matches_the_revision(disposable_database: str, engine:
         # files names, compared as sets (equal once WP5 declares them).
         # Communications WP4-S1 admits its read names ahead of the domain too (S5).
         added = {
-            "capability_is_known": FILES_CAPABILITIES | COMMUNICATIONS_READ_CAPABILITIES,
-            "purpose_is_known": FILES_PURPOSES | COMMUNICATIONS_READ_PURPOSES,
+            "capability_is_known": FILES_CAPABILITIES,
+            "purpose_is_known": FILES_PURPOSES,
         }
         for name in CHECKS:
             assert set(_literals(head[name])) == set(_literals(runtime[name])) | added[name]

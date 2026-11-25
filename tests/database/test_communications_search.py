@@ -460,3 +460,68 @@ def test_the_thread_view_pages_25_with_a_cursor(migrated_engine: Engine) -> None
     assert second.next_cursor is None
     missing = service.read(P, ReadRequest(conversation_id="nope"))
     assert (missing.messages, missing.not_found) == ((), ("nope",))
+
+
+# ---- WP4-S5: the wired capabilities over the real unit of work ---------------------------
+
+
+def test_the_wired_reads_answer_through_the_service_in_its_own_unit_of_work(
+    migrated_engine: Engine, world: dict[str, str]
+) -> None:
+    """The three capabilities, invoked through `ApplicationService` with the switch on.
+
+    The reads run inside the invocation's own transaction (the handler never
+    opens a second one); the answers carry the versions and coverage; another
+    Principal's ids are `not_found`; with the switch off the same request is the
+    standard `unsupported`.
+    """
+    from my_pa.adapters.normalization import normalize
+    from my_pa.application.service import ApplicationService
+    from my_pa.domain.identity.principal import Principal, PrincipalKind
+    from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
+    from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
+    from tests.conftest import DEFAULT_LIMITS
+    from tests.contract.test_transport_parity import document
+
+    def service(enabled: bool) -> ApplicationService:
+        return ApplicationService(
+            unit_of_work=lambda: SqlAlchemyUnitOfWork(
+                migrated_engine, audit=SqlAlchemyAuditSink(migrated_engine)
+            ),
+            limits=DEFAULT_LIMITS,
+            communications_enabled=enabled,
+        )
+
+    def invoke(
+        target: ApplicationService, principal_id: str, name: str, payload: dict[str, object]
+    ) -> object:
+        principal = Principal(principal_id, PrincipalKind.OPERATOR, authenticated=True)
+        metadata, command = normalize(name, document(Capability(name), principal_id, payload))
+        return target.invoke(metadata, command, principal=principal)
+
+    from my_pa.domain.identity.operation import Capability
+
+    on = service(True)
+    searched = invoke(on, P, "communications.search", {"query": "slab pour", "collapse": "none"})
+    assert searched.error is None, searched.error  # type: ignore[attr-defined]
+    payload = searched.result  # type: ignore[attr-defined]
+    assert world["slab"] in {r["message_id"] for r in payload["results"]}
+    assert payload["versions"]["identifier_version"] == "comms_identifiers_v2"
+    assert payload["coverage"]["snapshot_count"] >= 1
+    read = invoke(on, P, "communications.read", {"message_ids": [world["slab"]]})
+    assert read.error is None  # type: ignore[attr-defined]
+    (message,) = read.result["messages"]  # type: ignore[attr-defined]
+    assert message["search_text"].startswith("The slab pour")
+    assert message["coverage"]["coverage_state"] == "complete"
+    foreign = invoke(on, OTHER, "communications.read", {"message_ids": [world["slab"]]})
+    assert foreign.result["not_found"] == [world["slab"]]  # type: ignore[attr-defined]
+    covered = invoke(
+        on,
+        P,
+        "communications.coverage",
+        {"from_utc": "2026-11-17T00:00:00Z", "to_utc": "2026-11-20T23:59:59Z"},
+    )
+    assert covered.error is None  # type: ignore[attr-defined]
+    assert covered.result["coverage"]["state"] == "partial"  # type: ignore[attr-defined]
+    off = invoke(service(False), P, "communications.search", {"query": "slab pour"})
+    assert off.error.code.value == "unsupported"  # type: ignore[attr-defined]

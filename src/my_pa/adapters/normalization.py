@@ -104,6 +104,7 @@ from my_pa.application.commands import (
     CloseProject,
     Command,
     CommitIntelligenceArtifact,
+    CommunicationsCoverage,
     CompareScheduleBaseline,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
@@ -253,6 +254,7 @@ from my_pa.application.commands import (
     ReadCapture,
     ReadCommitment,
     ReadCommitmentV2,
+    ReadCommunications,
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
@@ -335,6 +337,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchCommitments,
     SearchCommitmentsV2,
+    SearchCommunications,
     SearchConstraints,
     SearchEntities,
     SearchFiles,
@@ -2898,6 +2901,22 @@ def _reconcile_meeting_providers(payload: Mapping[str, Any]) -> Command:
     return ReconcileMeetingProviders(**converted)
 
 
+def _communications_shapes(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The communications reads (WP4-S5): instants become `datetime`, arrays tuples.
+
+    Nothing else converts; the commands check every shape and bound.
+    """
+    converted = dict(payload)
+    for name in ("from_utc", "to_utc"):
+        if name in converted:
+            converted[name] = _meeting_instant(converted[name])
+    for name in ("identifiers", "participants", "message_ids"):
+        supplied = converted.get(name)
+        if isinstance(supplied, list):
+            converted[name] = tuple(supplied)
+    return converted
+
+
 def _update_issue(payload: Mapping[str, Any]) -> Command:
     """`issues.update`: `clear_fields` becomes a tuple; nothing else converts.
 
@@ -3155,6 +3174,15 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.MEETINGS_PROVIDER_BIND: _bind_meeting_provider,
         Capability.MEETINGS_PROVIDER_REVIEW: lambda payload: ReviewMeetingProviders(**payload),
         Capability.MEETINGS_PROVIDER_RECONCILE: _reconcile_meeting_providers,
+        Capability.COMMUNICATIONS_SEARCH: lambda payload: SearchCommunications(
+            **_communications_shapes(payload)
+        ),
+        Capability.COMMUNICATIONS_READ: lambda payload: ReadCommunications(
+            **_communications_shapes(payload)
+        ),
+        Capability.COMMUNICATIONS_COVERAGE: lambda payload: CommunicationsCoverage(
+            **_communications_shapes(payload)
+        ),
         Capability.RECORD_EVENTS_LIST: _list_record_events,
         Capability.RECORD_EVENTS_PROVENANCE: lambda payload: GetRecordEventProvenance(**payload),
         Capability.KNOWLEDGE_ASSERTIONS_READ: lambda payload: ReadKnowledgeAssertion(**payload),

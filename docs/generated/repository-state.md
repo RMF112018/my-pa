@@ -28,15 +28,15 @@ plans link here instead of restating them.
 
 | Figure | Current |
 |---|---|
-| Capabilities | 301 |
-| Purposes | 70 |
+| Capabilities | 304 |
+| Purposes | 71 |
 | IdKinds | 195 |
 | SafeDetails | 452 |
-| ChatLLM data profile version | `chatllm-data-v16` |
-| ChatLLM policy entries | 301 |
+| ChatLLM data profile version | `chatllm-data-v17` |
+| ChatLLM policy entries | 304 |
 | ChatLLM `CHATLLM_COMPATIBILITY_ONLY` entries | 2 |
 | ChatLLM `CHATLLM_CONTROL_PLANE_EXCLUDED` entries | 33 |
-| ChatLLM `CHATLLM_DATA_CONDITIONAL` entries | 176 |
+| ChatLLM `CHATLLM_DATA_CONDITIONAL` entries | 179 |
 | ChatLLM `CHATLLM_DATA_REQUIRED` entries | 88 |
 | ChatLLM `CHATLLM_OPERATOR_DECISION_REQUIRED` entries | 2 |
 | ChatLLM `CHATLLM_RETIRED` entries | 0 |
@@ -45,9 +45,9 @@ plans link here instead of restating them.
 
 | Figure | Current |
 |---|---|
-| Published tools with an accepted payload digest | 301 |
+| Published tools with an accepted payload digest | 304 |
 | v1 view models with an accepted field digest | 40 |
-| Acceptance ledger entries | 3 |
+| Acceptance ledger entries | 4 |
 
 ## Test tiers and corpora
 

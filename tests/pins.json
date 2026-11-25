@@ -156,20 +156,20 @@
     "classes": {
       "CHATLLM_COMPATIBILITY_ONLY": 2,
       "CHATLLM_CONTROL_PLANE_EXCLUDED": 33,
-      "CHATLLM_DATA_CONDITIONAL": 176,
+      "CHATLLM_DATA_CONDITIONAL": 179,
       "CHATLLM_DATA_REQUIRED": 88,
       "CHATLLM_OPERATOR_DECISION_REQUIRED": 2,
       "CHATLLM_RETIRED": 0
     },
-    "policy_sha256": "3d7220c1ed41248b928f8f180c8ccec64ff80e14452a437e0d9e909b0f6d8dd3",
-    "version": "chatllm-data-v16"
+    "policy_sha256": "9c0493d284d072c03f8a8ef7307664da8a3838182a78d30668f53b4ce7628b29",
+    "version": "chatllm-data-v17"
   },
   "counts": {
     "alembic_revisions": 135,
-    "capability": 301,
-    "chatllm_policy_entries": 301,
+    "capability": 304,
+    "chatllm_policy_entries": 304,
     "id_kind": 195,
-    "purpose": 70,
+    "purpose": 71,
     "safe_detail": 452
   },
   "vocabulary": {
@@ -196,6 +196,9 @@
       "commitments.v2.search",
       "commitments.v2.waiting_on",
       "commitments.waiting_on",
+      "communications.coverage",
+      "communications.read",
+      "communications.search",
       "constraint_categories.create",
       "constraint_categories.deactivate",
       "constraint_categories.list",
@@ -681,6 +684,7 @@
       "capture_review",
       "commitment_authoring",
       "commitment_read",
+      "communications_read",
       "constraint_authoring",
       "constraint_read",
       "constraint_sync_authoring",

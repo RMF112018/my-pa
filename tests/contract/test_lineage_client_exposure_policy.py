@@ -237,7 +237,8 @@ def test_v10_never_desires_a_withheld_lineage_name_in_any_composition() -> None:
     # CPM Workbench S5b-2 (chatllm-data-v11): the `schedule` plane flag, 256 -> 512.
     # Schedule Scenarios S6-3 (chatllm-data-v13): `schedule_scenarios`, 512 -> 1,024.
     # Files workspace WP5 (chatllm-data-v14): `files_workspace`, 1,024 -> 2,048.
-    assert len(compositions) == 2048
+    # Communications WP4-S5 (chatllm-data-v17): `communications`, 2,048 -> 4,096.
+    assert len(compositions) == 4096
     for planes in compositions:
         for knowledge_manager in (False, True):
             assert not _desired(planes, knowledge_manager=knowledge_manager) & WITHHELD, planes

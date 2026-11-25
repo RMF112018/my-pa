@@ -423,6 +423,67 @@ def test_the_revision_round_trips_and_restores_the_guard_byte_for_byte(engine: E
     assert _columns(engine) >= NEW_COLUMNS
 
 
+#: The catalog state the round trip must restore exactly (WP4-R1 F4): every
+#: function body in the schema (the message guard and the audit vocabulary
+#: functions), every CHECK, the columns of the two touched tables and every
+#: trigger, each as the server renders it. Columns are compared by name: a
+#: column re-added by a later upgrade takes a new attribute number.
+_STATE_QUERIES: Final = {
+    "functions": (
+        "SELECT p.proname, pg_get_functiondef(p.oid) FROM pg_proc p "
+        "JOIN pg_namespace n ON n.oid = p.pronamespace "
+        "WHERE n.nspname = 'knowledge' AND p.prokind = 'f' ORDER BY 1, 2"
+    ),
+    "checks": (
+        "SELECT c.conrelid::regclass::text, c.conname, pg_get_constraintdef(c.oid) "
+        "FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace "
+        "WHERE n.nspname = 'knowledge' AND c.contype = 'c' ORDER BY 1, 2"
+    ),
+    "columns": (
+        "SELECT table_name, column_name, data_type, is_nullable, "
+        "column_default, is_generated, generation_expression "
+        "FROM information_schema.columns WHERE table_schema = 'knowledge' "
+        "AND table_name IN ('communication_messages', 'communication_identifiers') "
+        "ORDER BY 1, 2"
+    ),
+    "triggers": (
+        "SELECT t.tgrelid::regclass::text, t.tgname, pg_get_triggerdef(t.oid) "
+        "FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = 'knowledge' AND NOT t.tgisinternal ORDER BY 1, 2"
+    ),
+}
+
+
+def _catalog_state(engine: Engine) -> dict[str, list[tuple[Any, ...]]]:
+    with engine.connect() as connection:
+        return {
+            name: [tuple(row) for row in connection.execute(text(sql))]
+            for name, sql in _STATE_QUERIES.items()
+        }
+
+
+@pytest.mark.database
+def test_the_downgrade_restores_the_previous_catalog_exactly(empty_database_url: str) -> None:
+    """F4: captured on a database built to `PREVIOUS`, before this revision ever ran."""
+    command.upgrade(_config(), PREVIOUS)
+    built = create_database_engine(empty_database_url)
+    try:
+        before = _catalog_state(built)
+        assert before["functions"] and before["checks"] and before["triggers"]
+        command.upgrade(_config(), REVISION)
+        at = _catalog_state(built)
+        assert at != before
+        command.downgrade(_config(), PREVIOUS)
+        after = _catalog_state(built)
+        for name in _STATE_QUERIES:
+            assert after[name] == before[name], name
+        command.upgrade(_config(), REVISION)
+        assert _catalog_state(built) == at
+    finally:
+        built.dispose()
+
+
 @pytest.mark.database
 def test_the_new_columns_default_and_are_mutable(seeded: Engine) -> None:
     with seeded.begin() as connection:

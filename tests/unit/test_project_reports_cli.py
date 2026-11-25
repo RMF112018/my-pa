@@ -8,7 +8,8 @@ file; no `--reason`, Manager ruling on S4); the expectation refusals (before an 
 built when the configured name differs, on the live connection when the
 catalog or the Alembic head differs); the database URL never appearing in any
 output; the closed exit codes; the JSON shape of `check` and `apply`; a
-second apply writing nothing; the refusal codes; and output that carries
+second apply writing nothing; the unbound listing stopping at its directory
+cap (`unbound_listing_truncated`) and never holding more; the refusal codes; and output that carries
 counts, codes and project numbers only -- no folder, path, file name, slug or
 filter text of the fixture. The end-to-end run on PostgreSQL is
 `tests/database/test_project_reports_bindings.py`.
@@ -37,6 +38,7 @@ from typing import Any, Final
 import pytest
 from apps.cli import project_reports as cli
 
+from my_pa.application import project_reports_bindings
 from my_pa.application.ingestion import IngestionLifecycle
 from my_pa.application.project_reports_bindings import ProjectReportBindings
 from my_pa.bootstrap.gateway import local_principal
@@ -427,6 +429,41 @@ def test_check_prints_the_diff_and_the_unbound_folders_and_writes_nothing(
     assert scene.rows() == (0, 0, 0, 0)
     assert scene.engine.connection.lock_calls == []  # check takes no lock
     assert set(scene.store.calls) <= {"stat", "list_directory"}
+
+
+@pytest.mark.parametrize(("cap", "truncated", "unbound"), [(10, False, 1), (9, True, None)])
+def test_the_unbound_listing_stops_at_its_directory_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    cap: int,
+    truncated: bool,
+    unbound: int | None,
+) -> None:
+    # The scene's tree is ten directories: the root and three per folder.
+    scene = _Scene(monkeypatch)
+    monkeypatch.setattr(project_reports_bindings, "MAX_LISTED_DIRECTORIES", cap)
+    path = _file(tmp_path, _document(_a(), _b()))
+    code, out, _ = run(capsys, "bindings", "check", "--file", path)
+    assert (code, out["unbound_listing_truncated"]) == (cli.EXIT_OK, truncated)
+    if unbound is not None:
+        assert out["unbound_folders"] == unbound
+    # Never more directories listed than the cap: every visited one is listed once.
+    assert scene.store.calls.count("list_directory") <= cap
+
+
+def test_a_wide_tree_holds_no_more_directories_than_the_cap(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    scene = _Scene(monkeypatch)
+    for index in range(40):
+        scene.store.put(f"{EXPORT_ROOT}/Wide Synth {index:02d}/{FILE_NAME}", b"Synthetic\n")
+    monkeypatch.setattr(project_reports_bindings, "MAX_LISTED_DIRECTORIES", 5)
+    path = _file(tmp_path, _document(_a(), _b()))
+    code, out, _ = run(capsys, "bindings", "check", "--file", path)
+    assert (code, out["unbound_listing_truncated"]) == (cli.EXIT_OK, True)
+    assert scene.store.calls.count("list_directory") == 5
+    assert out["unbound_folders"] <= 4
 
 
 def test_apply_writes_once_then_finds_nothing_to_change(

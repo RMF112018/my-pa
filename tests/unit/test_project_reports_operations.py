@@ -14,6 +14,10 @@ Proved here:
   `--expect` that matches, exit 0, and one that differs, exit 4), and the
   `source_not_found`, `source_unbound` (up front, writing nothing) and
   `lock_held` refusals;
+* filter semantics through the real `bindings apply` and coverage (ruling D8
+  (i)): a declared filter is `operator_declared`, and stays so across a
+  currency-only correction (the verbatim declaration keeps its instant); a
+  changed filter is `unknown` until a version is first seen after it;
 * **the log-line no-content guard**: every line the handler, the sweep, the
   worker step and every S5 command print over the synthetic fixtures holds
   none of the fixtures' cell texts, none of the placed file names, slugs or
@@ -27,16 +31,21 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
 import pytest
 from apps.cli import project_reports as cli
 
+from my_pa.application.project_reports_bindings import ProjectReportBindings
+from my_pa.application.project_reports_coverage import project_reports_coverage
+from my_pa.bootstrap.project_reports import PROJECT_REPORTS_WORKSPACE_ID
 from my_pa.bootstrap.settings import load_settings
 from my_pa.contracts.ports import FileWorkspaceRootError
-from my_pa.domain.project_reports.model import BindingState
+from my_pa.domain.project_reports.model import BindingReason, BindingState
+from my_pa.domain.situation.situation import Project, ProjectState
 from my_pa.infrastructure.jobs import cycle_scheduler
 from my_pa.infrastructure.jobs.cycle_scheduler import (
     PROJECT_REPORTS_POLL_LOCK_KEY,
@@ -47,14 +56,19 @@ from my_pa.infrastructure.project_reports.pulse_csv import (
     prepare_export,
 )
 from tests.unit.project_reports_scene import (
+    DATE_LABEL,
     DIRECTORIES,
     EXPORT_ROOT,
     FIXTURES,
+    WHEN,
     Scene,
     fixture_files,
     folder_of,
+    name_of,
+    project_number_of,
+    project_of,
 )
-from tests.unit.test_project_reports_cli import DSN, DSN_PARTS, EXPECT, _Engine
+from tests.unit.test_project_reports_cli import DSN, DSN_PARTS, EXPECT, _DirectoryStore, _Engine
 
 ENABLED: Final = "MY_PA_PROJECT_REPORTS_INGEST_ENABLED"
 
@@ -386,6 +400,127 @@ def test_a_held_lock_refuses_the_writing_commands(operator: _Operator) -> None:
         code, out = operator(*argv)
         assert (code, out["refused"]) == (cli.EXIT_REFUSED, "lock_held")
     assert not operator.scene.world.project_reports.snapshots
+
+
+# ---- filter semantics through `bindings apply` (ruling D8 (i)) -------------------------
+
+#: The slug label of the files placed below (`YYYYMMDD-<slug>.csv`).
+DECLARED_SLUG: Final = "qxsynthslug-00"
+DECLARED_FILTER: Final = "Synthetic filter: open items only"
+DECLARED_DIRECTORY: Final = "two_level"
+
+
+class _Declared:
+    """The bindings service, the lifecycle and coverage over one placed folder."""
+
+    def __init__(self) -> None:
+        self.scene = Scene(store=_DirectoryStore())
+        self.folder = folder_of(DECLARED_DIRECTORY)
+        self.data = fixture_files(DECLARED_DIRECTORY)[0].read_bytes()
+        self.scene.store.put(f"{self.folder}/{name_of(0)}", self.data)
+        self.scene.world.projects.append(
+            Project(
+                project_id=project_of(DECLARED_DIRECTORY),
+                principal_id=self.scene.principal,
+                name="Synthetic project",
+                state=ProjectState.ACTIVE,
+                opened_at=WHEN,
+                created_at=WHEN,
+                updated_at=WHEN,
+                project_number=project_number_of(DECLARED_DIRECTORY),
+            )
+        )
+        self.bindings = ProjectReportBindings(
+            unit_of_work=self.scene.unit,
+            lifecycle=self.scene.lifecycle,
+            stores=self.scene.stores,
+            workspace_id=PROJECT_REPORTS_WORKSPACE_ID,
+            lock=lambda: nullcontext(True),
+            clock=self.scene.clock,
+        )
+
+    def apply(self, *, currency: str = "USD", description: str = DECLARED_FILTER) -> None:
+        document = {
+            "schema": "my_pa_project_report_bindings_v1",
+            "workspace_id": PROJECT_REPORTS_WORKSPACE_ID,
+            "export_root": EXPORT_ROOT,
+            "bindings": [
+                {
+                    "folder": self.folder,
+                    "project_id": project_of(DECLARED_DIRECTORY),
+                    "project_number": project_number_of(DECLARED_DIRECTORY),
+                    "currency": currency,
+                    "reports": [{"slug": DECLARED_SLUG, "filter": description}],
+                }
+            ],
+        }
+        report = self.bindings.apply(self.scene.principal, json.dumps(document).encode())
+        assert report.applied
+
+    def source(self) -> str:
+        (source,) = self.scene.ingest.sources.values()
+        return source.ingest_source_id
+
+    def backfill(self) -> None:
+        counts = self.scene.lifecycle.backfill(self.scene.principal, self.source()).counts
+        assert counts["snapshots_failed"] == 0, counts
+
+    def current(self) -> tuple[BindingReason, list[datetime]]:
+        """The current revision's reason and its declarations' instants."""
+        with self.scene.unit() as unit:
+            repository = unit.project_reports
+            binding = repository.get_binding(self.scene.principal, self.source())
+            assert binding is not None
+            revision = repository.get_binding_revision(
+                self.scene.principal, binding.binding_revision_id
+            )
+            assert revision is not None
+            declarations = repository.list_filter_declarations(
+                self.scene.principal, revision.binding_revision_id
+            )
+        return revision.reason_code, [d.declared_at for d in declarations]
+
+    def semantics(self) -> list[str]:
+        with self.scene.unit() as unit:
+            (coverage,) = project_reports_coverage(
+                unit, self.scene.principal, None, now=self.scene.clock()
+            )
+        return [series.filter_semantics.value for series in coverage.series]
+
+
+def test_a_declared_filter_is_operator_declared_and_survives_a_currency_correction() -> None:
+    declared = _Declared()
+    declared.apply()
+    reason, first = declared.current()
+    assert reason is BindingReason.INITIAL
+    declared.backfill()
+    assert declared.semantics() == ["operator_declared"]
+    # A currency-only correction re-declares the same filter verbatim: it keeps
+    # its instant, so the versions seen since it are still `operator_declared`.
+    declared.apply(currency="CAD")
+    assert declared.semantics() == ["operator_declared"]
+    assert declared.current() == (BindingReason.CORRECTION, first)
+
+
+def test_a_changed_filter_holds_only_for_versions_first_seen_after_it() -> None:
+    declared = _Declared()
+    declared.apply()
+    declared.backfill()
+    _, first = declared.current()
+    declared.apply(description=DECLARED_FILTER + " (narrowed)")
+    # The version seen before the new declaration: its filter is not known.
+    assert declared.semantics() == ["unknown"]
+    reason, second = declared.current()
+    assert reason is BindingReason.FILTER_UPDATE
+    assert second[0] > first[0]  # a changed declaration is declared now
+    # A later version of the same series, first seen after it: declared.
+    later = name_of(0).replace(DATE_LABEL, "20261121")
+    declared.scene.store.put(
+        f"{declared.folder}/{later}",
+        declared.data.replace(b"Synthetic observation", b"Synthetic observation two"),
+    )
+    declared.backfill()
+    assert declared.semantics() == ["operator_declared"]
 
 
 # ---- the log-line no-content guard ------------------------------------------------------

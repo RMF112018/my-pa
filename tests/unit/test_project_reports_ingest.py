@@ -14,7 +14,7 @@ in-memory worlds (`tests/unit/project_reports_scene.py`). Proved here:
   once an adapter is registered (trigger a), a rebind (b) and a version bump
   (c), and writes nothing on a dry run;
 * the cross-report check is written once, buyout on the left, in either
-  arrival order;
+  arrival order; an export with no date label pairs with nothing;
 * every count key is in the closed vocabulary.
 
 The database tier is `tests/database/test_project_reports_ingest.py`.
@@ -51,7 +51,7 @@ from my_pa.infrastructure.project_reports import pulse_csv
 from my_pa.infrastructure.project_reports.aggregate_cli import summarize_paths
 from my_pa.infrastructure.project_reports.stored_aggregate import stored_counts
 from tests import conftest
-from tests.unit.project_reports_scene import FIXTURES, Scene, fixture_files
+from tests.unit.project_reports_scene import FIXTURES, Scene, fixture_files, folder_of, name_of
 
 
 def _scene(*directories: str) -> Scene:
@@ -267,6 +267,27 @@ def test_the_cross_report_check_is_written_once_in_either_order(order: tuple[str
     # The rest of the folder and a rebuild write no second check for the same pair.
     scene.lifecycle.backfill(scene.principal, source)
     assert len(scene.world.project_reports.cross_checks) == 1
+
+
+@pytest.mark.parametrize("undated", [("buyout_summary",), ("buyout_summary", "reconciliation")])
+def test_an_export_with_no_date_label_pairs_with_nothing(undated: tuple[str, ...]) -> None:
+    scene = Scene()
+    folder = folder_of("signatures")
+    for view in ("buyout_summary", "reconciliation"):
+        name = (
+            f"qxsynthundated-{view}.csv"
+            if view in undated
+            else name_of(("buyout_summary", "reconciliation").index(view))
+        )
+        scene.store.put(f"{folder}/{name}", (FIXTURES / "signatures" / f"{view}.csv").read_bytes())
+    scene.bind("signatures")
+    counts = scene.lifecycle.backfill(scene.principal, scene.sources["signatures"]).counts
+    assert (counts["snapshots_failed"], counts["snapshots_ingested"]) == (0, 2)
+    assert not any(key.startswith("records_cross_checks_") for key in counts)
+    assert not scene.world.project_reports.cross_checks
+    with scene.unit() as unit:
+        stored = stored_counts(unit, scene.principal, [scene.sources["signatures"]])
+    assert (stored["cross_report.not_checked"], stored["cross_report.match"]) == (1, 0)
 
 
 def test_a_rebuild_writes_a_cross_check_for_the_new_pair() -> None:

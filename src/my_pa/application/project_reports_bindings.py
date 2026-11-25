@@ -123,6 +123,8 @@ class _Current:
     binding: ProjectReportBindingRecord
     revision: ProjectReportBindingRevisionRecord
     filters: frozenset[tuple[str, str]]
+    #: When each `(slug, description)` declaration of the revision was declared.
+    declared_at: Mapping[tuple[str, str], datetime]
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,13 +338,15 @@ class ProjectReportBindings:
             )
             if revision is None:  # the pointer's foreign key makes this unreachable
                 raise RuntimeError("a binding pointer names no revision")
-            filters = frozenset(
-                (declaration.slug_label, declaration.description)
+            declared_at = {
+                (declaration.slug_label, declaration.description): declaration.declared_at
                 for declaration in unit.project_reports.list_filter_declarations(
                     principal_id, revision.binding_revision_id
                 )
+            }
+            found[source.path_prefix] = _Current(
+                source, binding, revision, frozenset(declared_at), declared_at
             )
-            found[source.path_prefix] = _Current(source, binding, revision, filters)
         return found
 
     def _plan(self, unit: UnitOfWork, principal_id: str, desired: BindingsFile) -> _Plan:
@@ -414,6 +418,10 @@ class ProjectReportBindings:
             repository.insert_binding_revision(principal_id, revision)
             writes["revisions"] += 1
             if change.reports:
+                # Ruling D8 (i): a declaration the current revision already holds
+                # verbatim (a correction, or a filter update of another slug)
+                # keeps its instant; only a new or changed one is declared now.
+                kept = {} if change.current is None else change.current.declared_at
                 repository.insert_filter_declarations(
                     principal_id,
                     [
@@ -421,7 +429,7 @@ class ProjectReportBindings:
                             binding_revision_id=revision.binding_revision_id,
                             slug_label=report.slug,
                             description=report.description,
-                            declared_at=recorded_at,
+                            declared_at=kept.get((report.slug, report.description), recorded_at),
                         )
                         for report in change.reports
                     ],
@@ -450,16 +458,20 @@ class ProjectReportBindings:
     # --- the unbound folders -------------------------------------------------------
 
     def _unbound(self, store: FileWorkspaceStore, desired: BindingsFile) -> tuple[int, bool]:
-        """CSV folders under `export_root` that the file binds to nothing, bounded."""
+        """CSV folders under `export_root` that the file binds to nothing, bounded.
+
+        At most `MAX_LISTED_DIRECTORIES` directories are ever visited or held
+        pending (memory is bounded by the cap, not by the tree); a directory
+        past the cap is never listed, and the answer says it was truncated.
+        """
         bound = {entry.folder for entry in desired.bindings}
         unbound = 0
         visited = 0
+        truncated = False
         pending: list[tuple[str, int]] = [(desired.export_root, 0)]
         while pending:
             directory, depth = pending.pop()
             visited += 1
-            if visited > MAX_LISTED_DIRECTORIES:
-                return unbound, True
             holds_csv = False
             after: str | None = None
             while True:
@@ -477,13 +489,16 @@ class ProjectReportBindings:
                     ):
                         holds_csv = True
                     elif entry.kind is EntryKind.DIRECTORY and depth < UNBOUND_FOLDER_DEPTH:
-                        pending.append((entry.path, depth + 1))
+                        if visited + len(pending) >= MAX_LISTED_DIRECTORIES:
+                            truncated = True
+                        else:
+                            pending.append((entry.path, depth + 1))
                 if page.next_after is None:
                     break
                 after = page.next_after
             if holds_csv and directory not in bound:
                 unbound += 1
-        return unbound, False
+        return unbound, truncated
 
     # --- the report --------------------------------------------------------------
 

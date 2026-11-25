@@ -24,7 +24,9 @@ folder and file names), the folders bound by `bindings apply`. Proved here:
   quarantines the financial views, the right one classifies them again);
 * `--dry-run` (backfill and rederive) writes nothing; a backfill resumes;
 * a retired source's `run-once` and `backfill` refuse `source_unbound` up
-  front and write nothing, not even a run row;
+  front and write nothing, not even a run row; `IngestionLifecycle.backfill`
+  called directly on it fails every snapshot (`snapshots_failed`) and rolls
+  each back, writing no snapshot, path or project-report row (ruling D12);
 * the cross-report check is written once, left the buyout summary, in both
   arrival orders.
 
@@ -52,8 +54,10 @@ from my_pa.application.project_reports_rederive import ProjectReportsRederiver
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.project_reports import (
     PulseExportReader,
+    project_reports_lifecycle,
     project_reports_unit_of_work,
 )
+from my_pa.bootstrap.settings import load_settings
 from my_pa.domain.project_reports.model import FamilyView, ValueKind
 from my_pa.infrastructure.persistence.tables import projects
 from my_pa.infrastructure.project_reports import pulse_csv
@@ -428,6 +432,24 @@ def test_a_retired_source_is_unbound_and_writes_nothing(operator: Operator) -> N
             {"command": argv[0], "refused": "source_unbound"},
         )
     assert operator.counts() == before  # refused up front: not even a run row
+
+
+def test_a_direct_backfill_of_a_retired_source_fails_and_rolls_back(operator: Operator) -> None:
+    """Ruling D12 below the command's up-front refusal: the handler raises in-transaction."""
+    operator.bind(("signatures", "rfc"))
+    operator.bind(("rfc",))  # signatures omitted: retired, its source disabled
+    before = operator.counts()
+    lifecycle = project_reports_lifecycle(load_settings(), operator.engine)
+    report = lifecycle.backfill(operator.principal, operator.source("signatures"))
+    files = len(fixture_files("signatures"))
+    assert (report.counts["snapshots_failed"], report.counts["snapshots_ingested"]) == (files, 0)
+    after = operator.counts()
+    # Each snapshot's transaction rolled back: no lifecycle snapshot, no path,
+    # no project-report row; only the run's own row records the failures.
+    assert {table: n for table, n in after.items() if table != "ingest_runs"} == {
+        table: n for table, n in before.items() if table != "ingest_runs"
+    }
+    assert after["ingest_runs"] == before["ingest_runs"] + 1
 
 
 @pytest.mark.parametrize(

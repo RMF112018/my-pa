@@ -354,15 +354,19 @@ def test_a_correction_a_filter_update_a_retire_and_a_rebind(operator: Operator) 
         first_b.binding_revision_id,
     )
     # Each new active revision carries its folder's declarations (AC-10).
-    for pointer, description in ((a, FILTER), (b, FILTER + " (bravo)")):
-        assert [
-            row.description
-            for row in operator.rows(
-                "SELECT description FROM knowledge.project_report_filter_declarations "
-                "WHERE binding_revision_id = :r",
-                r=pointer.binding_revision_id,
-            )
-        ] == [description]
+    declared_at = {}
+    for pointer, description in ((first_a, FILTER), (a, FILTER), (b, FILTER + " (bravo)")):
+        rows = operator.rows(
+            "SELECT description, declared_at FROM knowledge.project_report_filter_declarations "
+            "WHERE binding_revision_id = :r",
+            r=pointer.binding_revision_id,
+        )
+        assert [row.description for row in rows] == [description]
+        declared_at[pointer.binding_revision_id] = rows[0].declared_at
+    # Ruling D8 (i): the currency correction re-declares A's filter verbatim, so
+    # it keeps its first instant; B's new declaration is of this apply.
+    assert declared_at[a.binding_revision_id] == declared_at[first_a.binding_revision_id]
+    assert declared_at[b.binding_revision_id] > declared_at[a.binding_revision_id]
 
     # B is omitted: retired, its source disabled, every row kept.
     before = operator.counts()

@@ -613,10 +613,16 @@ def _cross_report(
     checked_at: datetime,
     counts: Counter[str],
 ) -> None:
-    """Write the cross-report check against every current partner (order-independent)."""
+    """Write the cross-report check against every current partner (order-independent).
+
+    Only exports of one date label pair: an export with no date label pairs with
+    nothing, so no check is written (the stored aggregate reads `not_checked`).
+    """
     repository = unit.project_reports
     other = _PAIR[1] if derived.view is _PAIR[0] else _PAIR[0]
     date_label = snapshot_labels(unit, principal_id, snapshot_id).date_label
+    if date_label is None:
+        return
     existing = {
         (check.left_derivation_id, check.right_derivation_id)
         for check in repository.list_cross_checks(principal_id, project_id)

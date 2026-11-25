@@ -142,14 +142,14 @@
     "revision_files": 134
   },
   "census": {
-    "architecture": 10036,
+    "architecture": 10142,
     "database": 7231,
     "evaluation": 2,
-    "fast_collected": 52347,
+    "fast_collected": 52869,
     "fast_skipped": 138,
-    "mypy_files": 775,
-    "src_modules": 578,
-    "test_modules": 1064
+    "mypy_files": 785,
+    "src_modules": 587,
+    "test_modules": 1069
   },
   "chatllm": {
     "classes": {

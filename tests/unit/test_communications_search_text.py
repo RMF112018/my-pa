@@ -1,8 +1,13 @@
-"""`comms_search_text_v1`: basis selection, html->text, quoted-chain and disclaimer removal."""
+"""`comms_search_text_v2` and v1: basis, html->text, quoted-chain and disclaimer removal.
+
+The v1-era cases below run against the current version (v2), which keeps them;
+the v2 section at the end pins the anchoring and the v1-prefix property.
+"""
 
 from __future__ import annotations
 
-from typing import Any
+import random
+from typing import Any, Final
 
 import pytest
 
@@ -10,10 +15,13 @@ from my_pa.domain.communications.model import NormalizedMessage
 from my_pa.domain.communications.search_text import (
     MAX_SEARCH_TEXT_CHARS,
     SEARCH_TEXT_VERSION,
+    SEARCH_TEXT_VERSION_V1,
+    SEARCH_TEXT_VERSION_V2,
     SIGNATURE_TAIL_LINES,
     SearchTextBasis,
     SearchTextFlag,
     derive_search_text,
+    derive_search_text_v1,
     html_to_text,
     normalize_plain_text,
     strip_disclaimer,
@@ -327,3 +335,131 @@ def test_output_is_capped() -> None:
     assert result.text is not None
     assert len(result.text) == MAX_SEARCH_TEXT_CHARS
     assert F.TEXT_CAPPED in result.flags
+
+
+# ---- comms_search_text_v2: the two markers anchored (WP4, contract section 6) -----------
+
+
+def test_v2_is_current_and_v1_stays_callable() -> None:
+    assert SEARCH_TEXT_VERSION == SEARCH_TEXT_VERSION_V2 == "comms_search_text_v2"
+    assert SEARCH_TEXT_VERSION_V1 == "comms_search_text_v1"
+    message = one(s.message(1, content="Main text.\n\nDisclaimer: x.", content_type="text"))
+    assert derive_search_text(message).version == SEARCH_TEXT_VERSION_V2
+    assert derive_search_text_v1(message).version == SEARCH_TEXT_VERSION_V1
+    with pytest.raises(ValueError, match="unknown search text version"):
+        strip_disclaimer("x", version="comms_search_text_v9")
+
+
+#: v1 cut each of these at a line merely holding a marker; v2 keeps the body.
+_V1_ONLY_CUTS: Final = (
+    # The report's probe: a mid-body line that starts with "Disclaimer", directly
+    # under the greeting (not a paragraph start).
+    "Hi team,\nDisclaimer language for the contract is attached; please review RFI 12.\n\nThanks",
+    # A paragraph-start "Disclaimer" line far from the end (not in the trailing region).
+    "Hi team,\n\nDisclaimer wording for RFI 12 is attached.\n"
+    + "\n".join(f"Item {n} of the punch list." for n in range(SIGNATURE_TAIL_LINES + 1)),
+    # The in-error phrase inside a sentence, on a paragraph-start trailing line.
+    "Hi,\n\nPlease note that if you have received this email in error they will resend it."
+    "\n\nThanks",
+    # The in-error phrase at a line start, but mid-paragraph.
+    "Hi,\nIf you have received this message in error, the courier resends RFI 5.\nThanks",
+)
+
+
+@pytest.mark.parametrize("text", _V1_ONLY_CUTS)
+def test_v2_keeps_body_text_that_v1_cut_at_an_unanchored_marker(text: str) -> None:
+    assert strip_disclaimer(text, version=SEARCH_TEXT_VERSION_V1)[1] is True
+    assert strip_disclaimer(text) == (text, False)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Main text.\n\nDisclaimer: nothing here is advice.",
+        "Main text.\n\nIf you have received this message in error, tell us.",
+        "Main text.\n-----\nDISCLAIMER: synthetic legal words.",
+        "Main text.\n\nif you have received this e-mail in error please delete it.",
+    ],
+)
+def test_v2_still_cuts_a_trailing_paragraph_start_marker(text: str) -> None:
+    assert strip_disclaimer(text) == ("Main text.", True)
+    assert strip_disclaimer(text, version=SEARCH_TEXT_VERSION_V1) == ("Main text.", True)
+
+
+def _fixture_messages() -> list[NormalizedMessage]:
+    documents = [builder() for builder in s.COMMITTED.values()]
+    documents += [s.lean_publication(), s.rich_publication()]
+    documents.append(
+        s.publication(
+            [
+                s.message(n, content=content, content_type="text")
+                for n, content in enumerate(
+                    (*_V1_ONLY_CUTS, s.QUOTED_REPLY, s.IDENTIFIER_TEXT), start=1
+                )
+            ],
+            s.window("2026-11-17T05:00:00Z", "2026-11-18T04:59:59Z", 24, "weekday_prior_24h"),
+            rich=True,
+        )
+    )
+    messages: list[NormalizedMessage] = []
+    for document in documents:
+        publication = parse_publication(s.encode(document)).publication
+        assert publication is not None
+        messages += [r.message for r in publication.records if r.message is not None]
+    return messages
+
+
+def test_the_v1_text_is_a_prefix_of_the_v2_text_for_every_fixture_message() -> None:
+    messages = _fixture_messages()
+    assert len(messages) > 20
+    removed = {SEARCH_TEXT_VERSION_V1: 0, SEARCH_TEXT_VERSION_V2: 0}
+    for message in messages:
+        v1, v2 = derive_search_text_v1(message), derive_search_text(message)
+        assert (v1.text is None) == (v2.text is None)
+        assert v1.basis is v2.basis
+        if v1.text is not None and v2.text is not None:
+            assert v2.text.startswith(v1.text)
+        assert v1.flags - {F.DISCLAIMER_REMOVED} == v2.flags - {F.DISCLAIMER_REMOVED}
+        removed[v1.version] += F.DISCLAIMER_REMOVED in v1.flags
+        removed[v2.version] += F.DISCLAIMER_REMOVED in v2.flags
+    # The `disclaimer_removed` count never grows, and the fixtures show it shrink.
+    assert removed[SEARCH_TEXT_VERSION_V2] < removed[SEARCH_TEXT_VERSION_V1]
+
+
+_POOL: Final = (
+    "Hi Bob,",
+    "Please review RFI 174 before Friday.",
+    "Disclaimer language for the contract is attached.",
+    "Disclaimer: synthetic legal words.",
+    "If you have received this message in error, delete it.",
+    "Note: if you have received this email in error they resend.",
+    "CONFIDENTIALITY NOTICE: synthetic.",
+    "This email is confidential and privileged.",
+    "If you are not the intended recipient, delete this.",
+    "-- ",
+    "--",
+    "-----",
+    "__________",
+    "",
+    "",
+    "Thanks,",
+    "Alpha",
+)
+
+
+def test_the_prefix_property_over_generated_variants() -> None:
+    """Seeded, so a failure reproduces; every variant is normalized first, as derived."""
+    generator = random.Random(20261125)  # noqa: S311 - a reproducible test seed
+    checked = 0
+    for _ in range(3000):
+        lines = [generator.choice(_POOL) for _ in range(generator.randint(1, 30))]
+        text = normalize_plain_text("\n".join(lines))
+        if not text:
+            continue
+        v1, cut1 = strip_disclaimer(text, version=SEARCH_TEXT_VERSION_V1)
+        v2, cut2 = strip_disclaimer(text, version=SEARCH_TEXT_VERSION_V2)
+        assert v2.startswith(v1), text
+        assert v1 and v2, text  # never cut to empty
+        assert cut1 or not cut2, text  # a v2 cut implies a v1 cut
+        checked += 1
+    assert checked > 2500

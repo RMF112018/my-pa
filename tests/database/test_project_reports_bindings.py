@@ -47,9 +47,8 @@ from sqlalchemy import Engine, insert, text
 from sqlalchemy.engine import Row, make_url
 
 from my_pa.application.ingestion import IngestionLifecycle
-from my_pa.application.project_reports_ingest import AdmissionOnlyHandler
 from my_pa.bootstrap.gateway import local_principal
-from my_pa.bootstrap.project_reports import project_reports_unit_of_work
+from my_pa.bootstrap.project_reports import project_reports_handler, project_reports_unit_of_work
 from my_pa.contracts.ports import IngestConsumer, UnitOfWork
 from my_pa.infrastructure.jobs.cycle_scheduler import (
     COMMS_INGEST_LOCK_KEY,
@@ -160,8 +159,8 @@ class Operator:
     def check(self, path: str) -> tuple[int, dict[str, Any]]:
         return self("bindings", "check", "--file", path)
 
-    def apply(self, path: str, reason: str = "initial") -> tuple[int, dict[str, Any]]:
-        return self("bindings", "apply", "--file", path, "--reason", reason)
+    def apply(self, path: str) -> tuple[int, dict[str, Any]]:
+        return self("bindings", "apply", "--file", path)
 
     def counts(self) -> dict[str, int]:
         with self.engine.connect() as connection:
@@ -340,7 +339,7 @@ def test_a_correction_a_filter_update_a_retire_and_a_rebind(operator: Operator) 
     second = _document(
         _a(currency="CAD"), _b(reports=[{"slug": SLUG, "filter": FILTER + " (bravo)"}])
     )
-    code, out = operator.apply(operator.file(second, "two.json"), "correction")
+    code, out = operator.apply(operator.file(second, "two.json"))
     assert code == cli.EXIT_OK, out
     assert out["project_numbers"]["correction"] == [PROJECTS[PA]]
     assert out["project_numbers"]["filter_update"] == [PROJECTS[PB]]
@@ -367,7 +366,7 @@ def test_a_correction_a_filter_update_a_retire_and_a_rebind(operator: Operator) 
 
     # B is omitted: retired, its source disabled, every row kept.
     before = operator.counts()
-    code, out = operator.apply(operator.file(_document(_a(currency="CAD")), "three.json"), "retire")
+    code, out = operator.apply(operator.file(_document(_a(currency="CAD")), "three.json"))
     assert code == cli.EXIT_OK, out
     assert out["project_numbers"]["retire"] == [PROJECTS[PB]]
     assert out["writes"]["sources_disabled"] == 1
@@ -415,14 +414,14 @@ def test_a_project_moved_between_folders_is_ordered_and_a_swap_is_refused(
     assert operator.apply(operator.file(_document(_a(), _b()), "one.json"))[0] == cli.EXIT_OK
     # B moves to C's Project while A keeps its own: one correction.
     moved = _document(_a(), _entry(FOLDER_B, PC))
-    code, out = operator.apply(operator.file(moved, "two.json"), "correction")
+    code, out = operator.apply(operator.file(moved, "two.json"))
     assert (code, out["project_numbers"]["correction"]) == (cli.EXIT_OK, [PROJECTS[PC]])
     # A swap (A takes C from B while B takes A's Project) cannot be ordered.
     before = operator.counts()
     swap = _document(
         _entry(FOLDER_A, PC, reports=[{"slug": SLUG, "filter": FILTER}]), _entry(FOLDER_B, PA)
     )
-    code, out = operator.apply(operator.file(swap, "three.json"), "correction")
+    code, out = operator.apply(operator.file(swap, "three.json"))
     assert (code, out) == (
         cli.EXIT_REFUSED,
         {"command": "bindings_apply", "refused": "project_duplicated"},
@@ -432,7 +431,7 @@ def test_a_project_moved_between_folders_is_ordered_and_a_swap_is_refused(
     chain = _document(
         _entry(FOLDER_A, PC, reports=[{"slug": SLUG, "filter": FILTER}]), _entry(FOLDER_B, PB)
     )
-    code, out = operator.apply(operator.file(chain, "four.json"), "correction")
+    code, out = operator.apply(operator.file(chain, "four.json"))
     assert code == cli.EXIT_OK, out
     assert operator.pointer_of(FOLDER_A).project_id == PC
     assert operator.pointer_of(FOLDER_B).project_id == PB
@@ -634,7 +633,7 @@ def test_admit_within_commits_or_rolls_back_with_its_callers_unit(operator: Oper
     lifecycle = IngestionLifecycle(
         unit_of_work=unit_of_work,
         stores=lambda _w: None,
-        handlers=[AdmissionOnlyHandler()],  # type: ignore[arg-type,return-value]
+        handlers=[project_reports_handler()],  # type: ignore[arg-type,return-value]
     )
 
     def admit(unit: UnitOfWork, folder: str) -> None:
@@ -661,7 +660,7 @@ def test_no_output_carries_a_folder_a_path_a_file_name_or_a_filter(
 ) -> None:
     operator.check(operator.file(_document(_a(), _b()), "one.json"))
     operator.apply(operator.file(_document(_a(), _b()), "one.json"))
-    operator.apply(operator.file(_document(_a(currency="CAD")), "two.json"), "retire")
+    operator.apply(operator.file(_document(_a(currency="CAD")), "two.json"))
     operator.check(operator.file(_document(_a(folder=f"{EXPORT_ROOT}/Missing")), "three.json"))
     url = make_url(os.environ["MY_PA_DATABASE_URL"])
     forbidden = (

@@ -4,7 +4,7 @@ With fakes: the lifecycle rows are the in-memory `IngestWorld`, the Projects
 and the project-report rows the general `World`, the workspace the in-memory
 `FakeStore` (with directories), and the engine answers only the identity and
 advisory-lock queries. Proved here: argument parsing (required expectations,
-file and a closed `--reason`); the expectation refusals (before an engine is
+file; no `--reason`, Manager ruling on S4); the expectation refusals (before an engine is
 built when the configured name differs, on the live connection when the
 catalog or the Alembic head differs); the database URL never appearing in any
 output; the closed exit codes; the JSON shape of `check` and `apply`; a
@@ -39,9 +39,12 @@ from apps.cli import project_reports as cli
 
 from my_pa.application.ingestion import IngestionLifecycle
 from my_pa.application.project_reports_bindings import ProjectReportBindings
-from my_pa.application.project_reports_ingest import AdmissionOnlyHandler
 from my_pa.bootstrap.gateway import local_principal
-from my_pa.bootstrap.project_reports import PROJECT_REPORTS_WORKSPACE_ID, poll_lock
+from my_pa.bootstrap.project_reports import (
+    PROJECT_REPORTS_WORKSPACE_ID,
+    poll_lock,
+    project_reports_handler,
+)
 from my_pa.contracts.ports import FileWorkspaceEntry, IngestConsumer
 from my_pa.domain.files.errors import FilesRefusal
 from my_pa.domain.files.versions import EntryKind
@@ -192,7 +195,7 @@ class _Scene:
 
     def _service(self, _settings: object, engine: _Engine) -> ProjectReportBindings:
         lifecycle = IngestionLifecycle(
-            unit_of_work=self._unit, stores=self._stores, handlers=[AdmissionOnlyHandler()]
+            unit_of_work=self._unit, stores=self._stores, handlers=[project_reports_handler()]
         )
         return ProjectReportBindings(
             unit_of_work=self._unit,
@@ -258,8 +261,8 @@ def run(capsys: pytest.CaptureFixture[str], *argv: str) -> tuple[int, dict[str, 
         ["bindings", "check", "--file", "f.json"],
         [*EXPECT, "bindings"],
         [*EXPECT, "bindings", "check"],
-        [*EXPECT, "bindings", "apply", "--file", "f.json"],
-        [*EXPECT, "bindings", "apply", "--file", "f.json", "--reason", "because"],
+        [*EXPECT, "bindings", "apply"],
+        [*EXPECT, "bindings", "apply", "--file", "f.json", "--reason", "initial"],
         [*EXPECT, "bindings", "purge", "--file", "f.json"],
         [*EXPECT, "run-once"],
     ],
@@ -267,10 +270,10 @@ def run(capsys: pytest.CaptureFixture[str], *argv: str) -> tuple[int, dict[str, 
         "no-expectations",
         "no-action",
         "no-file",
-        "no-reason",
-        "open-reason",
+        "apply-without-file",
+        "a-reason-is-no-argument",
         "unknown-action",
-        "unknown-command",
+        "run-once-without-source",
     ],
 )
 def test_usage_errors_exit_2(
@@ -343,7 +346,7 @@ def test_a_mismatched_connected_identity_refuses_before_any_read(
 ) -> None:
     scene = _Scene(monkeypatch, engine)
     path = _file(tmp_path, _document(_a()))
-    code, out, _ = run(capsys, "bindings", "apply", "--file", path, "--reason", "initial")
+    code, out, _ = run(capsys, "bindings", "apply", "--file", path)
     assert (code, out) == (
         cli.EXIT_REFUSED,
         {"command": "bindings_apply", "refused": "target_mismatch"},
@@ -363,7 +366,7 @@ def test_the_dsn_never_appears_on_any_path(
     outputs: list[str] = []
     for argv in (
         ["bindings", "check", "--file", path],
-        ["bindings", "apply", "--file", path, "--reason", "initial"],
+        ["bindings", "apply", "--file", path],
         ["bindings", "check", "--file", str(tmp_path / "missing.json")],
     ):
         cli.main([*EXPECT, *argv])
@@ -431,10 +434,10 @@ def test_apply_writes_once_then_finds_nothing_to_change(
 ) -> None:
     scene = _Scene(monkeypatch)
     path = _file(tmp_path, _document(_a(), _b()))
-    code, out, _ = run(capsys, "bindings", "apply", "--file", path, "--reason", "initial")
+    code, out, _ = run(capsys, "bindings", "apply", "--file", path)
     assert code == cli.EXIT_OK
     assert out["applied"] is True
-    assert out["reason"] == "initial"
+    assert "reason" not in out  # each revision records its own change kind's reason
     assert out["counts"]["add"] == 2
     assert out["writes"] == {
         "revisions": 2,
@@ -447,7 +450,7 @@ def test_apply_writes_once_then_finds_nothing_to_change(
     assert scene.rows() == (2, 2, 1, 2)
     assert scene.engine.connection.lock_calls == ["try", "unlock"]
     assert {s.consumer for s in scene.ingest.sources.values()} == {IngestConsumer.PULSE_CSV_EXPORT}
-    code, again, _ = run(capsys, "bindings", "apply", "--file", path, "--reason", "initial")
+    code, again, _ = run(capsys, "bindings", "apply", "--file", path)
     assert code == cli.EXIT_OK
     assert again["counts"]["unchanged"] == 2
     assert set(again["writes"].values()) == {0}
@@ -494,7 +497,7 @@ def test_a_refused_file_exits_1_with_its_code_and_writes_nothing(
 ) -> None:
     scene = _Scene(monkeypatch)
     path = _file(tmp_path, document)
-    for action in (["check"], ["apply", "--reason", "initial"]):
+    for action in (["check"], ["apply"]):
         exit_code, out, _ = run(capsys, "bindings", action[0], "--file", path, *action[1:])
         assert (exit_code, out) == (
             cli.EXIT_REFUSED,
@@ -524,7 +527,7 @@ def test_a_held_poll_lock_refuses_lock_held_and_writes_nothing(
     scene = _Scene(monkeypatch)
     scene.engine.connection.lock_free = False
     path = _file(tmp_path, _document(_a()))
-    code, out, _ = run(capsys, "bindings", "apply", "--file", path, "--reason", "initial")
+    code, out, _ = run(capsys, "bindings", "apply", "--file", path)
     assert (code, out) == (
         cli.EXIT_REFUSED,
         {"command": "bindings_apply", "refused": "lock_held"},
@@ -547,9 +550,9 @@ def test_output_is_counts_codes_and_project_numbers_only(
     )
     texts = [
         run(capsys, "bindings", "check", "--file", first)[2],
-        run(capsys, "bindings", "apply", "--file", first, "--reason", "initial")[2],
+        run(capsys, "bindings", "apply", "--file", first)[2],
         run(capsys, "bindings", "check", "--file", second)[2],
-        run(capsys, "bindings", "apply", "--file", second, "--reason", "filter_update")[2],
+        run(capsys, "bindings", "apply", "--file", second)[2],
     ]
     final = json.loads(texts[-1])
     assert final["project_numbers"]["filter_update"] == [NUMBER_A]
@@ -610,4 +613,6 @@ def test_the_command_imports_nothing_from_persistence_or_the_adapters() -> None:
     assert application == {
         "my_pa.application.ingestion",
         "my_pa.application.project_reports_bindings",
+        "my_pa.application.project_reports_coverage",
+        "my_pa.application.project_reports_rederive",
     }

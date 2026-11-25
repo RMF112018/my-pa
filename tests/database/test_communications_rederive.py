@@ -251,3 +251,39 @@ def test_rederive_refuses_lock_held_while_another_session_holds_the_poll_lock(
     code, out, _ = operator("rederive")
     assert (code, out["counts"]["messages_rederived"]) == (cli.EXIT_OK, 3)
     assert json.dumps(out).count("Synthetic") == 0
+
+
+def test_a_flagged_message_whose_file_has_returned_is_due_and_is_cleared(
+    migrated_engine: Engine, workspace: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """WP4-R1 F2: the SQL due clause `source_unavailable IS TRUE` (`_rederive_due`).
+
+    After a full rederive, message 1 is current in both versions. It is then
+    flagged (as a run whose file was missing would have left it), and its file
+    is present. Only the flag makes it due: the rederive must select it, read
+    the file and clear the flag.
+    """
+    operator = Operator(migrated_engine, capsys)
+    _seed_v1(operator)
+    code, out, _ = operator("rederive")
+    assert (code, out["counts"]["messages_rederived"]) == (cli.EXIT_OK, 3)
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE knowledge.communication_messages SET source_unavailable = true"
+                " WHERE subject = 'Synthetic 1'"
+            )
+        )
+    flagged = _messages(migrated_engine)["Synthetic 1"]
+    assert flagged[:3] == ("comms_search_text_v2", "comms_identifiers_v2", True)
+    code, dry, _ = operator("rederive", "--dry-run")
+    assert (code, dry["counts"]["messages_checked"]) == (cli.EXIT_OK, 1)
+    code, out, _ = operator("rederive")
+    assert code == cli.EXIT_OK, out
+    assert (out["counts"]["messages_checked"], out["counts"]["messages_source_restored"]) == (1, 1)
+    assert _messages(migrated_engine)["Synthetic 1"][:3] == (
+        "comms_search_text_v2",
+        "comms_identifiers_v2",
+        False,
+    )
+    assert operator("rederive")[1]["counts"]["messages_checked"] == 0

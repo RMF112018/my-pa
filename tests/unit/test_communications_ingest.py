@@ -15,6 +15,7 @@ or dry run leaving no communications row. Everything is synthetic.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
@@ -509,6 +510,32 @@ def test_a_newer_withheld_body_never_replaces_text(order: str) -> None:
     assert message.projection.search_text == "Synthetic body."
     assert message.projection.body_state == "present"
     assert scene.world.coverage[(P, message.latest_snapshot_id)].start_utc.day == 18
+
+
+def test_a_replaced_projection_clears_source_unavailable() -> None:
+    """WP4-R1 F2: a new text pointer names a snapshot this run has just verified."""
+    scene = Scene()
+    older, newer = _text_variants()
+    scene.ingest("20261117-comms.json", older)
+    message = scene.message()
+    scene.world.messages[(P, message.message_id)] = replace(message, source_unavailable=True)
+    scene.ingest("20261118-comms.json", newer)
+    after = scene.message()
+    assert after.projection.text_snapshot_id != message.projection.text_snapshot_id
+    assert after.source_unavailable is False
+
+
+def test_a_kept_projection_leaves_source_unavailable_alone() -> None:
+    """A snapshot that does not replace the pointer says nothing about its file."""
+    scene = Scene()
+    older, newer = _text_variants()
+    scene.ingest("20261118-comms.json", newer)
+    message = scene.message()
+    scene.world.messages[(P, message.message_id)] = replace(message, source_unavailable=True)
+    scene.ingest("20261117-comms.json", older)
+    after = scene.message()
+    assert after.projection == message.projection
+    assert after.source_unavailable is True
 
 
 # ---- failure and dry run ---------------------------------------------------------------

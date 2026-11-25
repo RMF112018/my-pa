@@ -334,3 +334,75 @@ def test_the_source_scope_selects_by_the_text_pointer(scene: RederiveScene) -> N
 def test_a_limit_outside_its_bounds_is_refused(scene: RederiveScene, limit: object) -> None:
     with pytest.raises(ValueError, match="limit"):
         scene.rederiver.rederive(P, limit=limit)  # type: ignore[arg-type]
+
+
+# ---- WP4-R1 F1 and F5: the per-row pointer re-check, the body digest, the read size ----
+
+
+def test_a_pointer_moved_after_the_due_read_is_not_rolled_back(scene: RederiveScene) -> None:
+    """F1: the per-row `text_snapshot_id` re-check under `FOR UPDATE`.
+
+    Between the due read and the group write, message 1's pointer moves from
+    snapshot A (17) to snapshot B (18) at the same ordinal, as an ingest that
+    skipped the lock would move it. Record A still carries that ordinal with
+    the same key and body digest, so without the re-check the group for A
+    would write a projection naming A: the pointer would roll back. With it,
+    the message counts `messages_current` and nothing is written for it.
+    """
+    two_snapshots(scene)
+    message = scene.by_subject("Synthetic 1")
+    snapshot_a = message.projection.text_snapshot_id
+    (snapshot_b,) = {m.projection.text_snapshot_id for m in scene.world.messages.values()} - {
+        snapshot_a
+    }
+    moved = replace(message, projection=replace(message.projection, text_snapshot_id=snapshot_b))
+    calls: list[int] = []
+
+    def parse_and_move(data: bytes) -> object:
+        parsed = parse_for_ingestion(data)
+        if not calls:  # before snapshot A's group writes, whichever group is read first
+            scene.set_message(moved)
+        calls.append(1)
+        return parsed
+
+    scene.rederiver._parse = parse_and_move  # type: ignore[assignment]
+    counts = scene.run().counts
+    after = scene.by_subject("Synthetic 1")
+    assert after == moved  # the pointer was not rolled back to A
+    assert after.projection.text_snapshot_id == snapshot_b
+    assert counts["messages_current"] == 1
+    assert counts["messages_rederived"] == 2  # the other two, from snapshot B's group
+
+
+def test_a_record_whose_body_digest_differs_is_a_pointer_mismatch(scene: RederiveScene) -> None:
+    """F1: the body-digest check in `_pointed`: same ordinal and key, another body."""
+    two_snapshots(scene)
+    message = scene.by_subject("Synthetic 1")
+    other = replace(message, projection=replace(message.projection, body_sha256="0" * 64))
+    scene.set_message(other)
+    counts = scene.run().counts
+    assert counts["messages_pointer_mismatch"] == 1
+    assert counts["messages_rederived"] == 2
+    assert scene.by_subject("Synthetic 1") == other  # nothing re-derived from the wrong body
+
+
+def test_a_read_shorter_than_its_stat_is_refused(scene: RederiveScene) -> None:
+    """F5: the `len(data) == entry.size` check in `_read`.
+
+    `stat` reports one byte more than the reader then yields. The bytes read
+    are the whole file and hash right, so only the size check refuses them;
+    the snapshot is unavailable and the message is flagged, not re-derived.
+    """
+    two_snapshots(scene)
+    path = f"{DIRECTORY}/20261117-comms.json"
+    real_stat = scene.store.stat
+
+    def longer_stat(p: str, *, include_sha256: bool = False) -> object:
+        entry = real_stat(p, include_sha256=include_sha256)
+        return replace(entry, size=entry.size + 1) if p == path else entry
+
+    scene.store.stat = longer_stat  # type: ignore[method-assign]
+    counts = scene.run().counts
+    assert (counts["snapshots_unavailable"], counts["snapshots_read"]) == (1, 1)
+    assert counts["messages_source_unavailable"] == 1
+    assert scene.by_subject("Synthetic 1").source_unavailable is True

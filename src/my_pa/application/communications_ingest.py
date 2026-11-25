@@ -490,6 +490,12 @@ class _Apply:
             )
             if not touched.created:
                 self.counts["projections_replaced"] += 1
+            if record.source_unavailable:
+                # The new pointer names the snapshot this run has just read and
+                # verified, so the source is available again (WP4-R1 F2).
+                self.repo.set_source_unavailable(
+                    self.principal_id, message_id, source_unavailable=False
+                )
         elif latest != record.latest_snapshot_id:
             self.repo.set_latest_snapshot(self.principal_id, message_id, latest)
         raise_reconciled = (

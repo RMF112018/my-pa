@@ -1058,13 +1058,13 @@ class RemoteFilesAPI:
             if observed_size != size or observed.hexdigest() != sha256:
                 raise PublicationError("my_pa_binary_transfer_failed")
             os.lseek(descriptor, 0, os.SEEK_SET)
+            # Duplicate before any await. A second cancellation can abandon the
+            # join below and run `finally` while the worker has not started;
+            # this copy still names the admitted bytes.
+            admitted = os.dup(descriptor)
 
             def transfer() -> dict[str, Any]:
-                # Duplicate the descriptor admitted above before any other open.
-                # The parent keeps that descriptor until this call returns, including
-                # when the awaiting task is cancelled, so the copy cannot observe a
-                # recycled descriptor number.
-                with os.fdopen(os.dup(descriptor), "rb") as handle:
+                with os.fdopen(admitted, "rb") as handle:
                     return upload_handle(
                         handle, Target(self.origin, route, UPLOADS_PREFIX, 60.0), token
                     )
@@ -1073,8 +1073,8 @@ class RemoteFilesAPI:
             try:
                 result = await asyncio.shield(worker)
             except asyncio.CancelledError:
-                # Join the worker before the descriptor close in `finally`. A worker
-                # failure must not replace the cancellation the caller is handling.
+                # Join the in-flight read when this task is cancelled once. A
+                # worker failure must not replace that cancellation.
                 with suppress(Exception):
                     await worker
                 raise

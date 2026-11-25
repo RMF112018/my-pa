@@ -38,7 +38,7 @@ workspace. my-pa **reads** them; it never writes, renames or trashes them.
 | `MY_PA_COMMUNICATIONS_INGEST_ENABLED` | `false` | Off: the cycles plane runs no ingestion poll, and so no scheduled meeting sync staging or apply (section 11.8). With it, `MY_PA_CYCLE_SCHEDULER_ENABLED` and `MY_PA_PROJECT_REPORTS_INGEST_ENABLED` all off, the plane exits 2 (`plane cycles disabled`). |
 | `MY_PA_COMMUNICATIONS_INGEST_POLL_SECONDS` | `900` | The poll interval, 60 to 86,400 s. |
 | `MY_PA_FILES_WORKSPACES` | unset | Set by the overlay to `mcp=/srv/my-pa/workspaces/mcp;mode=read_only`. |
-| `MY_PA_COMMUNICATIONS_ENABLED` | `false` | The read switch for `communications.search`, `.read` and `.coverage` (WP4). The setting exists from WP4-S4; the capabilities it gates are wired in WP4-S5. |
+| `MY_PA_COMMUNICATIONS_ENABLED` | `false` | The read switch for `communications.search`, `.read` and `.coverage` (WP4, section 12.3). Off, the three are withheld from `capabilities.get`, the tool list, readiness, the remote profile and the ChatLLM composition, and a call answers the standard `unsupported`. It is read by the gateway (HTTP and MCP), not by the cycles plane, and changes no row. |
 | `MY_PA_COMMUNICATIONS_IDENTIFIER_VERSION` | `comms_identifiers_v2` | The identifier version the reads match and normalize queries with. `comms_identifiers_v1` is a rollback lever that answers only for messages that still carry v1 rows. |
 
 ## 3. Prerequisites
@@ -491,6 +491,48 @@ query is empty: a name that is an English stop word, such as "Will" or "Don").
 for identifiers or names; stop-word names are the expected loss, and the participants filter
 answers name lookups by address. Run it after the rederive so the identifier rows are current.
 
+### 12.3 The read switch and activation (WP4)
+
+The three reads answer from the stored rows; they never read a workspace file. Activate in this
+order, as part of the consolidated activation (communications contract section 20.6); each step
+is the operator's:
+
+1. **Migrate.** The image holds `fa18ef3d9bc0`, and the database is migrated to the single head
+   (section 3).
+2. **Rederive.** `rederive --dry-run`, then `rederive` until `messages_checked` is `0`
+   (section 12.1), so the stored text and identifiers are v2 before a client searches them. Then
+   `measure-fts` if the full-text figures are wanted (section 12.2).
+3. **The switch.** Set `MY_PA_COMMUNICATIONS_ENABLED=true` on the gateway service (and
+   `MY_PA_COMMUNICATIONS_IDENTIFIER_VERSION` only to roll back to v1, which answers only for
+   messages that still carry v1 rows) and recreate it. `capabilities.get` then lists the 3
+   names `available`. A restricted MCP database role composition never serves them (its roles
+   hold no privilege on the communications tables).
+4. **The grants and the profile.** The client is the operator's connected client. Activate the
+   ChatLLM profile `chatllm-data-v17` (it contains v16) and grant, to the **operator profile
+   only**, each with purpose `communications_read`:
+
+   | Capability | Purpose |
+   | --- | --- |
+   | `communications.search` | `communications_read` |
+   | `communications.read` | `communications_read` |
+   | `communications.coverage` | `communications_read` |
+
+   With the switch on, `profile-plan` adds exactly these three; with it off, v17 desires exactly
+   the v16 set. No grant goes to a non-operator principal, and no change in the repository
+   writes one.
+
+**What a client sees.** Every search and read answer states the stored search-text versions,
+the identifier version (and, for a search, `identifier_version_pending`, the messages whose rows
+are not yet at it) and the coverage of the range searched or of each message's snapshot. A
+search may say `text_fallback: "simple_stopwords"` (a stop-word name matched through the
+`simple` configuration) or `query_state: "no_searchable_terms"`. A cursor is bound to the
+request and the caller's grants: after a grant change the answer is
+`cursor_state: "scope_changed_restart_required"` and the client starts again without it. A
+withheld or truncated body has no text, and no raw body is ever returned.
+
+**Disabling.** Set the switch off and recreate the gateway; the 3 names disappear and calls
+answer `unsupported`. Rows and grants are untouched; revoke the grants separately if wanted.
+
 ## 13. Residuals
 
 - `poll_enabled` stops at the first source whose workspace is unavailable; the poll is then
@@ -526,3 +568,7 @@ answers name lookups by address. Run it after the rederive so the identifier row
   `rfi:1`. A number followed by `:` and a digit (`RFI 10:30`) or directly by a letter
   (`PCO 12a`, `RFI 174A`) yields nothing, so a revision suffix is not searchable as an
   identifier; full-text search still finds it. `fpl` accepts exactly `FPL`, `FP&L` and `F.P.L.`.
+- Identifiers (WP4-C ruling): the prefixed RFI number form `RFI CON-132` is recognized by neither
+  version, so such an RFI is found by full text only; a later extractor version may add it.
+- Reads: the stop-word fallback costs about 470 ms at p50 at real-corpus size (accepted for
+  interactive search); WP5 measures the 10-Meeting context latency.

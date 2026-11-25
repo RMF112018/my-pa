@@ -44,7 +44,15 @@ from my_pa.domain.schedule import (
 )
 from my_pa.domain.schedule.p6.frame import frame_object
 from my_pa.domain.schedule.p6.model import P6Issue, P6IssueCode, P6Severity
-from my_pa.domain.schedule.p6_import import P6RenumberCandidate, match_p6_activities
+from my_pa.domain.schedule.p6_import import (
+    P6Admission,
+    P6RenumberCandidate,
+    P6Snapshot,
+    P6SourceFormat,
+    match_p6_activities,
+    p6_import_request,
+    p6_import_request_digest,
+)
 from my_pa.infrastructure.file_workspace.store import FilesystemFileWorkspaceStore
 from my_pa.infrastructure.jobs import schedule_p6 as p6_handler
 from my_pa.infrastructure.jobs.schedule import process_schedule_publication
@@ -57,6 +65,7 @@ from my_pa.infrastructure.jobs.schedule_parser_process import (
     run_isolated_p6_parse,
 )
 from my_pa.infrastructure.jobs.worker import JobExecutionError, run_worker
+from my_pa.infrastructure.persistence import schedule_p6 as p6_repository
 from my_pa.infrastructure.persistence.jobs import SCHEDULE_JOBS, LeasedJob, claim_job
 from my_pa.infrastructure.persistence.schedule import SqlAlchemyScheduleUnitOfWork
 from my_pa.infrastructure.persistence.schedule_p6 import SqlAlchemyScheduleP6UnitOfWork
@@ -503,6 +512,136 @@ def test_identical_bytes_are_already_present_and_write_nothing(w: World) -> None
     assert again["already_present"] is True
     assert again["publication_id"] == first["publication_id"]
     assert _snapshot(w.engine) == before
+
+
+# ---- C1 (concurrency) and Principal isolation (independent review S7-3) ------------------
+
+
+def _race(w: World, first_key: str, second_key: str) -> tuple[P6Admission, dict[str, Any]]:
+    """Hold one admission's transaction open while a second, identical one runs, then commit."""
+    named = w.put("exports/first.xer", _full())
+    other = named if second_key == first_key else w.put("exports/second.xer", _full())
+    request = p6_import_request(_request(named, first_key))
+    held = SqlAlchemyScheduleP6UnitOfWork(w.engine)
+    held.__enter__()
+    try:
+        first = held.p6.admit_p6_publication(
+            P,
+            request,
+            p6_import_request_digest(P, request),
+            P6Snapshot(content=_full(), format=P6SourceFormat.P6_XER),
+        )
+        found: dict[str, Any] = {}
+
+        def second() -> None:
+            try:
+                found["answer"] = w.application().import_p6(P, _request(other, second_key))
+            except Exception as error:
+                found["error"] = error
+
+        thread = threading.Thread(target=second)
+        thread.start()
+        time.sleep(1.0)
+        # The second admission waits on a unique the first holds.
+        assert thread.is_alive(), found
+    finally:
+        held.__exit__(None, None, None)
+    thread.join(60)
+    assert not thread.is_alive() and "error" not in found, found
+    return first, found
+
+
+def _counts(w: World) -> tuple[int, int, int, int]:
+    return tuple(  # type: ignore[return-value]
+        _one(
+            w.engine,
+            "SELECT (SELECT count(*) FROM knowledge.schedule_publications), "
+            "(SELECT count(*) FROM knowledge.schedule_jobs), "
+            "(SELECT count(*) FROM knowledge.schedule_series), "
+            "(SELECT count(*) FROM knowledge.schedule_p6_snapshots)",
+        )
+    )
+
+
+def test_concurrent_identical_bytes_under_another_key_are_already_present(w: World) -> None:
+    first, found = _race(w, "p6-race-0001", "p6-race-0002")
+    assert found["answer"]["outcome"] == "already_present"
+    assert found["answer"]["publication_id"] == first.publication_id
+    assert found["answer"]["operation_id"] == first.operation_id
+    assert _counts(w) == (1, 1, 1, 1)
+
+
+def test_concurrent_admissions_under_one_key_replay(w: World) -> None:
+    first, found = _race(w, "p6-race-0001", "p6-race-0001")
+    assert found["answer"]["outcome"] == "replayed"
+    assert found["answer"]["publication_id"] == first.publication_id
+    assert _counts(w) == (1, 1, 1, 1)
+
+
+def test_another_principal_never_reaches_a_publication_series_or_project(w: World) -> None:
+    mine = _import(w, _full())
+    # The same bytes, key and Series name under Q: Q's own creation, never P's.
+    theirs = _import(w, _full(), principal=Q, project_id=FOREIGN_PROJECT)
+    assert theirs["outcome"] == "created"
+    assert theirs["publication_id"] != mine["publication_id"]
+    assert theirs["series_id"] != mine["series_id"]
+    _refused(
+        lambda: _import(
+            w,
+            _full(),
+            key="p6-import-0002",
+            principal=Q,
+            project_id=FOREIGN_PROJECT,
+            series_name=None,
+            series_id=mine["series_id"],
+        ),
+        NotFoundError,
+        SafeDetail.SERIES_ID,
+    )
+    _refused(
+        lambda: _import(w, _full(), key="p6-import-0003", project_id=FOREIGN_PROJECT),
+        NotFoundError,
+        SafeDetail.PROJECT_ID,
+    )
+
+
+def test_a_half_written_run_is_rerun_without_duplicates(
+    w: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answer = _import(w, _full())
+    written = p6_repository.SqlScheduleP6Repository.insert_p6_relationships
+
+    def interrupted(*_args: object, **_kwargs: object) -> int:
+        raise JobExecutionError(ErrorCode.UNAVAILABLE)
+
+    monkeypatch.setattr(
+        p6_repository.SqlScheduleP6Repository, "insert_p6_relationships", interrupted
+    )
+    with pytest.raises(JobExecutionError):
+        _work(w.engine)
+    assert _one(w.engine, "SELECT count(*) FROM knowledge.schedule_p6_activities")[0] == 4
+    monkeypatch.setattr(p6_repository.SqlScheduleP6Repository, "insert_p6_relationships", written)
+    with w.engine.begin() as c:
+        c.execute(
+            text(
+                "UPDATE knowledge.schedule_jobs SET lease_expires_at = now() - interval '1 second'"
+            )
+        )
+    _work(w.engine)
+    assert _status(w.engine, answer["publication_id"]) == "complete"
+    runs = _all(
+        w.engine,
+        "SELECT attempt_number, status FROM knowledge.schedule_parser_runs ORDER BY 1",
+    )
+    assert [tuple(row) for row in runs] == [(1, "failed"), (2, "parsed")]
+    accepted = _one(
+        w.engine,
+        "SELECT count(*), count(a.schedule_activity_id) FROM knowledge.schedule_p6_activities a "
+        "JOIN knowledge.schedule_publications p ON p.accepted_parser_run_id = a.parser_run_id",
+    )
+    assert tuple(accepted) == (4, 4)
+    assert _one(w.engine, "SELECT count(*) FROM knowledge.schedule_activities")[0] == 4
+    assert _one(w.engine, "SELECT row_count FROM knowledge.schedule_publications")[0] == 4
 
 
 # ---- C2: snapshot dedup per Principal; the path is stored and never served --------------

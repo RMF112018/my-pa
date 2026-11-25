@@ -156,3 +156,16 @@ def test_the_contained_child_parses_a_fixture_end_to_end() -> None:
 def test_a_malformed_capture_selection_is_the_parents_error() -> None:
     data = xer.build("full_valid").data
     assert run_isolated_p6_parse(data, capture=["not a key"], wall_seconds=30) == _TRANSIENT
+
+
+def test_a_frame_over_the_output_cap_is_bounds_exceeded() -> None:
+    """Section 9.3 H4: the child's frame is capped; past the cap the parse is refused."""
+    from my_pa.infrastructure.jobs.schedule_parser_child import ChildLimits
+
+    data = xer.build("full_valid").data
+    whole = run_isolated_p6_parse(data, capture=None, wall_seconds=30)
+    assert isinstance(whole, ParsedP6Result)
+    capped = run_isolated_p6_parse(
+        data, capture=None, wall_seconds=30, limits=ChildLimits(output_bytes=1024)
+    )
+    assert capped == DeterministicFailure(ScheduleIssueCode.BOUNDS_EXCEEDED)

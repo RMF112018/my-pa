@@ -38,9 +38,8 @@ workspace. my-pa **reads** them; it never writes, renames or trashes them.
 | `MY_PA_COMMUNICATIONS_INGEST_ENABLED` | `false` | Off: the cycles plane runs no ingestion poll, and so no scheduled meeting sync staging or apply (section 11.8). With it, `MY_PA_CYCLE_SCHEDULER_ENABLED` and `MY_PA_PROJECT_REPORTS_INGEST_ENABLED` all off, the plane exits 2 (`plane cycles disabled`). |
 | `MY_PA_COMMUNICATIONS_INGEST_POLL_SECONDS` | `900` | The poll interval, 60 to 86,400 s. |
 | `MY_PA_FILES_WORKSPACES` | unset | Set by the overlay to `mcp=/srv/my-pa/workspaces/mcp;mode=read_only`. |
-
-`MY_PA_COMMUNICATIONS_ENABLED` (the contract's read switch) is not introduced here: WP3a adds no
-read capability for it to gate. It arrives with the reads in WP4.
+| `MY_PA_COMMUNICATIONS_ENABLED` | `false` | The read switch for `communications.search`, `.read` and `.coverage` (WP4). The setting exists from WP4-S4; the capabilities it gates are wired in WP4-S5. |
+| `MY_PA_COMMUNICATIONS_IDENTIFIER_VERSION` | `comms_identifiers_v2` | The identifier version the reads match and normalize queries with. `comms_identifiers_v1` is a rollback lever that answers only for messages that still carry v1 rows. |
 
 ## 3. Prerequisites
 

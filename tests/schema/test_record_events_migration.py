@@ -61,6 +61,8 @@ from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES as LINEAG
 from tests.schema.lineage_schema_ahead_contract import S1_PURPOSES as LINEAGE_S1_PURPOSES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES, S63_PURPOSES
 from tests.schema.test_meeting_records_migration import _audit, _seed_meeting
+from tests.schema.vocabulary_admissions import SINCE as ADMISSIONS_SINCE
+from tests.schema.vocabulary_admissions import capabilities_admitted_after
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -73,10 +75,6 @@ from my_pa.infrastructure.persistence.tables import (
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "1d9b248e7f83"
-#: The chain head. `0641c354ca85` (CRL-WP-03, Capture lifecycle) is additive on
-#: `REVISION`, so `REVISION` is no longer the head; a database upgraded to head
-#: stands there, and a refused downgrade leaves it there.
-HEAD: Final = "61fafdfd2986"
 PREVIOUS: Final = "7d9a450dfd07"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20260929_1d9b248e7f83_record_events.py"
@@ -144,30 +142,6 @@ def _offline(target: str, *, down: bool = False) -> str:
 def test_the_revision_is_directly_on_7d9a450dfd07_under_one_later_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "52a829ef718a"
-    assert script.get_revision("52a829ef718a").down_revision == "6418b57081c3"
-    assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
-    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
-    assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
-    assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
-    assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
-    assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
-    assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
-    assert script.get_revision("6c2306330ceb").down_revision == "023f8f7eb499"
-    assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"
-    assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"
-    assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
-    assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"
-    assert script.get_revision("b9025e7fb738").down_revision == "5c1e7a9b3d42"
-    assert script.get_revision("5c1e7a9b3d42").down_revision == "c8f7ae406d47"
-    assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
-    assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
-    assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
-    assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
-    assert script.get_revision("6734f039f7a6").down_revision == "0641c354ca85"
-    assert script.get_revision("0641c354ca85").down_revision == "c8e4a1b70d35"
-    assert script.get_revision("c8e4a1b70d35").down_revision == REVISION
 
 
 # ---- the freeze (RE-AC-004) ------------------------------------------------------
@@ -272,10 +246,9 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
         - S63_CAPABILITIES
         # Files workspace WP4: admitted by its revision (the head).
         - FILES_CAPABILITIES
-        # Communications intelligence WP2-W3: admitted by the WP2 provider-binding revision.
-        - {"meetings.provider.bind"}
-        # Communications intelligence WP3b-S1: admitted by the meeting sync staging revision.
-        - {"meetings.provider.reconcile", "meetings.provider.review"}
+        # Every family admitted after the files workspace revision (communications
+        # intelligence WP2-W3's `meetings.provider.bind` onward): `vocabulary_admissions.py`.
+        - capabilities_admitted_after(ADMISSIONS_SINCE)
         # Reports Modernization WP02 and WP03: admitted by `4c37731671fc`.
         - {
             "reports.publish",

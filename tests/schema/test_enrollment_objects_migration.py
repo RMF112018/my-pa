@@ -480,7 +480,6 @@ def test_the_enrollment_objects_revision_is_in_the_chain() -> None:
     package edit this file.
     """
     script = ScriptDirectory.from_config(_config())
-    assert len(list(script.get_heads())) == 1
     assert ENROLLMENT_OBJECTS_REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(ENROLLMENT_OBJECTS_REVISION).down_revision == AUDIT_REVISION
 

@@ -62,6 +62,7 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.relationship.governance import MutationRecordFamily
 from my_pa.infrastructure.database.engine import create_database_engine
+from tests.pins import ALEMBIC_HEAD
 
 pytestmark = pytest.mark.database
 
@@ -84,11 +85,9 @@ REVISION: Final = "16f05c46b8c3"
 #: `REVISION` is the link directly beneath it. Written out rather than derived
 #: so chain drift fails here rather than passing.
 HEAD_REVISION: Final = "b8e4d1a6c073"
-#: PR192's graph-vocabulary admission directly above `HEAD_REVISION`.
-GRAPH_REVISION: Final = "c3f8a1d07e94"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-CURRENT_HEAD_REVISION: Final = "61fafdfd2986"
+CURRENT_HEAD_REVISION: Final = ALEMBIC_HEAD
 #: What was head until `REVISION` stacked on it, and therefore the revision
 #: this module downgrades to. This revision was written against `c99cd8ed8d1c`
 #: and re-parented onto `UI-IMP-WP02`'s `2c00c9ac64bc` when `origin/main` merged
@@ -99,13 +98,6 @@ CURRENT_HEAD_REVISION: Final = "61fafdfd2986"
 #: so downgrading to it leaves exactly the pre-`REVISION` vocabularies the
 #: assertions below expect.
 PREVIOUS_REVISION: Final = "2c00c9ac64bc"
-#: What was head until `PREVIOUS_REVISION` stacked on it (`RI-ENT-WP-08`'s
-#: blocker-clearing pass, renaming the seeded `entity_relationship_types` row
-#: `design_coordinates_with` to `design_coordination_with`).
-SECOND_TO_PREVIOUS_REVISION: Final = "c99cd8ed8d1c"
-#: What was head until `SECOND_TO_PREVIOUS_REVISION` stacked on it
-#: (`RI-ENT-WP-07`, adding entity_assertions/entity_assertion_evidence).
-THIRD_TO_PREVIOUS_REVISION: Final = "1cda4d536268"
 
 #: What the revision admits to `capability_is_known`: `RI-ENT-WP-10`'s five paged
 #: reads and `RI-ENT-WP-11`'s fifteen writes. Restated here for the reason the
@@ -335,22 +327,7 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     decide what the other admitted.
     """
     script = ScriptDirectory.from_config(_config())
-    heads = list(script.get_heads())
-    assert heads == [CURRENT_HEAD_REVISION], (
-        f"expected exactly {CURRENT_HEAD_REVISION}, found {heads}"
-    )
-    assert script.get_revision("a1c9e4b72f80").down_revision == "2774329487be"
-    assert script.get_revision("e8f2a6c9d104").down_revision == "d4e8b1c7a902"
-    assert script.get_revision("d4e8b1c7a902").down_revision == "a4d8e31b2c90"
-    assert script.get_revision("a4d8e31b2c90").down_revision == "6a2f9d1c4b80"
-    assert script.get_revision("6a2f9d1c4b80").down_revision == GRAPH_REVISION
-    assert script.get_revision(GRAPH_REVISION).down_revision == HEAD_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION
-    assert script.get_revision(PREVIOUS_REVISION).down_revision == SECOND_TO_PREVIOUS_REVISION
-    assert (
-        script.get_revision(SECOND_TO_PREVIOUS_REVISION).down_revision == THIRD_TO_PREVIOUS_REVISION
-    )
     with migrated_engine.begin() as connection:
         rows = connection.execute(text("SELECT version_num FROM alembic_version"))
         stamped = list(rows.scalars())
@@ -475,7 +452,7 @@ def test_the_stored_vocabularies_are_missing_nothing_the_domain_declares(
     names are stored and are not in `Capability`, and they predate all of this.
     The direction that breaks a request is a name the domain declares and the
     database has never heard of, and the only way to be sure of it for all one
-    hundred and fifty-four is to try all two hundred and ninety-nine.
+    hundred and fifty-four is to try every declared capability.
 
     `Purpose` is driven for the same reason and not because this revision
     touched it: it deliberately does not widen `purpose_is_known`, because

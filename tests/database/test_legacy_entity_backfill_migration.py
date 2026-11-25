@@ -62,15 +62,13 @@ from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError
 
 from my_pa.infrastructure.database.engine import create_database_engine
+from tests.pins import ALEMBIC_REVISION_COUNT
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 
 REVISION: Final = "b8e4d1a6c073"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-HEAD_REVISION: Final = "61fafdfd2986"
-CURRENT_HEAD_REVISION: Final = HEAD_REVISION
-GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: What was head until `REVISION` stacked on it, and therefore the revision
 #: this module downgrades to. `REVISION` was written against `c99cd8ed8d1c` and
 #: re-parented onto `16f05c46b8c3` (RI-ENT-WP-10/11) once that merged, because
@@ -80,22 +78,8 @@ GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: writes in `entity_names` differs between the two parents.
 PREVIOUS_REVISION: Final = "16f05c46b8c3"
 
-#: Every `migrations/versions/*.py` on the chain, this revision included.
-#: Counted on the merged tree after the re-parent (RULING-M2): 88 on
-#: `origin/main` at `16f05c46b8c3` plus this revision, graph vocabulary,
-#: GoodNotes pull, promotion receipt, and canvas overlay successors. The
-#: Intelligence focus-area admission `93f3aa113f58` makes it 113, the Continuity
-#: Project sixteen-field admission `cc373834a485` makes it 114, and the
-#: Intelligence report type registry `a591b81f10a2` makes it 115, and the MCP
-#: interaction log `c8f7ae406d47` 116, and the Commitment counterparty Entity
-#: cutover `5c1e7a9b3d42` 117; the record lineage slices since (S1 to S4 and S3.1)
-#: make it 123, the CPM Workbench S5b-1 foundation 124, and the CPM Workbench
-#: S5b-2 vocabulary revision 125, the Schedule Scenarios S6-2 plane 126, and the
-#: Reports Modernization WP01 general report plane 127, Schedule Scenarios S6-3
-#: revision B 128, and the files workspace WP4 plane 129. (130 counted the
-#: ADR-020 meeting prep revision.) Communications intelligence WP2's provider
-#: bindings revision makes it 131, and WP3a's ingestion revision 132.
-REVISION_FILE_COUNT: Final = 133
+#: Every `migrations/versions/*.py` on the chain, from the reviewed snapshot.
+REVISION_FILE_COUNT: Final = ALEMBIC_REVISION_COUNT
 
 #: The revision's frozen salt, restated. If this and the revision ever disagree
 #: the expectations below stop matching, which is the point of restating it.
@@ -445,55 +429,6 @@ def _expected_backfilled_row(
 def test_the_revision_is_the_single_head_and_revises_the_prior_head() -> None:
     """One head through the additive successors, retaining every prior edge."""
     script = ScriptDirectory.from_config(_config())
-    assert list(script.get_heads()) == [CURRENT_HEAD_REVISION]
-    # Later revisions landed between this file's subject and the head:
-    # `4e9a1c7b2d60` (AUTH-IMP), `f7a2c9d51e64` (PC-CM-IMP-WP07),
-    # `b8e4d6f20a11` (PC-CM-IMP-WP11), `c1a8e4d70b29` (append-only capture
-    # labels), then `de5ec1c65857` (WP-TUX-01). Every edge below is retained
-    # and the new ones are asserted, so the chain is still checked link by
-    # link rather than loosened.
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "52a829ef718a"
-    assert script.get_revision("52a829ef718a").down_revision == "6418b57081c3"
-    assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
-    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
-    assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
-    assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
-    assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
-    assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
-    assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
-    assert script.get_revision("6c2306330ceb").down_revision == "023f8f7eb499"
-    assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"
-    assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"
-    assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
-    assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"
-    assert script.get_revision("b9025e7fb738").down_revision == "5c1e7a9b3d42"
-    assert script.get_revision("5c1e7a9b3d42").down_revision == "c8f7ae406d47"
-    assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
-    assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
-    assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
-    assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
-    assert script.get_revision("6734f039f7a6").down_revision == "0641c354ca85"
-    assert script.get_revision("0641c354ca85").down_revision == "c8e4a1b70d35"
-    assert script.get_revision("c8e4a1b70d35").down_revision == "1d9b248e7f83"
-    assert script.get_revision("1d9b248e7f83").down_revision == "7d9a450dfd07"
-    assert script.get_revision("7d9a450dfd07").down_revision == "6f6ead27d122"
-    assert script.get_revision("6f6ead27d122").down_revision == "e6a4c2f91b73"
-    assert script.get_revision("e6a4c2f91b73").down_revision == "c4f1a8e52d90"
-    assert script.get_revision("c4f1a8e52d90").down_revision == "b3e9d7a41c25"
-    assert script.get_revision("b3e9d7a41c25").down_revision == "9f2c8a1d4e70"
-    assert script.get_revision("9f2c8a1d4e70").down_revision == "de5ec1c65857"
-    assert script.get_revision("de5ec1c65857").down_revision == "c1a8e4d70b29"
-    assert script.get_revision("c1a8e4d70b29").down_revision == "b8e4d6f20a11"
-    assert script.get_revision("b8e4d6f20a11").down_revision == "f7a2c9d51e64"
-    assert script.get_revision("f7a2c9d51e64").down_revision == "4e9a1c7b2d60"
-    assert script.get_revision("4e9a1c7b2d60").down_revision == "c5b71e0a8d43"
-    assert script.get_revision("c5b71e0a8d43").down_revision == "a1c9e4b72f80"
-    assert script.get_revision("a1c9e4b72f80").down_revision == "2774329487be"
-    assert script.get_revision("e8f2a6c9d104").down_revision == "d4e8b1c7a902"
-    assert script.get_revision("d4e8b1c7a902").down_revision == "a4d8e31b2c90"
-    assert script.get_revision("a4d8e31b2c90").down_revision == "6a2f9d1c4b80"
-    assert script.get_revision("6a2f9d1c4b80").down_revision == GRAPH_REVISION
-    assert script.get_revision(GRAPH_REVISION).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION
 
 

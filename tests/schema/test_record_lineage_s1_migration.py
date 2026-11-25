@@ -44,6 +44,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, Table, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
+from tests.pins import ALEMBIC_HEAD, ALEMBIC_REVISION_COUNT
 from tests.schema import lineage_schema_ahead_contract as lineage_gap
 from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
@@ -53,6 +54,7 @@ from tests.schema.lineage_s4_schema_ahead_contract import S4_CAPABILITIES, S4_PU
 from tests.schema.lineage_s31_schema_ahead_contract import S31_CAPABILITIES
 from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES, S1_PURPOSES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES, S63_PURPOSES
+from tests.schema.vocabulary_admissions import capabilities_admitted_after
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -81,9 +83,8 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "264310e0416a"
 PREVIOUS: Final = "b9025e7fb738"
-#: Record lineage S2 (`d020b532ad7d`), S3 (`6f1476b8da52`) and S4 (`c5260943d933`,
-#: ADR-015) are additive on this revision; the S4 revision is the head.
-HEAD: Final = "61fafdfd2986"
+#: The current head, from the reviewed snapshot (`tests/pins.json`).
+HEAD: Final = ALEMBIC_HEAD
 #: The S2 revision, the S1 suite's head before the S3 revision.
 S2_REVISION: Final = "d020b532ad7d"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`.
@@ -239,11 +240,9 @@ def _offline(target: str, *, down: bool = False) -> str:
 
 def test_the_revision_is_the_single_head_on_b9025e7fb738() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [HEAD]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert script.get_revision(PREVIOUS).down_revision == "5c1e7a9b3d42"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
-    assert len(list(MIGRATIONS.glob("*.py"))) == 133
+    assert len(list(MIGRATIONS.glob("*.py"))) == ALEMBIC_REVISION_COUNT
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -399,12 +398,9 @@ def test_at_vocabulary_adds_exactly_the_s1_names() -> None:
             "reports.transfer.read_chunk",
         }
     )
-    # Communications intelligence WP2-W3: its provider-binding revision admits
-    # `meetings.provider.bind` after this revision.
-    declared -= {"meetings.provider.bind"}
-    # Communications intelligence WP3b-S4: the meeting sync staging revision
-    # admits the review and the reconcile after this revision too.
-    declared -= {"meetings.provider.reconcile", "meetings.provider.review"}
+    # Every family a later revision admits (communications intelligence WP2-W3's
+    # `meetings.provider.bind` onward): one home, `vocabulary_admissions.py`.
+    declared -= capabilities_admitted_after(REVISION)
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | S1_CAPABILITIES
     assert (

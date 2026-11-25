@@ -18,10 +18,11 @@ from sqlalchemy.engine import make_url
 
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID
 from my_pa.infrastructure.database.engine import create_database_engine
+from tests.pins import ALEMBIC_HEAD
 
 pytestmark = pytest.mark.database
 
-HEAD = "61fafdfd2986"
+HEAD = ALEMBIC_HEAD
 PRODUCTION_RP_ID = "pa.bobby-fetting.me"
 PRODUCTION_ORIGIN = "https://pa.bobby-fetting.me"
 

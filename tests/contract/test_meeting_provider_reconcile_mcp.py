@@ -36,7 +36,6 @@ from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
-    CHATLLM_DATA_PROFILE_VERSION,
     ChatLLMCapabilityClass,
 )
 from my_pa.domain.identity.operation import (
@@ -89,7 +88,6 @@ def test_purposes_kinds_scope_and_remote_stamping() -> None:
 
 
 def test_the_chatllm_v16_classification() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
     for capability, like in (
         (REVIEW, Capability.MEETINGS_READ),
         (RECONCILE, Capability.MEETINGS_PROVIDER_BIND),

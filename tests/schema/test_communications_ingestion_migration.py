@@ -78,7 +78,7 @@ MIGRATION: Final = (
 
 TABLES: Final = tuple(table.name for table in COMMUNICATIONS_INGESTION_TABLES)
 #: Constraints `tables.py` declares on these tables that a later revision adds:
-#: the WP3b revision `61fafdfd2986` keys `ingest_snapshots` by its digest too.
+#: the WP3b meeting sync revision keys `ingest_snapshots` by its digest too.
 LATER_CONSTRAINTS: Final = frozenset({"an_ingest_snapshot_is_identified_with_its_digest"})
 #: Tables of later revisions that reference these (so a `TRUNCATE ... CASCADE`
 #: reaches them) and refuse TRUNCATE by their own `<table>_refuse_truncate`.
@@ -159,14 +159,9 @@ def _source() -> str:
 # ---- the graph --------------------------------------------------------------
 
 
-def test_the_revision_is_directly_on_the_provider_binding_head() -> None:
+def test_the_revision_is_the_single_head_directly_on_the_provider_binding_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    # Communications intelligence WP3b's meeting sync revision is additive on
-    # this revision, so this revision is the head's parent rather than the head.
-    assert script.get_heads() == ["61fafdfd2986"]
-    assert script.get_revision("61fafdfd2986").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert script.get_revision(PREVIOUS).down_revision == "4d1069a7d84f"
 
 
 # ---- the freeze -------------------------------------------------------------

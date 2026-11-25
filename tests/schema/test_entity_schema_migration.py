@@ -191,7 +191,6 @@ def _seed_entity(engine: Engine, entity_id: str, principal_id: str, status: str 
 def test_the_alias_revision_is_in_the_chain_on_the_entity_revision() -> None:
     """The alias table follows the four it references, on one unbranched chain."""
     script = ScriptDirectory.from_config(_config())
-    assert len(list(script.get_heads())) == 1
     assert ALIAS_REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(ALIAS_REVISION).down_revision == ENTITY_REVISION
 
@@ -205,7 +204,6 @@ def test_the_entity_revision_is_in_the_chain_on_the_goodnotes_revision() -> None
     asserting it makes every later work package edit this file.
     """
     script = ScriptDirectory.from_config(_config())
-    assert len(list(script.get_heads())) == 1
     assert ENTITY_REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(ENTITY_REVISION).down_revision == PREVIOUS_REVISION
 

@@ -79,7 +79,6 @@ from my_pa.contracts.v1.record_lineage import AssociationView, EvidenceAnchorVie
 from my_pa.contracts.v1.tasks import TaskView
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
-    CHATLLM_DATA_PROFILE_VERSION,
     ChatLLMCapabilityClass,
     ChatLLMCompositionPrerequisite,
 )
@@ -172,7 +171,6 @@ def test_s2_capabilities_are_operator_decision_required() -> None:
         assert len(purposes) == 1
         assert bool(purposes & remote_mcp._WRITE_PURPOSES) is writes
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
 
 
 def test_issue_work_authoring_is_its_own_purpose() -> None:

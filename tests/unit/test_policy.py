@@ -681,11 +681,10 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # one of the pair: 298 capabilities, 70 purposes, 300 pairs.
     # Communications intelligence WP2-W3 adds `meetings.provider.bind` under the
     # existing `meeting_authoring`: 299 capabilities, 70 purposes, 301 pairs.
-    # WP3b-S4 adds `meetings.provider.review` under the existing `meeting_read`
-    # and `meetings.provider.reconcile` under `meeting_authoring`: 301
-    # capabilities, 70 purposes, 303 pairs.
-    assert len(PERMITTED_PAIRS) == 303
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 303 == 20767
+    # The figures are derived: the pair table is held equal to the
+    # implementation above, and the enum sizes are `tests/pins.json`'s.
+    assert set(itertools.product(Capability, Purpose)) >= PERMITTED_PAIRS
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - len(PERMITTED_PAIRS)
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

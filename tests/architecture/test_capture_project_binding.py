@@ -15,84 +15,14 @@ from my_pa.infrastructure.persistence import capture, capture_search
 from my_pa.infrastructure.persistence.tables import captures
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-#: Moved by KLP-WP-02, which appends the fourteen Knowledge declarations and the
-#: `context_run_items.knowledge_assertion_id` identity; `captures` is untouched.
-#: Moved again by the Intelligence report type registry, which declares
-#: `intelligence_report_types` and relaxes the two Intelligence artifact-kind
-#: CHECKs, and once more when it declares the kind-scoped
-#: `intelligence_artifact_current_head` index; `captures` is untouched.
-#: Moved by the Continuity Project 16-field addition, which appends columns to
-#: `projects` only; `captures` is untouched.
-#: Moved by the Commitment counterparty Entity cutover (`commitments` swaps
-#: `counterparty_person_id` for `counterparty_entity_id` with its composite
-#: foreign key and index); `captures` is untouched.
-#: Moved by the record lineage S1 revision (ADR-015), which declares the
-#: eight lineage tables, `situations.kind`/`version` with their uniques, the
-#: `project_situations` triplet unique and same-Principal foreign keys, the
-#: `meeting_note_versions` digest unique, and a comment beside
-#: `capture_versions` naming its database-only digest unique; `captures` is
-#: untouched.
-#: Moved by the record lineage S2 revision (ADR-015), which declares the three
-#: S2 tables, the closure columns and CHECKs of `issue_revisions`, the S2
-#: CHECKs of `record_links`, `record_link_revisions.member_native_version` and
-#: the handoff and composite result columns of `lineage_write_requests`;
-#: `captures` is untouched.
-#: Moved by the record lineage S3 revision (ADR-015), which declares the five
-#: S3 tables (the commit-mark allocator and marks, the handoff corrections and
-#: the backfill ledger), `commit_seq` with its foreign key and index on the four
-#: fact tables, the S3 CHECKs of `record_links` and `record_link_revisions`, the
-#: one-live-head predicate and the S3 result columns of `lineage_write_requests`;
-#: `captures` is untouched. Moved again by the record lineage S4 revision, which
-#: declares `intelligence_artifact_manifests`; `captures` is untouched. Moved
-#: again by the record lineage S3.1 revision (ADR-015 decision 15), which
-#: declares the client provenance columns and CHECKs of the four fact tables,
-#: the root creator CHECK, the confirm CHECKs, the request-row writer columns,
-#: CHECK and index, and the schema-2 manifest version; `captures` is untouched.
-#: Moved again by the CPM Workbench S5b-1 revision (the Schedule foundation), which
-#: declares the seven Schedule tables and a comment beside `enrollments` and
-#: `source_object_versions` naming their database-only support uniques;
-#: `captures` is untouched. Moved again by the CPM Workbench S5b-2 revision, which
-#: widens `worker_plane_is_known` to the `schedule` plane; `captures` is untouched.
-#: Moved again by the Schedule Scenarios S6-2 revision, which declares the 11 plane
-#: tables, restates the 2 publication CHECKs and builds the 6 `record_links`
-#: CHECKs from the lineage storage vocabulary; `captures` is untouched.
-#: Moved again by the Reports Modernization WP01 revision, which declares the 8
-#: general report tables and names their 3 deferred commit triggers in a
-#: comment; `captures` is untouched. Moved again by its R1-R4 corrective cycle,
-#: which declares the receipt version, update no-op and event CHECKs, the inline
-#: mixed-content CHECK and the settled-transfer byte-count CHECK, and names the
-#: two insert guards in the plane comment; `captures` is untouched. Moved again
-#: by Reports Modernization WP04, which declares the report version search
-#: projection (`search_text`, its bound and the generated `search_document` with
-#: its GIN index) and the root catalog-order index; `captures` is untouched.
-#: Moved again by Reports Modernization WP05 A2, which declares the root
-#: creator and version author columns, their four CHECKs and the root
-#: creator-filter index; `captures` is untouched. Moved again by Reports
-#: Modernization WP05b A1-A3, which declares the root hold cache (three columns,
-#: three CHECKs, the deferred hold-cache reference), `report_hold_events` and
-#: `report_retention_policy_events`; `captures` is untouched. Moved again by
-#: Reports Modernization WP06 A1/A2, which declares the transfer session's client
-#: binding, begin key, fixed chunk limit, owner key and quota index, and
-#: `report_transfer_chunks`; `captures` is untouched. Moved again by the files
-#: workspace WP4 revision, which declares the four files plane tables and imports
-#: their id prefixes, version-token pattern and bounds from `domain.files`;
-#: `captures` is untouched. Moved again by the ADR-020 revision, which declares
-#: `meeting_prep_versions` and imports `MAX_MEETING_PREP_CHARACTERS`; `captures`
-#: is untouched. Moved again by the communications intelligence WP2 revision,
-#: which declares the two Meeting provider binding tables and imports their
-#: bounds and vocabularies from `domain.meeting_sync`; `captures` is untouched.
-#: WP2-W3 moved it once more: the `meeting_write_requests` capability CHECK
-#: admits `meetings.provider.bind` and the internal sync namespace, each with a
-#: completed shape; `captures` is untouched. WP2-F1 moved it again: the
-#: provider binding table gains the `last_applied_generated_at_utc` ordering
-#: stamp; `captures` is untouched. Moved again by the communications
-#: intelligence WP3a revision, which declares the twelve ingestion and
-#: communications tables and imports their vocabularies from
-#: `domain.communications` and `contracts.ports`; purely additive, `captures` is
-#: untouched. Moved again by the communications intelligence WP3b revision,
-#: which declares the five meeting sync tables, the binding snapshot columns and
-#: the snapshot digest key; `captures` is untouched.
-TABLES_SHA256: Final = "ec6c3444606b76ab8701c6aac3336ce564e93a4c72594a63202b2f88f3cf3922"
+TABLES_MODULE: Final = ROOT / "src/my_pa/infrastructure/persistence/tables.py"
+#: The `tables.py` declarations that shape `captures`, each sliced from source and
+#: hashed in this order (precedent: `BASE_CONSTRAINT_TABLES_SHA256`), so a
+#: migration editing another table leaves this pin alone.
+CAPTURES_DECLARATIONS: Final = ("_IDENTIFIER_SUFFIX", "_is_identifier", "captures")
+CAPTURES_DECLARATIONS_SHA256: Final = (
+    "cd20aaef76d09a3188a0e57866a3e5924913eff7330cf7f2bc60eecaa7d418b8"
+)
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"
@@ -101,6 +31,26 @@ WP03_MIGRATION: Final = (
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _declarations(path: Path, names: tuple[str, ...]) -> str:
+    """The source of each named module-level assignment or function, in `names` order."""
+    source = path.read_text(encoding="utf-8")
+    lines = source.splitlines(keepends=True)
+    found: dict[str, str] = {}
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.FunctionDef):
+            name = node.name
+        elif isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+            name = node.targets[0].id
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            name = node.target.id
+        else:
+            continue
+        if name in names and node.end_lineno is not None:
+            found[name] = "".join(lines[node.lineno - 1 : node.end_lineno])
+    assert sorted(found) == sorted(names), f"tables.py declares {sorted(found)}, not {names}"
+    return "".join(found[name] for name in names)
 
 
 def _calls(path: Path, receiver: str) -> set[str]:
@@ -116,7 +66,10 @@ def _calls(path: Path, receiver: str) -> set[str]:
 
 
 def test_frozen_capture_table_and_wp03_migration_are_byte_unchanged() -> None:
-    assert _sha256(ROOT / "src/my_pa/infrastructure/persistence/tables.py") == TABLES_SHA256
+    captures_source = _declarations(TABLES_MODULE, CAPTURES_DECLARATIONS)
+    assert hashlib.sha256(captures_source.encode("utf-8")).hexdigest() == (
+        CAPTURES_DECLARATIONS_SHA256
+    ), "the `captures` declaration in tables.py changed; it is frozen"
     assert _sha256(WP03_MIGRATION) == WP03_MIGRATION_SHA256
     assert "project_id" not in captures.c
 

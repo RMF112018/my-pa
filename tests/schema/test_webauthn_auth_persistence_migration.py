@@ -11,6 +11,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
+from tests.pins import ALEMBIC_HEAD, ALEMBIC_REVISION_COUNT
 
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.user_accounts import IDENTITY_METADATA
@@ -29,24 +30,10 @@ MIGRATION: Final = ROOT / (
 PRIOR_REVISION: Final = "c99cd8ed8d1c"
 #: This module's subject revision: UI-IMP-WP02's auth-persistence revision.
 REVISION: Final = "2c00c9ac64bc"
-#: The link directly above `REVISION`. `2c00c9ac64bc` was head on `origin/main`;
-#: merging RI-ENT-WP-10/11 into it re-parented `16f05c46b8c3` -- which had also
-#: been written against `c99cd8ed8d1c` -- onto `REVISION` (RULING-M11).
-NEXT_REVISION: Final = "16f05c46b8c3"
-#: The RI successor above `NEXT_REVISION`: `b8e4d1a6c073` (RI-ENT-WP-12,
-#: backfilling one
-#: `display`-typed `entity_names` row per active `entities` row), likewise
-#: written against `c99cd8ed8d1c` and re-parented onto `NEXT_REVISION` once
-#: RI-ENT-WP-10/11 merged, so the head this suite must see is that one and
-#: `REVISION` is two links beneath it. Written out rather than derived so chain
-#: drift fails here rather than passing.
-HEAD_REVISION: Final = "b8e4d1a6c073"
-#: PR192's graph-vocabulary migration directly above `HEAD_REVISION`.
-GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: GoodNotes pull/review, then R8 promotion receipts, then canvas overlay head.
 GOODNOTES_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-CURRENT_HEAD_REVISION: Final = "61fafdfd2986"
+CURRENT_HEAD_REVISION: Final = ALEMBIC_HEAD
 NEW_TABLES: Final = frozenset(
     {
         "webauthn_credentials",
@@ -101,21 +88,11 @@ def test_tables_share_the_canonical_identity_metadata() -> None:
 
 def test_the_chain_has_one_head_and_this_revision_is_five_links_beneath_it() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [CURRENT_HEAD_REVISION]
-    assert script.get_revision("a1c9e4b72f80").down_revision == "2774329487be"
-    assert script.get_revision("2774329487be").down_revision == "e8f2a6c9d104"
-    assert script.get_revision("e8f2a6c9d104").down_revision == "d4e8b1c7a902"
-    assert script.get_revision("d4e8b1c7a902").down_revision == "a4d8e31b2c90"
-    assert script.get_revision("a4d8e31b2c90").down_revision == "6a2f9d1c4b80"
-    assert script.get_revision("6a2f9d1c4b80").down_revision == GRAPH_REVISION
-    assert script.get_revision(GRAPH_REVISION).down_revision == HEAD_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == NEXT_REVISION
-    assert script.get_revision(NEXT_REVISION).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PRIOR_REVISION
     # 91 on the merged tree: 88 at `16f05c46b8c3`, plus `b8e4d1a6c073`, the
     # graph vocabulary admission, and additive GoodNotes successor.
     # R8 adds one receipt migration on the previous 91-revision chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 133
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == ALEMBIC_REVISION_COUNT
 
 
 @pytest.mark.database

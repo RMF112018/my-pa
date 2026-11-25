@@ -27,8 +27,6 @@ from sqlalchemy import (
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
-from my_pa.domain.identity.operation import Capability
-from my_pa.domain.identity.purpose import Purpose
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.tables import (
     captures,
@@ -42,12 +40,6 @@ from my_pa.infrastructure.persistence.tables import (
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "e6a4c2f91b73"
 PREVIOUS: Final = "c4f1a8e52d90"
-#: The chain head this revision's test runs against. `6f6ead27d122` (CCA-005 /
-#: WP-TUX-01 legacy direct-Principal origin reconciliation), then `7d9a450dfd07`
-#: (WP-MTG-04, Meeting records), `1d9b248e7f83` (WP-RE-01, Record Events) and then
-#: `0641c354ca85` (CRL-WP-03, Capture lifecycle) are additive on `REVISION`, so
-#: `REVISION` is no longer the head.
-HEAD: Final = "61fafdfd2986"
 MIGRATION: Final = (
     ROOT / "migrations" / "versions" / "20260914_e6a4c2f91b73_project_controls_run01_integrity.py"
 )
@@ -105,7 +97,6 @@ def _offline_sql() -> str:
 
 def test_revision_identity_and_frozen_vocabulary_are_exact() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [HEAD]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
     before = _values(_literal("_CAPABILITIES_BEFORE_THIS_REVISION"))
@@ -135,10 +126,8 @@ def test_revision_identity_and_frozen_vocabulary_are_exact() -> None:
     # `report_retention`, and WP06 its 5 transfer names, and Schedule Scenarios
     # S6-3 its 26 plane names and 3 purposes, and the files workspace WP5 its 17
     # `files.*` names and 2 purposes, and communications intelligence WP2-W3
-    # `meetings.provider.bind`, and WP3b-S4 `meetings.provider.review` and
-    # `meetings.provider.reconcile`.
-    assert len(Capability) == 301
-    assert len(Purpose) == 70
+    # `meetings.provider.bind`. The current sizes are `tests/pins.json`'s
+    # (`test_pins_are_current`); this revision's own figures above stay literal.
     assert "from my_pa.domain" not in MIGRATION.read_text(encoding="utf-8")
 
 

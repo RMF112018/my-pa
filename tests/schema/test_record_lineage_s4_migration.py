@@ -43,12 +43,14 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
+from tests.pins import ALEMBIC_HEAD, ALEMBIC_REVISION_COUNT
 from tests.schema import lineage_s4_schema_ahead_contract as gap
 from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.lineage_s4_schema_ahead_contract import S4_CAPABILITIES, S4_PURPOSES
 from tests.schema.lineage_s31_schema_ahead_contract import S31_CAPABILITIES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES, S63_PURPOSES
+from tests.schema.vocabulary_admissions import capabilities_admitted_after
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -59,9 +61,8 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "c5260943d933"
 PREVIOUS: Final = "6f1476b8da52"
-#: Record lineage S3.1 (`023f8f7eb499`, ADR-015 decision 15) is additive on
-#: this revision, and CPM Workbench S5b-1 (`6c2306330ceb`) on it is the head.
-HEAD: Final = "61fafdfd2986"
+#: The current head, from the reviewed snapshot (`tests/pins.json`).
+HEAD: Final = ALEMBIC_HEAD
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261024_c5260943d933_record_lineage_s4.py"
 S3_MIGRATION: Final = MIGRATIONS / "20261019_6f1476b8da52_record_lineage_s3.py"
@@ -114,23 +115,10 @@ def _flat(value: str) -> str:
 
 def test_the_revision_is_the_single_head_on_6f1476b8da52() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "52a829ef718a"
-    assert script.get_revision("52a829ef718a").down_revision == "6418b57081c3"
-    assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
-    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
-    assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
-    assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
-    assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
-    assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
-    assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
-    assert script.get_revision("6c2306330ceb").down_revision == "023f8f7eb499"
-    assert script.get_revision("023f8f7eb499").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert script.get_revision(PREVIOUS).down_revision == "d020b532ad7d"
     assert [path.name for path in MIGRATIONS.glob(f"*_{REVISION}_*.py")] == [MIGRATION.name]
     assert MIGRATION.name.endswith("_record_lineage_s4.py")
-    assert len(list(MIGRATIONS.glob("*.py"))) == 133
+    assert len(list(MIGRATIONS.glob("*.py"))) == ALEMBIC_REVISION_COUNT
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -242,12 +230,9 @@ def test_at_vocabulary_adds_exactly_the_s4_names() -> None:
             "reports.transfer.read_chunk",
         }
     )
-    # Communications intelligence WP2-W3: its provider-binding revision admits
-    # `meetings.provider.bind` after this revision.
-    declared -= {"meetings.provider.bind"}
-    # Communications intelligence WP3b-S4: the meeting sync staging revision
-    # admits the review and the reconcile after this revision too.
-    declared -= {"meetings.provider.reconcile", "meetings.provider.review"}
+    # Every family a later revision admits (communications intelligence WP2-W3's
+    # `meetings.provider.bind` onward): one home, `vocabulary_admissions.py`.
+    declared -= capabilities_admitted_after(REVISION)
     native = {capability.value for capability in NativeSourceCapability}
     assert set(at) == declared | native | gap.lineage_s4_admitted_ahead("capability")
     # Reports Modernization WP03's purpose is the head's (4c37731671fc).

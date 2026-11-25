@@ -43,6 +43,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, Table, delete, insert, text, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError, IntegrityError
+from tests.schema.vocabulary_admissions import capabilities_admitted_after
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.meeting.model import MEETING_WRITE_REQUEST_NAMES
@@ -75,7 +76,7 @@ MIGRATION: Final = (
 
 TABLES: Final = frozenset({"meeting_provider_bindings", "meeting_series_provider_bindings"})
 #: What `tables.py` declares on `meeting_provider_bindings` that the WP3b
-#: revision `61fafdfd2986` adds (Manager ruling D10), not this revision.
+#: meeting sync revision adds (Manager ruling D10), not this revision.
 LATER_COLUMNS: Final = frozenset({"origin_snapshot_id", "last_seen_snapshot_id"})
 LATER_CONSTRAINTS: Final = frozenset(
     {
@@ -136,14 +137,7 @@ def _offline(target: str, *, down: bool = False) -> str:
 
 def test_the_revision_is_directly_on_the_meeting_prep_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    # Communications intelligence WP3a's ingestion revision is additive on this
-    # revision and WP3b's meeting sync revision on that, so this revision is the
-    # head's grandparent rather than the head.
-    assert script.get_heads() == ["61fafdfd2986"]
-    assert script.get_revision("61fafdfd2986").down_revision == "52a829ef718a"
-    assert script.get_revision("52a829ef718a").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert script.get_revision(PREVIOUS).down_revision == "640aaacc78e8"
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -280,9 +274,8 @@ def test_the_audit_at_set_is_the_live_enums() -> None:
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
-    # Communications intelligence WP3b-S4: the meeting sync staging revision
-    # admits the review and the reconcile after this revision.
-    declared -= {"meetings.provider.reconcile", "meetings.provider.review"}
+    # Every name a later revision admits (one home, `vocabulary_admissions.py`).
+    declared -= capabilities_admitted_after(REVISION)
     assert set(_literals(_namespace()["_CAPABILITIES_AT_THIS_REVISION"])) == declared
     # The internal sync namespace is never an audit name, never a Capability.
     assert SYNC not in declared

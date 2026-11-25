@@ -18,34 +18,76 @@ across all of them. This module is the one place they are recorded:
 - The typed accessors below (`ALEMBIC_HEAD`, `CAPABILITY_COUNT`, ...) read the
   committed snapshot, for later phases to import instead of restating literals.
 
-Additive in P1: no existing test reads this module yet. Not collected (no
-`test_` prefix), following `tests/ci_shard.py`.
+`regen` also enforces two rules a plain snapshot cannot (phase P3): `IdKind`
+only ever grows at its end, and the hand-bumped ChatLLM profile version moves
+exactly when the policy table does. A change breaking either is refused, and
+`test_pins_are_current.py` names the same rule while the snapshot is stale.
+
+`regen` also keeps `tests/contract/v1_payload_digests.json` (phase P4, operator
+decision O3): the wire-compatibility tripwire for external clients. It records
+one digest per published tool's `payload` schema and per v1 view model's field
+names, plus a dated acceptance ledger. A new tool or view is recorded only by
+`regen --accept-new`; a changed or removed one only by
+`regen --accept-v1-change NAME --reason "<ADR ref>"`, which writes a ledger
+entry. `tests/contract/test_v1_payload_digests.py` compares and never writes.
+
+`regen` also renders `docs/generated/repository-state.md` (phase P5, operator
+decision O1-a): the one current-state page for the figures the README, the
+architecture docs, the runbooks and the plans used to restate by hand. It is a
+pure function of `tests/pins.json` and the digest file, so
+`test_generated_repository_state_is_rendered` compares it with a fresh render.
+Its tier and corpus figures (the `census` section) are measurable only by a full
+`pytest --collect-only` (about three minutes), so plain `regen` keeps them as
+committed and only `regen --measure` re-measures them. The tests never write:
+`test_claimed_test_counts_match_collection.py` compares the committed census
+with the collection it already takes, so a test added without `--measure`
+turns `test_the_census_matches_a_fresh_measurement[<figure>]` red.
+
+Not collected (no `test_` prefix), following `tests/ci_shard.py`.
 
 Usage, from the repository root::
 
     PYTHONPATH=src .venv/bin/python -m tests.pins regen   # rewrite tests/pins.json
+    PYTHONPATH=src .venv/bin/python -m tests.pins regen --measure   # and the census
     PYTHONPATH=src .venv/bin/python -m tests.pins check   # exit 1 if it is stale
+    PYTHONPATH=src .venv/bin/python -m tests.pins regen --accept-new
+    PYTHONPATH=src .venv/bin/python -m tests.pins regen \
+        --accept-v1-change reports.read --reason "ADR-0NN: why the v1 shape moves"
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
+import importlib
+import inspect
 import json
+import subprocess
 import sys
+import tomllib
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Final
 
 ROOT: Final = Path(__file__).resolve().parents[1]
 PINS_PATH: Final = ROOT / "tests" / "pins.json"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
+DIGESTS_PATH: Final = ROOT / "tests" / "contract" / "v1_payload_digests.json"
+#: The generated current-state page (O1-a). Rendered by `regen`; never hand-edited.
+STATE_PATH: Final = ROOT / "docs" / "generated" / "repository-state.md"
 
 #: The sections `test_pins_are_current` compares with `derive()`, one test each.
 SECTIONS: Final = ("alembic", "vocabulary", "chatllm")
-#: Every section of the snapshot. `counts` is not compared separately: each
-#: count is asserted equal to the length of a committed list that *is*
-#: compared, so a stale count is caught without a second red for one change.
-SNAPSHOT_SECTIONS: Final = (*SECTIONS, "counts")
+#: The derived sections `check` compares. `counts` is not compared by
+#: `test_pins_are_current`: each count is asserted equal to the length of a
+#: committed list that *is* compared, so a stale count is caught without a
+#: second red for one change.
+DERIVED_SECTIONS: Final = (*SECTIONS, "counts")
+#: Every section of the snapshot. `census` is measured, not derived: only
+#: `regen --measure` writes it (see `measure`).
+SNAPSHOT_SECTIONS: Final = (*DERIVED_SECTIONS, "census")
 
 
 # --- Derivation ------------------------------------------------------------------------
@@ -155,6 +197,54 @@ ID_KIND_ORDER: Final[tuple[str, ...]] = tuple(_COMMITTED["vocabulary"]["id_kind"
 SAFE_DETAIL_COUNT: Final[int] = _COMMITTED["counts"]["safe_detail"]
 CHATLLM_PROFILE_VERSION: Final[str] = _COMMITTED["chatllm"]["version"]
 CHATLLM_POLICY_SHA256: Final[str] = _COMMITTED["chatllm"]["policy_sha256"]
+#: `ChatLLMCapabilityClass` value -> how many policy entries carry it.
+CHATLLM_CLASS_COUNTS: Final[Mapping[str, int]] = MappingProxyType(
+    dict(_COMMITTED["chatllm"]["classes"])
+)
+
+
+# --- Rules regen enforces (and the tests re-check) ------------------------------------------
+
+
+def id_kind_order_violation(committed: dict[str, Any], derived: dict[str, Any]) -> str | None:
+    """Why the derived `IdKind` order is not an append-only extension of the snapshot.
+
+    `IdKind` values are persisted identifier prefixes and tests index the enum
+    by position, so a kind may only ever be appended: the committed order must
+    be a prefix of the derived one. `None` when it is.
+    """
+    before = list(committed["vocabulary"]["id_kind"])
+    after = list(derived["vocabulary"]["id_kind"])
+    if after[: len(before)] == before:
+        return None
+    for position, (old, new) in enumerate(zip(before, after, strict=False)):
+        if old != new:
+            return f"IdKind position {position} was {old!r} and is now {new!r}"
+    return f"IdKind shrank from {len(before)} to {len(after)} kinds"
+
+
+def chatllm_version_violation(committed: dict[str, Any], derived: dict[str, Any]) -> str | None:
+    """Why the ChatLLM profile version and policy did not move together.
+
+    `CHATLLM_DATA_PROFILE_VERSION` is hand-bumped and operator-visible (remote
+    grant plans compare it), so it must change exactly when the policy table
+    does: a policy change under the old version, or a version bump with an
+    unchanged policy, is refused. `None` when they moved together.
+    """
+    old, new = committed["chatllm"], derived["chatllm"]
+    policy_moved = old["policy_sha256"] != new["policy_sha256"]
+    version_moved = old["version"] != new["version"]
+    if policy_moved and not version_moved:
+        return (
+            f"the ChatLLM policy changed but CHATLLM_DATA_PROFILE_VERSION is still "
+            f"{new['version']!r}; bump it"
+        )
+    if version_moved and not policy_moved:
+        return (
+            f"CHATLLM_DATA_PROFILE_VERSION moved {old['version']!r} -> {new['version']!r} "
+            "but the policy is unchanged"
+        )
+    return None
 
 
 # --- Spelling ---------------------------------------------------------------------------
@@ -211,20 +301,500 @@ def spell(value: int) -> str:
     return f"{prefix}{' and ' if rest < 100 else ' '}{spell(rest)}"
 
 
+_ORDINAL_UNITS: Final = (
+    "zeroth",
+    "first",
+    "second",
+    "third",
+    "fourth",
+    "fifth",
+    "sixth",
+    "seventh",
+    "eighth",
+    "ninth",
+    "tenth",
+    "eleventh",
+    "twelfth",
+    "thirteenth",
+    "fourteenth",
+    "fifteenth",
+    "sixteenth",
+    "seventeenth",
+    "eighteenth",
+    "nineteenth",
+)
+
+
+def ordinal(value: int) -> str:
+    """The lower-case English ordinal this corpus writes for `value` (0..9999).
+
+    Hyphenated throughout and without "and", and a bare "hundred" or "thousand"
+    for one of them: "twenty-first", "hundred-first", "two-hundred-ninety-ninth",
+    "thousandth", "thousand-first", "two-thousand-hundredth". This is the form
+    the dense hand list in
+    `tests/architecture/test_spelled_counts_match_the_sets_they_name.py` used,
+    which this replaces.
+    """
+    if not 0 <= value <= 9999:
+        raise ValueError(f"ordinal() covers 0..9999, not {value}")
+    if value < 20:
+        return _ORDINAL_UNITS[value]
+    if value < 100:
+        tens, unit = divmod(value, 10)
+        head = _TENS[tens - 2]
+        return f"{head[:-1]}ieth" if unit == 0 else f"{head}-{_ORDINAL_UNITS[unit]}"
+    for size, word in ((1000, "thousand"), (100, "hundred")):
+        if value >= size:
+            count, rest = divmod(value, size)
+            prefix = word if count == 1 else f"{_UNITS[count]}-{word}"
+            return f"{prefix}th" if rest == 0 else f"{prefix}-{ordinal(rest)}"
+    raise AssertionError(value)  # pragma: no cover - every value is reached above
+
+
+# --- v1 wire digests (D1) ----------------------------------------------------------------
+
+#: The digest file's sections: published tool name -> SHA-256 of its `payload`
+#: schema, and `module.Model` -> SHA-256 of its sorted field names.
+DIGEST_SECTIONS: Final = ("tools", "views")
+#: The `my_pa.contracts.v1` modules whose models are pinned, as the S3 view pin did.
+V1_VIEW_MODULES: Final = (
+    "tasks",
+    "commitments",
+    "meetings",
+    "record_events",
+    "capture",
+    "canvas_workspace",
+    "documents",
+    "reveal",
+    "status",
+    "capabilities",
+)
+
+
+def canonical_sha256(document: object) -> str:
+    """SHA-256 of compact, key-sorted JSON: the measure every v1 pin has used."""
+    return hashlib.sha256(
+        json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def v1_payloads() -> dict[str, Any]:
+    """Every published tool's `payload` input schema, by tool name."""
+    from my_pa.adapters.mcp.tools import TOOLS
+
+    return {tool.name: tool.input_schema["properties"]["payload"] for tool in TOOLS}
+
+
+def v1_view_fields() -> dict[str, list[str]]:
+    """Every v1 view model's sorted field names, by `module.Model`."""
+    from pydantic import BaseModel
+
+    views: dict[str, list[str]] = {}
+    for name in V1_VIEW_MODULES:
+        module = importlib.import_module(f"my_pa.contracts.v1.{name}")
+        for model_name, model in vars(module).items():
+            if (
+                inspect.isclass(model)
+                and issubclass(model, BaseModel)
+                and model.__module__ == module.__name__
+            ):
+                views[f"{name}.{model_name}"] = sorted(model.model_fields)
+    return views
+
+
+def derive_digests() -> dict[str, dict[str, str]]:
+    """The per-name digests the repository publishes now. Pure; writes nothing."""
+    return {
+        "tools": {name: canonical_sha256(payload) for name, payload in v1_payloads().items()},
+        "views": {name: canonical_sha256(fields) for name, fields in v1_view_fields().items()},
+    }
+
+
+def load_digests() -> dict[str, Any]:
+    """The committed `tests/contract/v1_payload_digests.json`."""
+    loaded = json.loads(DIGESTS_PATH.read_text(encoding="utf-8"))
+    assert isinstance(loaded, dict)
+    return loaded
+
+
+def digest_seal(document: Mapping[str, Any]) -> str:
+    """The seal `regen` writes over the accepted digests and the whole ledger.
+
+    A hand edit of a digest or of a ledger entry that skipped `regen` leaves the
+    seal stale, so it is caught even when the edited digest matches the source.
+    """
+    return canonical_sha256({key: document[key] for key in (*DIGEST_SECTIONS, "ledger")})
+
+
+def digest_drift(
+    committed: Mapping[str, Any], derived: Mapping[str, Mapping[str, str]]
+) -> dict[str, dict[str, list[str]]]:
+    """Per section: names `added` (unrecorded), `changed` and `removed` from the repository."""
+    drift: dict[str, dict[str, list[str]]] = {}
+    for section in DIGEST_SECTIONS:
+        accepted, now = committed[section], derived[section]
+        drift[section] = {
+            "added": sorted(set(now) - set(accepted)),
+            "changed": sorted(n for n in set(now) & set(accepted) if now[n] != accepted[n]),
+            "removed": sorted(set(accepted) - set(now)),
+        }
+    return drift
+
+
+def ledger_violation(committed: Mapping[str, Any]) -> str | None:
+    """Why the accepted digests are not what the ledger last accepted. `None` if they are.
+
+    The last `changed` entry naming a digest must record exactly the digest now
+    accepted for it (or none, for a removal).
+    """
+    last: dict[tuple[str, str], str | None] = {}
+    for entry in committed["ledger"]:
+        if entry["kind"] == "changed":
+            last[(entry["section"], entry["name"])] = entry["to"]
+    for (section, name), digest in last.items():
+        if committed[section].get(name) != digest:
+            return f"{section} {name!r} is not the digest its last ledger entry accepted"
+    return None
+
+
+def render_digests(document: Mapping[str, Any]) -> str:
+    sealed = {key: document[key] for key in (*DIGEST_SECTIONS, "ledger")}
+    sealed["seal"] = digest_seal(sealed)
+    sealed["about"] = (
+        "Written by `python -m tests.pins regen`; never edit by hand. A new name needs "
+        "`--accept-new`; a changed or removed one `--accept-v1-change NAME --reason`."
+    )
+    return json.dumps(sealed, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+
+
+def accept_digests(
+    committed: Mapping[str, Any],
+    derived: Mapping[str, Mapping[str, str]],
+    *,
+    accept_new: bool,
+    accept_change: list[str],
+    reason: str | None,
+    today: datetime.date,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """The digest document after accepting the named drift, or why it is refused."""
+    drift = digest_drift(committed, derived)
+    moved = {
+        name
+        for section in DIGEST_SECTIONS
+        for name in (*drift[section]["changed"], *drift[section]["removed"])
+    }
+    if accept_change and not (reason and reason.strip()):
+        return None, "--accept-v1-change needs --reason naming the ADR that allows it"
+    unmoved = sorted(set(accept_change) - moved)
+    if unmoved:
+        return None, f"--accept-v1-change names {unmoved}, whose digests did not move"
+    unaccepted = sorted(moved - set(accept_change))
+    if unaccepted:
+        return None, (
+            f"v1 digests changed or were removed for {unaccepted}: an external client "
+            'breaks; rerun with --accept-v1-change NAME --reason "<ADR ref>" for each'
+        )
+    new = {section: drift[section]["added"] for section in DIGEST_SECTIONS}
+    if any(new.values()) and not accept_new:
+        return None, f"new names {new} are not yet recorded; rerun with --accept-new"
+    document: dict[str, Any] = {
+        "ledger": list(committed["ledger"]),
+        **{section: dict(committed[section]) for section in DIGEST_SECTIONS},
+    }
+    for section in DIGEST_SECTIONS:
+        if new[section]:
+            document["ledger"].append(
+                {
+                    "date": today.isoformat(),
+                    "kind": "added",
+                    "names": new[section],
+                    "section": section,
+                }
+            )
+            for name in new[section]:
+                document[section][name] = derived[section][name]
+        for name in (*drift[section]["changed"], *drift[section]["removed"]):
+            digest = derived[section].get(name)
+            document["ledger"].append(
+                {
+                    "date": today.isoformat(),
+                    "from": committed[section][name],
+                    "kind": "changed",
+                    "name": name,
+                    "reason": (reason or "").strip(),
+                    "section": section,
+                    "to": digest,
+                }
+            )
+            if digest is None:
+                del document[section][name]
+            else:
+                document[section][name] = digest
+    return document, None
+
+
+# --- The census (measured, not derived) ------------------------------------------------
+
+#: The FAST tier, exactly as `repository-checks.yml` selects it.
+FAST_SELECTION: Final = (
+    "not slow and not database and not network and not connector and not evaluation "
+    "and not e2e and not recovery"
+)
+#: The full database tier disposition.
+DATABASE_SELECTION: Final = "database or recovery or e2e"
+EVALUATION_SELECTION: Final = "evaluation"
+ARCHITECTURE_PATH: Final = "tests/architecture"
+#: The census figures `measure` produces, each compared by its own test.
+#: `fast_skipped` is not among them: a skip is decided when a test *runs*
+#: (`importorskip`, a runtime `pytest.skip`), so collection cannot measure it.
+#: It is carried as committed and moved only by `regen --measure --fast-skipped N`.
+MEASURED: Final = (
+    "architecture",
+    "database",
+    "evaluation",
+    "fast_collected",
+    "mypy_files",
+    "src_modules",
+    "test_modules",
+)
+
+#: One `--collect-only` over `tests`, recording each node id and its marker names.
+#: Run in a subprocess so it collects the tree as pytest would, not as this
+#: process has already imported it.
+CENSUS_SCRIPT: Final = """
+import json, sys
+import pytest
+
+
+class Census:
+    def __init__(self):
+        self.rows = []
+
+    def pytest_collection_modifyitems(self, items):
+        for item in items:
+            self.rows.append([item.nodeid, sorted({m.name for m in item.iter_markers()})])
+
+
+census = Census()
+pytest.main(["--collect-only", "-q", "-p", "no:cacheprovider", "tests"], plugins=[census])
+sys.stderr.write(json.dumps(census.rows))
+"""
+
+
+def census_rows() -> list[tuple[str, frozenset[str]]]:
+    """Every collected test, with the markers it carries. About three minutes."""
+    result = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", CENSUS_SCRIPT],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+    )
+    try:
+        rows = json.loads(result.stderr)
+    except json.JSONDecodeError:
+        raise AssertionError(
+            f"could not take a collection census:\n{result.stdout[-2000:]}\n{result.stderr[-2000:]}"
+        ) from None
+    return [(node, frozenset(marks)) for node, marks in rows]
+
+
+def selected(rows: list[tuple[str, frozenset[str]]], expression: str) -> int:
+    """What `pytest -m expression` selects, by pytest's own `-m` parser."""
+    from _pytest.mark.expression import Expression
+
+    compiled = Expression.compile(expression)
+    count = 0
+    for _, marks in rows:
+
+        def carries(name: str, /, **_: object) -> bool:
+            return name in marks  # noqa: B023 - evaluated before the next iteration
+
+        count += compiled.evaluate(carries)
+    return count
+
+
+def mypy_files() -> int:
+    """The Python files under `[tool.mypy] files`: what a bare `mypy` checks."""
+    configuration = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    targets = configuration["tool"]["mypy"]["files"]
+    return sum(1 for target in targets for _ in (ROOT / target).rglob("*.py"))
+
+
+def measure(rows: list[tuple[str, frozenset[str]]]) -> dict[str, int]:
+    """Every `MEASURED` figure, from one collection census and the tree. Writes nothing."""
+    return {
+        "architecture": sum(1 for node, _ in rows if node.startswith(ARCHITECTURE_PATH + "/")),
+        "database": selected(rows, DATABASE_SELECTION),
+        "evaluation": selected(rows, EVALUATION_SELECTION),
+        "fast_collected": selected(rows, FAST_SELECTION),
+        "mypy_files": mypy_files(),
+        # `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`.
+        "src_modules": len(list((ROOT / "src" / "my_pa").rglob("*.py"))),
+        "test_modules": len(list((ROOT / "tests").rglob("test_*.py"))),
+    }
+
+
+# --- The generated current-state page (O1-a) ---------------------------------------------
+
+
+def _figure(value: int) -> str:
+    return f"{value:,}"
+
+
+def render_state(snapshot: Mapping[str, Any], digests: Mapping[str, Any]) -> str:
+    """`docs/generated/repository-state.md`: a pure function of the two committed files.
+
+    Figures are written in digits only. A spelled figure here would also be read
+    by the spelled-count sweep, so one stale snapshot would redden two tests.
+    """
+    alembic, counts, chatllm = snapshot["alembic"], snapshot["counts"], snapshot["chatllm"]
+    census = snapshot["census"]
+    fast_passed = census["fast_collected"] - census["fast_skipped"]
+    passing = {
+        name: f"{_figure(census[name])} passed, 0 skipped" for name in ("architecture", "database")
+    }
+    rows = (
+        ("Tier or corpus", "Selection", "Collected", "A green execution requires"),
+        ("---", "---", "---", "---"),
+        (
+            "FAST",
+            f'`pytest -m "{FAST_SELECTION}"`',
+            _figure(census["fast_collected"]),
+            f"{_figure(fast_passed)} passed, {_figure(census['fast_skipped'])} skipped",
+        ),
+        (
+            "Architecture",
+            f"`pytest {ARCHITECTURE_PATH}`",
+            _figure(census["architecture"]),
+            passing["architecture"],
+        ),
+        (
+            "Database",
+            f'`pytest -m "{DATABASE_SELECTION}"`',
+            _figure(census["database"]),
+            passing["database"],
+        ),
+        (
+            "Evaluation",
+            f'`pytest -m "{EVALUATION_SELECTION}"`',
+            _figure(census["evaluation"]),
+            f"{_figure(census['evaluation'])} passed",
+        ),
+        (
+            "mypy corpus",
+            "`mypy` (`[tool.mypy] files`)",
+            f"{_figure(census['mypy_files'])} files",
+            "no issues found",
+        ),
+        ("Source modules", '`find src/my_pa -name "*.py"`', _figure(census["src_modules"]), ""),
+        ("Test modules", '`find tests -name "test_*.py"`', _figure(census["test_modules"]), ""),
+    )
+    tiers = "\n".join("| " + " | ".join(row) + " |" for row in rows)
+    classes = "\n".join(
+        f"| ChatLLM `{name}` entries | {_figure(count)} |"
+        for name, count in sorted(chatllm["classes"].items())
+    )
+    return f"""<!-- Generated by `python -m tests.pins regen`. Do not edit. -->
+# Repository state (generated, do not edit)
+
+This page is **generated, do not edit**. It is rendered from `tests/pins.json`
+and `tests/contract/v1_payload_digests.json` by
+`PYTHONPATH=src .venv/bin/python -m tests.pins regen`; the tier and corpus
+figures are re-measured by `regen --measure`. It is the one current-state
+statement of these figures: the README, the architecture index, the system
+context, the module boundaries, the gateway and MCP/CLI runbooks and the two
+plans link here instead of restating them.
+
+- `tests/architecture/test_pins_are_current.py::test_generated_repository_state_is_rendered`
+  fails when this page differs from a fresh render.
+- `tests/architecture/test_pins_are_current.py::test_pins_are_current` binds the
+  schema, vocabulary and ChatLLM figures to the source they are derived from.
+- `test_the_census_matches_a_fresh_measurement`, in
+  `tests/architecture/test_claimed_test_counts_match_collection.py`, binds each
+  tier and corpus figure to a fresh `pytest --collect-only` and `find`.
+
+## Schema
+
+| Figure | Current |
+|---|---|
+| Alembic head | `{alembic["heads"][0]}` |
+| Alembic revisions | {_figure(counts["alembic_revisions"])} |
+
+## Vocabulary
+
+| Figure | Current |
+|---|---|
+| Capabilities | {_figure(counts["capability"])} |
+| Purposes | {_figure(counts["purpose"])} |
+| IdKinds | {_figure(counts["id_kind"])} |
+| SafeDetails | {_figure(counts["safe_detail"])} |
+| ChatLLM data profile version | `{chatllm["version"]}` |
+| ChatLLM policy entries | {_figure(counts["chatllm_policy_entries"])} |
+{classes}
+
+## v1 wire digests
+
+| Figure | Current |
+|---|---|
+| Published tools with an accepted payload digest | {_figure(len(digests["tools"]))} |
+| v1 view models with an accepted field digest | {_figure(len(digests["views"]))} |
+| Acceptance ledger entries | {_figure(len(digests["ledger"]))} |
+
+## Test tiers and corpora
+
+Measured by `regen --measure` from one `pytest --collect-only` over `tests`.
+A tier's figure is what its selection collects; the FAST skip count is not
+measurable at collection and is carried (`regen --measure --fast-skipped N`).
+
+{tiers}
+"""
+
+
 # --- CLI ----------------------------------------------------------------------------------
 
 
 def stale_sections(committed: dict[str, Any], derived: dict[str, Any]) -> list[str]:
     return [
-        section for section in SNAPSHOT_SECTIONS if committed.get(section) != derived.get(section)
+        section for section in DERIVED_SECTIONS if committed.get(section) != derived.get(section)
     ]
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m tests.pins", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("regen", help="rewrite tests/pins.json from the repository")
-    commands.add_parser("check", help="exit 1 if tests/pins.json is stale")
+    regen = commands.add_parser(
+        "regen",
+        help="rewrite tests/pins.json and docs/generated/repository-state.md, and accept "
+        "v1 digest drift you name",
+    )
+    regen.add_argument(
+        "--accept-new", action="store_true", help="record new tools and views in the digest file"
+    )
+    regen.add_argument(
+        "--accept-v1-change",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="accept a changed or removed v1 digest (repeatable); needs --reason",
+    )
+    regen.add_argument("--reason", help="the ADR reference the ledger records")
+    regen.add_argument(
+        "--measure",
+        action="store_true",
+        help="also re-measure the census (one full --collect-only, about three minutes)",
+    )
+    regen.add_argument(
+        "--fast-skipped",
+        type=int,
+        metavar="N",
+        help="with --measure: the FAST tier's skip count, read from a FAST run",
+    )
+    commands.add_parser(
+        "check",
+        help="exit 1 if tests/pins.json, the digest file or the generated page is stale "
+        "(the census is not re-measured)",
+    )
     arguments = parser.parse_args(argv)
     derived = derive()
     if arguments.command == "regen":
@@ -232,16 +802,56 @@ def main(argv: list[str] | None = None) -> int:
         if len(heads) != 1:
             print(f"refusing to pin {len(heads)} Alembic heads: {heads}", file=sys.stderr)
             return 1
-        PINS_PATH.write_text(render(derived), encoding="utf-8")
-        print(f"wrote {PINS_PATH.relative_to(ROOT)}")
+        if arguments.fast_skipped is not None and not arguments.measure:
+            print("refusing: --fast-skipped needs --measure", file=sys.stderr)
+            return 1
+        committed = load()
+        for rule in (id_kind_order_violation, chatllm_version_violation):
+            violation = rule(committed, derived)
+            if violation is not None:
+                print(f"refusing to regenerate: {violation}", file=sys.stderr)
+                return 1
+        digests, refusal = accept_digests(
+            load_digests(),
+            derive_digests(),
+            accept_new=arguments.accept_new,
+            accept_change=arguments.accept_v1_change,
+            reason=arguments.reason,
+            today=datetime.date.today(),
+        )
+        if digests is None:
+            print(f"refusing to regenerate: {refusal}", file=sys.stderr)
+            return 1
+        census = dict(committed["census"])
+        if arguments.measure:
+            census.update(measure(census_rows()))
+            if arguments.fast_skipped is not None:
+                census["fast_skipped"] = arguments.fast_skipped
+        snapshot = {**derived, "census": census}
+        PINS_PATH.write_text(render(snapshot), encoding="utf-8")
+        DIGESTS_PATH.write_text(render_digests(digests), encoding="utf-8")
+        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        STATE_PATH.write_text(render_state(snapshot, digests), encoding="utf-8")
+        written = (PINS_PATH, DIGESTS_PATH, STATE_PATH)
+        print("wrote " + ", ".join(str(path.relative_to(ROOT)) for path in written))
         return 0
     stale = stale_sections(load(), derived)
     if PINS_PATH.read_text(encoding="utf-8") != render(load()):
         stale.append("(formatting)")
+    digests = load_digests()
+    drift = digest_drift(digests, derive_digests())
+    if any(names for section in drift.values() for names in section.values()):
+        stale.append(f"v1 digests {drift}")
+    if DIGESTS_PATH.read_text(encoding="utf-8") != render_digests(digests):
+        stale.append("v1 digests (hand edited: seal or formatting)")
+    if not STATE_PATH.is_file() or STATE_PATH.read_text(encoding="utf-8") != render_state(
+        load(), digests
+    ):
+        stale.append(str(STATE_PATH.relative_to(ROOT)))
     if stale:
-        print(f"tests/pins.json is stale in {stale}; run `python -m tests.pins regen`")
+        print(f"pins are stale in {stale}; run `python -m tests.pins regen`")
         return 1
-    print("tests/pins.json is current")
+    print("tests/pins.json, the v1 digests and the generated page are current")
     return 0
 
 

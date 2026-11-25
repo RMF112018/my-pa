@@ -17824,10 +17824,11 @@ class CreateScheduleScenario:
 
     `schedule_scenarios.create`: exactly one origin. From a publication or an
     approved, effective baseline the snapshot needs `minutes_per_source_unit`,
-    1 to 32 `calendars`, their `default_calendar` and an optional
-    `data_date_time` (`HH:MM`, default `00:00`); a copy of a version takes none
-    of them. Scenario data is client-authored, non-authoritative and never
-    reportable.
+    either 1 to 32 `calendars` with their `default_calendar` or neither (then
+    the MY-PA standard calendar `my-pa-us-40h-v1` is the only calendar and the
+    default), and an optional `data_date_time` (`HH:MM`, default `00:00`); a
+    copy of a version takes none of them. Scenario data is client-authored,
+    non-authoritative and never reportable.
     """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.SCHEDULE_SCENARIOS_CREATE
@@ -17900,11 +17901,17 @@ class CreateScheduleScenario:
                 SafeDetail.MINUTES_PER_SOURCE_UNIT,
             )
             calendars: object = self.calendars
-            if not isinstance(calendars, list) or not 1 <= len(calendars) <= MAX_SNAPSHOT_CALENDARS:
-                raise InvalidRequestError(SafeDetail.CALENDAR)
             default: object = self.default_calendar
-            if not isinstance(default, str) or not default or len(default) > 32:
-                raise InvalidRequestError(SafeDetail.CALENDAR)
+            # S7-0 (import contract section 11.5): both omitted is the standard
+            # calendar; one without the other stays refused.
+            if calendars is not None or default is not None:
+                if (
+                    not isinstance(calendars, list)
+                    or not 1 <= len(calendars) <= MAX_SNAPSHOT_CALENDARS
+                ):
+                    raise InvalidRequestError(SafeDetail.CALENDAR)
+                if not isinstance(default, str) or not default or len(default) > 32:
+                    raise InvalidRequestError(SafeDetail.CALENDAR)
             moment: object = self.data_date_time
             if moment is not None and (
                 not isinstance(moment, str) or _DATA_DATE_TIME.fullmatch(moment) is None
@@ -17975,7 +17982,9 @@ class CreateScheduleScenarioVersion:
 class CreateScheduleCpmRun:
     """Run the deterministic server CPM engine over one scenario version and store its result (replays the existing run for the same version and engine).
 
-    `schedule_cpm_runs.create`: engine `my-pa-cpm-v1`; one compute per
+    `schedule_cpm_runs.create`: the engine follows the version's content
+    schema (`my-pa-cpm-v1` for a v1 content, `my-pa-cpm-v2` for one with
+    start/finish milestones or a fixed lag calendar); one compute per
     Principal at a time. The run is server-computed from client-authored logic:
     non-authoritative and never reportable.
     """  # noqa: E501

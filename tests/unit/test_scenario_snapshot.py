@@ -9,6 +9,7 @@ missing; milestones get 0 and 0; published dates stay inert.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
@@ -24,12 +25,19 @@ from my_pa.domain.schedule.model import (
     ScheduleDurationCell,
     ScheduleRowType,
 )
-from my_pa.domain.schedule.scenario.canonical import content_object
+from my_pa.domain.schedule.scenario.canonical import (
+    CONTENT_SCHEMA,
+    content_bytes,
+    content_object,
+    content_schema,
+    content_sha256,
+)
 from my_pa.domain.schedule.scenario.cpm import CpmIssueCode, CpmStatus, run_cpm
 from my_pa.domain.schedule.scenario.model import (
     ActivityKind,
     LagCalendar,
     ProgressPolicy,
+    content_problem,
     format_instant,
 )
 from my_pa.domain.schedule.scenario.snapshot import (
@@ -40,6 +48,7 @@ from my_pa.domain.schedule.scenario.snapshot import (
     snapshot_from_publication,
     snapshot_wbs_path,
 )
+from my_pa.domain.schedule.scenario.standard_calendar import standard_calendar
 from tests.fixtures.schedule_scenario import STD
 
 PUBLICATION: Final = "spub_" + "p" * 26
@@ -243,3 +252,51 @@ def test_a_row_a_scenario_activity_cannot_hold_is_a_closed_refusal() -> None:
     with pytest.raises(SnapshotRefusalError) as raised:
         _snapshot((unnamed,))
     assert raised.value.reason is SnapshotRefusalReason.ROWS
+
+
+# --- S7-0 (import contract section 11.5): calendars optional, standard calendar ----------------
+
+#: Computed at the pre-S7-0 basis (e17f994c0) for `_snapshot()` (S1 with calendar `std`).
+PRE_S70_S1_CONTENT_SHA256: Final = (
+    "34c9efafb343d9a552c4fce0b5428c9d99becff2bb85765ea393f19a041375d5"
+)
+PRE_S70_S1_CANONICAL_SHA256: Final = (
+    "a26f32819e1d0808cd5e998be730f9ef64155ea65d3d6f16876aa872297b76cf"
+)
+
+
+def test_a_snapshot_with_calendars_is_byte_identical_to_before() -> None:
+    """E7: a request that supplies calendars gives exactly the pre-S7-0 bytes and hash."""
+    snapshot = _snapshot()
+    assert snapshot.default_calendar_standard is False
+    assert content_schema(snapshot.content) == CONTENT_SCHEMA
+    assert hashlib.sha256(content_bytes(snapshot.content)).hexdigest() == (
+        PRE_S70_S1_CANONICAL_SHA256
+    )
+    assert content_sha256(snapshot.content) == PRE_S70_S1_CONTENT_SHA256
+
+
+def test_a_snapshot_without_calendars_takes_the_standard_calendar() -> None:
+    """E7: no calendars and no default -> `my-pa-us-40h-v1` only, the default, counted."""
+    snapshot = _snapshot(calendars=None, default_calendar=None)
+    content = snapshot.content
+    assert snapshot.default_calendar_standard is True
+    assert snapshot.report == S1_REPORT
+    assert [calendar.key for calendar in content.calendars] == ["my-pa-us-40h-v1"]
+    assert content.calendars[0] == standard_calendar(2027)
+    assert content.settings.default_calendar == "my-pa-us-40h-v1"
+    # PDF rows keep the kind `milestone`: a PDF snapshot is always a v1 content.
+    assert {activity.kind for activity in content.activities} == {
+        ActivityKind.TASK,
+        ActivityKind.MILESTONE,
+    }
+    assert content_schema(content) == CONTENT_SCHEMA
+    assert content_problem(content) is None
+    assert run_cpm(content).engine_version == "my-pa-cpm-v1"
+
+
+def test_calendars_and_default_are_given_together_or_not_at_all() -> None:
+    for overrides in ({"calendars": None}, {"default_calendar": None}):
+        with pytest.raises(SnapshotRefusalError) as refused:
+            _snapshot(**overrides)
+        assert refused.value.reason is SnapshotRefusalReason.CALENDAR, overrides

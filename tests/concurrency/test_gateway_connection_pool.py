@@ -95,6 +95,7 @@ from my_pa.contracts.ports import (
     MeetingRepository,
     MeetingSyncRepository,
     OperationQueue,
+    ProjectReportReadsRepository,
     ProjectReportsRepository,
     ProjectRepository,
     PulseRepository,
@@ -257,6 +258,10 @@ class _HoldsItsConnection(UnitOfWork):
     @property
     def project_reports(self) -> ProjectReportsRepository:
         return self._inner.project_reports
+
+    @property
+    def project_report_reads(self) -> ProjectReportReadsRepository:
+        return self._inner.project_report_reads
 
     @property
     def issues(self) -> IssueRepository:

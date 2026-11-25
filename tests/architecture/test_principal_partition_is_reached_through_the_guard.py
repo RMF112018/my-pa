@@ -172,6 +172,12 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # current-derivations view included), every INSERT (the get-or-create
         # record included) `_bound`. No join, no hand-written comparison.
         "infrastructure/persistence/project_reports.py",
+        # Project reports WP4P-S2's reads, in the same shape: every SELECT
+        # composes `_mine` over `partition_criterion`, and every join (the
+        # current-derivations view, the detail row role, the record, the
+        # lifecycle snapshot, path and binding rows) and every correlated value
+        # predicate `matching_partition_criterion`. It writes nothing.
+        "infrastructure/persistence/project_report_reads.py",
         # Record lineage S1's Issue plane, in the same shape: every SELECT and
         # UPDATE composes `_mine` or `principal_scoped`, every INSERT `_bound`,
         # and every correlated predicate `matching_partition_criterion`.
@@ -624,6 +630,11 @@ PER_MODULE_ONLY: Final = {
         "`partition_criterion` (the current-derivations view included), every INSERT "
         "(the ON CONFLICT record included) `_bound` over `principal_bound_values`; "
         "not yet in a dedicated statement-level scanner."
+    ),
+    "infrastructure/persistence/project_report_reads.py": (
+        "project reports WP4P-S2: every SELECT composes `_mine` over `partition_criterion`, "
+        "every join and correlated value predicate `matching_partition_criterion`; it "
+        "writes nothing; not yet in a dedicated statement-level scanner."
     ),
     "infrastructure/persistence/issue_handoffs.py": (
         "record lineage S2: every SELECT composes `_mine` over `partition_criterion`, "

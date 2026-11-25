@@ -468,7 +468,7 @@ def test_the_thread_view_pages_25_with_a_cursor(migrated_engine: Engine) -> None
 def test_the_wired_reads_answer_through_the_service_in_its_own_unit_of_work(
     migrated_engine: Engine, world: dict[str, str]
 ) -> None:
-    """The 3 capabilities, invoked through `ApplicationService` with the switch on.
+    """The 3 `communications.*` reads, invoked through `ApplicationService` with the switch on.
 
     The reads run inside the invocation's own transaction (the handler never
     opens a second one); the answers carry the versions and coverage; another

@@ -1027,7 +1027,7 @@ def _result(row: CommunicationSearchRow, lanes: Sequence[tuple[str, str]]) -> Se
 
 # --- answers as payloads (WP4-S5) ----------------------------------------------------------
 #
-# What the 3 capabilities answer on every transport. Instants are RFC 3339
+# What the 3 `communications.*` reads answer on every transport. Instants are RFC 3339
 # UTC; every answer states its versions and coverage (ruling D8), the cursor
 # state (C2: `scope_changed_restart_required` is an answer, not a refusal) and,
 # for a search, the D4-final `text_fallback` and the R8 `query_state`. Derived

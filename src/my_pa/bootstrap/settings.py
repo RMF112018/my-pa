@@ -667,6 +667,17 @@ class Settings(StrictModel):
     #: across two consecutive polls, so one is ingested 1-2 intervals after
     #: the collector finishes writing it.
     communications_ingest_poll_seconds: int = Field(default=900, ge=60, le=86_400)
+    #: Project-reports ingestion poll switch (WP3P ruling D5), env
+    #: `MY_PA_PROJECT_REPORTS_INGEST_ENABLED`. Default off. On, the `cycles`
+    #: plane runs its own step (`project_reports_ingest`, under its own lock):
+    #: one stability-gated poll of every enabled project-report source, then
+    #: the bounded re-derivation sweep (ruling D9). Any one of the cycles
+    #: switches starts the plane. It withholds no capability and changes no
+    #: row by being set.
+    project_reports_ingest_enabled: bool = False
+    #: The project-reports step's interval in seconds, env
+    #: `MY_PA_PROJECT_REPORTS_INGEST_POLL_SECONDS` (900 by default, 60..86,400).
+    project_reports_ingest_poll_seconds: int = Field(default=900, ge=60, le=86_400)
     #: KLP-WP-04 (R6 section 3.4, KLP-AC-019). The exact OAuth client ids bound
     #: as Knowledge discovery clients. Compared exactly, never by prefix; empty --
     #: the default -- binds no client, so `knowledge.assertions.submit` and

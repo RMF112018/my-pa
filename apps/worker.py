@@ -92,9 +92,18 @@ accept.
     step lock, once the reconciliation latch exists, with a second
     counts-only line (`meeting_sync.apply`). The workspace stores are composed from
     `MY_PA_FILES_WORKSPACES` at start; a misconfigured root refuses the plane
-    (exit 2, `plane cycles workspace_misconfigured`).
+    (exit 2, `plane cycles workspace_misconfigured`);
+  - the project-reports ingestion poll (`MY_PA_PROJECT_REPORTS_INGEST_ENABLED`,
+    WP3P ruling D5): every `MY_PA_PROJECT_REPORTS_INGEST_POLL_SECONDS`
+    (default 900, and at once on start), under its own lock
+    (`PROJECT_REPORTS_POLL_LOCK_KEY`, the one `bindings apply` takes), one
+    stability-gated poll of every enabled project-report source over the
+    project-reports lifecycle (`bootstrap.project_reports`), then the bounded
+    re-derivation sweep (ruling D9), with two counts-only lines
+    (`project_reports_ingest.run`, `project_reports.rederive`). Its workspace
+    stores are composed eagerly, as for the communications poll.
 
-  With both switches off the plane is refused (exit 2, `plane cycles
+  With every switch off the plane is refused (exit 2, `plane cycles
   disabled`, before an engine is built). It prints one JSON line per run,
   codes and counts only; `--lease-seconds` does not apply to it.
 
@@ -143,9 +152,11 @@ from my_pa.application.capture_lifecycle import always_eligible
 from my_pa.application.daily_cycle import DailyCycleRunner
 from my_pa.application.ingestion import IngestionLifecycle, IngestRunReport
 from my_pa.application.meeting_sync_apply import MeetingSyncApplier, MeetingSyncApplyReport
+from my_pa.application.project_reports_rederive import ProjectReportsRederiver, RederiveReport
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.communications_ingest import ingestion_lifecycle, meeting_sync_applier
 from my_pa.bootstrap.gateway import local_principal
+from my_pa.bootstrap.project_reports import project_reports_lifecycle, rederiver
 from my_pa.bootstrap.settings import AuthMode, load_settings
 from my_pa.contracts.ports import FileWorkspaceRootError, IngestRunOutcome
 from my_pa.domain.common.time import utc_now
@@ -157,6 +168,7 @@ from my_pa.infrastructure.jobs.capture_pipeline import (
 from my_pa.infrastructure.jobs.cycle_scheduler import (
     COMMS_INGEST_LOCK_KEY,
     DEFAULT_CYCLE_POLL_SECONDS,
+    PROJECT_REPORTS_POLL_LOCK_KEY,
     CycleSchedulerRun,
     DailyStep,
     IntervalStep,
@@ -402,11 +414,55 @@ def _comms_ingest_step(
     )
 
 
+def project_reports_ingest_log_fields(reports: tuple[IngestRunReport, ...]) -> dict[str, object]:
+    """The project-reports poll's line: outcomes and summed counts, never a path or id."""
+    fields = comms_ingest_log_fields(reports)
+    fields["event"] = "project_reports_ingest.run"
+    return fields
+
+
+def project_reports_rederive_log_fields(report: RederiveReport) -> dict[str, object]:
+    """The re-derivation sweep's line after a poll: closed count names, never an id."""
+    return {"event": "project_reports.rederive", "counts": dict(sorted(report.counts.items()))}
+
+
+def _project_reports_step(
+    lifecycle: IngestionLifecycle,
+    sweep: ProjectReportsRederiver,
+    principal_id: str,
+    seconds: int,
+) -> IntervalStep:
+    """The project-reports poll step (ruling D5), then the re-derivation sweep (D9).
+
+    One long-lived lifecycle (its stability memory) and one lock, the
+    project-reports poll lock, for both; a failed run or a failed re-derivation
+    fails the step.
+    """
+
+    def poll() -> bool:
+        reports = lifecycle.poll_enabled(principal_id)
+        _log_line(project_reports_ingest_log_fields(reports))
+        swept = sweep.sweep(principal_id)
+        _log_line(project_reports_rederive_log_fields(swept))
+        return all(
+            report.outcome is not IngestRunOutcome.FAILED for report in reports
+        ) and not swept.counts.get("derivations_failed")
+
+    return IntervalStep(
+        name="project_reports_ingest",
+        event="project_reports_ingest",
+        lock_key=PROJECT_REPORTS_POLL_LOCK_KEY,
+        interval_seconds=seconds,
+        run_once=poll,
+    )
+
+
 def _run_cycles(args: argparse.Namespace) -> int:
     """Serve the cycles-plane steps (ADR-010 amendment; communications contract 19).
 
-    Refused before an engine is built unless `MY_PA_CYCLE_SCHEDULER_ENABLED` or
-    `MY_PA_COMMUNICATIONS_INGEST_ENABLED` is on. The Principal is the fixed
+    Refused before an engine is built unless `MY_PA_CYCLE_SCHEDULER_ENABLED`,
+    `MY_PA_COMMUNICATIONS_INGEST_ENABLED` or `MY_PA_PROJECT_REPORTS_INGEST_ENABLED`
+    is on. The Principal is the fixed
     local operator (`local_principal`): every remote OAuth client row is
     constrained to it, so it owns ChatLLM's cycles and the ingested
     communications. The daily begin step goes through a minimal
@@ -416,7 +472,11 @@ def _run_cycles(args: argparse.Namespace) -> int:
     (`bootstrap.communications_ingest`).
     """
     settings = load_settings()
-    if not (settings.cycle_scheduler_enabled or settings.communications_ingest_enabled):
+    if not (
+        settings.cycle_scheduler_enabled
+        or settings.communications_ingest_enabled
+        or settings.project_reports_ingest_enabled
+    ):
         print("plane cycles disabled")
         return 2
     engine = create_database_engine(settings.parsed_database_url(), statement_timeout_ms=30_000)
@@ -462,6 +522,20 @@ def _run_cycles(args: argparse.Namespace) -> int:
                     meeting_sync_applier(engine),
                     local_principal().principal_id,
                     settings.communications_ingest_poll_seconds,
+                )
+            )
+        if settings.project_reports_ingest_enabled:
+            try:
+                reports_lifecycle = project_reports_lifecycle(settings, engine, eager=True)
+            except FileWorkspaceRootError:
+                print("plane cycles workspace_misconfigured")
+                return 2
+            steps.append(
+                _project_reports_step(
+                    reports_lifecycle,
+                    rederiver(engine),
+                    local_principal().principal_id,
+                    settings.project_reports_ingest_poll_seconds,
                 )
             )
         stop = threading.Event()

@@ -143,6 +143,8 @@ beyond `%T`/`%F`/`%R` adjacency.
 - A byte-order mark is not stripped: the first line then does not start with `ERMHDR`, and
   the file fails `p6_header_invalid`.
 
+Admission (9.1 step 3) requires the bytes to start with `ERMHDR\t`, so a file with a BOM in front is refused there as `unsupported(SOURCE_FORMAT)` before the parser's `p6_header_invalid` could apply.
+
 ### 3.3 Identifiers and value forms [S]
 
 | Item | Form in the sample |
@@ -885,10 +887,10 @@ the measured size calls for it (gate G-9); snapshots are never deleted (section 
 1. Switches (section 10.2), then strict input validation (unknown key → `invalid_request`).
 2. Outside any transaction, through the files-workspace store's contained read path (FW §3,
    §4: no symlink, no special file, no multiply-linked file): resolve `workspace_id` + `path`;
-   the current `version` must equal `expected_version` (`conflict(VERSION)`); `size` must be
+   the current `version` must equal `expected_version` (`conflict(EXPECTED_VERSION)`, the SafeDetail naming the request field); `size` must be
    ≤ 16 MiB before any byte is read (`unsupported(MAX_BYTES)`); read the bytes; their SHA-256
    must equal `expected_sha256` (`conflict(EXPECTED_SHA256)`); re-read the fingerprint after
-   reading (`conflict(VERSION)` if it moved).
+   reading (`conflict(EXPECTED_VERSION)` if it moved). A key replay made after the file has changed therefore answers this conflict, not the stored result, because this step runs before step 4.
 3. **Sniff** (the extension is ignored): `p6_xer` iff the bytes start with `ERMHDR\t` and the
    last non-empty line is `%E`; else `unsupported(SOURCE_FORMAT)`. (`p6_xml`, later: an
    `<?xml` declaration or none, then the root `APIBusinessObjects` in a namespace beginning
@@ -897,8 +899,8 @@ the measured size calls for it (gate G-9); snapshots are never deleted (section 
 4. One transaction: idempotency-key replay (same key + same request digest → stored result;
    different digest → `conflict(IDEMPOTENCY_KEY)`); the Project is the caller's
    (`not_found(PROJECT_ID)`); the Series resolves exactly as S5/S6 (`series_id`,
-   `series_name` resolve-or-create, or `series_auto` into an intake Series); a Series holding
-   any `pdf` publication refuses (`conflict(SERIES_FORMAT)`); **content idempotency**: a
+   `series_name` resolve-or-create, or `series_auto` into an intake Series; until S7-4 extends the ADR-017 hook to read `schedule_p6_activities`, a P6 `series_auto` import always gets its own intake Series with decision `needs_series`); the request digest covers every input but the idempotency key (including `expected_version` and the workspace path); a Series holding
+   any `pdf` publication refuses (`conflict(SERIES_FORMAT)`); **content idempotency** (which also answers for a failed publication of the same bytes: a retry needs a re-export or another Series): a
    publication of the same `sha256` already in that Series returns it with
    `already_present: true` (nothing new is written); the snapshot is inserted unless the
    Principal already holds that SHA-256; the publication is inserted (`source_format`,
@@ -930,7 +932,7 @@ frame `cpm-workbench-p6-frame-v1`, capped at the existing 134,217,728 bytes); H5
 observed fields and issues in batches of ≤ 1,000; H7 Stable Activities by exact `task_code`
 in the Series; H8 finalize and the ADR-017 series-match hook. Status: `failed` on any fatal
 issue; `review_required` on `p6_project_identity_changed`; else `complete` (non-fatal issues
-listed, at most 10,000, with complete counts by code, section 5.5). `partial` is not used by `p6_xer_v1`. Budgets: the S5 handler budget and parse wall;
+listed, at most 10,000, with counts by code over the listed issues; the complete counts by code are in the frame and are re-derivable from the retained snapshot, and are not stored separately, section 5.5). `partial` is not used by `p6_xer_v1`. Budgets: the S5 handler budget and parse wall;
 a measurement on a bounds-maximal synthetic file is an S7-3 acceptance item.
 
 ---
@@ -1041,7 +1043,7 @@ issue codes are the `p6_*` codes of section 5.5 (new `ScheduleIssueCode` members
 The Series is always the caller's explicit choice (or ADR-017 auto-matching, which matches by
 exact Activity IDs and is recorded). The P6 identity (`project_short_name`, `project_guid`,
 `p6_project_id`) is stored per publication and compared with the Series' earlier P6
-publications: if none shares the short name **or** the GUID, the publication becomes
+complete publications (a `review_required` one never becomes the reference): if none shares the short name **or** the GUID, the publication becomes
 `review_required` with `p6_project_identity_changed` unless the request set
 `accept_project_identity_change`. A project renamed in P6 keeps its GUID; a project copied
 into another database keeps its short name [A]; either keeps the Series.
@@ -1450,6 +1452,13 @@ Acceptance:
   milestone constraint conversion), counts, v1/v2 content.
 - D7 remote: published only with switch, writes-enabled and grant; the PDF import is still
   never published.
+- D8 the S5 reads (`get_publication`, `get_publication_detail`, `list_publications`) serve P6
+  publications (they have no enrollment): format-aware reads, tested on a complete P6
+  publication; the 7.7 storage quota and rate limits; the gateway composition; the `series_auto`
+  decision for P6 (refuse, or extend the ADR-017 hook to read `schedule_p6_activities` and
+  exclude PDF Series); the publication mapping: `data_date` is the project's data date,
+  `run_date` the ERMHDR export date, the title the project name when at most 300 characters,
+  else null.
 
 ### S7-5 — operator procedure and real-corpus evaluation
 

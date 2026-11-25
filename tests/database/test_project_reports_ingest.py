@@ -23,7 +23,8 @@ folder and file names), the folders bound by `bindings apply`. Proved here:
   registered (the registry is injected); a rebind re-derives (a wrong number
   quarantines the financial views, the right one classifies them again);
 * `--dry-run` (backfill and rederive) writes nothing; a backfill resumes;
-* a retired source's backfill fails `source_unbound` and writes nothing;
+* a retired source's `run-once` and `backfill` refuse `source_unbound` up
+  front and write nothing, not even a run row;
 * the cross-report check is written once, left the buyout summary, in both
   arrival orders.
 
@@ -416,15 +417,17 @@ def test_a_retired_source_is_unbound_and_writes_nothing(operator: Operator) -> N
     operator.bind(("signatures", "rfc"))
     operator.bind(("rfc",))  # signatures omitted: retired, its source disabled
     before = operator.counts()
-    out = operator.backfill("signatures")
-    assert (out["outcome"], out["counts"]["snapshots_failed"]) == (
-        "failed",
-        len(fixture_files("signatures")),
-    )
-    after = operator.counts()
-    assert {k: v for k, v in after.items() if k != "ingest_runs"} == {
-        k: v for k, v in before.items() if k != "ingest_runs"
-    }
+    source = operator.source("signatures")
+    for argv in (
+        ("run-once", "--source", source),
+        ("backfill", "--source", source),
+        ("backfill", "--source", source, "--dry-run"),
+    ):
+        assert operator(*argv) == (
+            cli.EXIT_REFUSED,
+            {"command": argv[0], "refused": "source_unbound"},
+        )
+    assert operator.counts() == before  # refused up front: not even a run row
 
 
 @pytest.mark.parametrize(

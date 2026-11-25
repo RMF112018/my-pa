@@ -12,7 +12,8 @@ Proved here:
 * the JSON shapes and closed exits of `run-once`, `backfill` (files, glob,
   dry run), `rederive` (and its dry run), `coverage` and `aggregate` (with an
   `--expect` that matches, exit 0, and one that differs, exit 4), and the
-  `source_not_found` and `lock_held` refusals;
+  `source_not_found`, `source_unbound` (up front, writing nothing) and
+  `lock_held` refusals;
 * **the log-line no-content guard**: every line the handler, the sweep, the
   worker step and every S5 command print over the synthetic fixtures holds
   none of the fixtures' cell texts, none of the placed file names, slugs or
@@ -270,7 +271,34 @@ def test_run_once_and_backfill_print_counts_and_exit_by_outcome(operator: _Opera
     assert operator.engine.connection.lock_calls.count("try") == 3  # not for the dry run
 
 
-def test_a_backfill_with_a_failed_snapshot_exits_3(operator: _Operator) -> None:
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_an_unbound_source_is_refused_up_front_and_nothing_is_written(
+    operator: _Operator, dry_run: bool
+) -> None:
+    """`source_unbound` before the lifecycle runs: no run, no snapshot, not even a rejected one.
+
+    The `rejected` fixtures would each write a rejected snapshot were the
+    lifecycle reached, so an empty world proves the refusal came first.
+    """
+    source = operator.source("rejected")
+    operator.scene.rebind("rejected", state=BindingState.RETIRED)
+    extra = ["--dry-run"] if dry_run else []
+    for argv in (["run-once", "--source", source], ["backfill", "--source", source, *extra]):
+        code, out = operator(*argv)
+        assert (code, out) == (
+            cli.EXIT_REFUSED,
+            {"command": argv[0], "refused": "source_unbound"},
+        )
+    ingest = operator.scene.ingest
+    assert (ingest.snapshots, ingest.paths, ingest.runs, ingest.run_snapshots) == ({}, {}, {}, {})
+    assert not operator.scene.world.project_reports.snapshots
+
+
+def test_a_backfill_with_a_failed_snapshot_exits_3(
+    operator: _Operator, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The handler's in-transaction `source_unbound` stays as defence in depth."""
+    monkeypatch.setattr(cli, "_require_bound", lambda *a, **k: None)
     operator.scene.rebind("hostile", state=BindingState.RETIRED)
     code, out = operator("backfill", "--source", operator.source("hostile"))
     assert (code, out["outcome"], out["counts"]["snapshots_failed"]) == (

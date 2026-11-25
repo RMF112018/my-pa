@@ -614,5 +614,6 @@ def test_the_command_imports_nothing_from_persistence_or_the_adapters() -> None:
         "my_pa.application.ingestion",
         "my_pa.application.project_reports_bindings",
         "my_pa.application.project_reports_coverage",
+        "my_pa.application.project_reports_ingest",
         "my_pa.application.project_reports_rederive",
     }

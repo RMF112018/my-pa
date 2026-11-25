@@ -49,10 +49,13 @@ outside the repository. It is read whole, at most `MAX_FILE_BYTES`.
   source's folder or workspace-relative paths under it), one `--glob` name
   pattern, or every candidate (trigger `backfill`). Each snapshot is its own
   transaction, so a stopped backfill leaves a consistent prefix and a rerun
-  counts the digests already held `snapshots_already_known`. A disabled
-  (retired) source may be backfilled, and each new snapshot then fails
-  `source_unbound` and rolls back (`snapshots_failed`; ruling D12).
-  `--dry-run` lists, reads, parses and counts and writes nothing.
+  counts the digests already held `snapshots_already_known`. Both refuse
+  `source_unbound` up front when the source has no active binding (no
+  pointer, or a retired one; ruling D12 and the Manager ruling on S5): no run,
+  no snapshot -- not even a rejected one -- is written, with or without
+  `--dry-run`. The handler's own in-transaction `source_unbound` stays as
+  defence in depth. `--dry-run` lists, reads, parses and counts and writes
+  nothing.
 * `rederive` runs the re-derivation sweep now, including an `operator_rebuild`
   of every current derivation not otherwise due, at most
   `DEFAULT_SWEEP_LIMIT` snapshots per call (the rest are counted
@@ -97,6 +100,7 @@ Refusal codes: the `BindingRefusal` values (`file_unreadable`,
 `lock_held`); the lifecycle's `IngestRefusalCode` values; and
 `target_mismatch`, `settings_invalid`, `workspace_misconfigured`,
 `source_not_found` (no project-report source of the operator has that id),
+`source_unbound` (`run-once` or `backfill` of a source with no active binding),
 `expect_invalid`, `transaction_conflict`, `write_refused` (a database guard
 refused a write), `database_unreachable` and `database_unavailable`.
 """
@@ -118,6 +122,10 @@ from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 from my_pa.application.ingestion import IngestRefusedError, IngestRunReport
 from my_pa.application.project_reports_bindings import BindingsReport
 from my_pa.application.project_reports_coverage import project_reports_coverage
+from my_pa.application.project_reports_ingest import (
+    ProjectReportsSourceUnboundError,
+    bound_revision,
+)
 from my_pa.application.project_reports_rederive import DEFAULT_SWEEP_LIMIT
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.project_reports import (
@@ -269,6 +277,21 @@ def _require_source(engine: Engine, principal_id: str, source_id: str) -> Ingest
     return source
 
 
+def _require_bound(engine: Engine, principal_id: str, source_id: str) -> None:
+    """The source is a project-report source with an active binding, or a refusal.
+
+    `source_not_found` first, then `source_unbound` (ruling D12, the Manager
+    ruling on S5): refused before the lifecycle runs, so nothing -- no run, no
+    snapshot, not even a rejected one -- is written.
+    """
+    _require_source(engine, principal_id, source_id)
+    with project_reports_unit_of_work(engine)() as unit:
+        try:
+            bound_revision(unit, principal_id, source_id)
+        except ProjectReportsSourceUnboundError:
+            raise _RefusalError(ProjectReportsSourceUnboundError.code) from None
+
+
 @contextmanager
 def _locked(engine: Engine) -> Iterator[None]:
     """Hold the project-reports poll lock, or refuse `lock_held` without waiting."""
@@ -311,6 +334,7 @@ def _runs(engine: Engine, settings: Settings, args: argparse.Namespace) -> int:
                 _require_source(engine, principal_id, args.source).path_prefix, args.file
             )
         if args.dry_run:  # writes nothing, so it takes no lock
+            _require_bound(engine, principal_id, args.source)
             return _run_report(
                 "backfill",
                 lifecycle.backfill(
@@ -320,7 +344,8 @@ def _runs(engine: Engine, settings: Settings, args: argparse.Namespace) -> int:
         run = lambda: lifecycle.backfill(  # noqa: E731
             principal_id, args.source, paths=paths, name_pattern=args.glob
         )
-    with _locked(engine):
+    with _locked(engine):  # bindings apply takes the same lock: the check holds for the run
+        _require_bound(engine, principal_id, args.source)
         report = run()
     return _run_report(args.command, report)
 

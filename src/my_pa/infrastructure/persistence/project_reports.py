@@ -706,6 +706,31 @@ class SqlProjectReportsRepository(ProjectReportsRepository):
                 _bound(project_report_derivations, principal_id, _derivation_values(derivation))
             )
         )
+        self._insert_children(principal_id, row_roles, lines, stated_totals)
+
+    @_refusals_translated
+    def insert_derivation_rows(
+        self,
+        principal_id: str,
+        derivation_id: str,
+        *,
+        row_roles: Sequence[ProjectReportRowRoleRecord] = (),
+        lines: Sequence[ProjectReportLineRecord] = (),
+        stated_totals: Sequence[ProjectReportStatedTotalRecord] = (),
+    ) -> None:
+        named = [r.derivation_id for r in row_roles] + [line.derivation_id for line in lines]
+        named += [total.derivation_id for total in stated_totals]
+        if any(name != derivation_id for name in named):
+            raise ValueError("every row of a derivation names that derivation")
+        self._insert_children(principal_id, row_roles, lines, stated_totals)
+
+    def _insert_children(
+        self,
+        principal_id: str,
+        row_roles: Sequence[ProjectReportRowRoleRecord],
+        lines: Sequence[ProjectReportLineRecord],
+        stated_totals: Sequence[ProjectReportStatedTotalRecord],
+    ) -> None:
         self._insert_many(
             project_report_row_roles, principal_id, [_role_values(role) for role in row_roles]
         )

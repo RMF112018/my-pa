@@ -15536,6 +15536,27 @@ class ProjectReportsRepository(ABC):
         """
 
     @abstractmethod
+    def insert_derivation_rows(
+        self,
+        principal_id: str,
+        derivation_id: str,
+        *,
+        row_roles: Sequence[ProjectReportRowRoleRecord] = (),
+        lines: Sequence[ProjectReportLineRecord] = (),
+        stated_totals: Sequence[ProjectReportStatedTotalRecord] = (),
+    ) -> None:
+        """Record the row roles, lines and totals of a derivation inserted bare (WP3P-S5).
+
+        A record identity names the derivation that created it
+        (`created_by_derivation_id`, a non-deferred foreign key), so a
+        derivation whose lines create records is written in three steps in one
+        transaction: `insert_derivation` with no rows, then
+        `get_or_create_record` per identity, then this call. Every row names
+        `derivation_id`; a row naming another refuses `ValueError` before any
+        write.
+        """
+
+    @abstractmethod
     def get_derivation(
         self, principal_id: str, derivation_id: str
     ) -> ProjectReportDerivationRecord | None:

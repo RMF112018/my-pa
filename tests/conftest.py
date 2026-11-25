@@ -10625,13 +10625,45 @@ class _ProjectReports(ProjectReportsRepository):
             derivation.project_id,
         ):
             self._refuse(_FOREIGN, "a_derivation_names_a_binding_revision_of_its_source")
+        self._w.derivations[key] = derivation
+        self._store_children(principal_id, derivation, row_roles, lines, stated_totals)
+
+    def insert_derivation_rows(
+        self,
+        principal_id: str,
+        derivation_id: str,
+        *,
+        row_roles: Sequence[ProjectReportRowRoleRecord] = (),
+        lines: Sequence[ProjectReportLineRecord] = (),
+        stated_totals: Sequence[ProjectReportStatedTotalRecord] = (),
+    ) -> None:
+        named = [r.derivation_id for r in row_roles] + [line.derivation_id for line in lines]
+        named += [total.derivation_id for total in stated_totals]
+        if any(name != derivation_id for name in named):
+            raise ValueError("every row of a derivation names that derivation")
+        key = (principal_id, derivation_id)
+        derivation = self._w.derivations.get(key)
+        if derivation is None:
+            self._refuse(_FOREIGN, "a_row_role_names_a_derivation_of_its_snapshot")
+        if self._w.row_roles.get(key) or self._w.lines.get(key) or self._w.stated_totals.get(key):
+            self._refuse(_UNIQUE, "project_report_row_roles_pkey")
+        self._store_children(principal_id, derivation, row_roles, lines, stated_totals)
+
+    def _store_children(
+        self,
+        principal_id: str,
+        derivation: ProjectReportDerivationRecord,
+        row_roles: Sequence[ProjectReportRowRoleRecord],
+        lines: Sequence[ProjectReportLineRecord],
+        stated_totals: Sequence[ProjectReportStatedTotalRecord],
+    ) -> None:
+        key = (principal_id, derivation.derivation_id)
         # The children, statement by statement as the repository sends them:
         # every row role, then every line, every value, every stated total.
         roles = self._check_row_roles(principal_id, derivation, row_roles)
         self._check_lines(principal_id, derivation, lines, roles)
         self._check_line_values(lines)
         self._check_stated_totals(stated_totals, roles)
-        self._w.derivations[key] = derivation
         self._w.row_roles[key] = tuple(sorted(row_roles, key=lambda r: r.row_ordinal))
         self._w.lines[key] = tuple(sorted(lines, key=lambda line: line.row_ordinal))
         self._w.stated_totals[key] = tuple(

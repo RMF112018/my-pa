@@ -34,9 +34,27 @@
         "communications.search"
       ],
       "section": "tools"
+    },
+    {
+      "date": "2026-11-25",
+      "from": "4e34fc71fcbf1ffc3e9844bac156f0d271fddc059eabaea203e200b904bf1ffa",
+      "kind": "changed",
+      "name": "communications.read",
+      "reason": "WP4-R2 G6: the communications cursor schema publishes maxLength 2048 (contract section 16)",
+      "section": "tools",
+      "to": "7c1beb128005b0b98a7de44eec51fe96e3485f3cb850dc7328603f5fa758d0b4"
+    },
+    {
+      "date": "2026-11-25",
+      "from": "1db684af436b47993e02ddbe55038204bba7a80e47e184883e89882de3d67d35",
+      "kind": "changed",
+      "name": "communications.search",
+      "reason": "WP4-R2 G6: the communications cursor schema publishes maxLength 2048 (contract section 16)",
+      "section": "tools",
+      "to": "c77a238a49c8a937551c853821d4c0eebe7d88a152defb9ad295fd6f2f0c9f0e"
     }
   ],
-  "seal": "ceb992dbdb04f60e3d0591282378105e010271bcfb97812eca669d5cb74e944d",
+  "seal": "c5029461532e440a0212a88c1f4c59a3b54094222fe331078e1aba2f1bccf890",
   "tools": {
     "canvas.workspace.get": "65876ad8f7197a4e8465b3a9019dd234b782f605dfda37d10c1026b660941fb3",
     "canvas.workspace.put": "985bbd6cd28bbaffe0520daa1883b0503a592f4369171a366ca14de8b43a5a8b",
@@ -61,8 +79,8 @@
     "commitments.v2.waiting_on": "056f8b696246aaed5336e50afb38bcecedb5fc7f3a7108c949b2a9585f827743",
     "commitments.waiting_on": "bc218ddd5d3f8241f86eebf3ff40abd870066e2790d37f6bd2ffe1cb38793360",
     "communications.coverage": "52d40b147526c06f93cfcdae745e87e713784355d247419850518de00df1336c",
-    "communications.read": "4e34fc71fcbf1ffc3e9844bac156f0d271fddc059eabaea203e200b904bf1ffa",
-    "communications.search": "1db684af436b47993e02ddbe55038204bba7a80e47e184883e89882de3d67d35",
+    "communications.read": "7c1beb128005b0b98a7de44eec51fe96e3485f3cb850dc7328603f5fa758d0b4",
+    "communications.search": "c77a238a49c8a937551c853821d4c0eebe7d88a152defb9ad295fd6f2f0c9f0e",
     "constraint_categories.create": "bb1b5439c85d65f1c3a794bea5d08882eab161bae6340b59463bab7194b0a680",
     "constraint_categories.deactivate": "fc26e7aba5203032175e0d08571352af41e91ed539371bf05870b299d1673b9a",
     "constraint_categories.list": "3eae328f415522d78455ddecabfafcd5e1dde94f92b548897b29dfee7fb1967f",

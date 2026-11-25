@@ -1,0 +1,977 @@
+{
+ "cases": {
+  "activity_codes_parent_chain": {
+   "frame_sha256": "be6a3e6163ba6c299b887642c991144369b61d9b70d2e936d91f0a6b77d8a3b4",
+   "input_sha256": "d3c4a09a38f3a71ad8d94e3b781f2eb905cd1a8ae747e6bd02094121837992dc",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "activity_missing_calendar": {
+   "frame_sha256": "837c2d1f55c80bf500599d0f10a661dbff0037aa53d273a90f2b9739a20612f9",
+   "input_sha256": "72a27a24ec5f31c33b9817c481263c27512cd23229a4031991a22a3634a22144",
+   "issues": [
+    [
+     "p6_calendar_missing",
+     "warning",
+     "TASK",
+     19,
+     "clndr_id"
+    ]
+   ],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "bare_cr_in_value": {
+   "frame_sha256": "1723d7a75354c22f66c673157a690424fa360838b8588ba94b94d1e24bee50bc",
+   "input_sha256": "b9813c12c8f7ae3cc11ac6003ddee54a93649f02ef5cbc356ad25bbe19e92436",
+   "issues": [
+    [
+     "p6_value_invalid",
+     "fatal",
+     "TASK",
+     18,
+     "task_name"
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "blank_line_inside": {
+   "frame_sha256": "d26cd6a661c8fc68423da3da361b062953c62f45599f91f8174c2d8f9dce69e2",
+   "input_sha256": "dea478ba6544ed96fef473b0c3e97cd838d3abd78b9edf021373770fc8b834d1",
+   "issues": [
+    [
+     "p6_structure_invalid",
+     "fatal",
+     null,
+     2,
+     null
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "bom_utf8": {
+   "frame_sha256": "04a9f9873e9b580d92a7b883e4cec9a6a8304e0d95ebfb593729225052c3b782",
+   "input_sha256": "29343feac09c600d709c0ff63978dde2beadd36b3fb70ac665ee265efd5948f8",
+   "issues": [
+    [
+     "p6_header_invalid",
+     "fatal",
+     null,
+     1,
+     null
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "calendar_midnight_end": {
+   "frame_sha256": "600a71b5d041991141f0b6ef3ccd4dd3bf8a6173b389baeafd23889fffa575be",
+   "input_sha256": "9e4812cc45e03d88b6d8836f86609778a091a2b6f4212e5d05001656f2e7bec6",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "calendar_unparseable": {
+   "frame_sha256": "50ad502a6d2f56cc81067b6387819dee3214c56acfb814a1071bf809cafde9a7",
+   "input_sha256": "6ed49f148a236466a6a6315b53c3981ac7745dfd742d54e4c532f539b7185c74",
+   "issues": [
+    [
+     "p6_calendar_invalid",
+     "warning",
+     "CALENDAR",
+     7,
+     "clndr_data"
+    ],
+    [
+     "p6_calendar_missing",
+     "warning",
+     "CALENDAR",
+     8,
+     "clndr_data"
+    ]
+   ],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "calendar_without_days_of_week": {
+   "frame_sha256": "ea8068cb3a15b7d6c9a000d25b3ecbb176710bb0a2a1b563c9c8141d869e2f1e",
+   "input_sha256": "fce16cde584aea9d434703b2d5416ab852af09f88670235614dcef6bbf67fad7",
+   "issues": [
+    [
+     "p6_calendar_base_substituted",
+     "warning",
+     "CALENDAR",
+     8,
+     "clndr_data"
+    ]
+   ],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "constraints_mapping": {
+   "frame_sha256": "f5dfe054a3af3dabd60a7e782854e86efad0c49dd0d8163f53e6f7c395f1333c",
+   "input_sha256": "35c17ef9ce0b9d56b7e36d84d9c426c76d59186e3e52f3be032dc2ce549fc437",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "content_after_end": {
+   "frame_sha256": "b3fb6db717e21606db1af57c466629422d6630c00eacffc1dbdf25e31b88bfe9",
+   "input_sha256": "77a797a815daedd6e240e0712fc8e1d3aae25139c1d7ff18d5c240e5554cf961",
+   "issues": [
+    [
+     "p6_structure_invalid",
+     "fatal",
+     null,
+     27,
+     null
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "cp1252_bytes": {
+   "frame_sha256": "520b7a162cbd36eae063541eb71628615295deea8f094e5a5e22eb7279a63195",
+   "input_sha256": "f03ce18762c9adb957d2d24505cb5d40aa753db5579ef8f2316ff001ca0f2e90",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "cross_project_relationship": {
+   "frame_sha256": "aa2ad065f4acffc6dff133cf147c3d0eb2edd9da0755e2806177052081cfd97b",
+   "input_sha256": "d3cc43831ef668f0e2763842034c83e8d41d541f9ef39f8e98d983efce621eba",
+   "issues": [
+    [
+     "p6_external_relationship",
+     "warning",
+     "TASKPRED",
+     26,
+     "pred_proj_id"
+    ]
+   ],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "dangling_relationship": {
+   "frame_sha256": "6883d0a83b7d2766d9e5dae2cc7ed382ae83fdc2224b99d8c1b3d611a282fa68",
+   "input_sha256": "ed63cf28334ed90acd1011960a5fc0ebdde6aea96115deb029fd61994838a120",
+   "issues": [
+    [
+     "p6_reference_dangling",
+     "fatal",
+     "TASKPRED",
+     24,
+     "pred_task_id"
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "dangling_wbs": {
+   "frame_sha256": "f96218b1505ff902a0abc5c93409a4102f0c7e76bcdc2215ae25977c83ac4e60",
+   "input_sha256": "d966fe9cddc074cfdae39db846fecb856a451172602ed0003a2dfa7cf760218b",
+   "issues": [
+    [
+     "p6_reference_dangling",
+     "fatal",
+     "TASK",
+     19,
+     "wbs_id"
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "dates_with_seconds": {
+   "frame_sha256": "60a5c5a36bde0757766e69efbf26a54b9f12ec262c9e832b58ef1a2ec807a17e",
+   "input_sha256": "7e215e44be46a5955e43c5466b177f7f707f8a24891be9bbaeaae6f6e31b3880",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "duplicate_activity_id": {
+   "frame_sha256": "051e8df8235508860f752589ba3029982a03c51dc238c9567d28de0ffe2597ae",
+   "input_sha256": "6e176e45cd09173298979c402b97944709a92327bd2876564ebf2b5c42a5434b",
+   "issues": [
+    [
+     "p6_duplicate_activity_id",
+     "fatal",
+     "TASK",
+     19,
+     "task_code"
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "duplicate_field": {
+   "frame_sha256": "894f07d68c42443ad196c9a54de3ca9f01a04ee03d9a6967947e3c7a5a6d5143",
+   "input_sha256": "359a9ba71e36c289d05e29b00d4508b5cd96dae24f9b1fedc92f8db745e24a4b",
+   "issues": [
+    [
+     "p6_structure_invalid",
+     "fatal",
+     "TASKPRED",
+     22,
+     null
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "duplicate_table": {
+   "frame_sha256": "d1e618275a321add0411560f42b19194bdc8ed4b7b821da8ecddb97cd679a8be",
+   "input_sha256": "47896ea271b56b53ab60caf234f047cf08a548751be826c85d8c03a4d3b2ce68",
+   "issues": [
+    [
+     "p6_structure_invalid",
+     "fatal",
+     null,
+     26,
+     null
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "duplicate_task_id": {
+   "frame_sha256": "9b2769af7c514fadc5f5db7e55aa9ab5f16e817143ad8e1d272041ce1bfe8771",
+   "input_sha256": "2c539a49c0a3828eea7e70755a4a795fe760f472ff78299947d251d9f579c764",
+   "issues": [
+    [
+     "p6_structure_invalid",
+     "fatal",
+     "TASK",
+     19,
+     "task_id"
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "empty_activity_id": {
+   "frame_sha256": "a86a35439d7a47018b8c3eb0edbabfb35e5b4ee674996d3a0476182af6a0a5ad",
+   "input_sha256": "93dd4dc60e1d80d8661af609804b92c2ae44aadfc6b4a7d9f0e1e1b7d445fb56",
+   "issues": [
+    [
+     "p6_duplicate_activity_id",
+     "fatal",
+     "TASK",
+     19,
+     "task_code"
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "full_selected_capture": {
+   "frame_sha256": "7bbdaf0b1ec70bf621b10c21d9740ddf0b0a19b80334b2ed366e3819735b2209",
+   "input_sha256": "6b2ad69e0fe4f4c9abad9df00d48821ae6795ef21584f1804e97278e29638e85",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "full_valid": {
+   "frame_sha256": "49eed4bd9f2aefbe93e663623592564274d8906e48223931ced31ad90e7da749",
+   "input_sha256": "6b2ad69e0fe4f4c9abad9df00d48821ae6795ef21584f1804e97278e29638e85",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "header_invalid": {
+   "frame_sha256": "04a9f9873e9b580d92a7b883e4cec9a6a8304e0d95ebfb593729225052c3b782",
+   "input_sha256": "c81c79876a441eba28241f91d50c3a93e3b655b0dfc6ada754f79917720a4682",
+   "issues": [
+    [
+     "p6_header_invalid",
+     "fatal",
+     null,
+     1,
+     null
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "invalid_bytes": {
+   "frame_sha256": "030ce1e39f89fad1dcdf694a27bbee1e3d13aa9f58a6b894fac9bb4addfa9c3f",
+   "input_sha256": "1ee6b711f2b82157db648175abcbc5fbeb889109bddf6b7ad65bb6da9817b180",
+   "issues": [
+    [
+     "p6_encoding_invalid",
+     "fatal",
+     null,
+     null,
+     null
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "lf_line_ends": {
+   "frame_sha256": "384f8de937192215b6a51d70081d6ab739bddf66cc41de203816726879df2578",
+   "input_sha256": "fa50f25bda68597fc0152833d3b4c70904010a820e33070c89b9976738dd6779",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "milestones_with_constraints": {
+   "frame_sha256": "e46f5d50338535a1fe5fa9580f97d6d3f9ce9316241707b56f049003b818409e",
+   "input_sha256": "cc3e498812e87601f2a218ed03ffc05038668de3c7f23c05806953b477234a97",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "minimal_valid": {
+   "frame_sha256": "34d99e3cbfc63153528afecb347ed9125807351a08ad7f8d2d609def341d9330",
+   "input_sha256": "e12c70d7d255b08ee422c9c1c2e42658a80cfac96f60ed77b5628797f4ff9baa",
+   "issues": [
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "PROJECT",
+     2,
+     "guid"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "PROJECT",
+     2,
+     "clndr_id"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "PROJECT",
+     2,
+     "plan_start_date"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "PROJECT",
+     2,
+     "plan_end_date"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "PROJECT",
+     2,
+     "scd_end_date"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "PROJECT",
+     2,
+     "critical_drtn_hr_cnt"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "PROJECT",
+     2,
+     "critical_path_type"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "PROJECT",
+     2,
+     "next_data_date"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "CALENDAR",
+     5,
+     "default_flag"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "CALENDAR",
+     5,
+     "clndr_name"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "CALENDAR",
+     5,
+     "proj_id"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "CALENDAR",
+     5,
+     "base_clndr_id"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "CALENDAR",
+     5,
+     "day_hr_cnt"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "CALENDAR",
+     5,
+     "week_hr_cnt"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "CALENDAR",
+     5,
+     "month_hr_cnt"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "CALENDAR",
+     5,
+     "year_hr_cnt"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "PROJWBS",
+     9,
+     "seq_num"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "PROJWBS",
+     9,
+     "status_code"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "PROJWBS",
+     9,
+     "guid"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "TASK",
+     15,
+     "phys_complete_pct"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "TASK",
+     15,
+     "complete_pct_type"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "TASK",
+     15,
+     "duration_type"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "TASK",
+     15,
+     "total_float_hr_cnt"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "TASK",
+     15,
+     "free_float_hr_cnt"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "TASK",
+     15,
+     "late_start_date"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "TASK",
+     15,
+     "late_end_date"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "TASK",
+     15,
+     "restart_date"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "TASK",
+     15,
+     "reend_date"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "TASK",
+     15,
+     "target_start_date"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "TASK",
+     15,
+     "target_end_date"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "TASK",
+     15,
+     "guid"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "TASK",
+     15,
+     "cstr_date2"
+    ],
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "TASK",
+     15,
+     "cstr_type2"
+    ]
+   ],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "missing_end": {
+   "frame_sha256": "de9dc742f0abb9b6ef945398dac1e5cd2ab12bab641cc0d01bc98b8b0d67e6bf",
+   "input_sha256": "dc6ea71a1c0e88aa52dbe02a9b666879112041bc2564f2d51ac68efb7a2e960d",
+   "issues": [
+    [
+     "p6_structure_invalid",
+     "fatal",
+     null,
+     null,
+     null
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "missing_required_field": {
+   "frame_sha256": "7a672894f78e74680da7a51c0a862f09f27776f43d0fe1741f7ceef2a2dfac5b",
+   "input_sha256": "2a7fec1e77dc2620c975f334246dc0eaadfb9394e93427ea7e2e348d84f902c2",
+   "issues": [
+    [
+     "p6_required_field_missing",
+     "fatal",
+     "TASK",
+     15,
+     "remain_drtn_hr_cnt"
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "missing_required_table": {
+   "frame_sha256": "b44dd10f40a2bef8ae0cba10d2f69049846b584ff53182c2ac2352b03955350f",
+   "input_sha256": "9b317055990547c959b59e6a196e0cf14c02fcd3b323ae13058809956e098733",
+   "issues": [
+    [
+     "p6_required_table_missing",
+     "fatal",
+     "TASKPRED",
+     null,
+     null
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "missing_tolerated_field": {
+   "frame_sha256": "f66a71a2fb76178d8ebb5fe41849310ff6aaaa8e33e535b4cc0d85f64f9f29aa",
+   "input_sha256": "8e478dd74a01458f83ef1777ed3827e7d59e870fb0996e4ed60c8c047843a612",
+   "issues": [
+    [
+     "p6_tolerated_field_missing",
+     "info",
+     "TASK",
+     15,
+     "total_float_hr_cnt"
+    ]
+   ],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "multi_project": {
+   "frame_sha256": "0a39b02554129f0859f48f00f8873326a3d8174da7fdc75dce4672a61b57816c",
+   "input_sha256": "189be21330be99ddb7c46634ce05f63164a64e1d31ff9df24794bef61f4f4443",
+   "issues": [
+    [
+     "p6_multiple_projects",
+     "fatal",
+     "PROJECT",
+     5,
+     null
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "no_optional_tables": {
+   "frame_sha256": "384f8de937192215b6a51d70081d6ab739bddf66cc41de203816726879df2578",
+   "input_sha256": "aa6dfb739d56c4fce1cc9df7b01c7c71329e721a7c6fc169cfa683a001c23364",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "no_project_node": {
+   "frame_sha256": "bff46cb4a9235693ca3fbe811543f8c91e98e683319c969950f024b99e5c83bc",
+   "input_sha256": "cbd8d02ed2c626c9bc4133fd5190e3795e5b14a8889931d3093f45833e15e7d4",
+   "issues": [
+    [
+     "p6_structure_invalid",
+     "fatal",
+     "PROJWBS",
+     9,
+     "proj_node_flag"
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "over_length_tolerated": {
+   "frame_sha256": "a7ca7628c060e1cb562c26846f5a675857f84cef1eec3dd8ca0ba8302af8b235",
+   "input_sha256": "a04d6846484179ae0b4532cd9b9a84f258c5de2c93dc8bdddf03a744322ec5c5",
+   "issues": [
+    [
+     "p6_value_invalid",
+     "warning",
+     "TASK",
+     18,
+     "guid"
+    ]
+   ],
+   "outcome": "complete",
+   "verdict": "fail"
+  },
+  "progress_statuses": {
+   "frame_sha256": "558ebf44cdd2f85cee83025835c7d7c51ed8c7386c204a5f8676243d59e5323d",
+   "input_sha256": "e1c98f6dfe860149d3a4d75181954fd16ac936b9042d0700f87eae7635d5edc2",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "rcal_project_neither_progress_flag": {
+   "frame_sha256": "eb00a25dab52c5e58c554bbee280aa486385ac1d2ebfce50cf96a608b9e09e0a",
+   "input_sha256": "19582d4fe7472a6ac17c9b277b12e94c4bc2f33af25fabcdba2a4689386fcf9c",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "record_before_fields": {
+   "frame_sha256": "c2361937a700ee520918dc377a5076d167ce4fc16546c63278347895e052e2b2",
+   "input_sha256": "6069459477c7ccad526830c9d266c014f566c782b309f13633682928a24ad41f",
+   "issues": [
+    [
+     "p6_structure_invalid",
+     "fatal",
+     "TASK",
+     16,
+     null
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "record_before_table": {
+   "frame_sha256": "d26cd6a661c8fc68423da3da361b062953c62f45599f91f8174c2d8f9dce69e2",
+   "input_sha256": "be31cc4ee7598c4c28880c1b1359fc48d0f09efc31cfccb8825ad458ac51a09e",
+   "issues": [
+    [
+     "p6_structure_invalid",
+     "fatal",
+     null,
+     2,
+     null
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "relationship_types_and_lags": {
+   "frame_sha256": "51b9c49d3e7ae8f565db15aac472ab2adea615e62fe42ec2067264f16400421e",
+   "input_sha256": "579e34e086eb68b9f870df84b5a7699dbecec8f7a9cb587eaf94d9874fea3f44",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "table_without_fields": {
+   "frame_sha256": "9e5793280f7495f5576d4307c5047b4d9d1367c120251d52db2ab6b88b32e3e3",
+   "input_sha256": "59a67f5685246008521000c84f1dbcade34d5d30c2d8214468ba51bb27d0651b",
+   "issues": [
+    [
+     "p6_structure_invalid",
+     "fatal",
+     "SYNEMPTY",
+     3,
+     null
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "trailing_blank_lines": {
+   "frame_sha256": "384f8de937192215b6a51d70081d6ab739bddf66cc41de203816726879df2578",
+   "input_sha256": "3739965cac54f10ab93f6f35264309d855473209f9ef861532635d693ef381fb",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "two_project_nodes": {
+   "frame_sha256": "15ee5b004c345d1399d3a7cd371a16ec85d98914a156e0683102d2e1c30b1ca8",
+   "input_sha256": "097bab4d4736b2b20bd9aea61894e8d2e40f8c8f43276f70d31eee4693f28b28",
+   "issues": [
+    [
+     "p6_structure_invalid",
+     "fatal",
+     "PROJWBS",
+     14,
+     "proj_node_flag"
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "udf_all_types": {
+   "frame_sha256": "9f891d797190e9915309e3da634a6a830bb057cc5be7b49b35550da0e21f88c5",
+   "input_sha256": "e8b3176abaf672f8f68436f81144ec47215af530f2dd334b191fec34c17b4a17",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "unknown_enum_required": {
+   "frame_sha256": "c46b4f93b7723da89dfb90cdc5296206ea6f3a72307f0e30c7c9e659d5ae8218",
+   "input_sha256": "8f20001ed18337a445b914e6e08edd84be6def9682bb1e9a6a4235b9b430b7c6",
+   "issues": [
+    [
+     "p6_unknown_enum_value",
+     "fatal",
+     "TASK",
+     18,
+     "task_type"
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "unknown_enum_tolerated": {
+   "frame_sha256": "40e9b86c5afc0846f48c3dac6fdcedfd9ff82e3ef4acba9ce957c77cb656295c",
+   "input_sha256": "3fc0fd43f27265523e4b21908f34ce17114c07d7f83bd661a957263fe61458c9",
+   "issues": [
+    [
+     "p6_unknown_enum_value",
+     "warning",
+     "TASK",
+     18,
+     "duration_type"
+    ]
+   ],
+   "outcome": "complete",
+   "verdict": "pass_with_findings"
+  },
+  "unknown_field": {
+   "frame_sha256": "6c79963bfe957545d193767c5184caddebb96a5ca4fa640a2e673992fa3c14af",
+   "input_sha256": "7c960168f9845fe13b06ef6d14abb3ad385f251b2bd18d6d92c79b89b2842395",
+   "issues": [
+    [
+     "p6_unknown_field",
+     "warning",
+     "TASK",
+     15,
+     "syn_extra_field"
+    ],
+    [
+     "p6_unknown_field_unnamed",
+     "warning",
+     "TASK",
+     15,
+     null
+    ]
+   ],
+   "outcome": "complete",
+   "verdict": "pass_with_findings"
+  },
+  "unknown_field_selected": {
+   "frame_sha256": "4cff9e221c7e4fdfd27dbcccf3e5329140ff4297f168b5f40be503100822e205",
+   "input_sha256": "7c960168f9845fe13b06ef6d14abb3ad385f251b2bd18d6d92c79b89b2842395",
+   "issues": [
+    [
+     "p6_unknown_field",
+     "warning",
+     "TASK",
+     15,
+     "syn_extra_field"
+    ],
+    [
+     "p6_unknown_field_unnamed",
+     "warning",
+     "TASK",
+     15,
+     null
+    ]
+   ],
+   "outcome": "complete",
+   "verdict": "pass_with_findings"
+  },
+  "unknown_table": {
+   "frame_sha256": "dbbd2c4f14daec32d6b7a375bd7e197ee830a9e9fc0813c1d5d8baf37d2be729",
+   "input_sha256": "0557fc9059f4c271a6fee0b44c719a89b0c876b132da3ee58349b4c9308ba7b2",
+   "issues": [
+    [
+     "p6_unknown_table",
+     "warning",
+     "SYNEXTRA",
+     26,
+     null
+    ]
+   ],
+   "outcome": "complete",
+   "verdict": "pass_with_findings"
+  },
+  "utf8_bytes": {
+   "frame_sha256": "ace7f68a7614a014fa14f5304fda704a822d317da94325d5197a1350fd75fccb",
+   "input_sha256": "91fa80c308085e55de39cbfefb936ef174a23ae37c67f8b4a15ea6193957cd88",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "value_invalid_required": {
+   "frame_sha256": "66565bbb9f6ad95a93a136e244cf2ced998e2856ab6825985d879a08a6d2f000",
+   "input_sha256": "48078eddba39b0e1536b8242bc8ed1b9891c00a911be5e252b8a1b304fb789aa",
+   "issues": [
+    [
+     "p6_value_invalid",
+     "fatal",
+     "TASK",
+     18,
+     "early_start_date"
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "value_invalid_tolerated": {
+   "frame_sha256": "d4b9ea5b401d235b3d6b1e46834f44ef9cbe6787905118260d97d33b3ae72de9",
+   "input_sha256": "e060d0e75140f95b4c70234fc2561f1e4502b2095943f8fd79dd92e7f0b94589",
+   "issues": [
+    [
+     "p6_value_invalid",
+     "warning",
+     "TASK",
+     18,
+     "late_start_date"
+    ]
+   ],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
+  "version_19_12": {
+   "frame_sha256": "f3e7d49269c63e6d1abfbe570aef9cb4ebb83ce730e013f206b812bb8e87f355",
+   "input_sha256": "7dc096c8c615ee975c4717358810dd81d4253d3a361641431d09c30dab28d774",
+   "issues": [
+    [
+     "p6_export_version_untested",
+     "warning",
+     null,
+     1,
+     null
+    ]
+   ],
+   "outcome": "complete",
+   "verdict": "pass_with_findings"
+  },
+  "version_8_4": {
+   "frame_sha256": "9ac216b4f3451022e968c01639768eaad08d144350c6953551327109fce4a564",
+   "input_sha256": "447771292f6395cb3c8dc6d62cef2dcb3994d8da9917a3fb9071d1c8d8f55f66",
+   "issues": [
+    [
+     "p6_export_version_untested",
+     "warning",
+     null,
+     1,
+     null
+    ]
+   ],
+   "outcome": "complete",
+   "verdict": "pass_with_findings"
+  },
+  "version_malformed": {
+   "frame_sha256": "04a9f9873e9b580d92a7b883e4cec9a6a8304e0d95ebfb593729225052c3b782",
+   "input_sha256": "d451585064586c0e7e20c758d76be101de7706e7f841e0fd80de5e397c693926",
+   "issues": [
+    [
+     "p6_header_invalid",
+     "fatal",
+     null,
+     1,
+     null
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "wbs_cycle": {
+   "frame_sha256": "9ae4a0bdc74293f73ab21d8d142426616a5ddcf47d850a98a586bdd722ac9293",
+   "input_sha256": "c4775032fd34d75398ac12be211c403e850d6a6e58f1810efc2ce3bd7fac6b3f",
+   "issues": [
+    [
+     "p6_wbs_cycle",
+     "fatal",
+     "PROJWBS",
+     12,
+     "parent_wbs_id"
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  },
+  "width_mismatch": {
+   "frame_sha256": "1479a79e17add425be2de225e58202580ccf3a0c605684d6ef212f5083526102",
+   "input_sha256": "7a1510252c3aec547bd4912a86f75b51f1cb73d62e332877852c9ecfe081a81f",
+   "issues": [
+    [
+     "p6_record_width_mismatch",
+     "fatal",
+     "TASK",
+     18,
+     null
+    ]
+   ],
+   "outcome": "failed",
+   "verdict": "fail"
+  }
+ },
+ "generator_version": 1
+}

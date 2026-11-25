@@ -144,6 +144,7 @@ from my_pa.domain.project_reports.reads import (
     RecordState,
     UsedVersion,
     answer_qualifiers,
+    changed_fields,
     compare_by_content,
     compare_records,
     content_signature,
@@ -1417,19 +1418,25 @@ class ProjectReportReads:
                 )
             )
             observations: list[Observation] = []
-            previous: dict[str, dict[str, str]] = {}
+            # Ruling R1-06: a change is between consecutive versions of a series,
+            # never between two lines of one version. A record on several lines
+            # of a version (an RFI per drawing link) is compared as the multiset
+            # of its lines (B3), and the change is answered once, on the version's
+            # first line.
+            in_version: dict[str, list[ProjectReportReadLine]] = {}
+            for line in mine:
+                in_version.setdefault(line.snapshot_id, []).append(line)
+            previous: dict[str, Mapping[str, str]] = {}
             for line in mine:
                 version = by_snapshot[line.snapshot_id]
-                raw = _raw(line)
-                before = previous.get(version.series_id)
-                changed = (
-                    ()
-                    if before is None
-                    else tuple(
-                        sorted(k for k in set(before) | set(raw) if before.get(k) != raw.get(k))
-                    )
-                )
-                previous[version.series_id] = raw
+                group = in_version[line.snapshot_id]
+                changed: tuple[str, ...] = ()
+                if line is group[0]:
+                    raw = _multiset_raw(group)
+                    before = previous.get(version.series_id)
+                    if before is not None:
+                        changed = changed_fields(before, raw)
+                    previous[version.series_id] = raw
                 observations.append(Observation(line, version.series_id, changed))
             presences: list[SeriesPresence] = []
             for series_id in dict.fromkeys(o.series_id for o in observations):
@@ -1813,22 +1820,26 @@ def _family_only(source: SourceCoverage, family: RecordFamily) -> SourceCoverage
     )
 
 
+def _multiset_raw(lines: Sequence[ProjectReportReadLine]) -> dict[str, str]:
+    """One record's lines of one version as the multiset of each field's raw texts."""
+    texts: dict[str, list[str]] = {}
+    for line in lines:
+        for value in line.values:
+            texts.setdefault(value.field_key, []).append(value.raw_text)
+    # A record on several lines (an RFI per drawing link) compares as the multiset.
+    return {k: "\x1f".join(sorted(v)) for k, v in texts.items()}
+
+
 def _record_states(lines: Sequence[ProjectReportReadLine]) -> dict[str, RecordState]:
     """Each identified record of a version: its first line's status, its fields' raw texts."""
     grouped: dict[str, list[ProjectReportReadLine]] = {}
     for line in lines:
         if line.identity_state is IdentityState.IDENTIFIED and line.identity_key is not None:
             grouped.setdefault(line.identity_key, []).append(line)
-    states: dict[str, RecordState] = {}
-    for key, members in grouped.items():
-        texts: dict[str, list[str]] = {}
-        for line in members:
-            for value in line.values:
-                texts.setdefault(value.field_key, []).append(value.raw_text)
-        # A record on several lines (an RFI per drawing link) compares as the multiset.
-        raw = {k: "\x1f".join(sorted(v)) for k, v in texts.items()}
-        states[key] = RecordState(members[0].status_class, raw)
-    return states
+    return {
+        key: RecordState(members[0].status_class, _multiset_raw(members))
+        for key, members in grouped.items()
+    }
 
 
 def _signature(line: ProjectReportReadLine) -> str:

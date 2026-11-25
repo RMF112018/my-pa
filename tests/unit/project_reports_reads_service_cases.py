@@ -465,6 +465,48 @@ def case_record_history_spans_three_rfi_views(scene: ReadsScene) -> None:
     assert by_id["records"] == payload["records"]
 
 
+def _linked(scene: ReadsScene, name: str, drawings: tuple[str, ...]) -> None:
+    header = adapter(FamilyView.LINKED_TO_DRAWINGS).header
+    rows = [("GMP-174", "Synthetic alpha", drawing, "1", "Pin", "Link") for drawing in drawings]
+    scene.ingest("rfis", name, csv_bytes(header, rows))
+
+
+def case_changed_fields_compare_consecutive_versions_only(scene: ReadsScene) -> None:
+    """Ruling R1-06: never two lines of one version; several lines compare as a multiset."""
+    # The same two links in the other order, then one link replaced.
+    _linked(scene, "20261123-qxrfilinks.csv", ("SYN-A2", "SYN-A1"))
+    _linked(scene, "20261124-qxrfilinks.csv", ("SYN-A1", "SYN-A3"))
+
+    def linked() -> list[tuple[str, list[str]]]:
+        payload = record_history_payload(
+            service(scene).record_history(
+                scene.principal,
+                RecordHistoryRequest(
+                    project_id=RFI_PROJECT[1], record_family="rfis", identity_key="rfi:GMP-174"
+                ),
+            )
+        )
+        (record,) = payload["records"]
+        dates = {v["version"]: v["publication_date"] for v in payload["versions"]}
+        return [
+            (dates[o["version"]], o["changed_fields"])
+            for o in record["observations"]
+            if o["family_view"] == "linked_to_drawings"
+        ]
+
+    assert linked() == [
+        # Two lines of one version are never a change of each other.
+        ("2026-11-21", []),
+        ("2026-11-21", []),
+        # The same multiset of links in another order: no change.
+        ("2026-11-23", []),
+        ("2026-11-23", []),
+        # One link replaced: answered once, on the version's first line.
+        ("2026-11-24", ["rfi.drawing_number"]),
+        ("2026-11-24", []),
+    ]
+
+
 def case_an_absent_record_is_not_observed_never_closed(scene: ReadsScene) -> None:
     """PULSE-AC-11: absent from the latest version is `not_observed`, never closed."""
     reads = service(scene)
@@ -911,6 +953,7 @@ CASES: Final = (
     case_a_cross_check_mismatch_withholds_both_columns,
     case_a_stale_cross_check_is_ignored_after_a_rederivation,
     case_record_history_spans_three_rfi_views,
+    case_changed_fields_compare_consecutive_versions_only,
     case_an_absent_record_is_not_observed_never_closed,
     case_a_quarantined_latest_version_is_latest_unreadable,
     case_a_quarantined_side_is_never_compared,

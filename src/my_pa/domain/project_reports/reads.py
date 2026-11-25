@@ -81,6 +81,7 @@ __all__ = [
     "RecordState",
     "UsedVersion",
     "answer_qualifiers",
+    "changed_fields",
     "compare_by_content",
     "compare_records",
     "content_signature",
@@ -190,7 +191,8 @@ class RecordDiff:
     changed: tuple[tuple[str, tuple[str, ...], StatusClass | None, StatusClass | None], ...]
 
 
-def _changed_fields(old: Mapping[str, str], new: Mapping[str, str]) -> tuple[str, ...]:
+def changed_fields(old: Mapping[str, str], new: Mapping[str, str]) -> tuple[str, ...]:
+    """The field keys whose raw text differs (an absent field is the empty text)."""
     return tuple(sorted(key for key in set(old) | set(new) if old.get(key, "") != new.get(key, "")))
 
 
@@ -200,7 +202,7 @@ def compare_records(
     """Records added, not observed and changed (fields or status) between two versions."""
     changed = []
     for key in sorted(set(before) & set(after)):
-        fields = _changed_fields(before[key].raw, after[key].raw)
+        fields = changed_fields(before[key].raw, after[key].raw)
         old, new = before[key].status_class, after[key].status_class
         if fields or old is not new:
             changed.append((key, fields, old, new))

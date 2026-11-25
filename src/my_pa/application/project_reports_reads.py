@@ -1965,6 +1965,8 @@ def _measure_payload(entry: MeasureEntry) -> dict[str, object]:
             {"key": list(key), **_measure_value(value, money=money, currency=entry.currency)}
             for key, value in answer.by_key.items()
         ]
+        # Lines without an identifier are never keyed (ruling R1-10).
+        payload["unidentified_lines"] = answer.unidentified_lines
     if money:
         # `reportable` certifies source integrity only (ADR-024 decision 2).
         payload["evidence_basis"] = "source_evidence"

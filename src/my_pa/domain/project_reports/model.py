@@ -292,6 +292,9 @@ class NotReportableReason(StrEnum):
     #: Answer-only (WP4P-R1 ruling R1-09): the two sides of a compare delta are
     #: in different currencies, so no delta is given.
     CURRENCY_MIXED = "currency_mixed"
+    #: Answer-only (WP4P-R1 ruling R1-10): a keyed measure has detail lines
+    #: without an identifier, which are never keyed, so no keyed total is given.
+    UNIDENTIFIED_KEY_PRESENT = "unidentified_key_present"
 
 
 class ReportQualifier(StrEnum):

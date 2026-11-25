@@ -651,6 +651,34 @@ def case_a_money_delta_across_two_currencies_is_currency_mixed(scene: ReadsScene
         assert "delta" not in delta
 
 
+def case_an_unidentified_commitment_line_is_never_keyed(scene: ReadsScene) -> None:
+    """Ruling R1-10: no shared empty key; the lines are counted and the total withheld."""
+    reads = service(scene)
+    name = "buyout_summary.commitment_line.amount"
+    request = QueryRequest(
+        project_id=PAIR_PROJECT[1], record_family="buyout", measures=(name,), include_rows=False
+    )
+    keyed = _measure(query_payload(reads.query(scene.principal, request)), name)
+    assert keyed["unidentified_lines"] == 0
+    assert keyed["total"] == {
+        "state": "reportable",
+        "value": {"amount": "1000.00", "currency": "USD"},
+    }
+    # Both commitment lines name one commitment (`SYN-0001.00001` is `SYN-0001.0001`).
+    assert [k["value"]["amount"] for k in keyed["by_key"]] == ["1000.00"]
+    # A later version whose second commitment line lost its number.
+    data = _signature_bytes("buyout_summary")
+    planted = data.replace(b",,,,SYN-0001.0001,Synthetic Vendor A,", b",,,,,Synthetic Vendor A,")
+    assert planted != data
+    scene.ingest(PAIR_PROJECT[0], "20261119-qxbuyout.csv", planted)
+    unkeyed = _measure(query_payload(reads.query(scene.principal, request)), name)
+    assert unkeyed["unidentified_lines"] == 1
+    assert unkeyed["total"] == {"state": "not_reportable", "reasons": ["unidentified_key_present"]}
+    (entry,) = unkeyed["by_key"]
+    assert entry["key"] != [""] and entry["key"][0].startswith("commitment:")
+    assert entry["value"] == {"amount": "600.00", "currency": "USD"}
+
+
 def case_not_found_is_indistinguishable_for_foreign_and_unknown(scene: ReadsScene) -> None:
     reads = service(scene)
     foreign = _refusal(lambda: reads.query(OTHER_PRINCIPAL, _rfi_query(scene)))
@@ -958,6 +986,7 @@ CASES: Final = (
     case_a_quarantined_latest_version_is_latest_unreadable,
     case_a_quarantined_side_is_never_compared,
     case_a_money_delta_across_two_currencies_is_currency_mixed,
+    case_an_unidentified_commitment_line_is_never_keyed,
     case_not_found_is_indistinguishable_for_foreign_and_unknown,
     case_the_facade_answers_absent_unbound_and_quarantined_projects,
     case_coverage_carries_per_version_filter_semantics,

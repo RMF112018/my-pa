@@ -296,6 +296,9 @@ class MeasureAnswer:
     by_key: Mapping[tuple[str, ...], MeasureValue]
     #: Attached to the measure, never a refusal (a count under a mismatch, ruling A2).
     qualifiers: frozenset[ReportQualifier] = frozenset()
+    #: A keyed measure's detail lines without an identifier: never keyed, and
+    #: while any exists the keyed total is unavailable (ruling R1-10).
+    unidentified_lines: int = 0
 
     @property
     def status_basis(self) -> StatusBasis | None:
@@ -437,13 +440,17 @@ def plan_measure(
             MappingProxyType({}),
         )
     if spec.basis is MeasureBasis.KEYED_DETAIL_SUM:
+        # Ruling R1-10: a line without an identifier is never keyed (no shared
+        # empty key); it is counted, and while any exists there is no keyed total.
+        identified = [row for line, row in zip(chosen, rows, strict=True) if line.record_key]
+        unidentified = len(rows) - len(identified)
         keyed = keyed_detail_sums(
-            rows,
+            identified,
             column,
             view=view,
             reconciliation=reconciliation,
             blockers=blockers,
-            judged_over=whole,
+            judged_over=rows if whole is None else whole,
         )
         total = (
             _keyed_total(keyed)
@@ -457,7 +464,11 @@ def plan_measure(
                 judged_over=whole,
             )
         )
-        return MeasureAnswer(spec, total, _EMPTY, keyed)
+        if unidentified:
+            total = MeasureValue(
+                None, total.reasons | {NotReportableReason.UNIDENTIFIED_KEY_PRESENT}
+            )
+        return MeasureAnswer(spec, total, _EMPTY, keyed, unidentified_lines=unidentified)
     total = detail_sum(
         rows,
         column,

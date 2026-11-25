@@ -534,6 +534,30 @@ def test_commitments_are_keyed_and_totalled_only_when_every_key_is_reportable() 
     assert total.reasons == {NotReportableReason.TYPE_ERROR_PRESENT}
 
 
+def test_an_unidentified_commitment_line_is_counted_never_keyed() -> None:
+    """Ruling R1-10: no empty key; while any such line exists there is no keyed total."""
+    spec = MEASURES["buyout_summary.commitment_line.amount"]
+    lines = [
+        _money(LineKind.COMMITMENT, "$10.00", key="commitment:SYN-0001-001.1@SYN-0001-A"),
+        _money(LineKind.COMMITMENT, "$5.00"),
+        _money(LineKind.COMMITMENT, "$2.00"),
+    ]
+    answer = plan_measure(spec, lines, CLASSIFIED)
+    assert {key: value.value for key, value in answer.by_key.items()} == {
+        ("commitment:SYN-0001-001.1@SYN-0001-A",): Decimal("10.0000")
+    }
+    assert answer.unidentified_lines == 2
+    assert answer.total is not None and answer.total.value is None
+    assert answer.total.reasons == {NotReportableReason.UNIDENTIFIED_KEY_PRESENT}
+    alone = plan_measure(spec, lines[1:], CLASSIFIED)
+    assert dict(alone.by_key) == {} and alone.unidentified_lines == 2
+    assert alone.total is not None
+    assert alone.total.reasons == {NotReportableReason.UNIDENTIFIED_KEY_PRESENT}
+    identified = plan_measure(spec, lines[:1], CLASSIFIED)
+    assert identified.unidentified_lines == 0
+    assert identified.total is not None and identified.total.value == Decimal("10.0000")
+
+
 def test_record_counts_are_distinct_records_per_status_class() -> None:
     spec = MEASURES["by_status.record_count"]
     lines = [

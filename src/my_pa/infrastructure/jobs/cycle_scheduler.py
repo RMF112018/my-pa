@@ -53,6 +53,7 @@ __all__ = [
     "CYCLE_SCHEDULER_LOCK_KEY",
     "DEFAULT_COMMS_INGEST_POLL_SECONDS",
     "DEFAULT_CYCLE_POLL_SECONDS",
+    "PROJECT_REPORTS_POLL_LOCK_KEY",
     "CycleSchedulerRun",
     "DailyStep",
     "IntervalStep",
@@ -82,6 +83,11 @@ CYCLE_SCHEDULER_LOCK_KEY: Final = advisory_lock_key(b"my-pa-daily-cycle-schedule
 
 #: The session advisory-lock key every communications ingestion poll contends for.
 COMMS_INGEST_LOCK_KEY: Final = advisory_lock_key(b"my-pa-ingest-poll")
+
+#: The session advisory-lock key of the project-reports lifecycle (WP3P ruling D5):
+#: its poll step (S5) and every bindings apply contend for it, never for the
+#: communications key, so the two lifecycles never block each other.
+PROJECT_REPORTS_POLL_LOCK_KEY: Final = advisory_lock_key(b"my-pa-project-reports-poll")
 
 type RunFor = Callable[[date], bool]
 type Log = Callable[[Mapping[str, object]], None]

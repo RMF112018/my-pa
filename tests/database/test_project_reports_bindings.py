@@ -392,9 +392,7 @@ def test_a_correction_a_filter_update_a_retire_and_a_rebind(operator: Operator) 
     ) == [("isnp_synbindkeep1",)]
 
     # B bound again: the retired source is enabled, not admitted twice.
-    code, out = operator.apply(
-        operator.file(_document(_a(currency="CAD"), _b()), "four.json"), "add"
-    )
+    code, out = operator.apply(operator.file(_document(_a(currency="CAD"), _b()), "four.json"))
     assert code == cli.EXIT_OK, out
     assert out["project_numbers"]["add"] == [PROJECTS[PB]]
     assert (out["writes"]["sources_admitted"], out["writes"]["sources_enabled"]) == (0, 1)

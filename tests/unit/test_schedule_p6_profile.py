@@ -204,3 +204,16 @@ def test_an_unknown_token_in_an_uncaptured_optional_enum_is_a_finding() -> None:
     model.table("TASK").rows[0]["priority_type"] = "PT_Synthetic"
     report = export_profile(fixtures.encode(fixtures.layout(model).lines))
     assert report["verdict"] == "pass_with_findings"
+
+
+def test_a_marker_in_a_bad_table_name_or_a_valid_version_is_not_shown() -> None:
+    model = fixtures.base_model("standard")
+    model.tables.append(fixtures.Table("Zq-55555-Mk", ["syn_note"], [{"syn_note": "x"}]))
+    report = _report_text(fixtures.encode(fixtures.layout(model).lines))
+    assert "55555" not in report
+    assert "p6_unknown_table" in report
+    model = fixtures.base_model("standard")
+    model.header[1] = "26.4.9876"
+    report = _report_text(fixtures.encode(fixtures.layout(model).lines))
+    assert "9876" not in report
+    assert json.loads(report)["export_version_tested"] is True

@@ -40,16 +40,18 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import Engine, MetaData, Table, insert, text
+from sqlalchemy import Engine, MetaData, Table, UniqueConstraint, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
+from tests.fixtures import schedule_p6_xer as xer_fixtures
 from tests.schema.vocabulary_admissions import admitted_ahead_of_the_domain
 
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.schedule import ScheduleIssueCode
 from my_pa.domain.schedule.p6.catalogue import ValueType
-from my_pa.domain.schedule.p6.model import FATAL_CODES, P6IssueCode
+from my_pa.domain.schedule.p6.model import FATAL_CODES, P6IssueCode, P6ParseResult, P6Severity
+from my_pa.domain.schedule.p6.parser import parse_xer
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence import tables
 from my_pa.infrastructure.persistence.tables import audit_events, p6_typed_fields
@@ -217,6 +219,100 @@ def test_the_frozen_issue_codes_are_the_domains() -> None:
     assert _literals(module["_P6_FATAL_CODES"]) == fatal
     assert _literals(module["_P6_EITHER_CODES"]) == either
     assert _literals(module["_P6_WARNING_CODES"]) == sorted(set(p6) - set(fatal) - set(either))
+
+
+#: The two history indexes contract sections 7.3 and 8.4 key by Principal and Series.
+_HISTORY_INDEXES: Final = frozenset(
+    {"schedule_p6_activities_by_stable_activity", "schedule_p6_field_values_by_stable_activity"}
+)
+
+
+@pytest.mark.parametrize("name", PER_RUN_TABLES)
+def test_every_per_run_key_and_index_leads_with_its_run(name: str) -> None:
+    """Contract 8.4: a publication's reads touch only its own index range."""
+    table = tables.METADATA.tables[f"{SCHEMA}.{name}"]
+    keyed: list[tuple[str, list[str]]] = [
+        ("primary key", [column.name for column in table.primary_key.columns])
+    ]
+    keyed += [
+        (str(constraint.name), [column.name for column in constraint.columns])
+        for constraint in table.constraints
+        if isinstance(constraint, UniqueConstraint)
+    ]
+    keyed += [
+        (str(index.name), [str(getattr(e, "name", e)) for e in index.expressions])
+        for index in table.indexes
+        if index.name not in _HISTORY_INDEXES
+    ]
+    for label, columns in keyed:
+        assert columns[0] == "parser_run_id", (name, label, columns)
+
+
+def _pattern(module: dict[str, Any], constant: str) -> re.Pattern[str]:
+    literal = module[constant]
+    assert isinstance(literal, str) and literal[0] == literal[-1] == "'"
+    return re.compile(literal[1:-1])
+
+
+def _parses() -> Iterator[P6ParseResult]:
+    """Every S7-1 fixture, plus unknown tables 5.2 may name but 7.7 cannot key."""
+    for name in xer_fixtures.CASES:
+        case = xer_fixtures.build(name)
+        yield parse_xer(case.data, capture=case.capture)
+    for table in ("Synextra", "S" * 40, "9bad"):
+        model = xer_fixtures.base_model("full")
+        model.insert_after("TASKPRED", xer_fixtures.Table(table, ["syn_key"], [{"syn_key": "1"}]))
+        yield parse_xer(xer_fixtures.encode(xer_fixtures.layout(model).lines))
+
+
+def _source_table(expression: str) -> re.Pattern[str]:
+    match = re.search(r"source_table ~\s+'([^']+)'", expression)
+    assert match is not None, expression
+    return re.compile(match.group(1))
+
+
+def test_what_the_parser_emits_the_schema_admits() -> None:
+    """S7-3 stores the S7-1 parse as it is: every name, key and severity fits a CHECK.
+
+    Section 5.2 names an unknown table or field whenever its name matches
+    `[A-Za-z][A-Za-z0-9_]{0,63}`, so an issue's and an observed field's table
+    admit that pattern; only a field key (section 7.7) needs an upper-case table.
+    """
+    module = _namespace(MIGRATION)
+    ddl = {table: create for table, create, _indexes in module["_RUN_TABLES"]}
+    issue_table = _source_table(
+        dict(module["_ISSUE_CHECKS"])["a_schedule_issue_source_table_is_a_name"]
+    )
+    observed_table = _source_table(ddl["schedule_p6_observed_fields"])
+    value_table = _source_table(ddl["schedule_p6_field_values"])
+    name, key = _pattern(module, "_FIELD_NAME"), _pattern(module, "_FIELD_KEY")
+    tiers, kinds = set(_literals(module["_TIERS"])), set(_literals(module["_ENTITY_KINDS"]))
+    fatal = set(_literals(module["_P6_FATAL_CODES"]))
+    either = set(_literals(module["_P6_EITHER_CODES"]))
+    warning = set(_literals(module["_P6_WARNING_CODES"]))
+    # The issue severity column holds `error` or `warning`: fatal is `error`,
+    # warning and info (`p6_tolerated_field_missing`) are `warning`.
+    stored = {
+        P6Severity.FATAL: fatal | either,
+        P6Severity.WARNING: warning | either,
+        P6Severity.INFO: warning,
+    }
+    reported_lower_case = False
+    for result in _parses():
+        for issue in result.issues:
+            assert issue.code.value in stored[issue.severity], issue
+            assert issue.table is None or issue_table.match(issue.table), issue
+            assert issue.field is None or name.match(issue.field), issue
+            reported_lower_case |= issue.table == "Synextra"
+        for observed in result.observed_fields:
+            assert observed.table is None or observed_table.match(observed.table), observed
+            assert observed.field is None or name.match(observed.field), observed
+            assert observed.field_key is None or key.match(observed.field_key), observed
+            assert observed.tier is None or observed.tier in tiers, observed
+        for value in result.field_values:
+            assert value_table.match(value.source_table) and key.match(value.field_key), value
+            assert value.entity_kind.value in kinds, value
+    assert reported_lower_case
 
 
 def test_the_restated_functions_restore_byte_copies_of_the_foundation() -> None:
@@ -1072,7 +1168,7 @@ def test_a_pdf_run_needs_its_engine_and_a_p6_run_needs_none(
         (
             "p6_unknown_table",
             "warning",
-            {"source_table": "lower"},
+            {"source_table": "9bad"},
             "a_schedule_issue_source_table_is_a_name",
         ),
         (

@@ -153,7 +153,9 @@ _FIELD_KEY: Final = (
     "'^(xer:[A-Z][A-Z0-9_]{0,31}\\.[A-Za-z][A-Za-z0-9_]{0,63}|udf:[A-Z]{1,16}:.{1,120}"
     "|code:.{1,120})$'"
 )
-#: An XER table name and an XER field name (sections 5.2, 7.7).
+#: The table of a captured value (section 7.7: a field key names an upper-case
+#: table) and a name the parser reports (section 5.2: an observed or issue table
+#: or field, named only when it matches, else positioned by line or position).
 _TABLE_NAME: Final = "'^[A-Z][A-Z0-9_]{0,31}$'"
 _FIELD_NAME: Final = "'^[A-Za-z][A-Za-z0-9_]{0,63}$'"
 #: Section 5.3: a stored enumeration token.
@@ -367,7 +369,7 @@ _ISSUE_RESTATED: Final = (
 _ISSUE_CHECKS: Final = (
     (
         "a_schedule_issue_source_table_is_a_name",
-        f"source_table IS NULL OR source_table ~ {_TABLE_NAME}",
+        f"source_table IS NULL OR source_table ~ {_FIELD_NAME}",
     ),
     ("a_schedule_issue_record_line_is_positive", "record_line IS NULL OR record_line >= 1"),
     (
@@ -731,7 +733,7 @@ _RUN_TABLES: Final[tuple[tuple[str, str, tuple[str, ...]], ...]] = (
       {_id("principal_id", "prn")},
       {_id("publication_id", "spub")},
       CONSTRAINT a_p6_observed_field_is_named CHECK (table_position >= 0 AND
-          field_position >= 0 AND (source_table IS NULL OR source_table ~ {_TABLE_NAME})
+          field_position >= 0 AND (source_table IS NULL OR source_table ~ {_FIELD_NAME})
           AND (field_name IS NULL OR field_name ~ {_FIELD_NAME}) AND (field_key IS NULL OR
           field_key ~ {_FIELD_KEY}) AND (tier IS NULL OR tier IN ({_TIERS}))),
       CONSTRAINT a_p6_observed_field_counts_are_consistent CHECK (record_count >= 0 AND

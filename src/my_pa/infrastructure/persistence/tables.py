@@ -22057,7 +22057,9 @@ _P6_NEVER_FATAL: Final = frozenset(code.value for code in P6IssueCode) - _P6_FAT
 #: Files workspace contract section 2: the workspace alias, a lower-case token
 #: (declared here because `schedule_publications` names one since S7-2).
 _FILE_WORKSPACE_ALIAS: Final = "^[a-z][a-z0-9_]{0,63}$"
-#: Sections 5.2 and 7.7: an XER table name and field name.
+#: Section 7.7: the upper-case table a field key names (a captured value's
+#: table). Section 5.2: a name the parser reports (an issue's or observed
+#: field's table, or a field), named only when it matches.
 _P6_TABLE_NAME: Final = "^[A-Z][A-Z0-9_]{0,31}$"
 _P6_FIELD_NAME: Final = "^[A-Za-z][A-Za-z0-9_]{0,63}$"
 
@@ -22916,7 +22918,7 @@ schedule_import_issues = Table(
         name="a_schedule_issue_severity_matches_its_code",
     ),
     CheckConstraint(
-        f"source_table IS NULL OR source_table ~ '{_P6_TABLE_NAME}'",
+        f"source_table IS NULL OR source_table ~ '{_P6_FIELD_NAME}'",
         name="a_schedule_issue_source_table_is_a_name",
     ),
     CheckConstraint(
@@ -24465,7 +24467,7 @@ schedule_p6_observed_fields = Table(
     _is_identifier("publication_id", IdKind.SCHEDULE_PUBLICATION),
     CheckConstraint(
         "table_position >= 0 AND field_position >= 0 AND (source_table IS NULL OR "
-        f"source_table ~ '{_P6_TABLE_NAME}') AND (field_name IS NULL OR field_name ~ "
+        f"source_table ~ '{_P6_FIELD_NAME}') AND (field_name IS NULL OR field_name ~ "
         f"'{_P6_FIELD_NAME}') AND (field_key IS NULL OR field_key ~ '{_P6_FIELD_KEY}') AND "
         f"(tier IS NULL OR tier IN ({_literals(Tier)}))",
         name="a_p6_observed_field_is_named",

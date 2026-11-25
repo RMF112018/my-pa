@@ -143,14 +143,14 @@
     "revision_files": 135
   },
   "census": {
-    "architecture": 10063,
-    "database": 7256,
+    "architecture": 10103,
+    "database": 7282,
     "evaluation": 2,
-    "fast_collected": 52577,
+    "fast_collected": 52722,
     "fast_skipped": 138,
-    "mypy_files": 778,
-    "src_modules": 580,
-    "test_modules": 1068
+    "mypy_files": 781,
+    "src_modules": 583,
+    "test_modules": 1071
   },
   "chatllm": {
     "classes": {
@@ -170,7 +170,7 @@
     "chatllm_policy_entries": 301,
     "id_kind": 195,
     "purpose": 70,
-    "safe_detail": 442
+    "safe_detail": 452
   },
   "vocabulary": {
     "capability": [
@@ -827,6 +827,7 @@
       "closure_evidence_anchors",
       "closure_evidence_ref",
       "closure_gate",
+      "collapse",
       "commitment_id",
       "communication_method_id",
       "concurrent_retirement",
@@ -845,6 +846,7 @@
       "context_source_object_id",
       "context_source_version_id",
       "conversation_context",
+      "conversation_id",
       "corrected_value",
       "correction_reason",
       "counterparty_entity_id",
@@ -927,11 +929,13 @@
       "file_handle_unsupported",
       "focus_area_id",
       "focus_entity_id",
+      "folder_role",
       "format",
       "from",
       "from_baseline_id",
       "from_entity_id",
       "from_publication_id",
+      "from_utc",
       "from_version_id",
       "geometry",
       "governing",
@@ -952,6 +956,7 @@
       "include_manifests",
       "include_sha256",
       "include_statement",
+      "include_text",
       "include_withdrawn",
       "invalid_evidence_reference",
       "invalid_path",
@@ -995,6 +1000,7 @@
       "memory_kind",
       "mention_display_name",
       "merged_away",
+      "message_ids",
       "metadata",
       "method_type_code",
       "minutes_per_source_unit",
@@ -1035,6 +1041,8 @@
       "parents",
       "part",
       "participant_entity_id",
+      "participant_mode",
+      "participants",
       "participation_id",
       "patch",
       "path",
@@ -1129,6 +1137,7 @@
       "situation_id",
       "size",
       "snippet_words",
+      "source",
       "source_file",
       "source_id",
       "source_lane",
@@ -1163,6 +1172,7 @@
       "to_entity_id",
       "to_path",
       "to_publication_id",
+      "to_utc",
       "too_large",
       "topics",
       "transcription",

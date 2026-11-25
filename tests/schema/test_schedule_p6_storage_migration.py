@@ -11,8 +11,8 @@ the one migration of the P6 XER import (schedule XER import contract sections
   bodies are byte copies of `6c2306330ceb`'s; on a live server the catalog it
   builds equals the catalog `tables.py` builds for every new and altered table;
 * **the audit vocabulary** -- the BEFORE texts are byte copies of the latest
-  prior restatements and the AT texts add exactly the seven S7-4 capability names and two
-  purposes of contract section 10.1, admitted ahead of the domain;
+  prior restatements and the AT texts add exactly the S7-4 capability and purpose
+  names of contract section 10.1, admitted ahead of the domain;
 * **offline SQL** for both directions, without a server;
 * on disposable databases: up/down/up; an existing PDF publication survives
   the upgrade unchanged; the publication CHECK matrix; every new foreign key

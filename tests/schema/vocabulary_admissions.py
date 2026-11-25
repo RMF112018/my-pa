@@ -69,7 +69,7 @@ CAPABILITY_ADMISSIONS: Final[Mapping[str, tuple[str, frozenset[str]]]] = Mapping
 #: before them). Same rules as `CAPABILITY_ADMISSIONS`.
 PURPOSE_ADMISSIONS: Final[Mapping[str, tuple[str, frozenset[str]]]] = MappingProxyType(
     {
-        # P6 XER import S7-2: contract section 10.1's two new purposes.
+        # P6 XER import S7-2: the new purpose names of contract section 10.1.
         "schedule_p6": (
             "d8383150cf72",
             frozenset({"schedule_p6_import", "schedule_p6_configuration"}),

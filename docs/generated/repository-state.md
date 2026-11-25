@@ -57,10 +57,10 @@ measurable at collection and is carried (`regen --measure --fast-skipped N`).
 
 | Tier or corpus | Selection | Collected | A green execution requires |
 | --- | --- | --- | --- |
-| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 51,985 | 51,847 passed, 138 skipped |
-| Architecture | `pytest tests/architecture` | 10,025 | 10,025 passed, 0 skipped |
+| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 52,532 | 52,394 passed, 138 skipped |
+| Architecture | `pytest tests/architecture` | 10,048 | 10,048 passed, 0 skipped |
 | Database | `pytest -m "database or recovery or e2e"` | 7,249 | 7,249 passed, 0 skipped |
 | Evaluation | `pytest -m "evaluation"` | 2 | 2 passed |
-| mypy corpus | `mypy` (`[tool.mypy] files`) | 775 files | no issues found |
-| Source modules | `find src/my_pa -name "*.py"` | 577 |  |
-| Test modules | `find tests -name "test_*.py"` | 1,063 |  |
+| mypy corpus | `mypy` (`[tool.mypy] files`) | 777 files | no issues found |
+| Source modules | `find src/my_pa -name "*.py"` | 579 |  |
+| Test modules | `find tests -name "test_*.py"` | 1,065 |  |

@@ -1466,3 +1466,86 @@ def test_rejected_baseline_reads_rejected(
         baseline_id=proposal["baseline_id"], reason="Synthetic", idempotency_key=_key("rev")
     )
     assert plane.refused(revoke, surface=OperatorSurface.CLI) == ("conflict", ["baseline_id"])
+
+
+# ---- S7-0 (import contract section 11.7): engine by content schema ------------------------------
+
+
+def test_runs_are_stored_and_replayed_under_the_content_engine(
+    rt: ScheduleRuntime, w: World, plane: Plane, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E8: a v1 version runs, stores and replays as `my-pa-cpm-v1`; a v2 version (one
+    start milestone) as `my-pa-cpm-v2`; `schedule_cpm_runs.read` reports each; and
+    removing the milestone returns the identical v1 content digest."""
+    publication = _publish(rt, w, monkeypatch)
+    created = _scenario(plane, publication)
+    request = _cpm(created["version_id"])
+    v1_run = plane.ok(request)
+    assert v1_run["engine_version"] == "my-pa-cpm-v1"
+    assert v1_run["__disclosure__"]["trust"]["basis"] == [
+        "schedule_scenario",
+        "client_authored",
+        "schedule_cpm",
+        "my-pa-cpm-v1",
+        "server_computed",
+    ]
+    replay = plane.ok(request)
+    assert replay["replayed"] is True and replay["engine_version"] == "my-pa-cpm-v1"
+    keys = [
+        row["key"]
+        for row in plane.ok(ListScheduleScenarioActivities(version_id=created["version_id"]))[
+            "activities"
+        ]
+    ]
+    edged = plane.ok(
+        _append(
+            created["scenario_id"],
+            change_set=[
+                {"op": "activity.add", "key": "x:M", "name": "Start", "kind": "start_milestone"},
+                {"op": "relationship.add", "pred": "x:M", "succ": keys[0], "type": "FS"},
+            ],
+        )
+    )
+    assert edged["content_sha256"] != created["content_sha256"]
+    rows = plane.ok(ListScheduleScenarioActivities(version_id=edged["version_id"]))["activities"]
+    assert {row["key"]: row["kind"] for row in rows}["x:M"] == "start_milestone"
+    # A v2 content carries `fields` (null) on every published reference.
+    assert all("fields" in row["published_reference"] for row in rows if row["published_reference"])
+    v2_request = _cpm(edged["version_id"])
+    v2_run = plane.ok(v2_request)
+    assert v2_run["engine_version"] == "my-pa-cpm-v2" and v2_run["created"] is True
+    assert "my-pa-cpm-v2" in v2_run["__disclosure__"]["trust"]["basis"]
+    assert plane.ok(v2_request)["replayed"] is True
+    for run, engine in ((v1_run, "my-pa-cpm-v1"), (v2_run, "my-pa-cpm-v2")):
+        detail = plane.ok(ReadScheduleCpmRun(cpm_run_id=run["cpm_run_id"]))
+        assert detail["engine_version"] == engine
+        assert engine in detail["__disclosure__"]["trust"]["basis"]
+    restored = plane.ok(
+        _append(
+            created["scenario_id"],
+            head=2,
+            change_set=[{"op": "activity.remove", "key": "x:M"}],
+        )
+    )
+    assert restored["content_sha256"] == created["content_sha256"]
+    assert plane.ok(_cpm(restored["version_id"]))["engine_version"] == "my-pa-cpm-v1"
+    stored = rt.scalar(
+        "SELECT string_agg(engine_version, ',' ORDER BY engine_version) "
+        "FROM knowledge.schedule_cpm_runs"
+    )
+    assert stored == "my-pa-cpm-v1,my-pa-cpm-v1,my-pa-cpm-v2"
+
+
+def test_a_snapshot_without_calendars_takes_the_standard_calendar(
+    rt: ScheduleRuntime, w: World, plane: Plane, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """E7 (application): no calendars and no default -> `my-pa-us-40h-v1`, a v1 content."""
+    publication = _publish(rt, w, monkeypatch)
+    created = plane.ok(_create(publication, calendars=None, default_calendar=None))
+    version = plane.ok(ReadScheduleScenarioVersion(version_id=created["version_id"]))
+    assert [calendar["key"] for calendar in version["calendars"]] == ["my-pa-us-40h-v1"]
+    assert version["settings"]["default_calendar"] == "my-pa-us-40h-v1"
+    # Data date 2026-05-04: the holidays of 2024..2046, 11 a year.
+    assert len(version["calendars"][0]["exceptions"]) == 23 * 11
+    run = plane.ok(_cpm(created["version_id"]))
+    assert run["engine_version"] == "my-pa-cpm-v1" and run["status"] == "computed"

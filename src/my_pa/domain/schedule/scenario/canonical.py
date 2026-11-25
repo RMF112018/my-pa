@@ -10,6 +10,15 @@ records already hold; numbers are Python `int` only.
 `content_from_object` is the strict inverse of `content_object`: exact key
 sets, closed values, and every record rebuilt through its constructor. Any
 refusal is `ScenarioDecodeError`, whose message carries nothing of the object.
+
+S7-0 (`docs/architecture/schedule-xer-import-contract.md` section 11.7): the
+content schema follows the content. A content without any v2 feature
+(`uses_v2_features`) is a byte-identical `schedule-scenario-content-v1`
+document with the v1 digest; one with any is `schedule-scenario-content-v2`,
+whose only shape difference is the `fields` key on every non-null
+`published_reference`, digested under its own prefix. The decoder refuses a
+document whose `schema` is not the one its content implies, so every content
+has exactly one canonical form.
 """
 
 from __future__ import annotations
@@ -27,10 +36,10 @@ from my_pa.domain.schedule.scenario.model import (
     ActivityKind,
     ActivityProgress,
     CalendarException,
+    CapturedValue,
     ConstraintType,
     DistributionKind,
     DurationDistribution,
-    LagCalendar,
     ProgressPolicy,
     PublishedReference,
     RelationshipType,
@@ -41,11 +50,15 @@ from my_pa.domain.schedule.scenario.model import (
     ScenarioSettings,
     format_instant,
     parse_instant,
+    parse_lag_calendar,
+    uses_v2_features,
 )
 
 __all__ = [
     "CHANGE_SET_SCHEMA",
     "CONTENT_SCHEMA",
+    "CONTENT_SCHEMAS",
+    "CONTENT_SCHEMA_V2",
     "DISTRIBUTIONS_SCHEMA",
     "OUTPUT_SCHEMA",
     "REQUEST_SCHEMA",
@@ -59,6 +72,7 @@ __all__ = [
     "content_bytes",
     "content_from_object",
     "content_object",
+    "content_schema",
     "content_sha256",
     "distribution_from_object",
     "distribution_spec_sha256",
@@ -69,6 +83,10 @@ __all__ = [
 ]
 
 CONTENT_SCHEMA: Final = "schedule-scenario-content-v1"
+#: S7-0 (section 11.7): a content using an edged milestone, a fixed lag calendar
+#: or captured fields.
+CONTENT_SCHEMA_V2: Final = "schedule-scenario-content-v2"
+CONTENT_SCHEMAS: Final = (CONTENT_SCHEMA, CONTENT_SCHEMA_V2)
 CHANGE_SET_SCHEMA: Final = "schedule-scenario-change-set-v1"
 RESULT_SCHEMA: Final = "schedule-cpm-result-v1"
 OUTPUT_SCHEMA: Final = "schedule-scenario-output-v1"
@@ -117,10 +135,12 @@ def _date_cell(cell: ScheduleDateCell) -> dict[str, object]:
     }
 
 
-def _reference_object(reference: PublishedReference | None) -> dict[str, object] | None:
+def _reference_object(
+    reference: PublishedReference | None, *, v2: bool
+) -> dict[str, object] | None:
     if reference is None:
         return None
-    return {
+    document: dict[str, object] = {
         "publication_id": reference.publication_id,
         "published_activity_id": reference.published_activity_id,
         "original_duration": _duration_cell(reference.original_duration),
@@ -128,6 +148,12 @@ def _reference_object(reference: PublishedReference | None) -> dict[str, object]
         "start": _date_cell(reference.start),
         "finish": _date_cell(reference.finish),
     }
+    if v2:
+        # A v2 document carries the key on every reference (absent = null); a
+        # v1 document never has it, so its bytes are exactly the S6 bytes.
+        fields = reference.fields
+        document["fields"] = None if fields is None else dict(fields)
+    return document
 
 
 def _distribution_object(value: DurationDistribution | None) -> dict[str, object] | None:
@@ -136,7 +162,8 @@ def _distribution_object(value: DurationDistribution | None) -> dict[str, object
     return {"kind": value.kind.value, **value.parameters()}
 
 
-def activity_object(activity: ScenarioActivity) -> dict[str, object]:
+def activity_object(activity: ScenarioActivity, *, v2: bool = False) -> dict[str, object]:
+    """One activity's canonical object; `v2` adds `published_reference.fields`."""
     progress = activity.progress
     return {
         "key": activity.key,
@@ -157,15 +184,22 @@ def activity_object(activity: ScenarioActivity) -> dict[str, object]:
             "actual_finish": _optional_instant(progress.actual_finish),
         },
         "distribution": _distribution_object(activity.distribution),
-        "published_reference": _reference_object(activity.published_reference),
+        "published_reference": _reference_object(activity.published_reference, v2=v2),
     }
 
 
+def content_schema(content: ScenarioContent) -> str:
+    """Section 11.7: `-v2` iff the content uses a v2 feature, else `-v1`."""
+    return CONTENT_SCHEMA_V2 if uses_v2_features(content) else CONTENT_SCHEMA
+
+
 def content_object(content: ScenarioContent) -> dict[str, object]:
-    """The `schedule-scenario-content-v1` object; every key present, absent = null."""
+    """The content's canonical object (its own schema); every key present, absent = null."""
     settings = content.settings
+    schema = content_schema(content)
+    v2 = schema == CONTENT_SCHEMA_V2
     return {
-        "schema": CONTENT_SCHEMA,
+        "schema": schema,
         "data_date": format_instant(content.data_date),
         "settings": {
             "default_calendar": settings.default_calendar,
@@ -175,7 +209,7 @@ def content_object(content: ScenarioContent) -> dict[str, object]:
             "critical_float_threshold_minutes": settings.critical_float_threshold_minutes,
         },
         "calendars": [_calendar_object(calendar) for calendar in content.calendars],
-        "activities": [activity_object(activity) for activity in content.activities],
+        "activities": [activity_object(activity, v2=v2) for activity in content.activities],
         "relationships": [
             {
                 "pred": item.pred,
@@ -193,8 +227,8 @@ def content_bytes(content: ScenarioContent) -> bytes:
 
 
 def content_sha256(content: ScenarioContent) -> str:
-    """`sha256(b"schedule-scenario-content-v1\\n" + canonical)`."""
-    return _digest(CONTENT_SCHEMA, content_bytes(content))
+    """`sha256(b"<content schema>\\n" + canonical)`; the v1 prefix for every v1 content."""
+    return _digest(content_schema(content), content_bytes(content))
 
 
 # --- decoding --------------------------------------------------------------------------
@@ -302,6 +336,7 @@ _REFERENCE_KEYS: Final = frozenset(
         "finish",
     }
 )
+_REFERENCE_KEYS_V2: Final = _REFERENCE_KEYS | {"fields"}
 _RELATIONSHIP_KEYS: Final = frozenset({"pred", "succ", "type", "lag_minutes"})
 _CONTENT_KEYS: Final = frozenset(
     {"schema", "data_date", "settings", "calendars", "activities", "relationships"}
@@ -362,10 +397,23 @@ def _date_cell_from(value: object) -> ScheduleDateCell:
     )
 
 
-def _reference_from(value: object) -> PublishedReference | None:
+def _captured_fields(value: object) -> tuple[tuple[str, CapturedValue], ...] | None:
     if value is None:
         return None
-    item = _mapping(value, _REFERENCE_KEYS)
+    if not isinstance(value, dict):
+        raise _refuse()
+    fields: list[tuple[str, CapturedValue]] = []
+    for name, raw in value.items():
+        if not (raw is None or isinstance(raw, str | int)):
+            raise _refuse()
+        fields.append((_text(name), raw))
+    return tuple(fields)
+
+
+def _reference_from(value: object, *, v2: bool) -> PublishedReference | None:
+    if value is None:
+        return None
+    item = _mapping(value, _REFERENCE_KEYS_V2 if v2 else _REFERENCE_KEYS)
     return PublishedReference(
         publication_id=_text(item["publication_id"]),
         published_activity_id=_text(item["published_activity_id"]),
@@ -373,6 +421,7 @@ def _reference_from(value: object) -> PublishedReference | None:
         remaining_duration=_duration_cell_from(item["remaining_duration"]),
         start=_date_cell_from(item["start"]),
         finish=_date_cell_from(item["finish"]),
+        fields=_captured_fields(item["fields"]) if v2 else None,
     )
 
 
@@ -386,7 +435,7 @@ def _progress_from(value: object) -> ActivityProgress | None:
     )
 
 
-def _activity_from(value: object) -> ScenarioActivity:
+def _activity_from(value: object, *, v2: bool) -> ScenarioActivity:
     item = _mapping(value, _ACTIVITY_KEYS)
     path = item["wbs_path"]
     distribution = item["distribution"]
@@ -406,7 +455,7 @@ def _activity_from(value: object) -> ScenarioActivity:
         ),
         progress=_progress_from(item["progress"]),
         distribution=None if distribution is None else distribution_from_object(distribution),
-        published_reference=_reference_from(item["published_reference"]),
+        published_reference=_reference_from(item["published_reference"], v2=v2),
     )
 
 
@@ -424,26 +473,33 @@ def content_from_object(obj: object) -> ScenarioContent:
     """Rebuild a content from its object, or raise `ScenarioDecodeError`.
 
     List order is not required (the records sort themselves); keys, types and
-    closed values are. Cross-references are left to `content_problem`.
+    closed values are. Cross-references are left to `content_problem`. The
+    `schema` must be the one the decoded content implies (section 11.7): a v1
+    object that uses a v2 feature, or a v2 object that uses none, is refused.
     """
     try:
         item = _mapping(obj, _CONTENT_KEYS)
-        if item["schema"] != CONTENT_SCHEMA:
+        schema = item["schema"]
+        if schema not in CONTENT_SCHEMAS:
             raise _refuse()
+        v2 = schema == CONTENT_SCHEMA_V2
         settings = _mapping(item["settings"], _SETTINGS_KEYS)
-        return ScenarioContent(
+        content = ScenarioContent(
             data_date=_instant(item["data_date"]),
             settings=ScenarioSettings(
                 default_calendar=_text(settings["default_calendar"]),
-                lag_calendar=LagCalendar(_text(settings["lag_calendar"])),
+                lag_calendar=parse_lag_calendar(_text(settings["lag_calendar"])),
                 progress_policy=ProgressPolicy(_text(settings["progress_policy"])),
                 must_finish_by=_optional_instant_value(settings["must_finish_by"]),
                 critical_float_threshold_minutes=_int(settings["critical_float_threshold_minutes"]),
             ),
             calendars=tuple(calendar_from_object(raw) for raw in _list(item["calendars"])),
-            activities=tuple(_activity_from(raw) for raw in _list(item["activities"])),
+            activities=tuple(_activity_from(raw, v2=v2) for raw in _list(item["activities"])),
             relationships=tuple(_relationship_from(raw) for raw in _list(item["relationships"])),
         )
+        if content_schema(content) != schema:
+            raise _refuse()
+        return content
     except ScenarioDecodeError:
         raise
     except (ValueError, TypeError, KeyError, ArithmeticError):

@@ -9,6 +9,12 @@ the longest path from `j` to a sink `s` (plus `d_s`). TF and the critical set
 follow. The oracle enumerates paths explicitly and shares no code with the
 engine. 2,000 seeded random DAGs of 2..7 activities, all 4 types, lags in
 [-480, 480], durations in [0, 960], no constraint or progress.
+
+S7-0 (import contract section 11.7): the same oracle checks `my-pa-cpm-v2`.
+On an all-working calendar `next_work` and `prev_end` are the identity, so a
+zero-duration activity written `start_milestone` or `finish_milestone` has the
+oracle's dates, and a fixed lag calendar (`calendar:all`) measures lags exactly
+like the activities' own calendar.
 """
 
 from __future__ import annotations
@@ -19,13 +25,17 @@ from typing import Final
 
 import pytest
 
-from my_pa.domain.schedule.scenario.cpm import CpmStatus, run_cpm
+from my_pa.domain.schedule.scenario.cpm import ENGINE_VERSION_V2, CpmStatus, run_cpm
 from my_pa.domain.schedule.scenario.model import (
+    ActivityKind,
+    FixedLagCalendar,
     LagCalendar,
+    LagCalendarSetting,
+    ScenarioActivity,
     ScenarioCalendar,
     parse_instant,
 )
-from tests.fixtures.schedule_scenario import key, link, network, task
+from tests.fixtures.schedule_scenario import key, link, milestone, network, task
 
 ALL_DAY: Final = ScenarioCalendar("all", (((0, 1440),),) * 7)
 DATA_DATE: Final = "2027-01-04T00:00"
@@ -82,19 +92,27 @@ def _random_dag(rng: random.Random) -> tuple[list[int], list[Edge]]:
     return durations, edges
 
 
-def _check(seed: int) -> None:
+def _check(seed: int, *, v2: bool = False) -> None:
     rng = _rng(seed)
     durations, edges = _random_dag(rng)
     # Shuffle the names so key order is not the generation order.
     names = [f"N{index}" for index in range(len(durations))]
     rng.shuffle(names)
+    lag_calendar: LagCalendarSetting = rng.choice(list(LagCalendar))
+    activities = [task(names[i], durations[i]) for i in range(len(durations))]
+    if v2:
+        # A separate stream, so the v1 networks are exactly the S6 ones.
+        edged = _rng(1_000_000 + seed)
+        durations = [0 if edged.random() < 0.5 else value for value in durations]
+        activities = [_v2_activity(names[i], durations[i], edged) for i in range(len(durations))]
+        lag_calendar = FixedLagCalendar("all") if edged.random() < 0.5 else lag_calendar
     content = network(
-        [task(names[i], durations[i]) for i in range(len(durations))],
+        activities,
         [link(names[i], names[j], kind, lag) for i, j, kind, lag in edges],
         data_date=DATA_DATE,
         calendars=(ALL_DAY,),
         default_calendar="all",
-        lag_calendar=rng.choice(list(LagCalendar)),
+        lag_calendar=lag_calendar,
     )
     result = run_cpm(content)
     assert result.status is CpmStatus.COMPUTED, seed
@@ -129,6 +147,36 @@ def _check(seed: int) -> None:
         if total_float <= 0:
             critical.add(item.key)
     assert {item.key for item in result.activities if item.critical} == critical
+
+
+def _v2_activity(name: str, duration: int, rng: random.Random) -> ScenarioActivity:
+    if duration:
+        return task(name, duration)
+    return milestone(
+        name,
+        rng.choice(
+            [ActivityKind.START_MILESTONE, ActivityKind.FINISH_MILESTONE, ActivityKind.MILESTONE]
+        ),
+    )
+
+
+@pytest.mark.parametrize("batch", range(BATCHES))
+def test_cpm_v2_matches_the_longest_path_oracle(batch: int) -> None:
+    """S7-0: `my-pa-cpm-v2` with edged milestones and fixed lag calendars, same oracle."""
+    size = NETWORKS // BATCHES
+    for seed in range(batch * size, (batch + 1) * size):
+        _check(seed, v2=True)
+
+
+def test_an_edged_milestone_network_runs_on_v2() -> None:
+    content = network(
+        [task("A", 60), milestone("M", ActivityKind.START_MILESTONE)],
+        [link("A", "M")],
+        data_date=DATA_DATE,
+        calendars=(ALL_DAY,),
+        default_calendar="all",
+    )
+    assert run_cpm(content).engine_version == ENGINE_VERSION_V2
 
 
 @pytest.mark.parametrize("batch", range(BATCHES))

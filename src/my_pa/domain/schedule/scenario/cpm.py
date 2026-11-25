@@ -1,4 +1,4 @@
-"""Schedule Scenarios S6-1: the deterministic CPM engine `my-pa-cpm-v1` (contract section 3).
+"""Schedule Scenarios S6-1: the deterministic CPM engines `my-pa-cpm-v1` and `-v2` (section 3).
 
 `run_cpm(content)` is a pure function of the content (and the engine version):
 no clock, randomness, environment, locale or unordered iteration reaches the
@@ -23,6 +23,24 @@ the backward pass); +1 per outermost calendar-function call (`shift` counts as
 its inner call; `snap`/`snap_back` call nothing for a zero duration); +1 per
 depth-first step and per dynamic-programming node. Before each increment, if
 the counter equals the budget, the run is rejected `operation_budget_exceeded`.
+
+`my-pa-cpm-v2` (S7-0, `docs/architecture/schedule-xer-import-contract.md`
+section 11.7) is chosen by the content schema and never crossed with v1: a
+`schedule-scenario-content-v1` content runs on v1, a `-v2` content on v2
+(`engine_version_for`). v2 is v1 plus additive branches that a v1 content can
+never reach:
+
+* a start milestone's date snaps forward to the next working start
+  (`ES = EF = next_work(C, x)`, `LS = LF = next_work(C, y)`), a finish
+  milestone's back to the previous working end (`ES = EF = max(D,
+  prev_end(C, x))`, `LS = LF = prev_end(C, y)`); a kept mandatory pin is never
+  snapped; snapping crosses only non-working time, so floats are unchanged;
+* an edged milestone with progress is complete at its one date;
+* a fixed lag calendar (`calendar:<key>`) measures every lag on that calendar.
+
+Each snap is one counted calendar call. `milestone` keeps its v1 meaning on
+both engines, so a content without any v2 feature computes the same activity
+results on either path (only `engine_version` differs).
 """
 
 from __future__ import annotations
@@ -46,20 +64,27 @@ from my_pa.domain.schedule.scenario.calendar import retreat as _retreat
 from my_pa.domain.schedule.scenario.calendar import working_minutes as _working_minutes
 from my_pa.domain.schedule.scenario.canonical import RESULT_SCHEMA, content_sha256
 from my_pa.domain.schedule.scenario.model import (
+    EDGED_MILESTONE_KINDS,
+    ActivityKind,
     ActivityState,
     ConstraintType,
+    FixedLagCalendar,
     LagCalendar,
     ProgressPolicy,
     RelationshipType,
+    ScenarioActivity,
     ScenarioContent,
     activity_state,
     format_instant,
+    uses_v2_features,
 )
 
 __all__ = [
     "CPM_OPERATION_BUDGET",
     "CRITICAL_PATH_COUNT_CAP",
     "ENGINE_VERSION",
+    "ENGINE_VERSIONS",
+    "ENGINE_VERSION_V2",
     "ISSUE_SEVERITY",
     "MAX_CRITICAL_PATHS",
     "MAX_CRITICAL_PATH_KEYS",
@@ -73,11 +98,16 @@ __all__ = [
     "CpmResult",
     "CpmStatus",
     "CpmSummary",
+    "engine_version_for",
     "result_document",
     "run_cpm",
 ]
 
+#: Frozen (section 11.7): every v1 content's result is byte-identical forever.
 ENGINE_VERSION: Final = "my-pa-cpm-v1"
+#: S7-0: edged milestones and fixed lag calendars; runs `-v2` contents only.
+ENGINE_VERSION_V2: Final = "my-pa-cpm-v2"
+ENGINE_VERSIONS: Final = (ENGINE_VERSION, ENGINE_VERSION_V2)
 #: Production budget; a request can never set it (section 3.11).
 CPM_OPERATION_BUDGET: Final = 4_000_000
 MAX_CRITICAL_PATHS: Final = 16
@@ -316,6 +346,11 @@ class _RejectedError(Exception):
 _BUDGET_ISSUE: Final = CpmIssue(CpmIssueCode.OPERATION_BUDGET_EXCEEDED)
 
 
+def engine_version_for(content: ScenarioContent) -> str:
+    """Section 11.7: the content schema chooses the engine (v1 -> v1, v2 -> v2)."""
+    return ENGINE_VERSION_V2 if uses_v2_features(content) else ENGINE_VERSION
+
+
 def _validation_issues(content: ScenarioContent) -> list[CpmIssue]:
     """Section 3.4: the first failing check's issues, else none."""
     if not content.activities:
@@ -329,6 +364,10 @@ def _validation_issues(content: ScenarioContent) -> list[CpmIssue]:
     ]
     if unknown:
         return unknown
+    lag_calendar = content.settings.lag_calendar
+    if isinstance(lag_calendar, FixedLagCalendar) and lag_calendar.key not in calendars:
+        # v2 only (a v1 content has no fixed lag calendar): the run has no subject.
+        return [CpmIssue(CpmIssueCode.UNKNOWN_CALENDAR)]
     keys = {activity.key for activity in content.activities}
     dangling = [
         CpmIssue(CpmIssueCode.DANGLING_RELATIONSHIP, pred=item.pred, succ=item.succ)
@@ -345,12 +384,30 @@ def _validation_issues(content: ScenarioContent) -> list[CpmIssue]:
     ]
 
 
+def _v2_state(activity: ScenarioActivity) -> ActivityState:
+    """v2: an edged milestone with progress is complete at its one date."""
+    if activity.kind in EDGED_MILESTONE_KINDS and activity.progress is not None:
+        return ActivityState.COMPLETE
+    return activity_state(activity)
+
+
+def _v2_actual_finish(activity: ScenarioActivity) -> int:
+    """v2: a start milestone's actual finish is its actual start when not given."""
+    progress = activity.progress
+    if progress is None:
+        return 0
+    if progress.actual_finish is None:
+        return progress.actual_start if activity.kind in EDGED_MILESTONE_KINDS else 0
+    return progress.actual_finish
+
+
 class _Engine:
     """One run over a validated content. Indices are positions in key order."""
 
-    def __init__(self, content: ScenarioContent, budget: int) -> None:
+    def __init__(self, content: ScenarioContent, budget: int, *, v2: bool = False) -> None:
         self.content = content
         self.budget = budget
+        self.v2 = v2
         self.operations = 0
         settings = content.settings
         self.data_date = content.data_date
@@ -368,7 +425,14 @@ class _Engine:
 
         default = settings.default_calendar
         self.calendars = [calendar_of(activity.calendar or default) for activity in activities]
-        self.states = [activity_state(activity) for activity in activities]
+        self.states = [
+            _v2_state(activity) if v2 else activity_state(activity) for activity in activities
+        ]
+        # v2 only: the edge an edged milestone's one date sits on (else None).
+        self.edges: list[ActivityKind | None] = [
+            activity.kind if v2 and activity.kind in EDGED_MILESTONE_KINDS else None
+            for activity in activities
+        ]
         self.durations = [
             0 if state is ActivityState.COMPLETE else activity.remaining_minutes or 0
             for activity, state in zip(activities, self.states, strict=True)
@@ -382,7 +446,9 @@ class _Engine:
             for activity in activities
         ]
         self.actual_finish = [
-            0
+            _v2_actual_finish(activity)
+            if v2
+            else 0
             if activity.progress is None or activity.progress.actual_finish is None
             else activity.progress.actual_finish
             for activity in activities
@@ -403,14 +469,21 @@ class _Engine:
             self.incoming[self.succs[position]].append(position)
         lag_calendar = settings.lag_calendar
         all_day = twenty_four_hour_calendar()
-        self.lag_calendars = [
-            self.calendars[self.preds[r]]
-            if lag_calendar is LagCalendar.PREDECESSOR
-            else self.calendars[self.succs[r]]
-            if lag_calendar is LagCalendar.SUCCESSOR
-            else all_day
-            for r in range(len(relationships))
-        ]
+        if isinstance(lag_calendar, FixedLagCalendar):
+            # v2 only: every lag on the one named calendar (P6 `rcal_Project`).
+            if not v2:
+                raise ValueError("a fixed lag calendar runs on my-pa-cpm-v2 only")
+            fixed = calendar_of(lag_calendar.key)
+            self.lag_calendars = [fixed] * len(relationships)
+        else:
+            self.lag_calendars = [
+                self.calendars[self.preds[r]]
+                if lag_calendar is LagCalendar.PREDECESSOR
+                else self.calendars[self.succs[r]]
+                if lag_calendar is LagCalendar.SUCCESSOR
+                else all_day
+                for r in range(len(relationships))
+            ]
         self.warnings: list[CpmIssue] = []
 
     # --- counting and calendar calls ------------------------------------------------
@@ -463,6 +536,21 @@ class _Engine:
             return t
         calendar = self.calendars[j]
         return self._call(lambda: _prev_end(calendar, t), j, None)
+
+    def snap_edge_forward(self, j: int, x: int) -> int:
+        """v2 forward: a start milestone at the next working start, a finish one at
+        the previous working end (never before the data date)."""
+        calendar = self.calendars[j]
+        if self.edges[j] is ActivityKind.START_MILESTONE:
+            return self._call(lambda: _next_work(calendar, x), j, None)
+        return max(self.data_date, self._call(lambda: _prev_end(calendar, x), j, None))
+
+    def snap_edge_backward(self, j: int, y: int) -> int:
+        """v2 backward: the same edges, without the data-date floor."""
+        calendar = self.calendars[j]
+        if self.edges[j] is ActivityKind.START_MILESTONE:
+            return self._call(lambda: _next_work(calendar, y), j, None)
+        return self._call(lambda: _prev_end(calendar, y), j, None)
 
     def worked(self, calendar: CompiledCalendar, a: int, b: int) -> int:
         self.tick()
@@ -623,6 +711,9 @@ class _Engine:
                     )
                 x = pin
                 self.kept_pin[j] = True
+        if self.edges[j] is not None and not self.kept_pin[j]:
+            # v2 only (section 11.7): the edged milestone's date; a kept pin is unsnapped.
+            x = self.snap_edge_forward(j, x)
         self.es[j] = self.rs[j] = x
         self.ef[j] = self.advance(calendar, x, duration, j)
         if ConstraintType.SNLT in constraints and self.es[j] > constraints[ConstraintType.SNLT]:
@@ -667,6 +758,9 @@ class _Engine:
                         self.advance(calendar, constraints[ConstraintType.SNLT], duration, j)
                     )
             y = self.snap_back(j, min(bounds))
+            if self.edges[j] is not None and not self.kept_pin[j]:
+                # v2 only (section 11.7): the edged milestone's late date.
+                y = self.snap_edge_backward(j, y)
             if self.kept_pin[j]:
                 if ConstraintType.MFO in constraints:
                     y = constraints[ConstraintType.MFO]
@@ -869,6 +963,7 @@ class _Engine:
             critical_paths=paths,
             activities=activities,
             relationships=relationships,
+            engine_version=ENGINE_VERSION_V2 if self.v2 else ENGINE_VERSION,
             operations=self.operations,
         )
 
@@ -881,7 +976,11 @@ def _issue_counts(issues: Sequence[CpmIssue]) -> dict[CpmIssueCode, int]:
 
 
 def _rejected(
-    content: ScenarioContent, digest: str, rejection: _RejectedError, operations: int
+    content: ScenarioContent,
+    digest: str,
+    rejection: _RejectedError,
+    operations: int,
+    engine_version: str,
 ) -> CpmResult:
     issues = sorted(rejection.issues, key=_issue_order)
     return CpmResult(
@@ -904,13 +1003,16 @@ def _rejected(
         critical_paths=(),
         activities=(),
         relationships=(),
+        engine_version=engine_version,
         operations=operations,
     )
 
 
 def run_cpm(content: ScenarioContent, *, operation_budget: int = CPM_OPERATION_BUDGET) -> CpmResult:
-    """Compute one content under `my-pa-cpm-v1` (section 3). Never raises for content.
+    """Compute one content under the engine its schema chooses. Never raises for content.
 
+    A `schedule-scenario-content-v1` content runs on `my-pa-cpm-v1` (section 3),
+    a `-v2` one on `my-pa-cpm-v2` (section 11.7); the two are never crossed.
     The content must already have passed `content_problem` (S6-2 obligation,
     FR8-F07): the record admits duplicate activity keys, and a run over them
     would compute a collapsed network without saying so.
@@ -919,12 +1021,26 @@ def run_cpm(content: ScenarioContent, *, operation_budget: int = CPM_OPERATION_B
         raise ValueError("the operation budget is a non-negative integer")
     if not isinstance(content, ScenarioContent):
         raise ValueError("run_cpm computes a ScenarioContent")
+    return _run(content, engine_version_for(content), operation_budget)
+
+
+def _run(content: ScenarioContent, engine_version: str, operation_budget: int) -> CpmResult:
+    """One run on a named engine path. Production goes through `run_cpm` only.
+
+    The v1 path refuses a v2 content. The v2 path over a v1 content exists for
+    the S7-0 differential test (E2) alone; its result is never stored.
+    """
+    if engine_version not in ENGINE_VERSIONS:
+        raise ValueError("an engine version is my-pa-cpm-v1 or my-pa-cpm-v2")
+    v2 = engine_version == ENGINE_VERSION_V2
+    if not v2 and uses_v2_features(content):
+        raise ValueError("a schedule-scenario-content-v2 content never runs on my-pa-cpm-v1")
     digest = content_sha256(content)
     issues = _validation_issues(content)
     if issues:
-        return _rejected(content, digest, _RejectedError(issues), 0)
-    engine = _Engine(content, operation_budget)
+        return _rejected(content, digest, _RejectedError(issues), 0, engine_version)
+    engine = _Engine(content, operation_budget, v2=v2)
     try:
         return engine.compute(digest)
     except _RejectedError as rejection:
-        return _rejected(content, digest, rejection, engine.operations)
+        return _rejected(content, digest, rejection, engine.operations, engine_version)

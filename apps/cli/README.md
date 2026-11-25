@@ -184,6 +184,53 @@ refused with a closed code, `2` usage, `3` a run finished `partial` or
 [`ops/runbooks/communications-ingestion.md`](/ops/runbooks/communications-ingestion.md)
 covers admission, backfill, monitoring and recovery.
 
+## `project_reports.py` — project-report bindings, ingestion and re-derivation
+
+Binds, ingests, re-derives and measures the project-report exports (WP3P
+rulings D5 to D9, D12, D14, D16 and D19). The bindings file
+(`my_pa_project_report_bindings_v1`) is held outside the repository: the
+folder-to-Project crosswalk.
+
+```text
+python apps/cli/project_reports.py <assertions> bindings check --file F
+python apps/cli/project_reports.py <assertions> bindings apply --file F
+python apps/cli/project_reports.py <assertions> run-once --source isrc_...
+python apps/cli/project_reports.py <assertions> backfill --source isrc_... [--file NAME ... | --glob PATTERN] [--dry-run]
+python apps/cli/project_reports.py <assertions> rederive [--source isrc_...] [--dry-run]
+python apps/cli/project_reports.py <assertions> coverage [--source isrc_...]
+python apps/cli/project_reports.py <assertions> aggregate --source isrc_... [--source ...] [--expect EXPECTED.json]
+```
+
+`<assertions>` is `--expected-database` and `--expected-alembic-head`, both
+required, compared as in `communications_ingest.py`; the URL is never an
+argument and never printed. `check` validates the file against the database
+and the read-only workspace and prints its diff (adds, corrections, filter
+updates, retires, unchanged) and the count of unbound CSV folders under
+`export_root` to a stated depth; it writes nothing. `apply` applies the whole
+file in one transaction under the project-reports poll lock (`lock_held` when
+busy): it admits each new folder's source, writes the append-only binding
+revisions (the audit: no `audit_events` row) and moves the pointers, and
+retires an omitted folder (its source disabled, its rows kept); re-applying
+the same file writes nothing. Each revision records the reason its change
+kind names; there is no reason argument. `run-once` and `backfill` run the
+project-reports lifecycle (Layer A rows and a derivation per new snapshot;
+`--dry-run` writes nothing); both refuse `source_unbound` up front, writing
+nothing, when the source has no active binding (a retired folder); `rederive` runs the re-derivation sweep now, rebuilding
+every current derivation; `coverage` prints each source's series (an index,
+never a slug); `aggregate` prints the PULSE-AC-17 figures from stored rows
+under the file-level `aggregate_cli` keys, `--expect` comparing them exactly
+with an expected-figures file. The writing commands hold the poll lock. It
+reaches the bindings service, the lifecycle, the sweep and the coverage read
+in `my_pa.application`, so it is `EXEMPT` in
+`tests/architecture/test_operator_commands_are_not_capabilities.py` and
+governed by `tests/unit/test_project_reports_cli.py` and
+`tests/unit/test_project_reports_operations.py`. Output is one JSON line of
+identifiers, closed codes, counts, UTC timestamps and project numbers only
+(never a folder, path, file name, slug or filter text); exit `0` done, `1`
+refused with a closed code, `2` usage, `3` a run `partial` or `failed` or a
+failed re-derivation, `4` an `--expect` difference. The operator procedure is
+[`ops/runbooks/project-reports-ingestion.md`](../../ops/runbooks/project-reports-ingestion.md).
+
 ## `sources.py` — the source configuration plane
 
 `sources.py` configures a root as a source and observes it, which is the

@@ -274,6 +274,12 @@ class FakeIngestion(IngestionRepository):
         ]
         return tuple(sorted(rows, key=lambda p: (p.relative_path, p.first_seen_at, p.snapshot_id)))
 
+    def list_paths_of_snapshot(
+        self, principal_id: str, snapshot_id: str
+    ) -> tuple[IngestSnapshotPathRecord, ...]:
+        rows = [p for p in self.w.mine(principal_id, self.w.paths) if p.snapshot_id == snapshot_id]
+        return tuple(sorted(rows, key=lambda p: (p.first_seen_at, p.relative_path)))
+
     def find_snapshot_path(
         self, principal_id: str, snapshot_id: str, relative_path: str
     ) -> IngestSnapshotPathRecord | None:

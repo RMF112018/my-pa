@@ -229,6 +229,83 @@ def test_admission_refuses_a_second_source_at_the_same_location() -> None:
     assert refused.value.code is IngestRefusalCode.SOURCE_ALREADY_ADMITTED
 
 
+class _AbortError(Exception):
+    """The caller's own failure after `admit_within`, rolling its unit back."""
+
+
+def test_admit_within_writes_in_the_callers_unit_and_never_commits() -> None:
+    """WP3P ruling D7: the source commits or rolls back with the caller's other writes."""
+    scene = Scene()
+    commits = scene.world.commits
+    with pytest.raises(_AbortError), unit_of_work_factory(scene.world)() as unit:
+        source = scene.lifecycle.admit_within(
+            unit,
+            P,
+            consumer=IngestConsumer.PULSE_CSV_EXPORT,
+            workspace_id="mcp",
+            path_prefix="Reports/one/",
+            file_pattern="*.csv",
+        )
+        assert (P, source.ingest_source_id) in scene.world.sources
+        raise _AbortError
+    assert (P, source.ingest_source_id) not in scene.world.sources
+    assert scene.world.commits == commits
+    with unit_of_work_factory(scene.world)() as unit:
+        kept = scene.lifecycle.admit_within(
+            unit,
+            P,
+            consumer=IngestConsumer.PULSE_CSV_EXPORT,
+            workspace_id="mcp",
+            path_prefix="Reports/one/",
+            file_pattern="*.csv",
+            enabled=False,
+        )
+    assert scene.world.sources[(P, kept.ingest_source_id)].enabled is False
+    assert scene.world.commits == commits + 1
+
+
+@pytest.mark.parametrize(
+    ("consumer", "path_prefix", "code"),
+    [
+        (IngestConsumer.MEETING_SYNC_V1, "Reports/two/", IngestRefusalCode.CONSUMER_NOT_REGISTERED),
+        (IngestConsumer.PULSE_CSV_EXPORT, "a/../b/", IngestRefusalCode.INVALID_LOCATION),
+        (IngestConsumer.PULSE_CSV_EXPORT, PREFIX, IngestRefusalCode.SOURCE_ALREADY_ADMITTED),
+    ],
+    ids=["unregistered", "invalid-location", "already-admitted"],
+)
+def test_admit_within_refuses_as_admit_does(
+    consumer: IngestConsumer, path_prefix: str, code: IngestRefusalCode
+) -> None:
+    scene = Scene()
+    pattern = "*-comms.json"
+    for admit in (
+        lambda: scene.lifecycle.admit(
+            P, consumer=consumer, workspace_id="mcp", path_prefix=path_prefix, file_pattern=pattern
+        ),
+        lambda: _within(scene, consumer, path_prefix, pattern),
+    ):
+        with pytest.raises(IngestRefusedError) as refused:
+            admit()
+        assert refused.value.code is code
+    assert len(scene.world.sources) == 1
+
+
+def _within(scene: Scene, consumer: IngestConsumer, path_prefix: str, pattern: str) -> None:
+    with unit_of_work_factory(scene.world)() as unit:
+        scene.lifecycle.admit_within(
+            unit,
+            P,
+            consumer=consumer,
+            workspace_id="mcp",
+            path_prefix=path_prefix,
+            file_pattern=pattern,
+        )
+
+
+def test_the_lifecycle_names_the_consumers_it_holds_a_handler_for() -> None:
+    assert Scene().lifecycle.consumers == frozenset({IngestConsumer.PULSE_CSV_EXPORT})
+
+
 def test_disable_and_enable_govern_the_scheduled_poll_only() -> None:
     scene = Scene()
     scene.put("20261117-comms.json", doc(17))

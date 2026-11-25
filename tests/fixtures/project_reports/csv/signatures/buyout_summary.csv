@@ -1,0 +1,15 @@
+Budget Code > Budget Code,Budget Line Item > Original Budget Amount,Budget Change Adjustment Line Item > Amount,Prime Contract Change Order Line Item > Approved Amount,Commitment > Number,Company (Vendor) > Name,Commitment Line Item > Amount,Commitment Change Order Line Item > Approved Amount (Including Markup)
+(Blank),,,,,,,
+,,,,,Synthetic Vendor A,,
+,,,,,Synthetic Vendor B,,
+,,,,,,,
+SYN-0001.01-100,$0.00,,$300.00,,,"$1,000.00",
+,$0.00,,,,,,
+,,,,SYN-0001.00001,Synthetic Vendor A,$600.00,
+,,,,SYN-0001.0001,Synthetic Vendor A,$400.00,
+,,,$300.00,,,,
+,,,,,,,
+SYN-0001.02-200,,$75.00,,,,,$30.00
+,,$75.00,,,Synthetic Vendor C,,
+,,,,,,,$30.00
+Grand Totals,$0.00,$75.00,$300.00,,,"$1,000.00",$30.00

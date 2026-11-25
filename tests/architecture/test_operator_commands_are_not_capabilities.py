@@ -198,6 +198,11 @@ EXEMPT = {
     # `my_pa.application.ingestion` by design; its own test holds that it names
     # no capability, builds no service and imports only the two aggregate reads.
     "communications_ingest.py": "tests/unit/test_communications_ingest_cli.py",
+    # Project-report bindings (WP3P-S4): reaches the bindings service and the
+    # project-reports lifecycle in `my_pa.application` by design; its own test
+    # holds that it names no capability, builds no service and imports nothing
+    # from persistence.
+    "project_reports.py": "tests/unit/test_project_reports_cli.py",
 }
 
 #: The identifier rule 3 forbids anywhere in the file.

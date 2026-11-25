@@ -90,6 +90,7 @@ from my_pa.contracts.ports import (
     MeetingSyncRepository,
     Operation,
     OperationQueue,
+    ProjectReportsRepository,
     ProjectRepository,
     PulseRepository,
     RecordEventReader,
@@ -232,6 +233,7 @@ from my_pa.infrastructure.persistence.managed_documents import SqlManagedDocumen
 from my_pa.infrastructure.persistence.meeting_sync import SqlMeetingSyncRepository
 from my_pa.infrastructure.persistence.meetings import SqlMeetingRepository
 from my_pa.infrastructure.persistence.principal_scope import capture_context
+from my_pa.infrastructure.persistence.project_reports import SqlProjectReportsRepository
 from my_pa.infrastructure.persistence.record_events import (
     RecordEventBuffer,
     SqlRecordEventReader,
@@ -1545,6 +1547,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def meeting_sync(self) -> MeetingSyncRepository:
         """The meeting sync staging and reconciliation rows, on this connection (WP3b)."""
         return SqlMeetingSyncRepository(self._open)
+
+    @property
+    def project_reports(self) -> ProjectReportsRepository:
+        """The project-report rows, on this transaction's connection (WP3P)."""
+        return SqlProjectReportsRepository(self._open)
 
     @property
     def issues(self) -> IssueRepository:

@@ -133,22 +133,23 @@
       "4d1069a7d84f",
       "6418b57081c3",
       "52a829ef718a",
-      "61fafdfd2986"
+      "61fafdfd2986",
+      "0d4e247d03cb"
     ],
     "heads": [
-      "61fafdfd2986"
+      "0d4e247d03cb"
     ],
-    "revision_files": 133
+    "revision_files": 134
   },
   "census": {
-    "architecture": 9594,
-    "database": 7100,
+    "architecture": 10025,
+    "database": 7229,
     "evaluation": 2,
-    "fast_collected": 50940,
+    "fast_collected": 51974,
     "fast_skipped": 138,
-    "mypy_files": 751,
-    "src_modules": 556,
-    "test_modules": 1039
+    "mypy_files": 774,
+    "src_modules": 577,
+    "test_modules": 1062
   },
   "chatllm": {
     "classes": {
@@ -163,10 +164,10 @@
     "version": "chatllm-data-v16"
   },
   "counts": {
-    "alembic_revisions": 133,
+    "alembic_revisions": 134,
     "capability": 301,
     "chatllm_policy_entries": 301,
-    "id_kind": 192,
+    "id_kind": 195,
     "purpose": 70,
     "safe_detail": 442
   },
@@ -666,7 +667,10 @@
       "cmitm",
       "cobs",
       "cqrn",
-      "msevt"
+      "msevt",
+      "prbnd",
+      "prrec",
+      "prdrv"
     ],
     "purpose": [
       "bounded_enrollment",

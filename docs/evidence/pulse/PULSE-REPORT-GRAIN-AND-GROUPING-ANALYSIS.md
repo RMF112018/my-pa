@@ -60,6 +60,8 @@ For every grouped financial or numeric export the Manager compared each group he
 | Buyout summary | 143 non-empty column-groups (782 both-empty) | 143 match, 0 mismatch |
 | Budget changes | 9 groups | 9 match, 0 mismatch |
 | Change-order reconciliation | 3 groups × both amount columns | 3 match, 0 mismatch |
+
+> **Manager correction 2026-11-24 (after the real-data run).** The buyout's 782 both-empty column-groups count all 185 level-1 headers × 5 money columns − 143. But of the 185 buyout level-1 headers (the 184 code headers and the `(Blank)` header), 96 have no line beneath them, so under rule 7 (section 2) they are `grouping_only`, and grouping-only headers are not reconciled. The code therefore asserts **302** both-empty column-groups (89 headers with lines × 5 − 143); the 143 matches and 0 mismatches are unchanged.
 | Daily log manpower | 3 numeric columns of 1 date group | 3 match, 0 mismatch |
 | Every export with `Grand Totals` | `Grand Totals` against the sum of its first-level group headers | match in every case |
 
@@ -81,6 +83,7 @@ Group headers must be classified **by level**, and only detail rows are business
 - Buyout carries 97 fully blank spacer rows (fill pattern `........`) and 23 distinct fill patterns overall: each line kind fills its own columns.
 - The 2 delay exports carry 1 grouping-only row each and no delay detail; the export proves only that the grouping value was present.
 - A `(Blank)` group may hold rows that are neither budget nor commitment lines (25 vendor-only rows in buyout).
+- **Manager note 2026-11-24 (the vendor-only rule as built).** A buyout row that names a vendor and whose only other filled cell is the never-loaded original-budget column is a vendor-only line, not a budget line; with that rule the code reproduces the inventory's 25 vendor-only rows. A buyout code header with no line beneath it is grouping-only by rule 7 (96 of the 185 level-1 headers).
 
 ## 8. Non-additive totals
 

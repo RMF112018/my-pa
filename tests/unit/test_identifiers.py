@@ -318,6 +318,11 @@ def test_contract_prefixes_are_stable() -> None:
         "cqrn",
         # Communications intelligence WP3b: one staged meeting_sync_v1 event.
         "msevt",
+        # Project reports WP3P-S3: a binding revision, a record identity and a
+        # derivation.
+        "prbnd",
+        "prrec",
+        "prdrv",
     }
 
 

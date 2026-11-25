@@ -3,7 +3,8 @@
 * `my_pa.application.ingestion` imports no consumer slice (Manager ruling M5):
   not the communications domain or parser, not the meeting sync domain or
   parser, not the consumers' application modules (the WP3b staging handler
-  and the S3 applier included). A consumer reaches it only through the
+  and the S3 applier included), and no layer of the project-reports consumer
+  (WP3P). A consumer reaches it only through the
   injected `IngestConsumerHandler` port;
 * the lifecycle calls only `list_directory`, `stat` and `open_download` on a
   `FileWorkspaceStore` (ruling m5), and names no other store method at all.
@@ -36,6 +37,12 @@ CONSUMER_SLICES: Final = (
     "my_pa.application.meeting_sync_apply",
     "my_pa.domain.pulse",
     "my_pa.application.pulse",
+    # WP3P: the project-reports consumer lives under `project_reports`, so the
+    # neutral lifecycle may import none of its layers (a prefix match covers the
+    # application handler modules `project_reports_*` too).
+    "my_pa.domain.project_reports",
+    "my_pa.application.project_reports",
+    "my_pa.infrastructure.project_reports",
 )
 
 #: The store's read path (ruling m5).
@@ -113,6 +120,16 @@ def test_a_planted_consumer_import_is_caught() -> None:
         "my_pa.domain.communications.model",
         "my_pa.domain.communications.model.Publication",
     }
+
+
+def test_a_planted_project_reports_import_is_caught() -> None:
+    for planted_module in (
+        "my_pa.domain.project_reports.model",
+        "my_pa.application.project_reports_ingest",
+        "my_pa.infrastructure.project_reports.reader",
+    ):
+        planted = _lifecycle() + f"\nimport {planted_module}\n"
+        assert _consumer_imports(planted) == {planted_module}
 
 
 def test_a_planted_store_write_is_caught() -> None:

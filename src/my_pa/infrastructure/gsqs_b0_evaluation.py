@@ -34,6 +34,7 @@ from my_pa.contracts.ports import (
     MeetingSyncRepository,
     OperationQueue,
     PortError,
+    ProjectReportsRepository,
     ProjectRepository,
     PulseRepository,
     RecordLineageRepository,
@@ -243,6 +244,10 @@ class GsqsB0EvaluationUnitOfWork(UnitOfWork):
     @property
     def meeting_sync(self) -> MeetingSyncRepository:
         return cast(MeetingSyncRepository, self._unused)
+
+    @property
+    def project_reports(self) -> ProjectReportsRepository:
+        return cast(ProjectReportsRepository, self._unused)
 
     @property
     def issues(self) -> IssueRepository:

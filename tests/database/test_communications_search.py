@@ -61,7 +61,7 @@ def world(migrated_engine: Engine) -> Iterator[dict[str, str]]:
             2,
             subject="Re: Slab pour schedule",
             text="Confirmed. Slab pour slab pour; see RFI 17 as well.",
-            when=at(17, 11),
+            when=at(20, 13),  # the conversation spans the whole browse
             conversation="conv-slab",
             participants=(("from", B), ("to", A)),
             lanes=(("sent", "unverified_lane_claim"),),
@@ -235,13 +235,19 @@ def test_collapse_keeps_the_best_ranked_message_of_a_conversation(
 def test_a_page_continues_after_the_collapsed_representative(
     migrated_engine: Engine, world: dict[str, str]
 ) -> None:
-    """The keyset is applied after the collapse: the browse order is by time."""
+    """The keyset is applied after the collapse (D9).
+
+    The slab conversation's representative (its latest message) heads the
+    browse and its first message is the oldest row of the world. Keyed before
+    the collapse, every page after the first would elect that older message as
+    the conversation's representative and show the conversation again.
+    """
     first = search(migrated_engine, limit=1)
-    assert _ids(first) == [world["tie_b"]]
-    rest = _all_pages(migrated_engine, 2)
-    assert len(rest) == len(set(rest)) == 9
-    # The slab conversation appears once, by its latest message (the representative).
-    assert world["slab_reply"] in rest and world["slab"] not in rest
+    assert _ids(first) == [world["slab_reply"]]
+    for limit in (1, 2, 3):
+        rest = _all_pages(migrated_engine, limit)
+        assert len(rest) == len(set(rest)) == 9
+        assert world["slab_reply"] in rest and world["slab"] not in rest
 
 
 def test_a_cursor_for_another_request_or_principal_conflicts(

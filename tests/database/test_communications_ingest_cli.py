@@ -253,7 +253,9 @@ def test_the_operator_sequence_admit_backfill_rerun_coverage_aggregate(
     assert aggregate["runs"]["operator"] == {"completed": 1}
     assert aggregate["coverage"]["snapshots"] == expected_snapshots
     assert aggregate["multi_lane_item_snapshots"] >= aggregate["multi_lane_items"] >= 1
-    identifier_rows = sum(kind["rows"] for kind in aggregate["identifiers"].values())
+    identifier_rows = sum(
+        kind["rows"] for version in aggregate["identifiers"].values() for kind in version.values()
+    )
     assert identifier_rows == ingested["communication_identifiers"]
     assert sum(aggregate["quarantine_reasons"].values()) >= aggregate["quarantined_records"]
 

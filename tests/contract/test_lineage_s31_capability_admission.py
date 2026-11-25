@@ -697,8 +697,13 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
     # Schedule Scenarios S6-3 appends its 3 plane purposes after those, and the
     # files workspace WP5 its 2 after S6-3's.
     assert len(published) == len(Purpose)
-    assert published[-2:] == ["file_workspace_read", "file_workspace_authoring"]
-    assert published[-12:-2] == [
+    # Communications intelligence WP4-S5 appends `communications_read` after them.
+    assert published[-3:] == [
+        "file_workspace_read",
+        "file_workspace_authoring",
+        "communications_read",
+    ]
+    assert published[-13:-3] == [
         "lineage_backfill",
         "program_reporting_read",
         "schedule_import",

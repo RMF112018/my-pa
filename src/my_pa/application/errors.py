@@ -888,6 +888,20 @@ class SafeDetail(StrEnum):
     SERIES_FORMAT = "series_format"
     ACCEPT_PROJECT_IDENTITY_CHANGE = "accept_project_identity_change"
 
+    #: Communications reads (contract section 16, WP4-S4): the request fields of
+    #: `communications.search`, `.read` and `.coverage`. `QUERY`, `IDENTIFIERS`,
+    #: `LIMIT` and `CURSOR` are reused.
+    PARTICIPANTS = "participants"
+    PARTICIPANT_MODE = "participant_mode"
+    FROM_UTC = "from_utc"
+    TO_UTC = "to_utc"
+    FOLDER_ROLE = "folder_role"
+    CONVERSATION_ID = "conversation_id"
+    COLLAPSE = "collapse"
+    MESSAGE_IDS = "message_ids"
+    INCLUDE_TEXT = "include_text"
+    SOURCE = "source"
+
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a
 #: message that described the request would describe it to whoever guessed it.

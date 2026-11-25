@@ -105,6 +105,10 @@ class ChatLLMCompositionPlanes:
     #: Files workspace (chatllm-data-v14): `MY_PA_FILES_WORKSPACE_ROOT` is set, so
     #: the store is composed. Default off, as an unset root is; needs no other plane.
     files_workspace: bool = False
+    #: Communications intelligence WP4-S5 (chatllm-data-v17):
+    #: `MY_PA_COMMUNICATIONS_ENABLED`. Default off, as the switch is; needs no
+    #: other plane.
+    communications: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +240,10 @@ def _prerequisite_holds(
     if prerequisite is ChatLLMCompositionPrerequisite.FILES_WORKSPACE:
         # The service's own condition: a composed store (files contract section 9).
         return planes.files_workspace
+    if prerequisite is ChatLLMCompositionPrerequisite.COMMUNICATIONS:
+        # The service's own condition: the read switch (communications contract
+        # section 16; `ApplicationService.available_capabilities`).
+        return planes.communications
     raise RuntimeError(f"unknown ChatLLM composition prerequisite: {prerequisite!r}")
 
 

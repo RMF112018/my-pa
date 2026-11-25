@@ -490,6 +490,13 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.FILES_RESTORE,
         Capability.FILES_UPLOAD_FINALIZE,
         Capability.FILES_WRITE_TEXT,
+        # Communications intelligence WP4-S5 (ruling D7): the three reads name the
+        # caller's own communications rows, never a configured source or an
+        # enrollment (a `source` filter is checked against the caller's own
+        # communications sources, not a scope).
+        Capability.COMMUNICATIONS_SEARCH,
+        Capability.COMMUNICATIONS_READ,
+        Capability.COMMUNICATIONS_COVERAGE,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

@@ -283,6 +283,9 @@ def test_profile_apply_installs_the_create_grant_with_its_purpose(
         schedule_scenarios_enabled=False,
         # Files workspace WP5 (chatllm-data-v14): no workspace root, its default.
         files_workspace_is_composed=lambda: False,
+        # Communications intelligence WP4-S5 (chatllm-data-v17): the read switch
+        # off, its default.
+        communications_enabled=False,
         knowledge_discovery_oauth_client_id_set=frozenset,
         knowledge_operator_review_oauth_client_id_set=frozenset,
         chatllm_gateway_oauth_client_id_set=frozenset,

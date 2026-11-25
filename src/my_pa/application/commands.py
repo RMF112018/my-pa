@@ -47,6 +47,54 @@ from typing import Any, ClassVar, Final, get_type_hints
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from my_pa.application import goodnotes_note_unit_contract as _note_unit
+from my_pa.application.communications_search import (
+    COLLAPSE_MODES as COMMUNICATIONS_COLLAPSE_MODES,
+)
+from my_pa.application.communications_search import (
+    DEFAULT_SEARCH_LIMIT as COMMUNICATIONS_DEFAULT_SEARCH_LIMIT,
+)
+from my_pa.application.communications_search import (
+    FOLDER_ROLES as COMMUNICATIONS_FOLDER_ROLES,
+)
+from my_pa.application.communications_search import (
+    MAX_CONVERSATION_ID_CHARACTERS as COMMUNICATIONS_MAX_CONVERSATION_ID_CHARACTERS,
+)
+from my_pa.application.communications_search import (
+    MAX_CURSOR_CHARACTERS as COMMUNICATIONS_MAX_CURSOR_CHARACTERS,
+)
+from my_pa.application.communications_search import (
+    MAX_QUERY_CHARACTERS as COMMUNICATIONS_MAX_QUERY_CHARACTERS,
+)
+from my_pa.application.communications_search import (
+    MAX_READ_IDS as COMMUNICATIONS_MAX_READ_IDS,
+)
+from my_pa.application.communications_search import (
+    MAX_SEARCH_LIMIT as COMMUNICATIONS_MAX_SEARCH_LIMIT,
+)
+from my_pa.application.communications_search import (
+    MAX_TERMS as COMMUNICATIONS_MAX_TERMS,
+)
+from my_pa.application.communications_search import (
+    PARTICIPANT_MODES as COMMUNICATIONS_PARTICIPANT_MODES,
+)
+from my_pa.application.communications_search import (
+    CoverageRequest as CommunicationsCoverageRequest,
+)
+from my_pa.application.communications_search import (
+    ReadRequest as CommunicationsReadRequest,
+)
+from my_pa.application.communications_search import (
+    SearchRequest as CommunicationsSearchRequest,
+)
+from my_pa.application.communications_search import (
+    check_coverage_request as check_communications_coverage,
+)
+from my_pa.application.communications_search import (
+    check_read_request as check_communications_read,
+)
+from my_pa.application.communications_search import (
+    normalize_search as normalize_communications_search,
+)
 from my_pa.application.errors import (
     ApplicationError,
     InvalidRequestError,
@@ -500,6 +548,7 @@ __all__ = [
     "CloseSituationCommand",
     "Command",
     "CommitIntelligenceArtifact",
+    "CommunicationsCoverage",
     "CompleteGoodNotesPull",
     "CopyFile",
     "CorrectGoodNotes",
@@ -563,6 +612,7 @@ __all__ = [
     "PutCanvasWorkspace",
     "ReadCapture",
     "ReadCommitment",
+    "ReadCommunications",
     "ReadGoodNotes",
     "ReadIntelligenceArtifact",
     "ReadKnowledge",
@@ -592,6 +642,7 @@ __all__ = [
     "ReviseManagedDocumentCommand",
     "SearchCaptures",
     "SearchCommitments",
+    "SearchCommunications",
     "SearchFiles",
     "SearchGoodNotes",
     "SearchIntelligenceArtifacts",
@@ -13785,6 +13836,235 @@ class ReconcileMeetingProviders:
         return tuple(_reconcile_item(item) for item in items)
 
 
+# --- Communications intelligence WP4-S5: the communications reads ---------------------
+#
+# Contract section 16, Manager rulings D7, D8, R6-R13. The commands check the
+# request's shape and bounds; the configured identifier read version, the
+# identifier normalization (R11) and the query merge (R6) are the service's
+# (`application.communications_search`), which re-checks everything here.
+
+_COMMUNICATIONS_INSTANT: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "string",
+        "format": "date-time",
+        "description": "ISO-8601 with an offset, whole seconds; inclusive.",
+    }
+)
+_COMMUNICATIONS_CONVERSATION: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": COMMUNICATIONS_MAX_CONVERSATION_ID_CHARACTERS,
+        "description": "A conversation_id a search or read answered.",
+    }
+)
+_COMMUNICATIONS_CURSOR: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": COMMUNICATIONS_MAX_CURSOR_CHARACTERS,
+        "description": (
+            "The previous answer's next_cursor, with the same request otherwise. A "
+            "cursor of another request is refused; an answer with cursor_state "
+            "scope_changed_restart_required means: start again without it."
+        ),
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchCommunications:
+    """Search your communications: text, exact identifiers, participants, time, folder.
+
+    `query` is full text over each message's derived search text and subject
+    (web-search syntax: `"quoted phrase"` is confirmed exactly within the subject
+    or the text; `-word` and `-"phrase"` exclude a message from every result,
+    identifier matches included); identifiers it names (for example `RFI 174`,
+    `PCO 12`) are also matched exactly. `identifiers` are exact technical identifiers,
+    each naming exactly one (`RFI 17` never matches `RFI 174`). `participants`
+    are addresses, matched `any` (default) or `all`. `from_utc`/`to_utc` bound
+    the message time, inclusive. `folder_role` is the observed folder claim, not
+    verified membership: each result states its lanes and their verification.
+    Results are ranked (exact identifier hits first, then text rank, participant
+    overlap, newest) and collapsed to one per conversation unless `collapse` is
+    `none`; pass `next_cursor` back as `cursor` for the next page. Every answer
+    states the search text and identifier versions and the coverage of the
+    range searched; `text_fallback` says the stop-word fallback applied and
+    `query_state` that the query had no searchable term. Snippets are derived
+    text, at most 300 characters; a withheld body has none.
+    """
+
+    capability: ClassVar[Capability] = Capability.COMMUNICATIONS_SEARCH
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "query": {
+                "type": "string",
+                "maxLength": COMMUNICATIONS_MAX_QUERY_CHARACTERS,
+                "description": "Full-text query, web-search syntax.",
+            },
+            "identifiers": {
+                "type": "array",
+                "maxItems": COMMUNICATIONS_MAX_TERMS,
+                "items": {"type": "string", "minLength": 1},
+                "description": (
+                    "Exact technical identifiers (RFI, CO, PCO, COR, submittal, spec, "
+                    "GMP, CB, FPL), each naming exactly one; at most 20 together with "
+                    "those the query names."
+                ),
+            },
+            "participants": {
+                "type": "array",
+                "maxItems": COMMUNICATIONS_MAX_TERMS,
+                "items": {"type": "string", "minLength": 3, "maxLength": 320},
+                "description": "Email addresses.",
+            },
+            "participant_mode": {
+                "type": "string",
+                "enum": list(COMMUNICATIONS_PARTICIPANT_MODES),
+                "default": "any",
+            },
+            "from_utc": _COMMUNICATIONS_INSTANT,
+            "to_utc": _COMMUNICATIONS_INSTANT,
+            "folder_role": {"type": "string", "enum": list(COMMUNICATIONS_FOLDER_ROLES)},
+            "conversation_id": _COMMUNICATIONS_CONVERSATION,
+            "collapse": {
+                "type": "string",
+                "enum": list(COMMUNICATIONS_COLLAPSE_MODES),
+                "default": "conversation",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": COMMUNICATIONS_MAX_SEARCH_LIMIT,
+                "default": COMMUNICATIONS_DEFAULT_SEARCH_LIMIT,
+            },
+            "cursor": _COMMUNICATIONS_CURSOR,
+        }
+    )
+
+    query: str | None = None
+    identifiers: tuple[str, ...] = ()
+    participants: tuple[str, ...] = ()
+    participant_mode: str = "any"
+    from_utc: datetime | None = None
+    to_utc: datetime | None = None
+    folder_role: str | None = None
+    conversation_id: str | None = None
+    collapse: str = "conversation"
+    limit: int = COMMUNICATIONS_DEFAULT_SEARCH_LIMIT
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        normalize_communications_search(self.search_request(), None)
+
+    def search_request(self) -> CommunicationsSearchRequest:
+        """The service request this command states."""
+        return CommunicationsSearchRequest(
+            query=self.query,
+            identifiers=self.identifiers,
+            participants=self.participants,
+            participant_mode=self.participant_mode,
+            from_utc=self.from_utc,
+            to_utc=self.to_utc,
+            folder_role=self.folder_role,
+            conversation_id=self.conversation_id,
+            collapse=self.collapse,
+            limit=self.limit,
+            cursor=self.cursor,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReadCommunications:
+    """Read your communications: up to 25 messages by id, or one conversation's messages.
+
+    Give `message_ids` (each a `message_id` a search answered) or a
+    `conversation_id`, never both. Each message carries its metadata, flags,
+    participants with the observations (and lanes) that carry each, an
+    observations summary, its source pointer, the coverage of its snapshot,
+    its identifiers and the derived `search_text` (at most 20,000 characters,
+    `truncated` when cut; at most 200,000 per answer, later ones say
+    `text_omitted`). A withheld body has no text, and no raw body is ever
+    returned. Unknown ids are listed in `not_found`. A conversation is read in
+    time order, 25 per page: pass `next_cursor` back as `cursor`.
+    `include_text: false` omits the text.
+    """
+
+    capability: ClassVar[Capability] = Capability.COMMUNICATIONS_READ
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "message_ids": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": COMMUNICATIONS_MAX_READ_IDS,
+                "items": {"type": "string", "pattern": "^cmsg_"},
+                "description": "Message ids a search answered (not with conversation_id).",
+            },
+            "conversation_id": _COMMUNICATIONS_CONVERSATION,
+            "include_text": {"type": "boolean", "default": True},
+            "cursor": _COMMUNICATIONS_CURSOR,
+        }
+    )
+
+    message_ids: tuple[str, ...] = ()
+    conversation_id: str | None = None
+    include_text: bool = True
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        check_communications_read(self.read_request())
+
+    def read_request(self) -> CommunicationsReadRequest:
+        """The service request this command states."""
+        return CommunicationsReadRequest(
+            message_ids=self.message_ids,
+            conversation_id=self.conversation_id,
+            include_text=self.include_text,
+            cursor=self.cursor,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationsCoverage:
+    """How completely your communications are ingested over a range (at most 366 days).
+
+    Answers the coverage `state` (`complete`, `partial` or `none`), the covered
+    `intervals` and the `gaps` (at most 20 of each, with totals),
+    `freshness_seconds` since the latest covered instant, the snapshot count
+    and the per-lane states, over every communications source you hold, or
+    over one `source` (an `isrc_` id); an unknown source is not found.
+    """
+
+    capability: ClassVar[Capability] = Capability.COMMUNICATIONS_COVERAGE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "from_utc": _COMMUNICATIONS_INSTANT,
+            "to_utc": _COMMUNICATIONS_INSTANT,
+            "source": {
+                "type": "string",
+                "pattern": "^isrc_",
+                "description": "One communications source; every one when absent.",
+            },
+        }
+    )
+
+    from_utc: datetime
+    to_utc: datetime
+    source: str | None = None
+
+    def __post_init__(self) -> None:
+        check_communications_coverage(self.coverage_request())
+
+    def coverage_request(self) -> CommunicationsCoverageRequest:
+        """The service request this command states."""
+        return CommunicationsCoverageRequest(
+            from_utc=self.from_utc, to_utc=self.to_utc, source=self.source
+        )
+
+
 def _closed_member[MemberT: StrEnum](
     value: object, vocabulary: type[MemberT], detail: SafeDetail
 ) -> MemberT:
@@ -19344,6 +19624,9 @@ type Command = (
     | UpdateMeetingSeries
     | BindMeetingProvider
     | ReviewMeetingProviders
+    | SearchCommunications
+    | ReadCommunications
+    | CommunicationsCoverage
     | ReconcileMeetingProviders
     | ListRecordEvents
     | GetRecordEventProvenance

@@ -52,15 +52,19 @@ are raised on the message when an item reports them, never lowered.
 `(has text, window end, window start, snapshot SHA-256, lowest ordinal)`: any
 observation with a usable text basis beats every one without, then the latest
 declared window wins -- a total order, so the projection does not depend on
-arrival order. `search_text` is `derive_search_text` (`comms_search_text_v1`,
-frozen) and is `NULL` whenever the body is withheld, truncated or empty.
+arrival order. `search_text` is `derive_search_text` (`comms_search_text_v2`
+since WP4; ingestion writes the current version only, ruling R10) and is
+`NULL` whenever the body is withheld, truncated or empty.
 `latest_snapshot_id` is the observing snapshot with the greatest `(window end,
 window start, SHA-256)`. The message's identity columns (subject, sender,
 time, conversation) are set once, by the snapshot that created it.
 
 **Identifiers** are `extract_identifiers(subject + "\\n" + search_text)`
-(`comms_identifiers_v1`), added whenever a message is created or its text is
-replaced; set-like, so earlier versions' rows stay.
+(`comms_identifiers_v2` since WP4, the current version only), added whenever
+a message is created or its text is replaced; set-like, so earlier versions'
+rows stay. The message's `identifiers_version` then records that version
+(WP4 ruling R2), so a rederive can tell in SQL which messages still lack the
+current version's rows.
 
 **Coverage.** `prepare` declares the window and one lane object per declared
 source: `key_kind` (`inbox`, `sent`, `procore_rfis`, else `other` -- the
@@ -130,6 +134,10 @@ __all__ = [
     "CommunicationsEvidenceHandler",
     "CommunicationsTotalsError",
     "ParsedPublication",
+    "communications_source_ids",
+    "coverage_facts",
+    "message_projection",
+    "window_fact",
 ]
 
 #: Producer source keys stored by name as `key_kind`; any other key is `other`.
@@ -168,9 +176,13 @@ def lane_state(source: SourceCoverage) -> dict[str, object]:
     }
 
 
-def _projection(
+def message_projection(
     message: NormalizedMessage, search: SearchText, snapshot_id: str
 ) -> CommunicationProjection:
+    """The stored projection of `message`'s text, pointing at `(snapshot_id, ordinal)`.
+
+    Ingestion and the rederive (`communications_rederive`) build it the same way.
+    """
     text = search.text
     return CommunicationProjection(
         body_state=message.body.state.value,
@@ -289,7 +301,7 @@ class _Apply:
             message_time=item.message_time,
             message_time_basis=item.message_time_basis.value,
             has_attachments=primary.has_attachments,
-            projection=_projection(primary, search, self.snapshot.snapshot_id),
+            projection=message_projection(primary, search, self.snapshot.snapshot_id),
             first_snapshot_id=self.snapshot.snapshot_id,
             latest_snapshot_id=self.snapshot.snapshot_id,
         )
@@ -446,7 +458,9 @@ class _Apply:
         self.counts["participants_added"] += self.repo.insert_participants(self.principal_id, rows)
 
     def offer(self, touched: _Touched, primary: NormalizedMessage) -> None:
-        projection = _projection(primary, derive_search_text(primary), self.snapshot.snapshot_id)
+        projection = message_projection(
+            primary, derive_search_text(primary), self.snapshot.snapshot_id
+        )
         candidate = _Candidate(
             key=(projection.search_text is not None, *self.window_key, -primary.ordinal),
             projection=projection,
@@ -479,6 +493,12 @@ class _Apply:
             )
             if not touched.created:
                 self.counts["projections_replaced"] += 1
+            if record.source_unavailable:
+                # The new pointer names the snapshot this run has just read and
+                # verified, so the source is available again (WP4-R1 F2).
+                self.repo.set_source_unavailable(
+                    self.principal_id, message_id, source_unavailable=False
+                )
         elif latest != record.latest_snapshot_id:
             self.repo.set_latest_snapshot(self.principal_id, message_id, latest)
         raise_reconciled = (
@@ -500,7 +520,9 @@ class _Apply:
                 if replaced and candidate is not None
                 else record.projection.search_text
             )
-            identifiers = extract_identifiers(f"{record.subject or ''}\n{text or ''}")
+            identifiers = extract_identifiers(
+                f"{record.subject or ''}\n{text or ''}", version=IDENTIFIER_VERSION
+            )
             self.counts["identifiers_added"] += self.repo.insert_identifiers(
                 self.principal_id,
                 [
@@ -513,6 +535,8 @@ class _Apply:
                     for identifier in identifiers
                 ],
             )
+            if record.identifiers_version != IDENTIFIER_VERSION:
+                self.repo.set_identifiers_version(self.principal_id, message_id, IDENTIFIER_VERSION)
 
 
 class CommunicationsEvidenceHandler(IngestConsumerHandler):
@@ -656,7 +680,8 @@ class CommunicationsEvidenceHandler(IngestConsumerHandler):
         return IngestApplied(record_counts=dict(sorted(counts.items())))
 
 
-def _window_fact(window: IngestCoverageWindowRecord) -> WindowFact:
+def window_fact(window: IngestCoverageWindowRecord) -> WindowFact:
+    """One stored coverage window as the pure coverage read takes it."""
     return WindowFact(
         start=window.start_utc,
         end=window.end_utc,
@@ -676,6 +701,26 @@ def _window_fact(window: IngestCoverageWindowRecord) -> WindowFact:
     )
 
 
+def communications_source_ids(unit: UnitOfWork, principal_id: str) -> tuple[str, ...]:
+    """The Principal's `communications_evidence_v2` sources, enabled or not, sorted."""
+    return tuple(
+        source.ingest_source_id
+        for source in unit.ingestion.list_sources(principal_id)
+        if source.consumer is IngestConsumer.COMMUNICATIONS_EVIDENCE_V2
+    )
+
+
+def coverage_facts(
+    unit: UnitOfWork, principal_id: str, ingest_source_ids: Sequence[str]
+) -> tuple[WindowFact, ...]:
+    """The stored windows of the given sources, inside the caller's unit of work (WP4-S4)."""
+    return tuple(
+        window_fact(window)
+        for source_id in sorted(set(ingest_source_ids))
+        for window in unit.ingestion.list_coverage_windows(principal_id, source_id)
+    )
+
+
 class CommunicationsCoverageReader:
     """The coverage read over one source's stored windows (contract sections 9 and 19)."""
 
@@ -690,8 +735,7 @@ class CommunicationsCoverageReader:
 
     def _facts(self, principal_id: str, ingest_source_id: str) -> tuple[WindowFact, ...]:
         with self._unit_of_work() as unit:
-            windows = unit.ingestion.list_coverage_windows(principal_id, ingest_source_id)
-        return tuple(_window_fact(window) for window in windows)
+            return coverage_facts(unit, principal_id, [ingest_source_id])
 
     def summary(self, principal_id: str, ingest_source_id: str) -> CoverageSummary:
         """Merged intervals, gaps, lanes, freshness and snapshot counts."""

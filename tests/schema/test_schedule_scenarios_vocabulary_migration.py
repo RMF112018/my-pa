@@ -46,6 +46,7 @@ from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES
 from tests.schema.vocabulary_admissions import (
     admitted_ahead_of_the_domain,
     capabilities_admitted_after,
+    purposes_admitted_after,
 )
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
@@ -161,7 +162,9 @@ def test_at_sets_equal_the_live_enums() -> None:
     at = _literals(mine["_CAPABILITIES_AT_THIS_REVISION"])
     assert set(at) == declared and len(at) == len(declared) == 292
     purposes = _literals(mine["_PURPOSES_AT_THIS_REVISION"])
-    assert set(purposes) == {member.value for member in Purpose} - FILES_PURPOSES
+    assert set(purposes) == (
+        {member.value for member in Purpose} - FILES_PURPOSES - purposes_admitted_after(REVISION)
+    )
     assert len(purposes) == 68
 
 

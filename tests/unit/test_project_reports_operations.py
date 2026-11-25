@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
@@ -556,10 +557,25 @@ def _banned(scene: Scene) -> set[str]:
     return banned
 
 
+def _occurs(token: str, text: str) -> bool:
+    """`token` in `text`; an all-digit token only at digit boundaries.
+
+    A digit-only token (a DSN port, a folder code) found inside a longer printed
+    number -- a count, a timestamp, a run's duration -- is that number, not the
+    token: `6543` in `165432` is no leak (the #384 flake). Standing alone, or
+    beside a non-digit, it still is.
+    """
+    if token.isdigit():
+        return re.search(rf"(?<![0-9]){re.escape(token)}(?![0-9])", text) is not None
+    return token in text
+
+
 def _leaks(text: str, banned: set[str], cells: set[str]) -> list[str]:
-    found = [token for token in banned if token in text]
+    found = [token for token in banned if _occurs(token, text)]
     # A cell leaks as itself, or JSON-escaped.
-    found += [cell for cell in cells if cell in text or json.dumps(cell)[1:-1] in text]
+    found += [
+        cell for cell in cells if _occurs(cell, text) or _occurs(json.dumps(cell)[1:-1], text)
+    ]
     return sorted(found)
 
 
@@ -611,3 +627,19 @@ def test_the_guard_sees_a_planted_leak() -> None:
     assert _leaks(planted_name, _banned(scene), cells)
     assert _leaks(planted_cell, _banned(scene), cells)
     assert not _leaks(json.dumps({"counts": {"rows.data": 3}}), _banned(scene), cells)
+
+
+def test_a_digit_token_leaks_standing_alone_but_not_inside_a_larger_number() -> None:
+    """The #384 flake: a digit-only banned token inside a printed number is that number."""
+    scene = Scene()
+    scene.place(("signatures",))
+    cells = _cell_texts()
+    banned = _banned(scene)
+    digits = sorted(token for token in banned if token.isdigit())
+    assert digits  # the DSN port, at least: the case the flake hit
+    token = digits[0]
+    assert _leaks(json.dumps({"port": token}), banned, cells) == [token]
+    assert _leaks(json.dumps({"x": f"db:{token}/y"}), banned, cells) == [token]
+    embedded = json.dumps({"counts": {"rows.data": int(f"1{token}2")}})
+    assert token not in _leaks(embedded, banned, cells)
+    assert token not in _leaks(json.dumps({"seconds": f"{token}9"}), banned, cells)

@@ -540,8 +540,9 @@ def test_v11_targets() -> None:
     default_all = _planes(constraints=True, lineage=True, program_reporting=True, schedule=True)
     assert len(_desired(default_all)) == 150
     # The `schedule_scenarios` flag doubles the compositions, 512 -> 1,024, and
-    # the files workspace's `files_workspace` flag again, 1,024 -> 2,048.
-    assert len(_every_composition()) == 2048
+    # the files workspace's `files_workspace` flag again, 1,024 -> 2,048, and
+    # communications WP4-S5's `communications` flag again, 2,048 -> 4,096.
+    assert len(_every_composition()) == 4096
 
 
 def test_planner_desires_schedule_reads_only_with_the_switch() -> None:

@@ -470,6 +470,10 @@ __all__ = [
     "CommunicationParticipantRecord",
     "CommunicationProjection",
     "CommunicationQuarantineRecord",
+    "CommunicationRederiveDueRecord",
+    "CommunicationSearchQuery",
+    "CommunicationSearchQueryShape",
+    "CommunicationSearchRow",
     "CommunicationSnapshotTally",
     "CommunicationsRepository",
     "ConstraintManagementRepository",
@@ -14681,6 +14685,23 @@ class CommunicationMessageRecord:
     identity_conflict: bool = False
     participants_reconciled: bool = False
     participants_disagreed: bool = False
+    #: The source file of the text pointer was missing or its digest differed at
+    #: the last rederive (WP4 ruling R3); the stored projection was kept.
+    source_unavailable: bool = False
+    #: The extractor version the identifier rows were last written under (WP4
+    #: ruling R2); `None` when never recorded.
+    identifiers_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationRederiveDueRecord:
+    """The columns a rederive groups a due message by (WP4-R1 F7), never its text."""
+
+    message_id: str
+    search_text_version: str
+    identifiers_version: str | None
+    source_unavailable: bool
+    text_snapshot_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -14745,6 +14766,71 @@ class CommunicationSnapshotTally:
 
     observations: int
     quarantined: int
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationSearchQueryShape:
+    """`numnode(websearch_to_tsquery(config, q))` for `english` and `simple` (WP4 D4-final)."""
+
+    english_nodes: int
+    simple_nodes: int
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationSearchQuery:
+    """A normalized `communications.search` request, as the SQL reads it (WP4-S4).
+
+    `query` is `None` when no text criterion applies (no query, or one with no
+    searchable terms). `english_terms` says the `english` query keeps a
+    lexeme; `text_fallback` adds the on-the-fly `simple` match and rank (ruling
+    D4-final). `excluded` is the query's negated terms alone (`-word`,
+    `-"..."`), which every candidate must satisfy, an identifier match
+    included (WP4-R2 G4); `None` when there are none. `to_utc` is inclusive of
+    its whole second. `after` is the last emitted
+    `(tier, rank, overlap, message_time, message_id)`.
+    """
+
+    query: str | None
+    english_terms: bool
+    text_fallback: bool
+    phrases: tuple[str, ...]
+    excluded: str | None
+    identifiers: tuple[tuple[str, str], ...]
+    identifier_version: str
+    participants: tuple[str, ...]
+    participants_all: bool
+    from_utc: datetime | None
+    to_utc: datetime | None
+    folder_role: str | None
+    conversation_id: str | None
+    collapse: bool
+    after: tuple[int, int, int, datetime, str] | None
+    limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationSearchRow:
+    """One search result: the message's metadata and its section 14 key."""
+
+    message_id: str
+    conversation_id: str | None
+    message_time: datetime
+    subject: str | None
+    sender_address: str | None
+    has_attachments: bool | None
+    body_state: str
+    search_text_version: str
+    search_text_flags: tuple[str, ...]
+    identity_conflict: bool
+    participants_reconciled: bool
+    participants_disagreed: bool
+    source_unavailable: bool
+    tier: int
+    rank: int
+    overlap: int
+    matched_identifier_kinds: tuple[str, ...]
+    conversation_hits: int
+    snippet: str | None
 
 
 class CommunicationsRepository(ABC):
@@ -14835,6 +14921,19 @@ class CommunicationsRepository(ABC):
         """
 
     @abstractmethod
+    def set_source_unavailable(
+        self, principal_id: str, message_id: str, *, source_unavailable: bool
+    ) -> None:
+        """Set or clear `source_unavailable`; `RepositoryFailureError` when absent."""
+
+    @abstractmethod
+    def set_identifiers_version(self, principal_id: str, message_id: str, version: str) -> None:
+        """Record the extractor version of the message's identifier rows.
+
+        `RepositoryFailureError` when the message does not exist.
+        """
+
+    @abstractmethod
     def insert_item(self, principal_id: str, item: CommunicationMailboxItemRecord) -> None:
         """Attach one provider id to its message."""
 
@@ -14887,6 +14986,85 @@ class CommunicationsRepository(ABC):
     @abstractmethod
     def tally_snapshot(self, principal_id: str, snapshot_id: str) -> CommunicationSnapshotTally:
         """How many observation and quarantine rows one snapshot left."""
+
+    @abstractmethod
+    def list_rederive_due(
+        self,
+        principal_id: str,
+        *,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None = None,
+        limit: int,
+    ) -> tuple[CommunicationRederiveDueRecord, ...]:
+        """The first `limit` messages a rederive must visit, by `message_id` (WP4 ruling D2).
+
+        Only the grouping columns are read (WP4-R1 F7): each group re-reads its
+        messages whole, `FOR UPDATE`, in its own transaction.
+
+        Due: `search_text_version` differs from the given one, `identifiers_version`
+        is distinct from the given one, or `source_unavailable` is set. With
+        `ingest_source_id`, only messages whose text pointer names a snapshot of
+        that source.
+        """
+
+    @abstractmethod
+    def count_rederive_due(
+        self,
+        principal_id: str,
+        *,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None = None,
+    ) -> int:
+        """How many messages `list_rederive_due` would answer with no limit."""
+
+    # --- the WP4 reads (contract sections 13, 14 and 16; WP4-S4) -------------------
+
+    @abstractmethod
+    def search_query_shape(self, query: str) -> CommunicationSearchQueryShape:
+        """How many nodes `websearch_to_tsquery` keeps for `query` under each configuration."""
+
+    @abstractmethod
+    def search_messages(
+        self, principal_id: str, query: CommunicationSearchQuery
+    ) -> tuple[CommunicationSearchRow, ...]:
+        """One page of the section 14 order, after `query.after`, at most `query.limit` rows.
+
+        Collapse (when asked) keeps the best-ranked message of each
+        conversation, and the keyset is applied after it.
+        """
+
+    @abstractmethod
+    def list_message_lanes(
+        self, principal_id: str, message_ids: Sequence[str]
+    ) -> Mapping[str, tuple[tuple[str, str], ...]]:
+        """Per message, its distinct observed `(folder_role, lane_verification)`, sorted."""
+
+    @abstractmethod
+    def list_messages(
+        self, principal_id: str, message_ids: Sequence[str]
+    ) -> tuple[CommunicationMessageRecord, ...]:
+        """The Principal's messages among `message_ids` (any order; absent ids are omitted)."""
+
+    @abstractmethod
+    def list_conversation_page(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        *,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[CommunicationMessageRecord, ...]:
+        """A conversation's messages by `(message_time, message_id COLLATE "C")` ascending."""
+
+    @abstractmethod
+    def count_identifier_version_pending(self, principal_id: str, version: str) -> int:
+        """How many messages' `identifiers_version` is distinct from `version`."""
+
+    @abstractmethod
+    def list_search_text_versions(self, principal_id: str) -> tuple[str, ...]:
+        """The distinct stored `search_text_version` values, sorted."""
 
 
 # --- Communications intelligence WP3b: meeting sync staging and reconciliation

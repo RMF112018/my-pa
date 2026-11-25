@@ -43,7 +43,7 @@ from tests.pins import ALEMBIC_HEAD, ALEMBIC_REVISION_COUNT
 from tests.schema.cpm_workbench_vocabulary_contract import S5B2_CAPABILITIES, S5B2_PURPOSES
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES, S63_PURPOSES
-from tests.schema.vocabulary_admissions import capabilities_admitted_after
+from tests.schema.vocabulary_admissions import capabilities_admitted_after, purposes_admitted_after
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -194,10 +194,9 @@ def test_at_sets_equal_the_live_enums() -> None:
     assert set(plane_capabilities) == declared
     assert len(plane_capabilities) == 292
     assert set(plane_capabilities) - set(head_capabilities) == S63_CAPABILITIES
-    assert (
-        set(_literals(plane["_PURPOSES_AT_THIS_REVISION"]))
-        == {member.value for member in Purpose} - FILES_PURPOSES
-    )
+    assert set(_literals(plane["_PURPOSES_AT_THIS_REVISION"])) == {
+        member.value for member in Purpose
+    } - FILES_PURPOSES - purposes_admitted_after(REVISION)
     declared -= S63_CAPABILITIES
     assert set(head_capabilities) == declared
     assert set(head_capabilities) - set(capabilities) == {
@@ -222,9 +221,9 @@ def test_at_sets_equal_the_live_enums() -> None:
     assert head["_PURPOSES_BEFORE_THIS_REVISION"] == mine["_PURPOSES_AT_THIS_REVISION"]
     head_purposes = _literals(head["_PURPOSES_AT_THIS_REVISION"])
     assert head_purposes == sorted(head_purposes)
-    assert (
-        set(head_purposes) == {member.value for member in Purpose} - S63_PURPOSES - FILES_PURPOSES
-    )
+    assert set(head_purposes) == {
+        member.value for member in Purpose
+    } - S63_PURPOSES - FILES_PURPOSES - purposes_admitted_after(REVISION)
     assert set(head_purposes) - set(purposes) == {
         "report_lifecycle",
         "report_hold",

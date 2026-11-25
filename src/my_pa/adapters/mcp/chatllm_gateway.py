@@ -88,6 +88,8 @@ _FEATURE_BY_FAMILY: Final[Mapping[str, str]] = {
     "schedule_baselines": "schedule",
     # Files workspace (files-workspace contract section 12): the 17 `files.*` names.
     "files": "files",
+    # Communications intelligence WP4-S5 (contract section 16): the 3 reads.
+    "communications": "communications",
 }
 
 _WRAPPER_SCHEMA: Final[dict[str, Any]] = {

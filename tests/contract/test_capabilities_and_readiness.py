@@ -368,6 +368,9 @@ def test_capability_names_match_the_published_contract() -> None:
         "files.restore",
         "files.upload.finalize",
         "files.write_text",
+        "communications.search",
+        "communications.read",
+        "communications.coverage",
     }
 
 

@@ -188,7 +188,7 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
     """
     variables = _switch_variables()
     assert variables, "no switch narrows the published surface, so this module proves nothing"
-    assert len(variables) == 11, (
+    assert len(variables) == 12, (
         "the published surface is narrowed by a different number of switches than "
         f"this guard knows about: {sorted(variables)}"
     )
@@ -210,6 +210,8 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
         "schedule_enabled",
         # Schedule Scenarios S6-3 (contract section 15.8): the plane switch.
         "schedule_scenarios_enabled",
+        # Communications intelligence WP4-S5 (contract section 16): the read switch.
+        "communications_enabled",
     }
 
 

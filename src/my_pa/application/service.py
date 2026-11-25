@@ -161,6 +161,7 @@ from my_pa.application.commands import (
     CloseProject,
     Command,
     CommitIntelligenceArtifact,
+    CommunicationsCoverage,
     CompareScheduleBaseline,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
@@ -303,6 +304,7 @@ from my_pa.application.commands import (
     ReadCapture,
     ReadCommitment,
     ReadCommitmentV2,
+    ReadCommunications,
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
@@ -386,6 +388,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchCommitments,
     SearchCommitmentsV2,
+    SearchCommunications,
     SearchConstraints,
     SearchEntities,
     SearchGoodNotes,
@@ -437,6 +440,12 @@ from my_pa.application.commitments_v2 import (
     page_follow_ups,
     read_commitment_page,
     require_owned_projects,
+)
+from my_pa.application.communications_search import (
+    CommunicationsReads,
+    coverage_payload,
+    read_payload,
+    search_payload,
 )
 from my_pa.application.constraint_management import (
     ConstraintCategoryMutationResult,
@@ -3533,6 +3542,9 @@ _RECORD_EVENT_TRUST_BASIS: Final = ("principal_partition",)
 #: partition, read through no configured source and no enrollment, so the basis
 #: is the partition exactly as the Constraint and task planes' is (WP-MTG-04).
 _MEETING_TRUST_BASIS: Final = ("principal_partition",)
+#: Communications intelligence WP4-S5: the reads answer derived rows of the
+#: acting Principal's own partition.
+_COMMUNICATIONS_TRUST_BASIS: Final = ("principal_partition",)
 
 
 @contextmanager
@@ -5066,8 +5078,18 @@ class ApplicationService:
         report_preservation_store: ReportContentStore | None = None,
         report_transfer_staging: ReportTransferStaging | None = None,
         file_workspace: FileWorkspaceApplication | None = None,
+        communications_enabled: bool = False,
+        communications_identifier_version: str | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
+        #: Communications intelligence WP4-S5 (contract section 16, ruling D7):
+        #: `MY_PA_COMMUNICATIONS_ENABLED`. Off -- the default -- withholds the 3
+        #: `communications.*` reads here and answers each `unsupported`
+        #: (`_communications`); the identifier version is the read setting
+        #: `MY_PA_COMMUNICATIONS_IDENTIFIER_VERSION` (rulings D3, R10); `None`
+        #: is the version ingestion writes.
+        self._communications_enabled = communications_enabled
+        self._communications_identifier_version = communications_identifier_version
         #: Files workspace (files-workspace contract section 9): the handlers over
         #: the composed store, or `None` -- what an unset
         #: `MY_PA_FILES_WORKSPACE_ROOT` composes -- which withholds the 17
@@ -5355,6 +5377,11 @@ class ApplicationService:
         # Files workspace (contract section 9): no composed store, no `files.*` name.
         if self._file_workspace is None:
             served -= FILE_WORKSPACE_CAPABILITIES
+        # Communications intelligence WP4-S5 (ruling D7): the read switch withholds
+        # the 3 `communications.*` reads from `capabilities.get`, readiness, the
+        # MCP tool list, the remote profile and the ChatLLM composition.
+        if not self._communications_enabled:
+            served -= _COMMUNICATIONS_CAPABILITIES
         if not self._relationship_intelligence_enabled:
             served -= _ENTITY_CAPABILITIES
         # The write half, narrowed separately. Subtracted after the line above
@@ -18071,6 +18098,69 @@ class ApplicationService:
         payload = files.handle(unit_of_work, authorization, command)
         return _Result(payload=payload, disclosure=unenrolled_disclosure(authorization.at))
 
+    def _communications(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: Command
+    ) -> _Result:
+        """The 3 `communications.*` reads (communications contract section 16, WP4-S5).
+
+        `unsupported` when `MY_PA_COMMUNICATIONS_ENABLED` is off, before anything
+        is read: the names are withheld from `available_capabilities` then, and a
+        transport dispatching straight through `_HANDLERS` meets the same
+        refusal (ruling D8: the standard disabled refusal, not an empty answer).
+        The reads run in this invocation's unit of work, scoped to the acting
+        Principal; the cursors bind to it and to its grants on the 3 names.
+        """
+        if not self._communications_enabled:
+            raise UnsupportedError()
+        version = self._communications_identifier_version
+        reads: CommunicationsReads = (
+            CommunicationsReads(
+                unit_of_work=lambda: nullcontext(unit_of_work), clock=lambda: authorization.at
+            )
+            if version is None
+            else CommunicationsReads(
+                unit_of_work=lambda: nullcontext(unit_of_work),
+                identifier_version=version,
+                clock=lambda: authorization.at,
+            )
+        )
+        principal_id = authorization.principal.principal_id
+        held = authorization.capability_grants
+        grants = (
+            None
+            if held is None
+            else tuple(
+                (granted.value, None if purpose is None else purpose.value)
+                for granted, purpose in held
+            )
+        )
+        next_cursor: str | None = None
+        with _translated():
+            if isinstance(command, SearchCommunications):
+                searched = reads.search(principal_id, command.search_request(), grants=grants)
+                payload = search_payload(searched)
+                next_cursor = searched.next_cursor
+            elif isinstance(command, ReadCommunications):
+                read = reads.read(principal_id, command.read_request(), grants=grants)
+                payload = read_payload(read)
+                next_cursor = read.next_cursor
+            elif isinstance(command, CommunicationsCoverage):
+                payload = coverage_payload(reads.coverage(principal_id, command.coverage_request()))
+            else:  # pragma: no cover - bound to exactly the 3 names below
+                raise UnsupportedError()
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_COMMUNICATIONS_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=next_cursor is not None,
+                    reason="page_size_reached" if next_cursor is not None else None,
+                    next_cursor=next_cursor,
+                ),
+            ),
+        )
+
     def _reports_transfer_begin(
         self,
         unit_of_work: UnitOfWork,
@@ -19874,6 +19964,10 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.MEETINGS_PROVIDER_BIND: ApplicationService._meetings_provider_bind,
         Capability.MEETINGS_PROVIDER_REVIEW: ApplicationService._meetings_provider_review,
         Capability.MEETINGS_PROVIDER_RECONCILE: ApplicationService._meetings_provider_reconcile,
+        # Communications intelligence WP4-S5: one binding for the 3 reads.
+        Capability.COMMUNICATIONS_SEARCH: ApplicationService._communications,
+        Capability.COMMUNICATIONS_READ: ApplicationService._communications,
+        Capability.COMMUNICATIONS_COVERAGE: ApplicationService._communications,
         Capability.ISSUES_CREATE: ApplicationService._issues_create,
         Capability.ISSUES_READ: ApplicationService._issues_read,
         Capability.ISSUES_LIST: ApplicationService._issues_list,
@@ -20528,6 +20622,16 @@ _PROGRAM_REPORTING_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 #: factory (and `programs.overview` the Constraint plane).
 _PROGRAM_READ_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability for capability in Capability if capability.value in PROGRAM_READ_CAPABILITIES
+)
+
+#: Communications intelligence WP4-S5 (contract section 16, ruling D7): the 3
+#: reads, withheld unless `communications_enabled` is on.
+_COMMUNICATIONS_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.COMMUNICATIONS_SEARCH,
+        Capability.COMMUNICATIONS_READ,
+        Capability.COMMUNICATIONS_COVERAGE,
+    }
 )
 
 #: CPM Workbench S5b-2 (contract section 3.1): the 7 Schedule names, withheld

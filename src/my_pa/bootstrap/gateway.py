@@ -1774,6 +1774,13 @@ def build_gateway_runtime(
             report_transfer_staging=report_transfer_staging(settings, work_engine),
             # Files workspace (contract section 9): composed above.
             file_workspace=file_workspace,
+            # Communications intelligence WP4-S5 (contract section 16, ruling
+            # D7): the read switch, never in a restricted composition -- an
+            # injected `data_engine` is a fixed MCP database role holding no
+            # privilege on the communications tables -- and the identifier read
+            # version (rulings D3, R10).
+            communications_enabled=settings.communications_enabled and data_engine is None,
+            communications_identifier_version=settings.communications_identifier_version,
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, control_engine) if entra else None,

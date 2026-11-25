@@ -323,6 +323,10 @@ def test_contract_prefixes_are_stable() -> None:
         "prbnd",
         "prrec",
         "prdrv",
+        # P6 XER import S7-2: one admitted export snapshot and one capture
+        # selection event.
+        "sp6n",
+        "sp6e",
     }
 
 
@@ -490,3 +494,30 @@ def test_knowledge_identifiers_have_the_frozen_regex_shape(row: dict[str, str]) 
             validate_identifier(f"{forbidden}_A1b2C3d4", kind)
     with pytest.raises(InvalidIdentifierError):
         make_identifier(kind, "short")
+
+
+# --- P6 XER import S7-2 (schedule XER import contract section 8.1) ------------
+
+
+@pytest.mark.parametrize(
+    ("kind", "prefix"),
+    [(IdKind.SCHEDULE_P6_SNAPSHOT, "sp6n"), (IdKind.SCHEDULE_P6_CAPTURE_EVENT, "sp6e")],
+)
+def test_the_p6_prefixes_are_prefix_free_against_every_kind(kind: IdKind, prefix: str) -> None:
+    """Neither prefix collides with, extends or is extended by any other kind's.
+
+    Measured against the whole enum, not a list: a `^sp6n_` CHECK then admits
+    no other plane's identifier, and no other plane's CHECK admits one of these.
+    """
+    assert kind.value == prefix
+    for other in IdKind:
+        if other is kind:
+            continue
+        assert not other.value.startswith(prefix), other
+        assert not prefix.startswith(other.value), other
+    value = make_identifier(kind, "A1b2C3d4")
+    assert parse_identifier(value) == (kind, "A1b2C3d4")
+    for other in IdKind:
+        if other is not kind:
+            with pytest.raises(InvalidIdentifierError):
+                validate_identifier(value, other)

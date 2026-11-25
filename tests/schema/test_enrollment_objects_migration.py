@@ -446,6 +446,16 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "project_report_line_values",
         "project_report_stated_totals",
         "project_report_cross_checks",
+        # P6 XER import S7-2 (`d8383150cf72`).
+        "schedule_p6_snapshots",
+        "schedule_p6_capture_events",
+        "schedule_p6_projects",
+        "schedule_p6_wbs",
+        "schedule_p6_activities",
+        "schedule_p6_relationships",
+        "schedule_p6_calendars",
+        "schedule_p6_field_values",
+        "schedule_p6_observed_fields",
     }
 )
 

@@ -513,7 +513,9 @@ class SqlProjectReportReadsRepository(ProjectReportReadsRepository):
                 _mine(values, principal_id),
                 tuple_(values.c.derivation_id, values.c.row_ordinal).in_(keys),
             )
-            .order_by(values.c.derivation_id, values.c.row_ordinal, values.c.field_key)
+            # Bytewise, whatever the cluster's collation (a UTF-8 locale sorts
+            # `commitment_line.amount` before `commitment.number`; the fake does not).
+            .order_by(values.c.derivation_id, values.c.row_ordinal, values.c.field_key.collate("C"))
         ):
             by_line.setdefault((row.derivation_id, row.row_ordinal), []).append(_to_value(row))
         return tuple(

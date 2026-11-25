@@ -889,6 +889,24 @@ class SafeDetail(StrEnum):
     MESSAGE_IDS = "message_ids"
     INCLUDE_TEXT = "include_text"
     SOURCE = "source"
+    #: Project-report reads (WP4P design section 2.10, WP4P-S3): the request
+    #: fields of `project_reports.catalog`, `.query`, `.record_history`,
+    #: `.compare` and `.coverage`. `PROJECT_ID`, `PROJECT_IDS`, `SERIES_ID`,
+    #: `TEXT`, `IDENTIFIERS`, `LIMIT` and `CURSOR` are reused.
+    RECORD_FAMILY = "record_family"
+    VERSION = "version"
+    FROM_VERSION = "from_version"
+    TO_VERSION = "to_version"
+    STATUS_CLASSES = "status_classes"
+    STATUSES = "statuses"
+    DATE_FIELD = "date_field"
+    DATE_FROM = "date_from"
+    DATE_TO = "date_to"
+    GROUP_KEYS = "group_keys"
+    MEASURES = "measures"
+    INCLUDE_ROWS = "include_rows"
+    RECORD_IDS = "record_ids"
+    IDENTITY_KEY = "identity_key"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

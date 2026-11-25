@@ -31,7 +31,8 @@ from my_pa.contracts.ports import (
     UnitOfWork,
 )
 from my_pa.domain.project_reports.model import BindingState, DerivationState, FilterSemantics
-from my_pa.domain.project_reports.versions import VersionRef, latest_version
+from my_pa.domain.project_reports.reads import series_id, version_filter_semantics
+from my_pa.domain.project_reports.versions import VersionRef, latest_version, version_order_key
 
 __all__ = ["SeriesCoverage", "SourceCoverage", "project_reports_coverage"]
 
@@ -48,6 +49,12 @@ class SeriesCoverage:
     filter_semantics: FilterSemantics
     completeness: dict[str, int] = field(default_factory=dict)
     quarantined: dict[str, int] = field(default_factory=dict)
+    #: The derived series token (WP4P ruling D2).
+    series_id: str | None = None
+    #: Each version's own filter semantics in the D10 order (WP4P-S3, ruling
+    #: D8 (i)): a declaration applies to a version first seen at or after it.
+    #: `filter_semantics` above judges the latest version only.
+    version_filter_semantics: tuple[tuple[str, FilterSemantics], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +142,7 @@ def project_reports_coverage(
                 (version, view, completeness, state)
             )
         series: list[SeriesCoverage] = []
-        for (slug, _signature), versions in sorted(
+        for (slug, signature), versions in sorted(
             groups.items(), key=lambda item: min(v[0].first_seen_at for v in item[1])
         ):
             refs = [v[0] for v in versions]
@@ -157,6 +164,11 @@ def project_reports_coverage(
                     else FilterSemantics.UNKNOWN,
                     completeness=dict(sorted(Counter(v[2] for v in versions if v[2]).items())),
                     quarantined=dict(sorted(Counter(v[3] for v in versions if v[3]).items())),
+                    series_id=series_id(principal_id, source_id, slug, signature),
+                    version_filter_semantics=tuple(
+                        (ref.snapshot_id, version_filter_semantics(declared, ref.first_seen_at))
+                        for ref in sorted(refs, key=version_order_key)
+                    ),
                 )
             )
         answer.append(

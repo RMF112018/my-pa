@@ -67,6 +67,10 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
+from tests.schema.communications_reads_vocabulary_contract import (
+    COMMUNICATIONS_READ_CAPABILITIES,
+    COMMUNICATIONS_READ_PURPOSES,
+)
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.knowledge_schema_ahead_contract import (
     GAP_ROWS,
@@ -996,7 +1000,9 @@ CHECKED_VOCABULARY: Final[tuple[tuple[str, str, frozenset[str]], ...]] = (
         | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
         | lineage_admitted_ahead("capability")
         # Files workspace WP4: admitted by its revision, declared by WP5.
-        | FILES_CAPABILITIES,
+        | FILES_CAPABILITIES
+        # Communications WP4-S1: admitted by its revision, declared by S5.
+        | COMMUNICATIONS_READ_CAPABILITIES,
     ),
     (
         "audit_events",
@@ -1004,7 +1010,8 @@ CHECKED_VOCABULARY: Final[tuple[tuple[str, str, frozenset[str]], ...]] = (
         frozenset(p.value for p in Purpose)
         | PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN
         | lineage_admitted_ahead("purpose")
-        | FILES_PURPOSES,
+        | FILES_PURPOSES
+        | COMMUNICATIONS_READ_PURPOSES,
     ),
     ("audit_events", "audit_outcome_is_known", frozenset(o.value for o in AuditOutcome)),
     ("audit_events", "denial_reason_is_known", frozenset(d.value for d in DenialReason)),
@@ -1182,6 +1189,9 @@ def test_the_schema_ahead_gap_matches_the_knowledge_wp_head() -> None:
     # here whether or not the domain declares them yet (WP5).
     frozen_capabilities -= FILES_CAPABILITIES
     frozen_purposes -= FILES_PURPOSES
+    # Communications WP4-S1 likewise (`communications_reads_vocabulary_contract.py`).
+    frozen_capabilities -= COMMUNICATIONS_READ_CAPABILITIES
+    frozen_purposes -= COMMUNICATIONS_READ_PURPOSES
     assert frozen_capabilities - HEAD_CAPABILITIES_DECLARED_BY_DOMAIN == row[
         "capability"
     ] | lineage_admitted_ahead("capability")
@@ -1399,6 +1409,7 @@ def test_downgrading_this_revision_restores_the_previous_vocabulary(
             | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
             | lineage_admitted_ahead("capability")
             | FILES_CAPABILITIES
+            | COMMUNICATIONS_READ_CAPABILITIES
         )
 
         command.downgrade(_config(), ENROLLMENT_OBJECTS_REVISION)
@@ -1448,6 +1459,7 @@ def test_stopping_at_the_capture_revision_emits_the_twelve_it_merged_with(
             | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
             | lineage_admitted_ahead("capability")
             | FILES_CAPABILITIES
+            | COMMUNICATIONS_READ_CAPABILITIES
         )
         assert _admitted(engine, "capability_is_known") == admitted_at_head
         assert _tables(engine) >= PROPOSAL_TABLES

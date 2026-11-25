@@ -62,7 +62,7 @@ from tests.schema.lineage_schema_ahead_contract import S1_PURPOSES as LINEAGE_S1
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES, S63_PURPOSES
 from tests.schema.test_meeting_records_migration import _audit, _seed_meeting
 from tests.schema.vocabulary_admissions import SINCE as ADMISSIONS_SINCE
-from tests.schema.vocabulary_admissions import capabilities_admitted_after
+from tests.schema.vocabulary_admissions import capabilities_admitted_after, purposes_admitted_after
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -278,6 +278,8 @@ def test_head_admits_every_declared_capability_and_purpose() -> None:
         - S5B2_PURPOSES
         - S63_PURPOSES
         - FILES_PURPOSES
+        # Every purpose admitted after the files workspace revision (WP4 ruling R17).
+        - purposes_admitted_after(ADMISSIONS_SINCE)
         # Reports Modernization WP03: admitted by `4c37731671fc`.
         - {"report_lifecycle", "report_hold", "report_retention"}
     )

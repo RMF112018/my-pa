@@ -461,6 +461,8 @@ class MeasureDelta:
     reasons: frozenset[NotReportableReason]
     money: bool
     currency: str | None
+    #: Both sides' measure qualifiers: `reconciliation_mismatch` on a count (ruling A2).
+    qualifiers: frozenset[ReportQualifier] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1621,7 +1623,17 @@ class ProjectReportReads:
                 ):
                     delta = second.value - first.value
                 deltas.append(
-                    MeasureDelta(name, status_class, delta, reasons, money, after.currency)
+                    MeasureDelta(
+                        name,
+                        status_class,
+                        delta,
+                        reasons,
+                        money,
+                        after.currency,
+                        # Ruling A2 on a compare (R1-03): a count of either side's
+                        # mismatched version is qualified, never blocked.
+                        old.qualifiers | new.qualifiers,
+                    )
                 )
         return tuple(deltas)
 
@@ -2196,6 +2208,7 @@ def compare_payload(answer: CompareAnswer) -> dict[str, object]:
                         "reasons": sorted(reason.value for reason in delta.reasons),
                     }
                 ),
+                "qualifiers": sorted(qualifier.value for qualifier in delta.qualifiers),
             }
             for delta in answer.measures_delta
         ],

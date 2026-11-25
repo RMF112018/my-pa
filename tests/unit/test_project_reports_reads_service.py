@@ -44,6 +44,7 @@ def _payload(render: Callable[[Any], dict[str, object]]) -> Callable[[Any], Any]
 
 
 query_payload = _payload(reads_module.query_payload)
+compare_payload = _payload(reads_module.compare_payload)
 
 PROJECT = RFI_PROJECT[1]
 
@@ -239,3 +240,49 @@ def test_a_reconciliation_mismatch_qualifies_counts_and_never_blocks_them() -> N
     assert counted["measure_scope"] == "filtered"
     assert counted["total"] == {"state": "reportable", "value": "3"}
     assert counted["qualifiers"] == ["reconciliation_mismatch"]
+
+
+def test_a_compared_count_carries_the_reconciliation_qualifier() -> None:
+    """Ruling A2 on `compare` (R1-03): a count delta is qualified, never blocked."""
+    built, _ingest, world = fast_scene()
+    build_world(built)
+    reads = service(built)
+    series = next(
+        s.series_id
+        for s in reads.catalog(built.principal, CatalogRequest([PROJECT])).projects[0].series
+        if s.slug_label == "qxrfis"
+    )
+    clean = compare_payload(reads.compare(built.principal, CompareRequest(series_id=series)))
+    counts = [d for d in clean["measures_delta"] if d["measure"].endswith("_count")]
+    assert counts and all(d["qualifiers"] == [] for d in counts)
+    # The mismatch is planted on the later (`to`) side only.
+    mismatch = {"column_groups": {"match": 1}, "grand": {"mismatch": 1}}
+    later = next(
+        v
+        for v in reads.compare(built.principal, CompareRequest(series_id=series)).versions
+        if v.is_latest
+    )
+    derivations = world.project_reports.derivations
+    for key, derivation in list(derivations.items()):
+        if derivation.derivation_id == later.record.derivation_id:
+            derivations[key] = dataclasses.replace(derivation, reconciliation=mismatch)
+    compared = compare_payload(reads.compare(built.principal, CompareRequest(series_id=series)))
+    deltas = {
+        d["measure"]: d for d in compared["measures_delta"] if d["measure"].endswith("_count")
+    }
+    assert deltas == {
+        "open_outstanding.record_count": {
+            "measure": "open_outstanding.record_count",
+            "status_class": None,
+            "state": "reportable",
+            "delta": "5",
+            "qualifiers": ["reconciliation_mismatch"],
+        },
+        "open_outstanding.row_count": {
+            "measure": "open_outstanding.row_count",
+            "status_class": None,
+            "state": "reportable",
+            "delta": "5",
+            "qualifiers": ["reconciliation_mismatch"],
+        },
+    }

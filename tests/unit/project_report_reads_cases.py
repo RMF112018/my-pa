@@ -104,7 +104,13 @@ def case_a_superseded_derivation_is_never_answered_or_counted(
     before_versions = _versions(scene)
     before_lines = _lines(scene, _rfis(scene))
     rows_before = derivation_rows()
+    # The observations export has stated totals, so a superseded one is live (R1-04).
+    (observations,) = (v.derivation_id for v in before_versions if v.project_id == OBS_PROJECT[1])
+    with scene.unit() as unit:
+        stated = unit.project_report_reads.stated_totals_of(scene.principal, [observations])
+    assert stated
     scene.correct("rfis")
+    scene.correct("observations")
     scene.rederive()
     scene.rederive(unknown_adapter_registry())
     assert derivation_rows() > rows_before  # superseded rows exist beside the current ones
@@ -120,6 +126,10 @@ def case_a_superseded_derivation_is_never_answered_or_counted(
     with scene.unit() as unit:
         reads = unit.project_report_reads
         assert reads.stated_totals_of(scene.principal, superseded) == ()
+        assert reads.stated_totals_of(scene.principal, [observations]) == ()
+        (current,) = (v.derivation_id for v in after_versions if v.project_id == OBS_PROJECT[1])
+        assert current != observations
+        assert len(reads.stated_totals_of(scene.principal, [current])) == len(stated)
         assert reads.rfi_candidates(scene.principal, superseded, [174]) == ()
         assert reads.cross_checks_of(scene.principal, superseded) == ()
     after_lines = _lines(scene, _rfis(scene))

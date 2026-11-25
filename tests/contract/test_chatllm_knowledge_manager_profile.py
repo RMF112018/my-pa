@@ -39,7 +39,6 @@ from my_pa.application.service import _HANDLERS
 from my_pa.bootstrap.knowledge_discovery_profiles import KNOWLEDGE_DISCOVERY_ONLY_CAPABILITIES
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
-    CHATLLM_DATA_PROFILE_VERSION,
     ChatLLMCapabilityClass,
 )
 from my_pa.domain.identity.operation import Capability, is_write_capability
@@ -115,7 +114,6 @@ def test_the_manager_exception_set_is_exactly_the_discovery_pair() -> None:
         assert policy.classification is ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED
         assert chatllm_grant_purpose(capability) is Purpose.KNOWLEDGE_ASSERTION_OBSERVATION
         assert is_write_capability(capability)
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
 
 
 def test_ordinary_active_submit_and_checkpoint_grants_stay_unexpected() -> None:

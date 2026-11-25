@@ -8,6 +8,7 @@ from typing import Final
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from tests.pins import ALEMBIC_REVISION_COUNT
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -39,7 +40,6 @@ def _frozen_literals(constant: str) -> frozenset[str]:
 
 def test_this_revision_is_in_the_chain() -> None:
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     # 79 since `7e114f822af2` (RI-ENT-WP-02) added the entity_names/
@@ -72,7 +72,7 @@ def test_this_revision_is_in_the_chain() -> None:
     # (RULING-M11); 91 since `6a2f9d1c4b80` added the GoodNotes pull schema on
     # top of that -- counted on the merged tree, not derived (RULING-M2).
     # R8 adds one receipt migration on the previous 91-revision chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 134
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == ALEMBIC_REVISION_COUNT
 
 
 def test_the_frozen_literals_are_this_revision_s_vocabulary() -> None:

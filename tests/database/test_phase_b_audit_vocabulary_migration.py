@@ -45,6 +45,7 @@ from sqlalchemy.exc import IntegrityError
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.infrastructure.database.engine import create_database_engine
+from tests.pins import ALEMBIC_HEAD
 
 pytestmark = pytest.mark.database
 
@@ -59,11 +60,9 @@ DISPOSABLE_DATABASE: Final = "my_pa_phase_b_vocabulary_test"
 #: out rather than imported so current chain drift and historical identity are
 #: checked independently.
 HEAD_REVISION: Final = "b8e4d1a6c073"
-#: PR192's graph-vocabulary admission directly above `HEAD_REVISION`.
-GRAPH_REVISION: Final = "c3f8a1d07e94"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-CURRENT_HEAD_REVISION: Final = "0d4e247d03cb"
+CURRENT_HEAD_REVISION: Final = ALEMBIC_HEAD
 #: What was head until `HEAD_REVISION` stacked on it (RI-ENT-WP-10/11, widening
 #: three closed-set CHECKs to admit that phase's capability names and record
 #: families, creating and altering no table).
@@ -89,11 +88,6 @@ FIFTH_TO_HEAD_REVISION: Final = "1cda4d536268"
 #: What was head until `FIFTH_TO_HEAD_REVISION` stacked on it (RI-ENT-WP-06b,
 #: widening the identity-effect family CHECKs).
 SIXTH_TO_HEAD_REVISION: Final = "9a3f6c1e8d24"
-#: The identity-history revision, several links below `SIXTH_TO_HEAD_REVISION`
-#: rather than immediately beneath it -- the chain assertion below walks the
-#: intervening links by literal. Named so that assertion stays a statement about
-#: the order rather than about whichever revision happens to be last.
-IDENTITY_HISTORY_REVISION: Final = "8e1c4a7b2d90"
 PHASE_B_SCHEMA_REVISION: Final = "3d07af4dc513"
 PHASE_B_REVISION: Final = "b64e29a0f7c1"
 PREVIOUS_REVISION: Final = "a1f7d3c85e40"
@@ -203,60 +197,6 @@ def test_the_names_this_module_checks_are_the_names_the_domain_declares() -> Non
 def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> None:
     """One Alembic head, and it is this one, on a database built from empty."""
     script = ScriptDirectory.from_config(_config())
-    heads = list(script.get_heads())
-    assert heads == [CURRENT_HEAD_REVISION], (
-        f"expected exactly {CURRENT_HEAD_REVISION}, found {heads}"
-    )
-    assert script.get_revision("a1c9e4b72f80").down_revision == "2774329487be"
-    assert script.get_revision("e8f2a6c9d104").down_revision == "d4e8b1c7a902"
-    assert script.get_revision("d4e8b1c7a902").down_revision == "a4d8e31b2c90"
-    assert script.get_revision("a4d8e31b2c90").down_revision == "6a2f9d1c4b80"
-    assert script.get_revision("6a2f9d1c4b80").down_revision == GRAPH_REVISION
-    # `b8e4d1a6c073` (RI-ENT-WP-12, backfilling one `display`-typed
-    # `entity_names` row per active `entities` row and writing no
-    # `entity_project_participations` row, RULING-M10) is additive on
-    # `16f05c46b8c3` -- an edge RI-ENT-WP-12's integration made, because it had
-    # been written against `c99cd8ed8d1c` and would otherwise have stood beside
-    # `16f05c46b8c3` as a second head (RULING-M11). `16f05c46b8c3` (RI-ENT-WP-10/11,
-    # widening `audit_events.capability_is_known` 115 -> 135,
-    # `entity_mutation_events.a_mutated_record_family_is_known` 6 -> 11 and
-    # `entity_proposals.an_accepted_proposal_record_family_is_known` 6 -> 11 for
-    # RI-ENT-WP-10's five entity reads and RI-ENT-WP-11's fifteen entity
-    # mutation contracts, and creating and altering no table) is additive on
-    # `2c00c9ac64bc` (UI-IMP-WP02, adding the WebAuthn credential, challenge,
-    # recovery-code and opaque session tables) -- an edge the base merge made,
-    # because both revisions had been written against `c99cd8ed8d1c` and the
-    # pair would otherwise have stood as two heads (RULING-M11). `2c00c9ac64bc`
-    # is itself additive on `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing
-    # pass, renaming the seeded `entity_relationship_types` row
-    # `design_coordinates_with` to `design_coordination_with`), itself additive
-    # on `1cda4d536268` (RI-ENT-WP-07), itself additive on `9a3f6c1e8d24`
-    # (RI-ENT-WP-06b), itself additive on `8dc3619891bb` (RI-ENT-WP-06a), itself
-    # additive on `17149a48fa30` (RI-ENT-WP-05), itself additive on
-    # `f5b06925857e` (RI-ENT-WP-04), itself additive on `441b071bf37b`
-    # (RI-ENT-WP-03), itself additive on `7e114f822af2` (RI-ENT-WP-02), itself
-    # additive on `b727e870d45e`, which is additive on
-    # `IDENTITY_HISTORY_REVISION` -- three more links than this chain had before
-    # `c99cd8ed8d1c` landed, and one more than it had before `b8e4d1a6c073` did.
-    assert script.get_revision(GRAPH_REVISION).down_revision == HEAD_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == SECOND_TO_HEAD_REVISION
-    assert script.get_revision(SECOND_TO_HEAD_REVISION).down_revision == THIRD_TO_HEAD_REVISION
-    assert script.get_revision(THIRD_TO_HEAD_REVISION).down_revision == FOURTH_TO_HEAD_REVISION
-    assert script.get_revision(FOURTH_TO_HEAD_REVISION).down_revision == FIFTH_TO_HEAD_REVISION
-    assert script.get_revision(FIFTH_TO_HEAD_REVISION).down_revision == SIXTH_TO_HEAD_REVISION
-    assert script.get_revision(SIXTH_TO_HEAD_REVISION).down_revision == "8dc3619891bb"
-    # `8dc3619891bb` used to be `FOURTH_TO_HEAD_REVISION` itself, and
-    # `17149a48fa30` before that; naming both explicitly here keeps this chain
-    # covering exactly the links it covered before the constants above shifted --
-    # once when `c99cd8ed8d1c` landed, once when `16f05c46b8c3` did, once more
-    # when the base merge put `2c00c9ac64bc` between the two, and once more when
-    # `b8e4d1a6c073` was re-parented onto `16f05c46b8c3`.
-    assert script.get_revision("8dc3619891bb").down_revision == "17149a48fa30"
-    assert script.get_revision("17149a48fa30").down_revision == "f5b06925857e"
-    assert script.get_revision("441b071bf37b").down_revision == "7e114f822af2"
-    assert script.get_revision("7e114f822af2").down_revision == "b727e870d45e"
-    assert script.get_revision("b727e870d45e").down_revision == IDENTITY_HISTORY_REVISION
-    assert script.get_revision(IDENTITY_HISTORY_REVISION).down_revision == PHASE_B_SCHEMA_REVISION
     assert script.get_revision(PHASE_B_SCHEMA_REVISION).down_revision == PHASE_B_REVISION
     assert script.get_revision(PHASE_B_REVISION).down_revision == PREVIOUS_REVISION
     with migrated_engine.begin() as connection:

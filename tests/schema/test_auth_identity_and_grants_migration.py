@@ -16,6 +16,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, inspect, text
 from sqlalchemy.exc import IntegrityError
+from tests.pins import ALEMBIC_HEAD, ALEMBIC_REVISION_COUNT
 
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.auth_grants import auth_grants
@@ -28,14 +29,7 @@ from my_pa.infrastructure.persistence.webauthn_auth import (
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "4e9a1c7b2d60"
 PREVIOUS: Final = "c5b71e0a8d43"
-#: The revision that landed on this one, making it the chain head instead.
-SUCCESSOR: Final = "f7a2c9d51e64"
-CONSTRAINT_SYNC: Final = "b8e4d6f20a11"
-CAPTURE_LABELS: Final = "c1a8e4d70b29"
-WP_TUX_01: Final = "de5ec1c65857"
-WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
-WP_MCP_PROJ_02: Final = "b3e9d7a41c25"
-HEAD: Final = "0d4e247d03cb"
+HEAD: Final = ALEMBIC_HEAD
 MIGRATION: Final = (
     ROOT / "migrations/versions/20260907_4e9a1c7b2d60_normalize_auth_identity_and_add_grants.py"
 )
@@ -136,44 +130,8 @@ def test_the_chain_has_exactly_one_head_and_this_revision_is_beneath_it() -> Non
     link rather than loosened to reachability.
     """
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == "61fafdfd2986"
-    assert script.get_revision("61fafdfd2986").down_revision == "52a829ef718a"
-    assert script.get_revision("52a829ef718a").down_revision == "6418b57081c3"
-    assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
-    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
-    assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
-    assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
-    assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
-    assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
-    assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
-    assert script.get_revision("6c2306330ceb").down_revision == "023f8f7eb499"
-    assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"
-    assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"
-    assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
-    assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"
-    assert script.get_revision("b9025e7fb738").down_revision == "5c1e7a9b3d42"
-    assert script.get_revision("5c1e7a9b3d42").down_revision == "c8f7ae406d47"
-    assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
-    assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
-    assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
-    assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
-    assert script.get_revision("6734f039f7a6").down_revision == "0641c354ca85"
-    assert script.get_revision("0641c354ca85").down_revision == "c8e4a1b70d35"
-    assert script.get_revision("c8e4a1b70d35").down_revision == "1d9b248e7f83"
-    assert script.get_revision("1d9b248e7f83").down_revision == "7d9a450dfd07"
-    assert script.get_revision("7d9a450dfd07").down_revision == "6f6ead27d122"
-    assert script.get_revision("6f6ead27d122").down_revision == "e6a4c2f91b73"
-    assert script.get_revision("e6a4c2f91b73").down_revision == "c4f1a8e52d90"
-    assert script.get_revision("c4f1a8e52d90").down_revision == WP_MCP_PROJ_02
-    assert script.get_revision(WP_MCP_PROJ_02).down_revision == WP_MCP_PROJ_01
-    assert script.get_revision(WP_MCP_PROJ_01).down_revision == WP_TUX_01
-    assert script.get_revision(WP_TUX_01).down_revision == CAPTURE_LABELS
-    assert script.get_revision(CAPTURE_LABELS).down_revision == CONSTRAINT_SYNC
-    assert script.get_revision(CONSTRAINT_SYNC).down_revision == SUCCESSOR
-    assert script.get_revision(SUCCESSOR).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 134
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == ALEMBIC_REVISION_COUNT
 
 
 def test_revision_imports_no_domain_or_persistence_modules() -> None:

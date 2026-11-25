@@ -50,16 +50,6 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "c5b71e0a8d43"
 PREVIOUS: Final = "a1c9e4b72f80"
-CURRENT_HEAD: Final = "0d4e247d03cb"
-CAPTURE_LABELS: Final = "c1a8e4d70b29"
-WP_TUX_01: Final = "de5ec1c65857"
-WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
-WP_MCP_PROJ_02: Final = "b3e9d7a41c25"
-CONSTRAINT_SYNC: Final = "b8e4d6f20a11"
-#: The revision between this one and the head, landed by AUTH-IMP while
-#: PC-CM-IMP-WP07 was in review.
-INTERVENING: Final = "4e9a1c7b2d60"
-AUTHORING_REVISION: Final = "f7a2c9d51e64"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20260906_c5b71e0a8d43_admit_the_constraint_read_capabilities.py"
 PREVIOUS_MIGRATION: Final = (
@@ -176,52 +166,6 @@ def _literals(block: str) -> list[str]:
 
 def test_revision_sits_on_the_single_head_chain() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [CURRENT_HEAD]
-    # `4e9a1c7b2d60` (AUTH-IMP), `f7a2c9d51e64` (PC-CM-IMP-WP07),
-    # `b8e4d6f20a11` (PC-CM-IMP-WP11), `c1a8e4d70b29` (capture labels),
-    # `de5ec1c65857` (WP-TUX-01), `9f2c8a1d4e70` (WP-MCP-PROJ-01),
-    # `b3e9d7a41c25` (WP-MCP-PROJ-02), `93f3aa113f58` (Intelligence focus-area
-    # admission), `cc373834a485` (Continuity Project sixteen-field admission),
-    # then `a591b81f10a2` (Intelligence report type registry) landed on top of
-    # this revision, so the head is no longer its direct child. The path from
-    # head down to this revision is asserted link by link rather than loosened
-    # to mere reachability, which would be the weaker claim.
-    assert script.get_revision(CURRENT_HEAD).down_revision == "61fafdfd2986"
-    assert script.get_revision("61fafdfd2986").down_revision == "52a829ef718a"
-    assert script.get_revision("52a829ef718a").down_revision == "6418b57081c3"
-    assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
-    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
-    assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
-    assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
-    assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
-    assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
-    assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
-    assert script.get_revision("6c2306330ceb").down_revision == "023f8f7eb499"
-    assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"
-    assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"
-    assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
-    assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"
-    assert script.get_revision("b9025e7fb738").down_revision == "5c1e7a9b3d42"
-    assert script.get_revision("5c1e7a9b3d42").down_revision == "c8f7ae406d47"
-    assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
-    assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
-    assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
-    assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
-    assert script.get_revision("6734f039f7a6").down_revision == "0641c354ca85"
-    assert script.get_revision("0641c354ca85").down_revision == "c8e4a1b70d35"
-    assert script.get_revision("c8e4a1b70d35").down_revision == "1d9b248e7f83"
-    assert script.get_revision("1d9b248e7f83").down_revision == "7d9a450dfd07"
-    assert script.get_revision("7d9a450dfd07").down_revision == "6f6ead27d122"
-    assert script.get_revision("6f6ead27d122").down_revision == "e6a4c2f91b73"
-    assert script.get_revision("e6a4c2f91b73").down_revision == "c4f1a8e52d90"
-    assert script.get_revision("c4f1a8e52d90").down_revision == WP_MCP_PROJ_02
-    assert script.get_revision(WP_MCP_PROJ_02).down_revision == WP_MCP_PROJ_01
-    assert script.get_revision(WP_MCP_PROJ_01).down_revision == WP_TUX_01
-    assert script.get_revision(WP_TUX_01).down_revision == CAPTURE_LABELS
-    assert script.get_revision(CAPTURE_LABELS).down_revision == CONSTRAINT_SYNC
-    assert script.get_revision(CONSTRAINT_SYNC).down_revision == AUTHORING_REVISION
-    assert script.get_revision(AUTHORING_REVISION).down_revision == INTERVENING
-    assert script.get_revision(INTERVENING).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 

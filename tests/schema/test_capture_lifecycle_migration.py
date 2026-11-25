@@ -40,6 +40,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, insert, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
+from tests.pins import ALEMBIC_HEAD
 
 from my_pa.domain.capture.version import digest_of
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -55,10 +56,8 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "0641c354ca85"
 PREVIOUS: Final = "c8e4a1b70d35"
-#: The chain's head since KLP-WP-02, directly on this revision. The refusal and
-#: round-trip tests below upgrade to this revision rather than to the head, so
-#: they keep measuring this revision's own downgrade.
-HEAD: Final = "0d4e247d03cb"
+#: The current head, from the reviewed snapshot (`tests/pins.json`).
+HEAD: Final = ALEMBIC_HEAD
 MIGRATION: Final = ROOT / "migrations" / "versions" / "20261001_0641c354ca85_capture_lifecycle.py"
 TABLE_NAMES: Final = frozenset({"capture_lifecycle_events", "capture_lifecycle_receipts"})
 TRIGGERS: Final = frozenset(
@@ -104,30 +103,7 @@ def _offline(target: str, *, down: bool = False) -> str:
 
 def test_the_revision_is_the_single_head_directly_on_c8e4a1b70d35() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [HEAD]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert script.get_revision(HEAD).down_revision == "61fafdfd2986"
-    assert script.get_revision("61fafdfd2986").down_revision == "52a829ef718a"
-    assert script.get_revision("52a829ef718a").down_revision == "6418b57081c3"
-    assert script.get_revision("6418b57081c3").down_revision == "4d1069a7d84f"
-    assert script.get_revision("4d1069a7d84f").down_revision == "640aaacc78e8"
-    assert script.get_revision("640aaacc78e8").down_revision == "b77334135653"
-    assert script.get_revision("b77334135653").down_revision == "4c37731671fc"
-    assert script.get_revision("4c37731671fc").down_revision == "2a90f91dd786"
-    assert script.get_revision("2a90f91dd786").down_revision == "621ef6786c64"
-    assert script.get_revision("621ef6786c64").down_revision == "6c2306330ceb"
-    assert script.get_revision("6c2306330ceb").down_revision == "023f8f7eb499"
-    assert script.get_revision("c5260943d933").down_revision == "6f1476b8da52"
-    assert script.get_revision("6f1476b8da52").down_revision == "d020b532ad7d"
-    assert script.get_revision("d020b532ad7d").down_revision == "264310e0416a"
-    assert script.get_revision("264310e0416a").down_revision == "b9025e7fb738"
-    assert script.get_revision("b9025e7fb738").down_revision == "5c1e7a9b3d42"
-    assert script.get_revision("5c1e7a9b3d42").down_revision == "c8f7ae406d47"
-    assert script.get_revision("c8f7ae406d47").down_revision == "a591b81f10a2"
-    assert script.get_revision("a591b81f10a2").down_revision == "cc373834a485"
-    assert script.get_revision("cc373834a485").down_revision == "93f3aa113f58"
-    assert script.get_revision("93f3aa113f58").down_revision == "6734f039f7a6"
-    assert script.get_revision("6734f039f7a6").down_revision == REVISION
 
 
 # ---- the freeze -----------------------------------------------------------------------

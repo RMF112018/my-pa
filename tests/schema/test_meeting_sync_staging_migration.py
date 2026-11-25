@@ -6,8 +6,8 @@ gives `meeting_provider_bindings` its two snapshot columns (Manager ruling D10)
 and restates the audit capability vocabulary 310 -> 312 (D9). This module
 proves:
 
-* **the graph** -- this revision, directly on `52a829ef718a`, on the one chain,
-  with the project reports WP3P revision `0d4e247d03cb` additive on it;
+* **the graph** -- this revision, directly on `52a829ef718a`, on the one chain;
+  no test here names the chain head;
 * **the freeze** -- the revision imports nothing from the package it migrates
   and names every column, constraint and index `tables.py` declares for it; on
   a live server the catalog it builds equals the catalog `tables.py` builds;
@@ -162,8 +162,6 @@ def test_the_revision_is_directly_on_the_ingestion_revision_on_the_one_chain() -
     script = ScriptDirectory.from_config(_config())
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == "6418b57081c3"
-    # Project reports WP3P's revision is additive on this one.
-    assert script.get_revision("0d4e247d03cb").down_revision == REVISION
     heads = script.get_heads()
     assert len(heads) == 1
     # This revision is the head or an ancestor of it; the head itself is not named.

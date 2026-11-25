@@ -64,6 +64,8 @@ from tests.conftest import (
     build_service,
     metadata_for,
 )
+from tests.schema.vocabulary_admissions import SINCE as ADMISSIONS_SINCE
+from tests.schema.vocabulary_admissions import capabilities_admitted_after
 from tests.unit.test_knowledge_assertion_domain import SEEDS, _predicate_from_seed
 
 from my_pa.application import chatllm_data_profile
@@ -924,11 +926,6 @@ _POST_KLP_CAPABILITIES: Final = frozenset(
     {
         "reports.types.create",
         "reports.types.list",
-        # Communications intelligence WP2-W3.
-        "meetings.provider.bind",
-        # Communications intelligence WP3b-S4.
-        "meetings.provider.review",
-        "meetings.provider.reconcile",
         # Reports Modernization WP02.
         "reports.publish",
         # Reports Modernization WP03.
@@ -1050,7 +1047,9 @@ _POST_KLP_CAPABILITIES: Final = frozenset(
         "files.upload.finalize",
         "files.write_text",
     }
-)
+) | capabilities_admitted_after(ADMISSIONS_SINCE)
+# Every family admitted after the files workspace revision (communications
+# intelligence WP2-W3's `meetings.provider.bind` onward) comes from its one home.
 _EVENT: Final = "rcev_fastworld000000001"
 
 

@@ -103,20 +103,6 @@ def test_the_authoring_purpose_exists_and_is_the_only_one_added() -> None:
     }
 
 
-def test_the_two_vocabularies_are_the_sizes_this_package_states() -> None:
-    """The counts the census documents and the migration are written against."""
-    # CPM Workbench S5b-2: the 7 Schedule names and their 2 purposes.
-    # Reports Modernization WP02: `reports.publish`, and no purpose. WP03: its 5
-    # names and `report_lifecycle`. WP05b: its 4 custody names, `report_hold` and
-    # `report_retention`. WP06: its 5 transfer names, and no purpose.
-    # Schedule Scenarios S6-3: its 26 plane names and their 3 purposes.
-    # Files workspace WP5: its 17 `files.*` names and their 2 purposes.
-    # Communications intelligence WP2-W3: `meetings.provider.bind`, and no purpose.
-    # WP3b-S4: `meetings.provider.review` and `.reconcile`, and no purpose.
-    assert len(Capability) == 301
-    assert len(Purpose) == 70
-
-
 def test_no_public_migration_capability_exists() -> None:
     """`CM-BE-AC-080`, as a negative over the whole set.
 

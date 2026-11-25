@@ -365,8 +365,14 @@ def test_the_offline_downgrade_locks_refuses_first_and_unwinds_everything(
 
 @pytest.fixture
 def engine(cloned_database_url: str) -> Iterator[Engine]:
-    """A current-head clone, which carries this revision."""
+    """A current-head clone, downgraded to this revision.
+
+    A later revision may be additive on this one; it is unwound so every case
+    here measures this revision's own catalog and guards, and no test here
+    depends on this revision being the chain head.
+    """
     built = create_database_engine(cloned_database_url)
+    command.downgrade(_config(), REVISION)
     try:
         yield built
     finally:

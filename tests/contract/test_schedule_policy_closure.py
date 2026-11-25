@@ -90,7 +90,6 @@ from my_pa.contracts.mcp_database_profiles import (
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
-    CHATLLM_DATA_PROFILE_VERSION,
     SCHEDULE_DATA_NAMES,
     ChatLLMCapabilityClass,
     ChatLLMCompositionPrerequisite,
@@ -225,13 +224,16 @@ def _capability_enum(scene: Scene) -> None:
     del scene
     members = list(Capability)
     # Schedule Scenarios S6-3 appends its 26 plane names after the 7, and the
-    # files workspace WP5 its 17 `files.*` names after those.
-    assert [(member.name, member.value) for member in members[-50:-43]] == [
-        (name, value) for name, value, _, _ in _TABLE
-    ]
+    # files workspace WP5 its 17 `files.*` names after those. Anchored at the
+    # first of the 7, not at the end of the enum, so a later appended name moves
+    # nothing; the enum size is `tests/pins.json`'s (`test_pins_are_current`).
     # Reports Modernization WP03 declares its five beside `reports.publish`, and
     # WP05b its four custody names after them, and WP06 its five transfer names.
-    assert len(members) == 301
+    start = members.index(Capability(_TABLE[0][1]))
+    assert [(member.name, member.value) for member in members[start : start + 7]] == [
+        (name, value) for name, value, _, _ in _TABLE
+    ]
+    assert members[start + 7] == Capability.SCHEDULE_SCENARIOS_CREATE
 
 
 def _purpose_enum(scene: Scene) -> None:
@@ -241,16 +243,18 @@ def _purpose_enum(scene: Scene) -> None:
     # WP05b `report_hold` and `report_retention` after it.
     # Schedule Scenarios S6-3 appends its 3 plane purposes after those, and the
     # files workspace WP5 its 2 after S6-3's.
-    assert [(member.name, member.value) for member in members[-10:-8]] == [
+    # Anchored at `schedule_import`, not at the end of the enum, so a later
+    # appended purpose moves nothing; the enum size is `tests/pins.json`'s.
+    start = members.index(Purpose.SCHEDULE_IMPORT)
+    assert [(member.name, member.value) for member in members[start : start + 2]] == [
         ("SCHEDULE_IMPORT", "schedule_import"),
         ("SCHEDULE_READ", "schedule_read"),
     ]
-    assert members[-8:-5] == [
+    assert members[start + 2 : start + 5] == [
         Purpose.REPORT_LIFECYCLE,
         Purpose.REPORT_HOLD,
         Purpose.REPORT_RETENTION,
     ]
-    assert len(members) == 70
 
 
 def _operator_only(scene: Scene) -> None:
@@ -336,7 +340,6 @@ def _remote_write(scene: Scene) -> None:
 
 def _chatllm_policy(scene: Scene) -> None:
     del scene
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
     for capability in READS:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL, capability
@@ -515,13 +518,11 @@ def test_import_is_control_plane_excluded() -> None:
 
 
 def test_v11_targets() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
     # Schedule Scenarios S6-3 (chatllm-data-v13): the 22 plane names compose only
     # with `schedule_scenarios` too, off here, so every target below is
     # unchanged (`test_v13_targets` has the scenario targets). Files workspace
     # WP5 (chatllm-data-v14): the 17 `files.*` names compose only with
     # `files_workspace`, off here, so every target below is unchanged too.
-    assert len(CHATLLM_CAPABILITY_POLICY) == 301
     # chatllm-data-v12 (Reports Modernization): `reports.publish`, the 5 report
     # management names and the 5 `reports.transfer.*` names (`DATA_REQUIRED`)
     # add 11 everywhere; chatllm-data-v15 (WP2-W3) `meetings.provider.bind` adds

@@ -28,9 +28,10 @@ from sqlalchemy.exc import OperationalError
 from my_pa.bootstrap.settings import Settings
 from my_pa.domain.identity.auth_state import AuthStateKind, AuthStateReason
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID
+from tests.pins import ALEMBIC_HEAD
 
 DSN = "postgresql+psycopg://operator@db.invalid:5432/somewhere"
-HEAD = "0d4e247d03cb"
+HEAD = ALEMBIC_HEAD
 DSN_SHAPED = re.compile(r"[a-z0-9+]+://\S+", re.IGNORECASE)
 STATUS_KEYS = frozenset({"state", "reason", "grant", "expires"})
 SECRET_KEYS = frozenset(

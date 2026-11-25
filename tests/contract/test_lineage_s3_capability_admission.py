@@ -31,10 +31,8 @@ Every value is synthetic.
 
 from __future__ import annotations
 
-import hashlib
 import importlib
 import inspect
-import json
 import re
 from pathlib import Path
 from typing import Any, Final
@@ -66,7 +64,6 @@ from my_pa.application.service import (
 )
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
-    CHATLLM_DATA_PROFILE_VERSION,
     ChatLLMCapabilityClass,
     ChatLLMCompositionPrerequisite,
 )
@@ -84,7 +81,6 @@ from my_pa.domain.lineage.vocabulary import (
     LINEAGE_WRITE_CAPABILITIES,
 )
 from my_pa.domain.policy.decision import _SCOPELESS
-from my_pa.domain.program.vocabulary import PROGRAM_REPORTING_CAPABILITIES
 
 S3_NAMES: Final = frozenset(
     {
@@ -238,7 +234,6 @@ def test_s3_capabilities_are_operator_decision_required() -> None:
         assert policy.exclusion_rationale is None
         assert not is_operator_only(capability)
     # P1 moved data-class members, so the ChatLLM data profile moved too.
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
 
 
 def test_backfill_capabilities_are_operator_only_and_control_plane_excluded() -> None:
@@ -313,135 +308,10 @@ def test_s3_requests_reject_server_owned_fields(name: str) -> None:
 
 # ---- L6: the v1 and S1/S2 shapes, the S1 read, the web routes (sections 7.6, 8.1) ----
 
-#: SHA-256 of every published non-lineage tool's payload schema (name -> the
-#: `payload` property of its input schema, canonical JSON), measured at the S2
-#: basis `84ddab37` and unchanged at the S3 head: S3 changes no v1 request.
-_V1_PAYLOAD_SCHEMA_SHA256: Final = (
-    "e87a5186273905f60ae033764f70d6715cb01829a56a19e77409ab2d2de63ebb"
-)
-#: The same measurement without `reports.read`, taken at the Reports
-#: Modernization WP02 base `09a05158c`: WP02 adds `reports.publish` and
-#: deliberately extends `reports.read` (the `grpt_` selectors), so both are
-#: excluded and the other 191 shapes stay pinned byte for byte. The legacy
-#: `rpt_` read's answers are pinned by `tests/unit/test_reports_legacy_read_golden.py`.
-_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ: Final = (
-    "f4dc83a1e8e4699dc047d58279d97321fd750c1ecdff521b4cd148bb77fafb71"
-)
-#: The same measurement without `reports.read`, `reports.list` and
-#: `reports.search`, taken at the Reports Modernization WP04 base `f933f9fb3`:
-#: WP04 deliberately extends `reports.list` and `reports.search` (the `plane`
-#: selector and the catalog filters), so both are excluded too and the other
-#: 189 shapes stay pinned byte for byte. Their legacy answers are pinned by
-#: `tests/unit/test_reports_legacy_list_search_golden.py`.
-_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG: Final = (
-    "4a66657c422eb2c538a3cf7725cca2fab7b71325b883d3a0e724f200a7093459"
-)
-#: The v1 view modules and the SHA-256 of their models' field names
-#: (`module.Model` -> sorted field names, canonical JSON), measured alike.
-_V1_VIEW_MODULES: Final = (
-    "tasks",
-    "commitments",
-    "meetings",
-    "record_events",
-    "capture",
-    "canvas_workspace",
-    "documents",
-    "reveal",
-    "status",
-    "capabilities",
-)
-_V1_VIEW_FIELDS_SHA256: Final = "dff6d5a7482e860134079775c898014ed6b14342fd04164eeae2112d2babc32a"
-#: ADR-020 (meeting prep briefs) deliberately extends `meetings.create`,
-#: `meetings.update` (`prep_markdown`) and `meetings.read` (`prep_version_number`),
-#: and `MeetingView` (`prep`, `prep_version`, beside the new `MeetingPrepView`).
-#: Those tools and views (`_ADR_020_EXTENDED_*`) are excluded and every other shape stays
-#: pinned, each measured at the ADR-020 base `00880446b`. The excluded views'
-#: exact field sets are pinned by `tests/contract/test_meeting_contracts.py`.
-_ADR_020_EXTENDED_TOOLS: Final = frozenset({"meetings.create", "meetings.update", "meetings.read"})
-_ADR_020_EXTENDED_VIEWS: Final = frozenset({"meetings.MeetingView", "meetings.MeetingPrepView"})
-_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_MEETING_PREP: Final = (
-    "ae0f97c41d80eb7b3f8bb08e80c3062b0af0c4a1199933617f539d151f916fad"
-)
-_V1_VIEW_FIELDS_SHA256_WITHOUT_MEETING_VIEW: Final = (
-    "f78a9edb57105e8b25f1330bd2468964b132ca8d7e7af91a7f7c2bf3257825c7"
-)
-
-
-def _canonical_sha256(document: object) -> str:
-    return hashlib.sha256(
-        json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-
 
 def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
-    lineage = {capability.value for capability in _LINEAGE_CAPABILITIES}
-    # Record lineage S4 (S4 contract section 10): its 7 names are excluded
-    # beside the lineage names; the count and both pins stay.
-    lineage |= PROGRAM_REPORTING_CAPABILITIES
-    # CPM Workbench S5b-2: likewise the 7 Schedule names.
-    lineage |= {
-        capability.value for capability in Capability if capability.value.startswith("schedule_")
-    }
-    # Reports Modernization WP02: see `_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ`.
-    lineage |= {Capability.REPORTS_PUBLISH.value, Capability.REPORTS_READ.value}
-    # Reports Modernization WP03: its five additions, each excluded as new.
-    lineage |= {
-        Capability.REPORTS_UPDATE.value,
-        Capability.REPORTS_HISTORY.value,
-        Capability.REPORTS_ARCHIVE.value,
-        Capability.REPORTS_DELETE.value,
-        Capability.REPORTS_RESTORE.value,
-    }
-    # Reports Modernization WP05b: its four operator custody names, new too.
-    lineage |= {
-        Capability.REPORTS_HOLD_PLACE.value,
-        Capability.REPORTS_HOLD_RELEASE.value,
-        Capability.REPORTS_RETENTION_SET.value,
-        Capability.REPORTS_RETENTION_GET.value,
-    }
-    # Reports Modernization WP04: see `_V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG`.
-    lineage |= {Capability.REPORTS_LIST.value, Capability.REPORTS_SEARCH.value}
-    # Reports Modernization WP06: its five transfer names, new too (pinned by
-    # `tests/contract/test_reports_transfer_compact_facade.py`).
-    lineage |= {
-        capability.value
-        for capability in Capability
-        if capability.value.startswith("reports.transfer.")
-    }
-    # Files workspace WP5: its 17 `files.*` names are new.
-    lineage |= {
-        capability.value for capability in Capability if capability.value.startswith("files.")
-    }
-    # ADR-020: see `_ADR_020_EXTENDED_TOOLS`.
-    lineage |= _ADR_020_EXTENDED_TOOLS
-    # Communications intelligence WP2-W3: `meetings.provider.bind` is new.
-    lineage |= {"meetings.provider.bind"}
-    # Communications intelligence WP3b-S4: the review and the reconcile are new.
-    lineage |= {"meetings.provider.review", "meetings.provider.reconcile"}
-    payloads = {
-        tool.name: tool.input_schema["properties"]["payload"]
-        for tool in TOOLS
-        if tool.name not in lineage
-    }
-    assert len(payloads) == 186
-    assert _canonical_sha256(payloads) == _V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_MEETING_PREP
-    views: dict[str, list[str]] = {}
-    for name in _V1_VIEW_MODULES:
-        module = importlib.import_module(f"my_pa.contracts.v1.{name}")
-        for model_name, model in vars(module).items():
-            if (
-                inspect.isclass(model)
-                and issubclass(model, BaseModel)
-                and model.__module__ == module.__name__
-            ):
-                views[f"{name}.{model_name}"] = sorted(model.model_fields)
-    # ADR-020: see `_ADR_020_EXTENDED_VIEWS`.
-    for extended in _ADR_020_EXTENDED_VIEWS:
-        views.pop(extended)
-    # Communications intelligence WP2-W3: one new view, no existing one changed.
-    views.pop("meetings.MeetingProviderBindingView")
-    assert len(views) == 37
-    assert _canonical_sha256(views) == _V1_VIEW_FIELDS_SHA256_WITHOUT_MEETING_VIEW
+    # Every published tool's payload schema and every v1 view's fields are pinned
+    # per name by `tests/contract/test_v1_payload_digests.py` (phase P4, O3).
     # The envelope's `purpose` enum is the one v1 schema S3 widens, and only by
     # its own backfill purpose (section 7.7); S4 widens it by exactly its one
     # Program purpose after it (S4 contract sections 8 and 10, R4-F04, R4-F15).

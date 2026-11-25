@@ -42,7 +42,6 @@ from my_pa.application.chatllm_data_profile import (
 from my_pa.application.service import _HANDLERS
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
-    CHATLLM_DATA_PROFILE_VERSION,
     ChatLLMCapabilityClass,
     is_chatllm_data_management,
 )
@@ -126,7 +125,6 @@ def test_remote_tool_names_never_publish_a_custody_name(profile: str, writes_ena
 
 
 def test_the_chatllm_policy_excludes_every_custody_name_with_its_rationale() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
     for capability in CUSTODY:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED, capability

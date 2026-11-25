@@ -18,7 +18,6 @@ def test_goodnotes_revision_is_on_the_single_candidate_chain() -> None:
     revision = script.get_revision(REVISION)
     assert revision is not None
     assert revision.down_revision == PARENT
-    assert len(script.get_heads()) == 1
     ancestors = {item.revision for item in script.walk_revisions()}
     assert REVISION in ancestors
 

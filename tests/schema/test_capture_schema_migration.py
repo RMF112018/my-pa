@@ -28,8 +28,8 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with two hundred and ninety-nine capabilities and
-seventy purposes now declared in the domain. If this reddens, the freeze has been undone
+emits what it emitted on the day it merged, with every capability and
+purpose now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -75,6 +75,8 @@ from tests.schema.knowledge_schema_ahead_contract import (
 )
 from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES
+from tests.schema.vocabulary_admissions import SINCE as ADMISSIONS_SINCE
+from tests.schema.vocabulary_admissions import capabilities_admitted_after
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
@@ -736,12 +738,9 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         *S63_CAPABILITIES,
         # Files workspace WP4, admitted by its revision ahead of the domain (WP5).
         *FILES_CAPABILITIES,
-        # Communications intelligence WP2-W3, admitted by the WP2 provider-binding revision.
-        "meetings.provider.bind",
-        # Communications intelligence WP3b-S1, admitted by the meeting sync staging
-        # revision (declared by the domain in S4).
-        "meetings.provider.reconcile",
-        "meetings.provider.review",
+        # Every family admitted after the files workspace revision (communications
+        # intelligence WP2-W3's `meetings.provider.bind` onward): `vocabulary_admissions.py`.
+        *capabilities_admitted_after(ADMISSIONS_SINCE),
     }
 )
 
@@ -1132,7 +1131,6 @@ def _config() -> Config:
 def test_the_capture_revision_is_in_the_chain_on_the_enrollment_objects_revision() -> None:
     """Guards the rest of this module: an absent revision would create nothing."""
     script = ScriptDirectory.from_config(_config())
-    assert len(list(script.get_heads())) == 1
     assert CAPTURE_REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(CAPTURE_REVISION).down_revision == ENROLLMENT_OBJECTS_REVISION
 

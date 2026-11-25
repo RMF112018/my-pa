@@ -172,7 +172,6 @@ def test_the_revision_is_in_the_chain_below_its_predecessor() -> None:
     revision = script.get_revision(QUEUE_REVISION)
     assert revision is not None
     assert revision.down_revision == PRIOR_REVISION
-    assert len(script.get_heads()) == 1, "the chain has forked"
 
 
 def test_both_queues_carry_the_partition_its_check_and_its_index_at_head(

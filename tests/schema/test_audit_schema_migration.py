@@ -529,7 +529,6 @@ def test_the_audit_revision_is_in_the_chain_on_the_extraction_revision() -> None
     edit this file.
     """
     script = ScriptDirectory.from_config(_config())
-    assert len(list(script.get_heads())) == 1
     assert AUDIT_REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(AUDIT_REVISION).down_revision == EXTRACTION_REVISION
 

@@ -38,7 +38,6 @@ from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.files.vocabulary import FilesReason
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
-    CHATLLM_DATA_PROFILE_VERSION,
     FILES_WORKSPACE_DATA_NAMES,
     ChatLLMCapabilityClass,
     ChatLLMCompositionPrerequisite,
@@ -82,19 +81,15 @@ _WRITES: Final = frozenset(Capability(name) for name, row in INVENTORY.items() i
 
 def test_the_inventory_is_the_17_appended_names_and_the_2_purposes() -> None:
     members = list(Capability)
-    assert [member.value for member in members[-17:]] == list(INVENTORY)
-    assert list(Purpose)[-2:] == [_R, _W]
-    # ADR-019 Amendment 2 (contract section 18.3): one more IdKind, `fwpnd`.
-    # ADR-020 C1: one more, `mprep` (a Meeting prep version).
-    # Communications intelligence WP2: two more, `mpbnd` and `msbnd`.
-    # Communications intelligence WP3a: eight more (the ingestion lifecycle and
-    # the communications rows).
-    # Communications intelligence WP3b: one more (`msevt`, a staged sync event).
-    # Communications intelligence WP3b-S4: two more capabilities, declared before
-    # the files names (`meetings.provider.review` and `.reconcile`).
-    # Project reports WP3P-S3: three more kinds (`prbnd`, `prrec`, `prdrv`).
-    assert (len(Capability), len(Purpose), len(IdKind)) == (301, 70, 195)
-    assert frozenset(members[-17:]) == FILE_WORKSPACE_CAPABILITIES
+    # Contiguous and in contract order. Anchored where the inventory starts rather than
+    # at the end of the enum, so a later name appended after them moves nothing
+    # here; the enum sizes are `tests/pins.json`'s (`test_pins_are_current`).
+    start = members.index(Capability(next(iter(INVENTORY))))
+    block = members[start : start + len(INVENTORY)]
+    assert [member.value for member in block] == list(INVENTORY)
+    purposes = list(Purpose)
+    assert purposes[purposes.index(_R) : purposes.index(_R) + 2] == [_R, _W]
+    assert frozenset(block) == FILE_WORKSPACE_CAPABILITIES
     assert set(FILES_WORKSPACE_COMMAND_TYPES) == FILE_WORKSPACE_CAPABILITIES
     # WP4's frozen audit vocabulary names exactly these (contract section 13).
     assert {member.value for member in FILE_WORKSPACE_CAPABILITIES} == FILES_CAPABILITIES
@@ -104,12 +99,10 @@ def test_the_inventory_is_the_17_appended_names_and_the_2_purposes() -> None:
 def test_the_id_kinds_are_the_contract_prefixes() -> None:
     # ADR-020 C1 appended one Meeting kind (`mprep`) after the files kinds,
     # communications intelligence WP2 the two provider binding kinds after it,
-    # WP3a the eight ingestion and communications kinds after those, WP3b the
-    # one staged sync event kind after those, and project reports WP3P the
-    # three project-report kinds after that.
-    assert [kind.value for kind in list(IdKind)[-3:]] == ["prbnd", "prrec", "prdrv"]
-    assert list(IdKind)[-4:-3] == [IdKind.MEETING_SYNC_EVENT]
-    assert [kind.value for kind in list(IdKind)[-12:-4]] == [
+    # and WP3a the eight ingestion and communications kinds after those.
+    # Absolute positions: `IdKind` is append-only (`test_id_kind_is_append_only`),
+    # so a kind appended later moves none of them.
+    assert [kind.value for kind in list(IdKind)[183:191]] == [
         "isrc",
         "isnp",
         "irun",
@@ -119,12 +112,12 @@ def test_the_id_kinds_are_the_contract_prefixes() -> None:
         "cobs",
         "cqrn",
     ]
-    assert list(IdKind)[-15:-12] == [
+    assert list(IdKind)[180:183] == [
         IdKind.MEETING_PREP_VERSION,
         IdKind.MEETING_PROVIDER_BINDING,
         IdKind.MEETING_SERIES_PROVIDER_BINDING,
     ]
-    assert [kind.value for kind in list(IdKind)[-21:-15]] == [
+    assert [kind.value for kind in list(IdKind)[174:180]] == [
         "fwupl",
         "fwdnl",
         "fwver",
@@ -167,7 +160,6 @@ def test_the_tool_hints_follow_the_classification() -> None:
 
 
 def test_chatllm_classifies_the_17_data_conditional_on_the_workspace_at_v14() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v16"
     assert FILES_WORKSPACE_DATA_NAMES == FILE_WORKSPACE_CAPABILITIES
     for capability in FILE_WORKSPACE_CAPABILITIES:
         policy = CHATLLM_CAPABILITY_POLICY[capability]

@@ -8,9 +8,10 @@ keys, with the switch on and over Commitments that store a `project_id`:
 * `test_v1_commitment_answers_are_byte_identical` (database) -- the same v1
   request answers the same bytes with `MY_PA_PROGRAM_REPORTING_ENABLED` on as
   with it off;
-* `test_v1_tool_schemas_are_unchanged_by_s4` -- the S3 payload-schema pin over
-  the 192 v1 tools holds, and the envelope's `$defs.Purpose.enum` is exactly
-  the basis enum plus `program_reporting_read` (R4-F04, R4-F15);
+* `test_v1_tool_schemas_are_unchanged_by_s4` -- the v1 Commitment reads are
+  among the per-tool payload digests (`tests/contract/v1_payload_digests.json`),
+  and the envelope's `$defs.Purpose.enum` is exactly the basis enum plus
+  `program_reporting_read` (R4-F04, R4-F15);
 * `test_v1_commitment_views_keep_their_keys` -- the 3 v1 Commitment views'
   field lists, exactly;
 * `test_s4_adds_no_gateway_entry` -- the web BFF contract names no S4
@@ -28,6 +29,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import pytest
+from tests import pins
 from tests.database.lineage_issue_harness import PRINCIPAL
 from tests.database.lineage_s4_harness import T0, S4Runtime
 
@@ -39,38 +41,13 @@ from my_pa.application.commands import (
     SearchCommitments,
     WaitingOn,
 )
-from my_pa.application.service import _LINEAGE_CAPABILITIES
 from my_pa.contracts.v1.commitments import CommitmentListEntry, CommitmentView, WaitingOnEntry
 from my_pa.contracts.v1.envelope import ResponseEnvelope
-from my_pa.domain.identity.operation import Capability
 from my_pa.domain.program.vocabulary import PROGRAM_REPORTING_CAPABILITIES
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 GATEWAY_CONTRACT: Final = ROOT / "web" / "src" / "contracts" / "gateway.json"
 
-#: The S3 pin of `test_lineage_s3_capability_admission`: SHA-256 of every
-#: non-lineage, non-S4 tool's `payload` schema (canonical JSON), measured at the
-#: S2 basis `84ddab37` and unchanged since.
-V1_PAYLOAD_SCHEMA_SHA256: Final = "e87a5186273905f60ae033764f70d6715cb01829a56a19e77409ab2d2de63ebb"
-#: The same measurement without `reports.read`, at the Reports Modernization WP02
-#: base `09a05158c`: WP02 adds `reports.publish` and deliberately extends
-#: `reports.read`, so both are excluded and the other 191 shapes stay pinned.
-V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_READ: Final = (
-    "f4dc83a1e8e4699dc047d58279d97321fd750c1ecdff521b4cd148bb77fafb71"
-)
-#: The same measurement also without `reports.list` and `reports.search`, at
-#: the Reports Modernization WP04 base `5f395aa36`: WP04 deliberately extends
-#: both, so they are excluded and the other 189 shapes stay pinned.
-V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_REPORTS_CATALOG: Final = (
-    "4a66657c422eb2c538a3cf7725cca2fab7b71325b883d3a0e724f200a7093459"
-)
-#: The same measurement also without `meetings.create`, `meetings.update` and
-#: `meetings.read`, at the ADR-020 base `00880446b`: meeting prep briefs
-#: deliberately extend each of them, so they are excluded and the other 186 shapes
-#: stay pinned.
-V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_MEETING_PREP: Final = (
-    "ae0f97c41d80eb7b3f8bb08e80c3062b0af0c4a1199933617f539d151f916fad"
-)
 #: SHA-256 of the envelope `$defs.Purpose.enum` at the S4 basis (`3d1593aa`,
 #: the 59 `Purpose` values in declaration order, compact JSON).
 BASIS_PURPOSE_ENUM_SHA256: Final = (
@@ -130,12 +107,6 @@ V1_READS: Final = frozenset(
 )
 
 
-def _canonical_sha256(document: object) -> str:
-    return hashlib.sha256(
-        json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-
-
 def _bytes(envelope: ResponseEnvelope) -> bytes:
     """The answer's bytes, without its per-request values.
 
@@ -189,67 +160,10 @@ def test_v1_commitment_answers_are_byte_identical(disposable_database: str) -> N
         on.close()
 
 
-#: Schedule Scenarios S6-3: the 5 plane families (`schedule_series.*` reads by name).
-_S63_FAMILIES: Final = (
-    "schedule_scenarios.",
-    "schedule_scenario_versions.",
-    "schedule_cpm_runs.",
-    "schedule_scenario_outputs.",
-    "schedule_baselines.",
-)
-
-
 def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
-    excluded = {capability.value for capability in _LINEAGE_CAPABILITIES}
-    excluded |= PROGRAM_REPORTING_CAPABILITIES
-    # CPM Workbench S5b-2: likewise the 7 Schedule names.
-    excluded |= {name for name in (tool.name for tool in TOOLS) if name.startswith("schedule_")}
-    # Reports Modernization WP02: `reports.publish` and the extended `reports.read`.
-    excluded |= {"reports.publish", "reports.read"}
-    # Reports Modernization WP03: its five new additions.
-    excluded |= {
-        "reports.update",
-        "reports.history",
-        "reports.archive",
-        "reports.delete",
-        "reports.restore",
-        # WP05b's four operator custody names, new too.
-        "reports.hold.place",
-        "reports.hold.release",
-        "reports.retention.set",
-        "reports.retention.get",
-        # WP06's five transfer names, new too.
-        "reports.transfer.begin",
-        "reports.transfer.append",
-        "reports.transfer.finalize",
-        "reports.transfer.abort",
-        "reports.transfer.read_chunk",
-    }
-    # Reports Modernization WP04: the extended `reports.list` and `reports.search`.
-    excluded |= {"reports.list", "reports.search"}
-    # Schedule Scenarios S6-3: its 26 plane names are new.
-    excluded |= {
-        capability.value for capability in Capability if capability.value.startswith(_S63_FAMILIES)
-    } | {"schedule_series.current", "schedule_series.match_decisions"}
-    # Files workspace WP5: its 17 `files.*` names are new.
-    excluded |= {
-        capability.value for capability in Capability if capability.value.startswith("files.")
-    }
-    # ADR-020 (meeting prep briefs): the extended `meetings.create`,
-    # `meetings.update` (`prep_markdown`) and `meetings.read` (`prep_version_number`).
-    excluded |= {"meetings.create", "meetings.update", "meetings.read"}
-    # Communications intelligence WP2-W3: `meetings.provider.bind` is new.
-    excluded |= {"meetings.provider.bind"}
-    # Communications intelligence WP3b-S4: the review and the reconcile are new.
-    excluded |= {"meetings.provider.review", "meetings.provider.reconcile"}
-    payloads = {
-        tool.name: tool.input_schema["properties"]["payload"]
-        for tool in TOOLS
-        if tool.name not in excluded
-    }
-    assert len(payloads) == 186
-    assert set(payloads) >= V1_READS
-    assert _canonical_sha256(payloads) == V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_MEETING_PREP
+    # The payload shapes are pinned per tool by `test_v1_payload_digests_are_accepted`;
+    # the 4 v1 Commitment reads are among them.
+    assert set(pins.load_digests()["tools"]) >= V1_READS
     # Every tool carries the one envelope purpose enum: the basis enum, then
     # exactly the one S4 purpose -- nothing removed, reordered or added beside it.
     enums = {json.dumps(tool.input_schema["$defs"]["Purpose"]["enum"]) for tool in TOOLS}

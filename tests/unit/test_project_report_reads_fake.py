@@ -36,8 +36,8 @@ def test_a_superseded_derivation_on_the_fake() -> None:
     )
 
 
-def test_the_fake_folds_only_ascii_letters_as_every_postgresql_locale_does() -> None:
-    """Ruling R1-08: the fake never folds a non-ASCII letter that a C-locale cluster keeps.
+def test_the_fake_folds_only_ascii_letters_and_emulates_a_c_locale_cluster() -> None:
+    """Ruling R1-08: the fake emulates a C-locale cluster and folds ASCII letters only.
 
     `É` against `é` is left out of the shared case on purpose: a UTF-8 cluster
     folds it and a C-locale one does not, so only the ASCII fold is a contract.

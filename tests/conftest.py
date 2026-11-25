@@ -10969,7 +10969,11 @@ _ASCII_LOWER: Final = str.maketrans(string.ascii_uppercase, string.ascii_lowerca
 
 
 def _ascii_lower(text: str) -> str:
-    """`lower()` as PostgreSQL applies it in every locale: the ASCII letters only."""
+    """`lower()` as a C-locale cluster folds it: the ASCII letters only.
+
+    This emulates a C-locale cluster. A UTF-8 cluster also folds non-ASCII
+    letters; only ASCII folding is contractual (ruling F1-4).
+    """
     return text.translate(_ASCII_LOWER)
 
 
@@ -11165,8 +11169,10 @@ class _ProjectReportReads(ProjectReportReadsRepository):
         if query.group_keys and not any(step[1] in query.group_keys for step in line.group_path):
             return False
         if query.text is not None:
-            # Ruling R1-08: PostgreSQL's `lower()` on both sides, as every locale
-            # folds it: ASCII letters only, so a non-ASCII letter matches as written.
+            # Ruling R1-08: PostgreSQL's `lower()` on both sides, as a C-locale
+            # cluster folds it (this emulates a C-locale cluster): the ASCII
+            # letters only, so a non-ASCII letter matches as written. Only
+            # ASCII folding is contractual (ruling F1-4).
             needle = _ascii_lower(query.text)
             return any(
                 v.field_key in query.text_fields

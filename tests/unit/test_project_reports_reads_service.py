@@ -224,3 +224,18 @@ def test_a_reconciliation_mismatch_qualifies_counts_and_never_blocks_them() -> N
     assert all(m["qualifiers"] == ["reconciliation_mismatch"] for m in classified)
     record_count = next(m for m in classified if m["measure"] == "open_outstanding.record_count")
     assert record_count["total"] == {"state": "reportable", "value": "7"}
+    # Ruling B1 (amended): a filtered count is qualified by the version's mismatch too.
+    filtered = query_payload(
+        service(built).query(
+            built.principal,
+            _query(
+                measures=["open_outstanding.record_count"],
+                identifiers=[IdentifierItem("rfi", "174")],
+                include_rows=False,
+            ),
+        )
+    )
+    (counted,) = [m for m in filtered["measures"] if m["total"]["state"] == "reportable"]
+    assert counted["measure_scope"] == "filtered"
+    assert counted["total"] == {"state": "reportable", "value": "3"}
+    assert counted["qualifiers"] == ["reconciliation_mismatch"]

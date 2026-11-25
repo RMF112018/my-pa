@@ -13,13 +13,17 @@ clone.
   check mismatches (the buyout's approved prime change is `$310.00` against
   the reconciliation's `$300.00`), each internally reconciled, in one source;
 * a Project whose only version is quarantined, and one bound but never ingested.
+
+The ruling B1 (amended) cases bind their own reconciliation Projects inside
+the case (`_reconciliation_project`): one whose stated totals all match and
+one whose grand total is planted `$1.00` off.
 """
 
 from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Final
 
 import pytest
@@ -78,6 +82,11 @@ PAIR_PROJECT: Final = ("pair", "prj_synreads0004x", "SYN-0001")
 QUARANTINED_PROJECT: Final = ("quarantined", "prj_synreads0005x", "SYN-7105")
 NEVER_PROJECT: Final = ("never", "prj_synreads0006x", "SYN-7106")
 UNKNOWN_PROJECT: Final = "prj_synreads0099x"
+#: Ruling B1 (amended): a reconciled reconciliation export, and one whose grand total mismatches.
+SOLO_PROJECT: Final = ("solo", "prj_synreads0007x", "SYN-7107")
+MISMATCH_PROJECT: Final = ("mismatch", "prj_synreads0008x", "SYN-7108")
+PRIME: Final = "reconciliation.prime_co_line.amount"
+COMMITMENT: Final = "reconciliation.commitment_co_line.amount"
 
 LINKED: Final = "20261121-qxrfilinks.csv"
 CLOSED: Final = "20261122-qxrficlosed.csv"
@@ -176,6 +185,39 @@ def _measure(payload: dict[str, object], name: str) -> dict[str, object]:
     found = [m for m in measures if m["measure"] == name]
     assert len(found) == 1, found
     return dict(found[0])
+
+
+def _reconciliation_project(scene: ReadsScene, project: tuple[str, str, str]) -> None:
+    """Bind `project` and ingest the synthetic reconciliation (grand total off for `mismatch`)."""
+    data = _signature_bytes("reconciliation")
+    if project is MISMATCH_PROJECT:
+        planted = data.replace(b"Grand Totals,,,,,$350.00", b"Grand Totals,,,,,$351.00")
+        assert planted != data
+        data = planted
+    scene.bind(*project)
+    scene.ingest(project[0], f"20261118-qx{project[0]}.csv", data)
+
+
+def _reconciliation_query(project: tuple[str, str, str], **fields: object) -> QueryRequest:
+    return QueryRequest(
+        project_id=project[1],
+        record_family="change_order_reconciliation",
+        measures=(PRIME, COMMITMENT),
+        **fields,
+    )
+
+
+def _amounts(payload: dict[str, object], name: str) -> dict[str, object]:
+    """`{status: amount}` of a reportable per-status measure, `{status: reasons}` otherwise."""
+    by_status = _measure(payload, name)["by_status"]
+    assert isinstance(by_status, dict)
+    return {
+        status: value["value"]["amount"] if value["state"] == "reportable" else value["reasons"]
+        for status, value in by_status.items()
+    }
+
+
+_FROM_JUNE_2: Final = {"date_field": "pco.date_created", "date_from": date(2026, 6, 2)}
 
 
 # --- cases ------------------------------------------------------------------------------
@@ -587,6 +629,165 @@ def case_rows_carry_typed_fields_and_raw_text(scene: ReadsScene) -> None:
     assert match["state"] == "ambiguous_prefix"
 
 
+def case_filtered_measures_sum_only_the_selected_lines(scene: ReadsScene) -> None:
+    """Ruling B1 (amended): the filters select the lines measured, the version is the same."""
+    _reconciliation_project(scene, SOLO_PROJECT)
+    reads = service(scene)
+    whole = query_payload(reads.query(scene.principal, _reconciliation_query(SOLO_PROJECT)))
+    filtered = query_payload(
+        reads.query(scene.principal, _reconciliation_query(SOLO_PROJECT, **_FROM_JUNE_2))
+    )
+    assert _measure(whole, PRIME)["version"] == _measure(filtered, PRIME)["version"]
+    assert _amounts(whole, PRIME) == {
+        "approved": "300.00",
+        "pending": "40.00",
+        "void": "10.00",
+        "unknown": "0.00",
+    }
+    # PCO 3 (void, 6/2) and PCO 4 (approved, 6/3) only.
+    assert _amounts(filtered, PRIME) == {
+        "approved": "200.00",
+        "pending": "0.00",
+        "void": "10.00",
+        "unknown": "0.00",
+    }
+    # No commitment line is selected, yet the column is populated in the version:
+    # an exact zero, never `source_column_unpopulated` (judged over the version).
+    assert _amounts(filtered, COMMITMENT) == {
+        "approved": "0.00",
+        "pending": "0.00",
+        "void": "0.00",
+        "unknown": "0.00",
+    }
+    pending = query_payload(
+        reads.query(
+            scene.principal, _reconciliation_query(SOLO_PROJECT, status_classes=["pending"])
+        )
+    )
+    assert _amounts(pending, PRIME)["pending"] == "40.00"
+    assert _amounts(pending, PRIME)["approved"] == "0.00"
+    series = _series_of(scene, "qxrfis")
+    counts = ("open_outstanding.record_count",)
+    rfis = [
+        query_payload(
+            reads.query(
+                scene.principal,
+                _rfi_query(scene, series_id=series, measures=counts, include_rows=False, **extra),
+            )
+        )
+        for extra in ({}, {"identifiers": [IdentifierItem("rfi", "174")]})
+    ]
+    assert [_measure(p, counts[0])["total"] for p in rfis] == [
+        {"state": "reportable", "value": "7"},
+        {"state": "reportable", "value": "3"},
+    ]
+
+
+def case_measure_scope_is_version_only_without_a_row_filter(scene: ReadsScene) -> None:
+    _reconciliation_project(scene, SOLO_PROJECT)
+    reads = service(scene)
+    variants: list[tuple[dict[str, Any], str]] = [
+        ({}, "version"),
+        # A date field without a bound selects every line.
+        ({"date_field": "pco.date_created"}, "version"),
+        ({"status_classes": ["approved"]}, "filtered"),
+        ({"statuses": ["Void"]}, "filtered"),
+        (_FROM_JUNE_2, "filtered"),
+        ({"date_field": "pco.date_created", "date_to": date(2026, 6, 1)}, "filtered"),
+        ({"identifiers": [IdentifierItem("pco", "4")]}, "filtered"),
+        ({"group_keys": ["SYN-CO-1"]}, "filtered"),
+        ({"text": "synthetic"}, "filtered"),
+    ]
+    for fields, expected in variants:
+        payload = query_payload(
+            reads.query(scene.principal, _reconciliation_query(SOLO_PROJECT, **fields))
+        )
+        scopes = {m["measure_scope"] for m in payload["measures"]}
+        assert scopes == {expected}, (fields, scopes)
+    summary = project_summary_payload(reads.project_summary(scene.principal, RFI_PROJECT[1]))
+    assert {c["measure_scope"] for c in summary["counts"]} == {"version"}
+
+
+def case_a_mismatched_version_blocks_money_under_either_scope(scene: ReadsScene) -> None:
+    """D9 under ruling B1 (amended): the version's mismatch blocks a filtered sum too."""
+    _reconciliation_project(scene, MISMATCH_PROJECT)
+    reads = service(scene)
+    blocked = {
+        status: ["reconciliation_mismatch"] for status in ("approved", "pending", "void", "unknown")
+    }
+    for fields in ({}, _FROM_JUNE_2, {"statuses": ["Approved"]}, {"text": "commitment"}):
+        payload = query_payload(
+            reads.query(scene.principal, _reconciliation_query(MISMATCH_PROJECT, **fields))
+        )
+        assert _measure(payload, PRIME)["measure_scope"] == ("filtered" if fields else "version")
+        assert _amounts(payload, PRIME) == blocked, fields
+        assert _amounts(payload, COMMITMENT) == blocked, fields
+
+
+def case_a_filtered_answer_never_claims_its_sum_matches_a_stated_total(
+    scene: ReadsScene,
+) -> None:
+    """The stated totals judge the whole version; none is set against the filtered sum."""
+    _reconciliation_project(scene, SOLO_PROJECT)
+    reads = service(scene)
+    whole = query_payload(reads.query(scene.principal, _reconciliation_query(SOLO_PROJECT)))
+    filtered = query_payload(
+        reads.query(scene.principal, _reconciliation_query(SOLO_PROJECT, **_FROM_JUNE_2))
+    )
+    totals = filtered["source_totals"]
+    assert totals["reconciliation_scope"] == "version"
+    # The same evidence in both scopes: each outcome is against the version's lines.
+    assert totals == whole["source_totals"]
+    (grand,) = [
+        e
+        for e in totals["entries"]
+        if e["scope"] == "grand" and e["field_key"] == "prime_co_line.amount"
+    ]
+    assert (grand["value"], grand["computed_value"], grand["outcome"]) == (
+        "350.00",
+        "350.00",
+        "match",
+    )
+    sums = _amounts(filtered, PRIME)
+    assert sums["approved"] == "200.00" and sums["void"] == "10.00"
+    for measure in filtered["measures"]:
+        assert measure["measure_scope"] == "filtered"
+        assert not set(measure) & {"outcome", "computed_value", "reconciliation", "stated"}
+        assert measure["qualifiers"] == []
+
+
+def case_measures_are_identical_across_pages_of_one_query(scene: ReadsScene) -> None:
+    """Measures are per answer scope, never per page (ruling B1, amended)."""
+    _reconciliation_project(scene, SOLO_PROJECT)
+    reads = service(scene)
+    for fields in ({}, {"text": "synthetic"}):
+        cursor: str | None = None
+        pages: list[dict[str, Any]] = []
+        for _page in range(10):
+            pages.append(
+                query_payload(
+                    reads.query(
+                        scene.principal,
+                        _reconciliation_query(SOLO_PROJECT, limit=1, cursor=cursor, **fields),
+                    )
+                )
+            )
+            cursor = pages[-1]["next_cursor"]
+            if cursor is None:
+                break
+        assert len(pages) >= 3, fields
+        assert sum(len(p["rows"]) for p in pages) == len(pages)
+        assert all(p["measures"] == pages[0]["measures"] for p in pages), fields
+        alone = query_payload(
+            reads.query(
+                scene.principal,
+                _reconciliation_query(SOLO_PROJECT, include_rows=False, **fields),
+            )
+        )
+        assert alone["measures"] == pages[0]["measures"], fields
+    assert _amounts(pages[0], PRIME)["pending"] == "0.00"  # PCO 2 has no description
+
+
 CASES: Final = (
     case_catalog_lists_series_with_their_latest_version,
     case_query_pages_are_disjoint_and_complete,
@@ -601,6 +802,11 @@ CASES: Final = (
     case_the_facade_answers_absent_unbound_and_quarantined_projects,
     case_coverage_carries_per_version_filter_semantics,
     case_rows_carry_typed_fields_and_raw_text,
+    case_filtered_measures_sum_only_the_selected_lines,
+    case_measure_scope_is_version_only_without_a_row_filter,
+    case_a_mismatched_version_blocks_money_under_either_scope,
+    case_a_filtered_answer_never_claims_its_sum_matches_a_stated_total,
+    case_measures_are_identical_across_pages_of_one_query,
 )
 
 __all__ = ["CASES", "extend_world", "service"]

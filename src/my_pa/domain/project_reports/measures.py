@@ -140,12 +140,18 @@ def detail_sum(
     view: FamilyView,
     reconciliation: Iterable[ReconciliationOutcome] = (),
     blockers: Iterable[NotReportableReason] = (),
+    judged_over: Sequence[MeasureRow] | None = None,
 ) -> MeasureValue:
-    """The exact sum of the column over the view's detail rows, or why there is none."""
+    """The exact sum of the column over the view's detail rows, or why there is none.
+
+    `judged_over` is the whole column the population is judged over when
+    `rows` is a slice of it (a filtered read); `rows` itself by default.
+    """
     _require_measure(column)
     details = _details(rows, view)
+    whole = details if judged_over is None else _details(judged_over, view)
     reasons = _base_reasons(reconciliation, blockers)
-    return _evaluate(details, populated=_populated(details, column), reasons=reasons)
+    return _evaluate(details, populated=_populated(whole, column), reasons=reasons)
 
 
 def status_measures(
@@ -155,18 +161,22 @@ def status_measures(
     view: FamilyView,
     reconciliation: Iterable[ReconciliationOutcome] = (),
     blockers: Iterable[NotReportableReason] = (),
+    judged_over: Sequence[MeasureRow] | None = None,
 ) -> Mapping[StatusClass, MeasureValue]:
     """One measure per status class; an `unknown` status blocks every class.
 
     A class with no line in a populated column is an exact zero (an empty sum
-    over a verified report), not a substituted one.
+    over a verified report), not a substituted one. The population and the
+    `unknown` block are judged over `judged_over` (the whole column) when
+    `rows` is a slice of it; over `rows` by default.
     """
     _require_measure(column)
     details = _details(rows, view)
+    whole = details if judged_over is None else _details(judged_over, view)
     base = _base_reasons(reconciliation, blockers)
-    if any(row.status in (None, StatusClass.UNKNOWN) for row in details):
+    if any(row.status in (None, StatusClass.UNKNOWN) for row in whole):
         base.add(NotReportableReason.STATUS_UNKNOWN_PRESENT)
-    populated = _populated(details, column)
+    populated = _populated(whole, column)
     return MappingProxyType(
         {
             status: _evaluate(
@@ -186,12 +196,14 @@ def keyed_detail_sums(
     view: FamilyView,
     reconciliation: Iterable[ReconciliationOutcome] = (),
     blockers: Iterable[NotReportableReason] = (),
+    judged_over: Sequence[MeasureRow] | None = None,
 ) -> Mapping[tuple[str, ...], MeasureValue]:
-    """Detail sums per row key, e.g. `(commitment, budget code)`."""
+    """Detail sums per row key, e.g. `(commitment, budget code)`; population as `detail_sum`."""
     _require_measure(column)
     details = _details(rows, view)
+    whole = details if judged_over is None else _details(judged_over, view)
     base = _base_reasons(reconciliation, blockers)
-    populated = _populated(details, column)
+    populated = _populated(whole, column)
     keys = sorted({row.key for row in details})
     return MappingProxyType(
         {

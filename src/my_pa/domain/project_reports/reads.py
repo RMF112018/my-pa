@@ -20,6 +20,11 @@
   or row count is never withheld for a reconciliation mismatch (ruling A2: a
   mismatch concerns reconciled amounts, not counts); it carries the
   `reconciliation_mismatch` qualifier instead.
+* **Measure scope** (ruling B1, amended): a measure is computed over the
+  detail lines the query's row filters select, `measure_scope: "filtered"`,
+  or over the whole version when no row filter applies, `"version"`. The
+  reconciliation inputs (stated totals and cross-checks, with their blockers
+  and qualifiers) always judge the whole version, under either scope.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Final
 
@@ -69,6 +75,7 @@ __all__ = [
     "ContentEntry",
     "MeasureAnswer",
     "MeasureInputs",
+    "MeasureScope",
     "PlannedLine",
     "RecordDiff",
     "RecordState",
@@ -79,6 +86,7 @@ __all__ = [
     "content_signature",
     "format_amount",
     "is_series_id",
+    "measure_scope",
     "plan_measure",
     "reconciliation_outcomes",
     "series_id",
@@ -241,6 +249,20 @@ def compare_by_content(before: Sequence[str], after: Sequence[str]) -> tuple[Con
 # --- the measure planner --------------------------------------------------------------------
 
 
+class MeasureScope(StrEnum):
+    """The lines a measure was computed over (ruling B1, amended)."""
+
+    #: Every detail line of the version: no row filter applies.
+    VERSION = "version"
+    #: Only the detail lines the query's row filters select.
+    FILTERED = "filtered"
+
+
+def measure_scope(*, row_filtered: bool) -> MeasureScope:
+    """`filtered` when any row filter applies, `version` otherwise."""
+    return MeasureScope.FILTERED if row_filtered else MeasureScope.VERSION
+
+
 @dataclass(frozen=True, slots=True)
 class PlannedLine:
     """One detail line of one version, as a measure reads it."""
@@ -344,12 +366,27 @@ def _keyed_total(values: Mapping[tuple[str, ...], MeasureValue]) -> MeasureValue
 
 
 def plan_measure(
-    spec: MeasureSpec, lines: Sequence[PlannedLine], inputs: MeasureInputs
+    spec: MeasureSpec,
+    lines: Sequence[PlannedLine],
+    inputs: MeasureInputs,
+    *,
+    version_lines: Sequence[PlannedLine] | None = None,
 ) -> MeasureAnswer:
-    """The measure over one version's detail lines (the version is the caller's choice)."""
+    """The measure over detail lines of one version (the caller chooses the version and lines).
+
+    `inputs` are always the whole version's: under a row filter `lines` are
+    the filtered ones, but the blockers and the reconciliation still judge the
+    version (ruling B1, amended). So do a column's population and the
+    `unknown` status block: they are judged over `version_lines`, every
+    detail line of the version, when `lines` is a filtered slice of it.
+    """
     reasons = _blockers(spec, inputs)
     reconciliation = reconciliation_outcomes(inputs.reconciliation)
-    chosen = [line for line in lines if not spec.line_kinds or line.line_kind in spec.line_kinds]
+
+    def measured(found: Sequence[PlannedLine]) -> list[PlannedLine]:
+        return [line for line in found if not spec.line_kinds or line.line_kind in spec.line_kinds]
+
+    chosen = measured(lines)
     if spec.basis in (MeasureBasis.RECORD_COUNT, MeasureBasis.ROW_COUNT):
         # Ruling A2: qualified, never blocked, by a reconciliation mismatch.
         qualifiers = (
@@ -365,20 +402,30 @@ def plan_measure(
         Additivity.ADDITIVE,
         unpopulated_when_all_zero=spec.unpopulated_when_all_zero,
     )
-    rows = [
-        MeasureRow(
-            spec.view,
-            RowRole.DETAIL,
-            line.cell if line.cell is not None else NumericCell("", None),
-            line.status_class,
-            (line.record_key or "",),
-        )
-        for line in chosen
-    ]
+
+    def as_rows(found: Sequence[PlannedLine]) -> list[MeasureRow]:
+        return [
+            MeasureRow(
+                spec.view,
+                RowRole.DETAIL,
+                line.cell if line.cell is not None else NumericCell("", None),
+                line.status_class,
+                (line.record_key or "",),
+            )
+            for line in found
+        ]
+
+    rows = as_rows(chosen)
+    whole = None if version_lines is None else as_rows(measured(version_lines))
     view, blockers = spec.view, reasons
     if spec.basis is MeasureBasis.PER_STATUS_CLASS:
         separated = status_measures(
-            rows, column, view=view, reconciliation=reconciliation, blockers=blockers
+            rows,
+            column,
+            view=view,
+            reconciliation=reconciliation,
+            blockers=blockers,
+            judged_over=whole,
         )
         return MeasureAnswer(
             spec,
@@ -388,15 +435,32 @@ def plan_measure(
         )
     if spec.basis is MeasureBasis.KEYED_DETAIL_SUM:
         keyed = keyed_detail_sums(
-            rows, column, view=view, reconciliation=reconciliation, blockers=blockers
+            rows,
+            column,
+            view=view,
+            reconciliation=reconciliation,
+            blockers=blockers,
+            judged_over=whole,
         )
         total = (
             _keyed_total(keyed)
             if keyed
             else detail_sum(
-                rows, column, view=view, reconciliation=reconciliation, blockers=blockers
+                rows,
+                column,
+                view=view,
+                reconciliation=reconciliation,
+                blockers=blockers,
+                judged_over=whole,
             )
         )
         return MeasureAnswer(spec, total, _EMPTY, keyed)
-    total = detail_sum(rows, column, view=view, reconciliation=reconciliation, blockers=blockers)
+    total = detail_sum(
+        rows,
+        column,
+        view=view,
+        reconciliation=reconciliation,
+        blockers=blockers,
+        judged_over=whole,
+    )
     return MeasureAnswer(spec, total, _EMPTY, MappingProxyType({}))

@@ -43,6 +43,7 @@ from my_pa.domain.project_reports.model import (
 from my_pa.domain.project_reports.money import read_cell
 from my_pa.domain.project_reports.reads import (
     MeasureInputs,
+    MeasureScope,
     PlannedLine,
     RecordState,
     UsedVersion,
@@ -52,6 +53,7 @@ from my_pa.domain.project_reports.reads import (
     content_signature,
     format_amount,
     is_series_id,
+    measure_scope,
     plan_measure,
     reconciliation_outcomes,
     series_id,
@@ -331,6 +333,35 @@ def test_an_unknown_status_blocks_every_class() -> None:
     for value in answer.by_status.values():
         assert value.value is None
         assert value.reasons == {NotReportableReason.STATUS_UNKNOWN_PRESENT}
+
+
+def test_a_filtered_slice_is_summed_but_judged_over_the_whole_version() -> None:
+    """Ruling B1 (amended): population and the `unknown` block are the version's facts."""
+    spec = MEASURES["reconciliation.prime_co_line.amount"]
+    whole = _reconciliation_lines()
+    pending = [line for line in whole if line.status_class is StatusClass.PENDING]
+    sliced = plan_measure(spec, pending, CLASSIFIED, version_lines=whole)
+    assert {s: v.value for s, v in sliced.by_status.items()} == {
+        StatusClass.APPROVED: Decimal("0"),
+        StatusClass.PENDING: Decimal("45.0000"),
+        StatusClass.VOID: Decimal("0"),
+        StatusClass.UNKNOWN: Decimal("0"),
+    }
+    commitment = MEASURES["reconciliation.commitment_co_line.amount"]
+    populated = [*whole, _money(LineKind.COMMITMENT_CO_LINE, "$20.00", StatusClass.APPROVED)]
+    empty_slice = plan_measure(commitment, pending, CLASSIFIED, version_lines=populated)
+    assert all(v.reportable for v in empty_slice.by_status.values())
+    assert not all(
+        v.reportable for v in plan_measure(commitment, pending, CLASSIFIED).by_status.values()
+    )
+    unknown = [*whole, _money(LineKind.PRIME_PCO_LINE, "$1.00", None)]
+    blocked = plan_measure(spec, pending, CLASSIFIED, version_lines=unknown)
+    assert all(
+        v.reasons == {NotReportableReason.STATUS_UNKNOWN_PRESENT}
+        for v in blocked.by_status.values()
+    )
+    assert measure_scope(row_filtered=False) is MeasureScope.VERSION
+    assert measure_scope(row_filtered=True) is MeasureScope.FILTERED
 
 
 def test_by_code_is_a_detail_sum_without_status() -> None:

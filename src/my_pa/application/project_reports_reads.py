@@ -24,15 +24,22 @@ local caller).
   re-derivation, a binding correction) answers
   `scope_changed_restart_required` and nothing else (ruling D4 (b)), checked
   after the versions are resolved and before any line is read.
-* **Measures** (section 2.6) are computed per series over the whole version
-  read (every detail line of it, never the filtered page), through
-  `plan_measure`: amounts are withheld by a reconciliation mismatch
-  derivation-wide (D9) and by a cross-check mismatch on the two columns it
-  concerns; a cross-check counts only when both of its sides are current
-  (ruling A4, held by the repository); record and row counts are never
-  withheld by a mismatch but carry the `reconciliation_mismatch` qualifier
-  (ruling A2). No zero is substituted. Stated totals are evidence and are
-  answered only in `source_totals`, never in `measures` (PULSE-AC-08).
+* **Measures** (section 2.6) are computed per series over the detail lines
+  the query's row filters select across the whole version (never the page,
+  so paging never changes them), or over every detail line when no row filter
+  applies; each carries `measure_scope` (`"filtered"` / `"version"`, ruling
+  B1 amended). They go through `plan_measure`, whose reconciliation inputs
+  always judge the whole version: amounts are withheld by a reconciliation
+  mismatch derivation-wide under either scope (D9) and by a cross-check
+  mismatch on the two columns it concerns; a cross-check counts only when
+  both of its sides are current (ruling A4, held by the repository); record
+  and row counts are never withheld by a mismatch but carry the
+  `reconciliation_mismatch` qualifier (ruling A2). A column's population and
+  the `unknown` status block are judged over the whole version too. No zero
+  is substituted. Stated totals are evidence and are answered only in
+  `source_totals`, never in `measures` (PULSE-AC-08); their outcome is
+  against the whole version's lines (`reconciliation_scope: "version"`), so a
+  filtered answer never presents one as matching its sum.
 * **Money is `Decimal` only**, answered as plain fixed-point strings
   (`format_amount`); no float exists anywhere in the path.
 * **Closure is never inferred**: a record absent from a later version is
@@ -129,6 +136,7 @@ from my_pa.domain.project_reports.money import NumericCell
 from my_pa.domain.project_reports.reads import (
     MeasureAnswer,
     MeasureInputs,
+    MeasureScope,
     PlannedLine,
     RecordState,
     UsedVersion,
@@ -138,6 +146,7 @@ from my_pa.domain.project_reports.reads import (
     content_signature,
     format_amount,
     is_series_id,
+    measure_scope,
     plan_measure,
     version_filter_semantics,
 )
@@ -354,6 +363,8 @@ class MeasureEntry:
     series_id: str | None
     version: str | None
     currency: str | None
+    #: The lines it was computed over (ruling B1, amended).
+    scope: MeasureScope = MeasureScope.VERSION
 
 
 @dataclass(frozen=True, slots=True)
@@ -589,6 +600,42 @@ class _Query:
     limit: int
     cursor: str | None
 
+    @property
+    def row_filtered(self) -> bool:
+        """Any row filter applies (a date field without a bound selects every line)."""
+        return bool(
+            self.status_classes
+            or self.statuses
+            or (
+                self.date_field is not None
+                and (self.date_from is not None or self.date_to is not None)
+            )
+            or self.rfi_terms
+            or self.identifiers
+            or self.group_keys
+            or self.text is not None
+        )
+
+    def line_query(
+        self, derivation_ids: tuple[str, ...], *, limit: int, after: tuple[int, int] | None
+    ) -> ProjectReportLineQuery:
+        """The repository read of the lines these row filters select."""
+        return ProjectReportLineQuery(
+            derivation_ids=derivation_ids,
+            limit=limit,
+            after=after,
+            status_classes=self.status_classes,
+            statuses=self.statuses,
+            date_field=self.date_field,
+            date_from=self.date_from,
+            date_to=self.date_to,
+            rfi_terms=self.rfi_terms,
+            identifiers=self.identifiers,
+            group_keys=self.group_keys,
+            text=self.text,
+            text_fields=searchable_text_fields(self.family) if self.text is not None else (),
+        )
+
     def document(self) -> dict[str, object]:
         """The request without cursor and limit, as the cursor binding covers it."""
         return {
@@ -811,15 +858,20 @@ def _bounded(versions: Sequence[ProjectReportVersionRecord], detail: SafeDetail)
 
 
 def _all_lines(
-    reads: ProjectReportReadsRepository, principal_id: str, derivation_id: str
+    reads: ProjectReportReadsRepository,
+    principal_id: str,
+    derivation_id: str,
+    filters: _Query | None = None,
 ) -> list[ProjectReportReadLine]:
-    """Every detail line of one current derivation, read in keyset batches."""
+    """Every detail line of one current derivation (or every one `filters` selects), batched."""
     found: list[ProjectReportReadLine] = []
     after: tuple[int, int] | None = None
     while True:
         batch = reads.query_lines(
             principal_id,
-            ProjectReportLineQuery(derivation_ids=(derivation_id,), limit=_LINE_BATCH, after=after),
+            ProjectReportLineQuery(derivation_ids=(derivation_id,), limit=_LINE_BATCH, after=after)
+            if filters is None
+            else filters.line_query((derivation_id,), limit=_LINE_BATCH, after=after),
         )
         found.extend(batch)
         if len(batch) < _LINE_BATCH:
@@ -878,19 +930,39 @@ def _measure(
     version: ProjectReportVersionRecord,
     mismatched: frozenset[str],
     lines: dict[str, list[ProjectReportReadLine]],
+    filters: _Query | None = None,
 ) -> MeasureEntry:
-    """`lines` caches each derivation's detail lines across the measures of one answer."""
-    read: list[ProjectReportReadLine] = []
-    if version.state is DerivationState.CLASSIFIED:
-        if version.derivation_id not in lines:
-            lines[version.derivation_id] = _all_lines(reads, principal_id, version.derivation_id)
-        read = lines[version.derivation_id]
-    answer = plan_measure(spec, _planned(spec, read), _inputs(version, mismatched))
-    return MeasureEntry(answer, version.series_id, version.snapshot_id, version.currency)
+    """One measure over a version's lines, or the ones a query's row filters select.
+
+    `lines` caches each derivation's lines across the measures of one answer
+    (one answer has one set of filters). The reconciliation inputs are the
+    whole version's under either scope (ruling B1, amended; D9).
+    """
+    scope = measure_scope(row_filtered=filters is not None and filters.row_filtered)
+    selecting = filters if scope is MeasureScope.FILTERED else None
+
+    def read(chosen: _Query | None) -> list[ProjectReportReadLine]:
+        if version.state is not DerivationState.CLASSIFIED:
+            return []
+        # The whole version under its derivation id (as `compare` fills it), a slice beside it.
+        key = version.derivation_id if chosen is None else f"{version.derivation_id}#filtered"
+        if key not in lines:
+            lines[key] = _all_lines(reads, principal_id, version.derivation_id, chosen)
+        return lines[key]
+
+    whole = _planned(spec, read(None))
+    answer = plan_measure(
+        spec,
+        whole if selecting is None else _planned(spec, read(selecting)),
+        _inputs(version, mismatched),
+        # Population and the `unknown` block judge the whole version (never a slice).
+        version_lines=None if selecting is None else whole,
+    )
+    return MeasureEntry(answer, version.series_id, version.snapshot_id, version.currency, scope)
 
 
-def _no_snapshot(spec: MeasureSpec) -> MeasureEntry:
-    return MeasureEntry(plan_measure(spec, [], MeasureInputs(None)), None, None, None)
+def _no_snapshot(spec: MeasureSpec, scope: MeasureScope = MeasureScope.VERSION) -> MeasureEntry:
+    return MeasureEntry(plan_measure(spec, [], MeasureInputs(None)), None, None, None, scope)
 
 
 def _truncate(line: ProjectReportReadLine) -> tuple[ProjectReportReadLine, tuple[str, ...]]:
@@ -1140,7 +1212,7 @@ class ProjectReportReads:
             totals: tuple[tuple[str, ProjectReportStatedTotalRecord], ...] | None = None
             truncated = False
             if normalized.measures:
-                measures = self._measures(reads, principal_id, normalized.measures, selected)
+                measures = self._measures(reads, principal_id, normalized, selected)
                 snapshot_of = {v.derivation_id: v.snapshot_id for v in selected}
                 stated = reads.stated_totals_of(principal_id, [v.derivation_id for v in readable])
                 truncated = len(stated) > MAX_SOURCE_TOTALS
@@ -1211,23 +1283,7 @@ class ProjectReportReads:
             after = (index, position.row_ordinal)
         lines = reads.query_lines(
             principal_id,
-            ProjectReportLineQuery(
-                derivation_ids=tuple(order),
-                limit=normalized.limit + 1,
-                after=after,
-                status_classes=normalized.status_classes,
-                statuses=normalized.statuses,
-                date_field=normalized.date_field,
-                date_from=normalized.date_from,
-                date_to=normalized.date_to,
-                rfi_terms=normalized.rfi_terms,
-                identifiers=normalized.identifiers,
-                group_keys=normalized.group_keys,
-                text=normalized.text,
-                text_fields=searchable_text_fields(normalized.family)
-                if normalized.text is not None
-                else (),
-            ),
+            normalized.line_query(tuple(order), limit=normalized.limit + 1, after=after),
         )
         by_derivation = {v.derivation_id: v for v in readable}
         page: list[RowEntry] = []
@@ -1279,9 +1335,10 @@ class ProjectReportReads:
     def _measures(
         reads: ProjectReportReadsRepository,
         principal_id: str,
-        names: Sequence[str],
+        normalized: _Query,
         selected: Sequence[ProjectReportVersionRecord],
     ) -> tuple[MeasureEntry, ...]:
+        """Per answer scope, never per page: the cursor plays no part (ruling B1, amended)."""
         mismatched = _mismatched(
             reads,
             principal_id,
@@ -1289,14 +1346,17 @@ class ProjectReportReads:
         )
         cache: dict[str, list[ProjectReportReadLine]] = {}
         entries: list[MeasureEntry] = []
-        for name in names:
+        scope = measure_scope(row_filtered=normalized.row_filtered)
+        for name in normalized.measures:
             spec = MEASURES[name]
             # One version per series, never summed across 2 series of a view.
             chosen = [v for v in selected if v.family_view is spec.view]
             if not chosen:
-                entries.append(_no_snapshot(spec))
+                entries.append(_no_snapshot(spec, scope))
             for version in chosen:
-                entries.append(_measure(reads, principal_id, spec, version, mismatched, cache))
+                entries.append(
+                    _measure(reads, principal_id, spec, version, mismatched, cache, normalized)
+                )
         return tuple(entries)
 
     # --- record history --------------------------------------------------------------------
@@ -1844,6 +1904,7 @@ def _measure_payload(entry: MeasureEntry) -> dict[str, object]:
     unit = "money" if money else ("count" if spec.field_key is None else "number")
     payload: dict[str, object] = {
         "measure": spec.name,
+        "measure_scope": entry.scope.value,
         "series_id": entry.series_id,
         "version": entry.version,
         "basis": spec.basis.value,
@@ -2020,6 +2081,9 @@ def query_payload(answer: QueryAnswer) -> dict[str, object]:
         # Evidence, never a measure (PULSE-AC-08).
         payload["source_totals"] = {
             "basis": "source_evidence",
+            # Each outcome is the stated total against the whole version's lines,
+            # never against a filtered measure (ruling B1, amended).
+            "reconciliation_scope": "version",
             "entries": [_total_payload(version, total) for version, total in answer.source_totals],
             "truncated": answer.source_totals_truncated,
         }

@@ -20,6 +20,11 @@ the lifecycle differently:
   step calls it after `poll_enabled`, the CLI after `run-once` and `backfill`,
   both under `COMMS_INGEST_LOCK_KEY`. It applies nothing until the
   reconciliation latch exists (ruling D4).
+* **The rederive (WP4-S3).** `communications_rederiver()` builds
+  `CommunicationsRederiver` over the same refusing-audit transactions, the same
+  lazily composed workspace stores and the same parser and byte bound as the
+  handler, so a rederive reads a file exactly as ingestion read it. The CLI's
+  `rederive` runs it under `COMMS_INGEST_LOCK_KEY`.
 * **The workspace stores come from settings, once.** `MY_PA_FILES_WORKSPACES`
   (or the single-root form) composed by `bootstrap.gateway.files_workspace_stores`
   with every overlap root, so a `read_only` workspace is refused unless it is
@@ -41,6 +46,11 @@ from my_pa.application.communications_ingest import (
     CommunicationsEvidenceHandler,
     ParsedPublication,
 )
+from my_pa.application.communications_rederive import (
+    DEFAULT_REDERIVE_LIMIT,
+    MAX_REDERIVE_LIMIT,
+    CommunicationsRederiver,
+)
 from my_pa.application.ingestion import IngestionLifecycle, StabilityMemory
 from my_pa.application.meeting_sync_apply import MeetingSyncApplier
 from my_pa.application.meeting_sync_ingest import MeetingSyncHandler, ParsedMeetingSync
@@ -49,6 +59,7 @@ from my_pa.bootstrap.settings import Settings
 from my_pa.contracts.ports import AuditSink, FileWorkspaceStore, UnitOfWork
 from my_pa.domain.audit.events import AuditEvent
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.communications.identifiers import IDENTIFIER_VERSION
 from my_pa.infrastructure.communications.evidence_v2 import (
     MAX_PUBLICATION_BYTES,
     PARSER_VERSION,
@@ -58,7 +69,11 @@ from my_pa.infrastructure.meeting_sync import parser as meeting_sync_parser
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 __all__ = [
+    "DEFAULT_REDERIVE_LIMIT",
+    "IDENTIFIER_VERSION",
+    "MAX_REDERIVE_LIMIT",
     "communications_handler",
+    "communications_rederiver",
     "coverage_reader",
     "ingest_unit_of_work",
     "ingest_workspace_stores",
@@ -176,3 +191,13 @@ def meeting_sync_applier(
 ) -> MeetingSyncApplier:
     """The staged-publication applier over the ingestion transactions (no audit, D9)."""
     return MeetingSyncApplier(unit_of_work=ingest_unit_of_work(engine), clock=clock)
+
+
+def communications_rederiver(settings: Settings, engine: Engine) -> CommunicationsRederiver:
+    """The WP4 rederive over the ingestion transactions, stores and parser (no audit)."""
+    return CommunicationsRederiver(
+        unit_of_work=ingest_unit_of_work(engine),
+        stores=ingest_workspace_stores(settings, engine),
+        parse=parse_for_ingestion,
+        max_bytes=MAX_PUBLICATION_BYTES,
+    )

@@ -40,6 +40,11 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
+from tests.communications_reads_samples import (
+    COMMUNICATIONS_READ_CAPABILITIES,
+    communications_commands,
+    communications_payloads,
+)
 from tests.conftest import (
     DEFAULT_LIMITS,
     WHEN,
@@ -566,6 +571,8 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         *SCHEDULE_SCENARIO_CAPABILITIES,
         # Files workspace WP5: the 17 `files.*` names (no workspace root here).
         *FILES_WORKSPACE_CAPABILITIES,
+        # Communications intelligence WP4-S5: the 3 reads (scopeless, read switch off).
+        *COMMUNICATIONS_READ_CAPABILITIES,
         # Reports Modernization WP06 T14: the 4 transfer uploads need a report
         # content store and the transfer staging; this harness composes neither.
         Capability.REPORTS_TRANSFER_BEGIN,
@@ -2042,6 +2049,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         **scenario_payloads("http"),
         # Files workspace WP5: synthetic plane samples.
         **files_payloads("http"),
+        **communications_payloads("http"),
     }
 
 
@@ -3422,6 +3430,7 @@ def commands_for(
         **scenario_commands("http"),
         # Files workspace WP5: synthetic plane samples.
         **files_commands("http"),
+        **communications_commands("http"),
     }
 
 

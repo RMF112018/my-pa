@@ -157,8 +157,10 @@ covers enabling the log, reading it and scheduling the purge.
 ## `communications_ingest.py` — the communications ingestion lifecycle
 
 Admits `ingest_sources`, turns their scheduled polling on and off, runs the
-poll step once, backfills, and reports coverage and corpus aggregates
-(communications contract sections 10, 11 and 19).
+poll step once, backfills, reports coverage and corpus aggregates
+(communications contract sections 10, 11 and 19), re-derives stored messages to
+the current search-text and identifier versions, and measures `english`
+against `simple` full-text search, counts only (WP4 rulings D2 to D4).
 
 ```text
 python apps/cli/communications_ingest.py <assertions> admit --consumer C --workspace W \
@@ -168,6 +170,8 @@ python apps/cli/communications_ingest.py <assertions> backfill --source ID \
     [--file NAME ... | --glob PATTERN] [--dry-run]
 python apps/cli/communications_ingest.py <assertions> coverage --source ID [--from T --to T]
 python apps/cli/communications_ingest.py <assertions> aggregate --source ID [--source ID ...]
+python apps/cli/communications_ingest.py <assertions> rederive [--source ID] [--limit N] [--dry-run]
+python apps/cli/communications_ingest.py <assertions> measure-fts [--source ID] [--limit N]
 ```
 
 `<assertions>` is `--expected-database` and `--expected-alembic-head`, both
@@ -180,9 +184,10 @@ in `tests/architecture/test_operator_commands_are_not_capabilities.py` and
 governed by `tests/unit/test_communications_ingest_cli.py` instead. Output is
 one JSON line of ids, codes, counts and UTC timestamps; exit `0` done, `1`
 refused with a closed code, `2` usage, `3` a run finished `partial` or
-`failed`.
+`failed` (or a rederive group failed). `rederive` holds the poll's lock like
+`run-once` and `backfill`.
 [`ops/runbooks/communications-ingestion.md`](/ops/runbooks/communications-ingestion.md)
-covers admission, backfill, monitoring and recovery.
+covers admission, backfill, monitoring, recovery and the rederive.
 
 ## `project_reports.py` — project-report bindings, ingestion and re-derivation
 

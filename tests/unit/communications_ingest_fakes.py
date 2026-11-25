@@ -35,6 +35,10 @@ from my_pa.contracts.ports import (
     CommunicationParticipantRecord,
     CommunicationProjection,
     CommunicationQuarantineRecord,
+    CommunicationRederiveDueRecord,
+    CommunicationSearchQuery,
+    CommunicationSearchQueryShape,
+    CommunicationSearchRow,
     CommunicationSnapshotTally,
     CommunicationsRepository,
     FileWorkspaceEntry,
@@ -88,6 +92,13 @@ class IngestWorld:
     rollbacks: int = 0
     #: A write method name that raises on its next call (an injected failure).
     fail_on: set[str] = field(default_factory=set)
+    #: The WP4 search's SQL answers, canned (the statement is the database tier's).
+    query_shape: CommunicationSearchQueryShape = field(
+        default_factory=lambda: CommunicationSearchQueryShape(english_nodes=1, simple_nodes=1)
+    )
+    search_rows: list[CommunicationSearchRow] = field(default_factory=list)
+    search_queries: list[str] = field(default_factory=list)
+    search_calls: list[CommunicationSearchQuery] = field(default_factory=list)
 
     def write(self, name: str) -> None:
         self.writes.append(name)
@@ -468,6 +479,16 @@ class FakeCommunications(CommunicationsRepository):
             raise ValueError("set_message_flags names no flag")
         self._change(principal_id, message_id, **changes)
 
+    def set_source_unavailable(
+        self, principal_id: str, message_id: str, *, source_unavailable: bool
+    ) -> None:
+        self.w.write("set_source_unavailable")
+        self._change(principal_id, message_id, source_unavailable=source_unavailable)
+
+    def set_identifiers_version(self, principal_id: str, message_id: str, version: str) -> None:
+        self.w.write("set_identifiers_version")
+        self._change(principal_id, message_id, identifiers_version=version)
+
     def insert_item(self, principal_id: str, item: CommunicationMailboxItemRecord) -> None:
         self.w.write("insert_item")
         if self.find_item_by_provider_id(principal_id, item.mailbox_ref, item.provider_id):
@@ -566,6 +587,138 @@ class FakeCommunications(CommunicationsRepository):
                 for q in self.w.mine(principal_id, self.w.quarantine)
                 if q.snapshot_id == snapshot_id
             ),
+        )
+
+    def _rederive_due(
+        self,
+        principal_id: str,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None,
+    ) -> list[CommunicationMessageRecord]:
+        def in_scope(message: CommunicationMessageRecord) -> bool:
+            if ingest_source_id is None:
+                return True
+            snapshot = self.w.snapshots.get((principal_id, message.projection.text_snapshot_id))
+            return snapshot is not None and snapshot.ingest_source_id == ingest_source_id
+
+        due = [
+            m
+            for m in self.w.mine(principal_id, self.w.messages)
+            if (
+                m.projection.search_text_version != search_text_version
+                or m.identifiers_version != identifiers_version
+                or m.source_unavailable
+            )
+            and in_scope(m)
+        ]
+        return sorted(due, key=lambda m: m.message_id)
+
+    def list_rederive_due(
+        self,
+        principal_id: str,
+        *,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None = None,
+        limit: int,
+    ) -> tuple[CommunicationRederiveDueRecord, ...]:
+        due = self._rederive_due(
+            principal_id, search_text_version, identifiers_version, ingest_source_id
+        )
+        return tuple(
+            CommunicationRederiveDueRecord(
+                message_id=m.message_id,
+                search_text_version=m.projection.search_text_version,
+                identifiers_version=m.identifiers_version,
+                source_unavailable=m.source_unavailable,
+                text_snapshot_id=m.projection.text_snapshot_id,
+            )
+            for m in due[:limit]
+        )
+
+    def count_rederive_due(
+        self,
+        principal_id: str,
+        *,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None = None,
+    ) -> int:
+        return len(
+            self._rederive_due(
+                principal_id, search_text_version, identifiers_version, ingest_source_id
+            )
+        )
+
+    # --- the WP4 reads: the plain ones modelled; the SQL ones canned on the world ----------
+
+    def search_query_shape(self, query: str) -> CommunicationSearchQueryShape:
+        self.w.search_queries.append(query)
+        return self.w.query_shape
+
+    def search_messages(
+        self, principal_id: str, query: CommunicationSearchQuery
+    ) -> tuple[CommunicationSearchRow, ...]:
+        self.w.search_calls.append(query)
+        return tuple(self.w.search_rows[: query.limit])
+
+    def list_message_lanes(
+        self, principal_id: str, message_ids: Sequence[str]
+    ) -> Mapping[str, tuple[tuple[str, str], ...]]:
+        lanes: dict[str, set[tuple[str, str]]] = {}
+        for (owner, _), item in self.w.items.items():
+            if owner != principal_id or item.message_id not in message_ids:
+                continue
+            for observation in self.w.mine(principal_id, self.w.observations):
+                if observation.item_id == item.item_id:
+                    lanes.setdefault(item.message_id, set()).add(
+                        (observation.folder_role, observation.lane_verification)
+                    )
+        return {message_id: tuple(sorted(found)) for message_id, found in lanes.items()}
+
+    def list_messages(
+        self, principal_id: str, message_ids: Sequence[str]
+    ) -> tuple[CommunicationMessageRecord, ...]:
+        return tuple(
+            m for m in self.w.mine(principal_id, self.w.messages) if m.message_id in message_ids
+        )
+
+    def list_conversation_page(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        *,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[CommunicationMessageRecord, ...]:
+        rows = sorted(
+            (
+                m
+                for m in self.w.mine(principal_id, self.w.messages)
+                if m.conversation_id == conversation_id
+            ),
+            key=lambda m: (m.message_time, m.message_id),
+        )
+        if after is not None:
+            rows = [m for m in rows if (m.message_time, m.message_id) > after]
+        return tuple(rows[:limit])
+
+    def count_identifier_version_pending(self, principal_id: str, version: str) -> int:
+        return sum(
+            1
+            for m in self.w.mine(principal_id, self.w.messages)
+            if m.identifiers_version != version
+        )
+
+    def list_search_text_versions(self, principal_id: str) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                {
+                    m.projection.search_text_version
+                    for m in self.w.mine(principal_id, self.w.messages)
+                }
+            )
         )
 
 

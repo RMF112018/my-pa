@@ -229,6 +229,9 @@ _FULL_PLANE_SETTINGS = SimpleNamespace(
     schedule_scenarios_enabled=False,
     # Files workspace WP5 (chatllm-data-v14): no workspace root, its default.
     files_workspace_is_composed=lambda: False,
+    # Communications intelligence WP4-S5 (chatllm-data-v17): the read switch off,
+    # its default.
+    communications_enabled=False,
     # KLP-WP-04: no client is Knowledge-bound, so the ChatLLM profile tooling runs.
     knowledge_discovery_oauth_client_id_set=frozenset,
     knowledge_operator_review_oauth_client_id_set=frozenset,
@@ -803,6 +806,7 @@ _NONEXISTENT_NEXT_VERSION: Final = _PROFILE_VERSION_PREFIX + str(
         "chatllm-data-v13",
         "chatllm-data-v14",
         "chatllm-data-v15",
+        "chatllm-data-v16",
         _NONEXISTENT_NEXT_VERSION,
     ],
 )
@@ -918,3 +922,39 @@ def test_v14_profile_plan_adds_the_17_files_grants_only_with_the_workspace_root(
         } == expected
         assert len(expected) == 17
         assert sum(write for _, write in expected.values()) == 10
+
+
+def test_v17_profile_plan_adds_the_3_communications_grants_only_with_the_switch(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Communications WP4-S5 (ruling D7): v17 with the switch off desires exactly v16.
+
+    A client converged with `MY_PA_COMMUNICATIONS_ENABLED` off stays healthy;
+    with it on, the plan adds exactly the 3 `communications.*` reads under
+    `communications_read`, none a write, none operator-only. Synthetic
+    in-memory store only; nothing is granted outside it.
+    """
+    from my_pa.domain.identity.chatllm_capability_policy import COMMUNICATIONS_DATA_NAMES
+    from my_pa.domain.identity.operation import is_operator_only
+
+    switched = SimpleNamespace(**{**vars(_FULL_PLANE_SETTINGS), "communications_enabled": True})
+    with _repository() as (_, repository):
+        _grant_v2_catalog(repository)
+        code, _ = _run(repository, "profile-apply", _FULL_PLANE_SETTINGS, capsys)
+        assert code == 0
+        code, off = _run(repository, "profile-diff", _FULL_PLANE_SETTINGS, capsys)
+        assert code == 0 and off["healthy"] is True
+        assert off["profile_version"] == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v17"
+        code, plan = _run(repository, "profile-plan", switched, capsys)
+        assert code == 1
+        actions = plan["actions"]
+        assert isinstance(actions, list)
+        assert all(action["kind"] == "add" for action in actions)
+        assert all(not is_operator_only(capability) for capability in COMMUNICATIONS_DATA_NAMES)
+        assert {
+            action["capability"]: (action["purpose"], action["write"]) for action in actions
+        } == {
+            "communications.search": ("communications_read", False),
+            "communications.read": ("communications_read", False),
+            "communications.coverage": ("communications_read", False),
+        }

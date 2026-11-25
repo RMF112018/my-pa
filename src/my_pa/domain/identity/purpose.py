@@ -512,3 +512,8 @@ class Purpose(StrEnum):
     # 10 `files.*` writes.
     FILE_WORKSPACE_READ = "file_workspace_read"
     FILE_WORKSPACE_AUTHORING = "file_workspace_authoring"
+    # Communications intelligence WP4-S5 (ADR-022, contract section 16, ruling
+    # D7), on `D-91`: would reuse widen the grant? Every existing purpose would:
+    # none reads the Principal's ingested communications. One purpose of its own,
+    # implied by no other, for exactly the 3 `communications.*` reads.
+    COMMUNICATIONS_READ = "communications_read"

@@ -99,6 +99,7 @@ def test_the_newest_purpose_revision_admits_since_plus_the_rows() -> None:
         before = pins.ALEMBIC_CHAIN[pins.ALEMBIC_CHAIN.index(revision) - 1]
         assert names <= purposes_admitted_after(before)
         assert not names & purposes_admitted_after(revision)
+    assert purposes_admitted_after(pins.ALEMBIC_HEAD) == frozenset()
 
 
 def test_the_ahead_families_are_exactly_the_rows_the_domain_does_not_declare() -> None:
@@ -123,3 +124,12 @@ def test_the_ahead_families_are_exactly_the_rows_the_domain_does_not_declare() -
         assert admitted_ahead_of_the_domain(kind).isdisjoint(declared[kind])
     assert len(admitted_ahead_of_the_domain("capability")) == 7
     assert len(admitted_ahead_of_the_domain("purpose")) == 2
+
+
+def test_each_purpose_row_is_admitted_after_since_by_the_revision_it_names() -> None:
+    assert PURPOSE_ADMISSIONS, "an empty table proves nothing below"
+    seen: set[str] = set()
+    for family, (revision, names) in PURPOSE_ADMISSIONS.items():
+        assert pins.ALEMBIC_CHAIN.index(revision) > pins.ALEMBIC_CHAIN.index(SINCE), family
+        assert not names & seen, f"{family} repeats another row's name"
+        seen |= names

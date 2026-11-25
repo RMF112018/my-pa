@@ -46,6 +46,10 @@ from pathlib import Path
 from typing import Any, Final
 
 import pytest
+from tests.communications_reads_samples import (
+    COMMUNICATIONS_READ_CAPABILITIES,
+    communications_payloads,
+)
 from tests.conftest import (
     DEFAULT_LIMITS,
     WHEN,
@@ -351,6 +355,8 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         *SCHEDULE_SCENARIO_CAPABILITIES,
         # Files workspace WP5: the 17 `files.*` names (scopeless, no workspace root).
         *FILES_WORKSPACE_CAPABILITIES,
+        # Communications intelligence WP4-S5: the 3 reads (scopeless, read switch off).
+        *COMMUNICATIONS_READ_CAPABILITIES,
     }
 )
 
@@ -1766,6 +1772,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         **scenario_payloads("wire"),
         # Files workspace WP5: synthetic plane samples.
         **files_payloads("wire"),
+        **communications_payloads("wire"),
     }
 
 
@@ -2526,6 +2533,8 @@ SCOPED_CAPABILITIES = [
         *SCHEDULE_SCENARIO_CAPABILITIES,
         # Files workspace WP5: the 17 `files.*` names (scopeless, no workspace root).
         *FILES_WORKSPACE_CAPABILITIES,
+        # Communications intelligence WP4-S5: the 3 reads (scopeless, read switch off).
+        *COMMUNICATIONS_READ_CAPABILITIES,
     }
 ]
 

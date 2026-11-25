@@ -49,7 +49,10 @@ from my_pa.contracts.ports import (
     RepositoryFailureError,
 )
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
-from my_pa.infrastructure.persistence.communications import SqlCommunicationsRepository
+from my_pa.infrastructure.persistence.communications import (
+    SqlCommunicationsRepository,
+    communications_aggregate,
+)
 from my_pa.infrastructure.persistence.ingestion import SqlIngestionRepository
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
@@ -600,6 +603,70 @@ def test_participants_and_identifiers_are_set_like(
     assert communications.insert_identifiers(P, [rfi]) == 0
     assert communications.insert_identifiers(P, []) == 0
     assert communications.list_identifiers(P, MESSAGE.message_id) == (gmp, rfi)
+
+
+def test_the_rederive_markers_round_trip_and_are_partitioned(
+    planted: tuple[SqlIngestionRepository, SqlCommunicationsRepository],
+) -> None:
+    """WP4 rulings R2 and R3: both markers start clear and move alone."""
+    _ingestion, communications = planted
+    stored = communications.get_message(P, MESSAGE.message_id)
+    assert stored is not None
+    assert (stored.source_unavailable, stored.identifiers_version) == (False, None)
+    communications.set_source_unavailable(P, MESSAGE.message_id, source_unavailable=True)
+    communications.set_identifiers_version(P, MESSAGE.message_id, "comms_identifiers_v2")
+    assert communications.get_message(P, MESSAGE.message_id) == replace(
+        MESSAGE, source_unavailable=True, identifiers_version="comms_identifiers_v2"
+    )
+    communications.set_source_unavailable(P, MESSAGE.message_id, source_unavailable=False)
+    cleared = communications.get_message(P, MESSAGE.message_id)
+    assert cleared is not None
+    assert cleared.source_unavailable is False
+    for call in (
+        lambda: communications.set_source_unavailable(
+            OTHER, MESSAGE.message_id, source_unavailable=True
+        ),
+        lambda: communications.set_identifiers_version(OTHER, MESSAGE.message_id, "x"),
+    ):
+        with pytest.raises(RepositoryFailureError):
+            call()
+
+
+def test_a_message_inserted_with_its_markers_reads_them_back(
+    connection: Connection,
+) -> None:
+    ingestion = SqlIngestionRepository(connection)
+    communications = SqlCommunicationsRepository(connection)
+    ingestion.insert_source(P, SOURCE)
+    ingestion.insert_snapshot(P, _snapshot("isnp_repo0001", "a"))
+    marked = replace(MESSAGE, identifiers_version="comms_identifiers_v1", source_unavailable=True)
+    communications.insert_message(P, marked)
+    assert communications.get_message(P, MESSAGE.message_id) == marked
+
+
+def test_the_aggregate_keeps_identifier_versions_apart(
+    connection: Connection,
+    planted: tuple[SqlIngestionRepository, SqlCommunicationsRepository],
+) -> None:
+    """v1 and v2 rows of one message stay side by side (R4), so counts are per version."""
+    _ingestion, communications = planted
+    v1, v2 = "comms_identifiers_v1", "comms_identifiers_v2"
+    communications.insert_identifiers(
+        P,
+        [
+            CommunicationIdentifierRecord(MESSAGE.message_id, "rfi", "174", v1),
+            CommunicationIdentifierRecord(MESSAGE.message_id, "rfi", "174", v2),
+            CommunicationIdentifierRecord(MESSAGE.message_id, "pco", "12", v2),
+        ],
+    )
+    aggregate = communications_aggregate(connection, P, [SOURCE.ingest_source_id])
+    assert aggregate["identifiers"] == {
+        v1: {"rfi": {"rows": 1, "messages": 1}},
+        v2: {"pco": {"rows": 1, "messages": 1}, "rfi": {"rows": 1, "messages": 1}},
+    }
+    assert (
+        communications_aggregate(connection, OTHER, [SOURCE.ingest_source_id])["identifiers"] == {}
+    )
 
 
 def test_the_general_unit_of_work_exposes_both_repositories(migrated_engine: Engine) -> None:

@@ -135,42 +135,43 @@
       "52a829ef718a",
       "61fafdfd2986",
       "0d4e247d03cb",
-      "d8383150cf72"
+      "d8383150cf72",
+      "fa18ef3d9bc0"
     ],
     "heads": [
-      "d8383150cf72"
+      "fa18ef3d9bc0"
     ],
-    "revision_files": 135
+    "revision_files": 136
   },
   "census": {
-    "architecture": 10142,
-    "database": 7349,
+    "architecture": 10223,
+    "database": 7408,
     "evaluation": 2,
-    "fast_collected": 52913,
+    "fast_collected": 54243,
     "fast_skipped": 138,
-    "mypy_files": 786,
-    "src_modules": 587,
-    "test_modules": 1070
+    "mypy_files": 793,
+    "src_modules": 593,
+    "test_modules": 1080
   },
   "chatllm": {
     "classes": {
       "CHATLLM_COMPATIBILITY_ONLY": 2,
       "CHATLLM_CONTROL_PLANE_EXCLUDED": 33,
-      "CHATLLM_DATA_CONDITIONAL": 176,
+      "CHATLLM_DATA_CONDITIONAL": 179,
       "CHATLLM_DATA_REQUIRED": 88,
       "CHATLLM_OPERATOR_DECISION_REQUIRED": 2,
       "CHATLLM_RETIRED": 0
     },
-    "policy_sha256": "3d7220c1ed41248b928f8f180c8ccec64ff80e14452a437e0d9e909b0f6d8dd3",
-    "version": "chatllm-data-v16"
+    "policy_sha256": "9c0493d284d072c03f8a8ef7307664da8a3838182a78d30668f53b4ce7628b29",
+    "version": "chatllm-data-v17"
   },
   "counts": {
-    "alembic_revisions": 135,
-    "capability": 301,
-    "chatllm_policy_entries": 301,
+    "alembic_revisions": 136,
+    "capability": 304,
+    "chatllm_policy_entries": 304,
     "id_kind": 197,
-    "purpose": 70,
-    "safe_detail": 442
+    "purpose": 71,
+    "safe_detail": 452
   },
   "vocabulary": {
     "capability": [
@@ -196,6 +197,9 @@
       "commitments.v2.search",
       "commitments.v2.waiting_on",
       "commitments.waiting_on",
+      "communications.coverage",
+      "communications.read",
+      "communications.search",
       "constraint_categories.create",
       "constraint_categories.deactivate",
       "constraint_categories.list",
@@ -683,6 +687,7 @@
       "capture_review",
       "commitment_authoring",
       "commitment_read",
+      "communications_read",
       "constraint_authoring",
       "constraint_read",
       "constraint_sync_authoring",
@@ -829,6 +834,7 @@
       "closure_evidence_anchors",
       "closure_evidence_ref",
       "closure_gate",
+      "collapse",
       "commitment_id",
       "communication_method_id",
       "concurrent_retirement",
@@ -847,6 +853,7 @@
       "context_source_object_id",
       "context_source_version_id",
       "conversation_context",
+      "conversation_id",
       "corrected_value",
       "correction_reason",
       "counterparty_entity_id",
@@ -929,11 +936,13 @@
       "file_handle_unsupported",
       "focus_area_id",
       "focus_entity_id",
+      "folder_role",
       "format",
       "from",
       "from_baseline_id",
       "from_entity_id",
       "from_publication_id",
+      "from_utc",
       "from_version_id",
       "geometry",
       "governing",
@@ -954,6 +963,7 @@
       "include_manifests",
       "include_sha256",
       "include_statement",
+      "include_text",
       "include_withdrawn",
       "invalid_evidence_reference",
       "invalid_path",
@@ -997,6 +1007,7 @@
       "memory_kind",
       "mention_display_name",
       "merged_away",
+      "message_ids",
       "metadata",
       "method_type_code",
       "minutes_per_source_unit",
@@ -1037,6 +1048,8 @@
       "parents",
       "part",
       "participant_entity_id",
+      "participant_mode",
+      "participants",
       "participation_id",
       "patch",
       "path",
@@ -1131,6 +1144,7 @@
       "situation_id",
       "size",
       "snippet_words",
+      "source",
       "source_file",
       "source_id",
       "source_lane",
@@ -1165,6 +1179,7 @@
       "to_entity_id",
       "to_path",
       "to_publication_id",
+      "to_utc",
       "too_large",
       "topics",
       "transcription",

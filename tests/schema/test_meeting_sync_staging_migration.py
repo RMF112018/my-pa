@@ -47,6 +47,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import ColumnElement, Engine, Table, delete, insert, text, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError
+from tests.schema.vocabulary_admissions import capabilities_admitted_after
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -272,6 +273,8 @@ def test_the_audit_at_set_is_exactly_the_live_enums() -> None:
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
+    # Every name a later revision admits (one home, `vocabulary_admissions.py`).
+    declared -= capabilities_admitted_after(REVISION)
     at = set(_literals(_namespace(MIGRATION)["_CAPABILITIES_AT_THIS_REVISION"]))
     assert declared >= NEW_CAPABILITIES
     assert declared <= at

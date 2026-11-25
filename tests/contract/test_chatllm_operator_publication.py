@@ -159,6 +159,8 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
         and not c.value.startswith("files.")
         # Nor WP3b-S4's two reconciliation pass names (chatllm-data-v16).
         and c.value not in {"meetings.provider.review", "meetings.provider.reconcile"}
+        # Nor WP4-S5's three communications reads (chatllm-data-v17).
+        and not c.value.startswith("communications.")
     }
     assert len(deployed) == 191
     assert deployed <= names

@@ -1201,6 +1201,21 @@ class Capability(StrEnum):
     FILES_RESTORE = "files.restore"
     FILES_UPLOAD_FINALIZE = "files.upload.finalize"
     FILES_WRITE_TEXT = "files.write_text"
+    #: Communications intelligence WP4-S5 (contract section 16, Manager ruling
+    #: D7): ranked search over the Principal's own communications -- full text
+    #: over the derived search text, exact technical identifiers, participant
+    #: addresses, time, folder-role claim and conversation. A read under
+    #: `Purpose.COMMUNICATIONS_READ` only; scopeless; not operator-only;
+    #: withheld unless `MY_PA_COMMUNICATIONS_ENABLED`.
+    COMMUNICATIONS_SEARCH = "communications.search"
+    #: WP4-S5 (section 16): a batch of the Principal's own messages by id, or one
+    #: conversation's messages a page at a time -- metadata, participants with
+    #: provenance, the source pointer, coverage and the bounded derived text,
+    #: never a raw body. Same purpose, scope and switch as the search.
+    COMMUNICATIONS_READ = "communications.read"
+    #: WP4-S5 (sections 9, 16): the coverage of a range over the Principal's own
+    #: communications sources. Same purpose, scope and switch as the search.
+    COMMUNICATIONS_COVERAGE = "communications.coverage"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1934,6 +1949,11 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.FILES_RESTORE: frozenset({Purpose.FILE_WORKSPACE_AUTHORING}),
         Capability.FILES_UPLOAD_FINALIZE: frozenset({Purpose.FILE_WORKSPACE_AUTHORING}),
         Capability.FILES_WRITE_TEXT: frozenset({Purpose.FILE_WORKSPACE_AUTHORING}),
+        # Communications intelligence WP4-S5 (ruling D7): the three reads, each
+        # to exactly the one purpose of their own.
+        Capability.COMMUNICATIONS_SEARCH: frozenset({Purpose.COMMUNICATIONS_READ}),
+        Capability.COMMUNICATIONS_READ: frozenset({Purpose.COMMUNICATIONS_READ}),
+        Capability.COMMUNICATIONS_COVERAGE: frozenset({Purpose.COMMUNICATIONS_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

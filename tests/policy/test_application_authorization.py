@@ -36,6 +36,10 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+from tests.communications_reads_samples import (
+    COMMUNICATIONS_READ_CAPABILITIES,
+    communications_commands,
+)
 from tests.conftest import (
     DEFAULT_LIMITS,
     WHEN,
@@ -1665,6 +1669,7 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         **scenario_commands("policy"),
         # Files workspace WP5: synthetic plane commands.
         **files_commands("policy"),
+        **communications_commands("policy"),
     }
 
 
@@ -2182,6 +2187,8 @@ SCOPED_CAPABILITIES = [
         *SCHEDULE_SCENARIO_CAPABILITIES,
         # Files workspace WP5: the 17 `files.*` names, also in `_SCOPELESS`.
         *FILES_WORKSPACE_CAPABILITIES,
+        # Communications intelligence WP4-S5: the 3 reads (scopeless, read switch off).
+        *COMMUNICATIONS_READ_CAPABILITIES,
     }
 ]
 
@@ -2549,6 +2556,8 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         *SCHEDULE_SCENARIO_CAPABILITIES,
         # Files workspace WP5: the 17 `files.*` names, also in `_SCOPELESS`.
         *FILES_WORKSPACE_CAPABILITIES,
+        # Communications intelligence WP4-S5: the 3 reads (scopeless, read switch off).
+        *COMMUNICATIONS_READ_CAPABILITIES,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

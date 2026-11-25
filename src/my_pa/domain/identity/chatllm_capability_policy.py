@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v16"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v17"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -49,6 +49,10 @@ class ChatLLMCompositionPrerequisite(StrEnum):
     #: Files workspace (chatllm-data-v14; files-workspace contract section 12):
     #: `MY_PA_FILES_WORKSPACE_ROOT` composes the store; needs no other plane.
     FILES_WORKSPACE = "FILES_WORKSPACE"
+    #: Communications intelligence WP4-S5 (chatllm-data-v17; communications
+    #: contract section 16, ruling D7): `MY_PA_COMMUNICATIONS_ENABLED`; needs no
+    #: other plane.
+    COMMUNICATIONS = "COMMUNICATIONS"
     NONE = "NONE"
 
 
@@ -392,6 +396,13 @@ _DATA_CONDITIONAL: Final[frozenset[Capability]] = frozenset(
         Capability.FILES_RESTORE,
         Capability.FILES_UPLOAD_FINALIZE,
         Capability.FILES_WRITE_TEXT,
+        # Communications intelligence WP4-S5 (chatllm-data-v17; ruling D7): the 3
+        # `communications.*` reads, conditional on `MY_PA_COMMUNICATIONS_ENABLED`
+        # by explicit name (`COMMUNICATIONS_DATA_NAMES`). Derived text only, never
+        # a raw body (R-OP-3).
+        Capability.COMMUNICATIONS_SEARCH,
+        Capability.COMMUNICATIONS_READ,
+        Capability.COMMUNICATIONS_COVERAGE,
     }
 )
 
@@ -622,6 +633,17 @@ FILES_WORKSPACE_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
+#: Communications intelligence WP4-S5 (chatllm-data-v17; communications contract
+#: section 16, ruling D7): the 3 `communications.*` reads, composed only when
+#: `MY_PA_COMMUNICATIONS_ENABLED` is on. None is operator-only.
+COMMUNICATIONS_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.COMMUNICATIONS_SEARCH,
+        Capability.COMMUNICATIONS_READ,
+        Capability.COMMUNICATIONS_COVERAGE,
+    }
+)
+
 #: Files workspace native handles (ADR-019 Amendment 1, files-workspace contract
 #: section 17.4; operator ruling 2026-11-15): the primary file names a
 #: compact-façade client is *also* offered as top-level MCP tools, under their
@@ -756,6 +778,8 @@ def _prerequisite_of(
         return ChatLLMCompositionPrerequisite.SCHEDULE_SCENARIOS
     if capability in FILES_WORKSPACE_DATA_NAMES:
         return ChatLLMCompositionPrerequisite.FILES_WORKSPACE
+    if capability in COMMUNICATIONS_DATA_NAMES:
+        return ChatLLMCompositionPrerequisite.COMMUNICATIONS
     value = capability.value
     if value.startswith("documents."):
         return ChatLLMCompositionPrerequisite.MANAGED_DOCUMENTS

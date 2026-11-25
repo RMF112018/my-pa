@@ -35,6 +35,7 @@ from typing import Any, Final
 
 import apps.gateway as gateway
 import pytest
+from tests.communications_reads_samples import COMMUNICATIONS_READ_CAPABILITIES
 from tests.conftest import (
     FakeProviders,
     Scene,
@@ -151,6 +152,7 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         and capability not in _TRANSFER_UPLOADS
         and capability not in SCHEDULE_SCENARIO_CAPABILITIES
         and capability not in FILES_WORKSPACE_CAPABILITIES
+        and capability not in COMMUNICATIONS_READ_CAPABILITIES
     ]
     # WP05b: the 4 custody names are listed over stdio as the attested confirms
     # are; the handler denies them there (no operator surface). WP06: the 4
@@ -636,6 +638,9 @@ _COMPOSED_CAPABILITIES: Final = (
     # Files workspace WP5: the 17 `files.*` names, composed only with the
     # workspace store (`MY_PA_FILES_WORKSPACE_ROOT`).
     | FILES_WORKSPACE_CAPABILITIES
+    # Communications intelligence WP4-S5: the 3 reads, composed only with
+    # `MY_PA_COMMUNICATIONS_ENABLED`.
+    | COMMUNICATIONS_READ_CAPABILITIES
 )
 
 #: WP06 T14: the transfer uploads this module's in-memory world never composes.
@@ -764,6 +769,8 @@ def test_a_child_with_a_managed_root_publishes_every_locally_available_capabilit
         MY_PA_SCHEDULE_ENABLED="true",
         # Schedule Scenarios S6-3 (contract section 15.8): the plane switch.
         MY_PA_SCHEDULE_SCENARIOS_ENABLED="true",
+        # Communications intelligence WP4-S5: the read switch, no dependency.
+        MY_PA_COMMUNICATIONS_ENABLED="true",
         # Reports Modernization WP06 T14: the report content root, which composes
         # the content store and the transfer staging the 4 uploads need.
         MY_PA_REPORT_CONTENT_ROOT=str(report_content),

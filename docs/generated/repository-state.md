@@ -21,22 +21,22 @@ plans link here instead of restating them.
 
 | Figure | Current |
 |---|---|
-| Alembic head | `d8383150cf72` |
-| Alembic revisions | 135 |
+| Alembic head | `fa18ef3d9bc0` |
+| Alembic revisions | 136 |
 
 ## Vocabulary
 
 | Figure | Current |
 |---|---|
-| Capabilities | 301 |
-| Purposes | 70 |
+| Capabilities | 304 |
+| Purposes | 71 |
 | IdKinds | 197 |
-| SafeDetails | 442 |
-| ChatLLM data profile version | `chatllm-data-v16` |
-| ChatLLM policy entries | 301 |
+| SafeDetails | 452 |
+| ChatLLM data profile version | `chatllm-data-v17` |
+| ChatLLM policy entries | 304 |
 | ChatLLM `CHATLLM_COMPATIBILITY_ONLY` entries | 2 |
 | ChatLLM `CHATLLM_CONTROL_PLANE_EXCLUDED` entries | 33 |
-| ChatLLM `CHATLLM_DATA_CONDITIONAL` entries | 176 |
+| ChatLLM `CHATLLM_DATA_CONDITIONAL` entries | 179 |
 | ChatLLM `CHATLLM_DATA_REQUIRED` entries | 88 |
 | ChatLLM `CHATLLM_OPERATOR_DECISION_REQUIRED` entries | 2 |
 | ChatLLM `CHATLLM_RETIRED` entries | 0 |
@@ -45,9 +45,9 @@ plans link here instead of restating them.
 
 | Figure | Current |
 |---|---|
-| Published tools with an accepted payload digest | 301 |
+| Published tools with an accepted payload digest | 304 |
 | v1 view models with an accepted field digest | 40 |
-| Acceptance ledger entries | 3 |
+| Acceptance ledger entries | 6 |
 
 ## Test tiers and corpora
 
@@ -57,10 +57,10 @@ measurable at collection and is carried (`regen --measure --fast-skipped N`).
 
 | Tier or corpus | Selection | Collected | A green execution requires |
 | --- | --- | --- | --- |
-| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 52,913 | 52,775 passed, 138 skipped |
-| Architecture | `pytest tests/architecture` | 10,142 | 10,142 passed, 0 skipped |
-| Database | `pytest -m "database or recovery or e2e"` | 7,349 | 7,349 passed, 0 skipped |
+| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 54,243 | 54,105 passed, 138 skipped |
+| Architecture | `pytest tests/architecture` | 10,223 | 10,223 passed, 0 skipped |
+| Database | `pytest -m "database or recovery or e2e"` | 7,408 | 7,408 passed, 0 skipped |
 | Evaluation | `pytest -m "evaluation"` | 2 | 2 passed |
-| mypy corpus | `mypy` (`[tool.mypy] files`) | 786 files | no issues found |
-| Source modules | `find src/my_pa -name "*.py"` | 587 |  |
-| Test modules | `find tests -name "test_*.py"` | 1,070 |  |
+| mypy corpus | `mypy` (`[tool.mypy] files`) | 793 files | no issues found |
+| Source modules | `find src/my_pa -name "*.py"` | 593 |  |
+| Test modules | `find tests -name "test_*.py"` | 1,080 |  |

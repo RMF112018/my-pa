@@ -574,6 +574,10 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.FILES_RESTORE, Purpose.FILE_WORKSPACE_AUTHORING),
         (Capability.FILES_UPLOAD_FINALIZE, Purpose.FILE_WORKSPACE_AUTHORING),
         (Capability.FILES_WRITE_TEXT, Purpose.FILE_WORKSPACE_AUTHORING),
+        # Communications intelligence WP4-S5 (ruling D7): each read under its one purpose.
+        (Capability.COMMUNICATIONS_SEARCH, Purpose.COMMUNICATIONS_READ),
+        (Capability.COMMUNICATIONS_READ, Purpose.COMMUNICATIONS_READ),
+        (Capability.COMMUNICATIONS_COVERAGE, Purpose.COMMUNICATIONS_READ),
     }
 )
 

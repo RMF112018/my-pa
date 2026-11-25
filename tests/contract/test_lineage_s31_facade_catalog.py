@@ -214,6 +214,8 @@ def test_non_lineage_tool_annotations_are_unchanged() -> None:
             Capability.MEETINGS_PROVIDER_REVIEW.value,
             Capability.MEETINGS_PROVIDER_RECONCILE.value,
         }
+        # Communications intelligence WP4-S5: the three reads are new.
+        - {name for name in _tools() if name.startswith("communications.")}
     )
     assert len(others) == 192
     for name in sorted(others):

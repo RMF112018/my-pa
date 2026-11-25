@@ -976,7 +976,7 @@ def _probe_counts(
         .group_by(probes.c.cls)
     )
     return {
-        str(row.cls): {name: int(getattr(row, name)) for name in FTS_COUNT_KEYS} for row in rows
+        str(row.cls): {name: int(row._mapping[name]) for name in FTS_COUNT_KEYS} for row in rows
     }
 
 

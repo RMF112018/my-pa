@@ -341,6 +341,7 @@ from my_pa.domain.schedule.baselines import (
 )
 from my_pa.domain.schedule.compare import ScheduleComparisonRow
 from my_pa.domain.schedule.currency import CurrencyPublication
+from my_pa.domain.schedule.p6_import import P6Admission, P6ImportRequest, P6Snapshot
 from my_pa.domain.schedule.plane import PlaneProvenance, PlaneResultKind
 from my_pa.domain.schedule.scenario.cpm import CpmResult, CpmStatus
 from my_pa.domain.schedule.scenario.model import ScenarioContent, VersionLabel
@@ -636,6 +637,8 @@ __all__ = [
     "ScheduleAdmissionRejectedError",
     "ScheduleIntegrityError",
     "ScheduleLeaseLostError",
+    "ScheduleP6AdmissionRepository",
+    "ScheduleP6UnitOfWork",
     "ScheduleRepository",
     "ScheduleUnitOfWork",
     "SearchOutcome",
@@ -10279,6 +10282,52 @@ class ScheduleUnitOfWork(ABC):
     @abstractmethod
     def schedules(self) -> ScheduleRepository:
         """The Schedule repository, inside this transaction."""
+
+
+# --- P6 XER import S7-3 admission ports ------------------------------------------
+#
+# Contract: `docs/architecture/schedule-xer-import-contract.md` section 9.1. A
+# dedicated unit of work over the S5 and S7-2 tables; S7-4 composes it behind
+# `schedule_publications.import_p6`. Not a member of `UnitOfWork`.
+
+
+class ScheduleP6AdmissionRepository(ABC):
+    """The one P6 admission transaction (section 9.1 step 4), inside a unit of work."""
+
+    @abstractmethod
+    def admit_p6_publication(
+        self,
+        principal_id: str,
+        request: P6ImportRequest,
+        request_digest: str,
+        snapshot: P6Snapshot,
+    ) -> P6Admission:
+        """Replay, Project, Series, format, content idempotency, snapshot, publication, job.
+
+        Raises `P6AdmissionRejectedError` with a closed reason; writes nothing then.
+        """
+
+
+class ScheduleP6UnitOfWork(ABC):
+    """One transaction over the Schedule and P6 tables, and the P6 repository inside it."""
+
+    @abstractmethod
+    def __enter__(self) -> ScheduleP6UnitOfWork:
+        """Begin the transaction and return the unit of work it belongs to."""
+
+    @abstractmethod
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Commit when the block succeeded, roll back when it did not."""
+
+    @property
+    @abstractmethod
+    def p6(self) -> ScheduleP6AdmissionRepository:
+        """The P6 admission repository, inside this transaction."""
 
 
 # --- Schedule Scenarios S6-2 plane ports -----------------------------------------

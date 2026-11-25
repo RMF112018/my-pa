@@ -876,6 +876,17 @@ class SafeDetail(StrEnum):
     INCLUDE_SHA256 = "include_sha256"
     SIZE = "size"
     AFTER = "after"
+    #: P6 XER import S7-3 (schedule XER import contract sections 9.1, 10.3 and
+    #: 10.6): the admitted bytes' digest did not equal `expected_sha256`; the
+    #: bytes are not a P6 export the build reads; the Series holds another
+    #: format; and the identity-override field. `WORKSPACE_ID`, `PATH`,
+    #: `EXPECTED_VERSION`, `MAX_BYTES`, `FORMAT`, `PROJECT_ID`, `SERIES_ID`,
+    #: `SERIES_NAME`, `SERIES_AUTO`, `SUPERSEDES_PUBLICATION_ID` and
+    #: `IDEMPOTENCY_KEY` are reused.
+    EXPECTED_SHA256 = "expected_sha256"
+    SOURCE_FORMAT = "source_format"
+    SERIES_FORMAT = "series_format"
+    ACCEPT_PROJECT_IDENTITY_CHANGE = "accept_project_identity_change"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

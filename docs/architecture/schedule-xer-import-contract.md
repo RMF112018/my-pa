@@ -1,8 +1,12 @@
 # P6 XER/XML schedule import — whole-slice contract (S7-0 to S7-6)
 
-**Status:** proposed implementation contract. S7-0 is merged (#384), S7-1 is merged (#386)
-and S7-2 (revision `d8383150cf72`) is implemented on `feat/schedule-xer-storage`, not merged;
-nothing else in it is implemented, and nothing is migrated on a shared database, granted,
+**Status:** proposed implementation contract. S7-0 is merged (#384), S7-1 is merged (#386),
+S7-2 (revision `d8383150cf72`) is merged (#387), and S7-3 (the admission service `import_p6`
+and the `schedule` worker's P6 path, no migration, no capability) is implemented on
+`feat/schedule-xer-worker`, not merged; its bounds-maximal synthetic measurement (25,000
+activities, 100,000 relationships, 25,000 WBS rows, 8,526,632 bytes) ran the handler in 50.7 s
+(the contained parse 6.1 s) against the 240 s budget on a local PostgreSQL 15 scratch cluster.
+Nothing else in it is implemented, and nothing is migrated on a shared database, granted,
 switched on or deployed. The decision record is
 [`ADR-023`](../decisions/ADR-023-p6-xer-xml-schedule-import.md), which loosens
 [`ADR-016`](../decisions/ADR-016-cpm-workbench-schedule-evidence.md) decision 4 for the P6

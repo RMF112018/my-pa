@@ -364,6 +364,42 @@ def test_a_filtered_slice_is_summed_but_judged_over_the_whole_version() -> None:
     assert measure_scope(row_filtered=True) is MeasureScope.FILTERED
 
 
+def test_a_failed_cell_outside_a_filtered_slice_still_blocks_it() -> None:
+    """Ruling R1-07 (B2-1 amended): `type_error_present` is judged over the whole version."""
+    spec = MEASURES["reconciliation.prime_co_line.amount"]
+    whole = _reconciliation_lines()
+    pending = [line for line in whole if line.status_class is StatusClass.PENDING]
+    failed = [*whole, _money(LineKind.PRIME_PCO_LINE, "$1.00001", StatusClass.APPROVED)]
+    assert all(
+        v.reportable
+        for v in plan_measure(spec, pending, CLASSIFIED, version_lines=whole).by_status.values()
+    )
+    sliced = plan_measure(spec, pending, CLASSIFIED, version_lines=failed)
+    assert all(
+        (v.value, v.reasons) == (None, {NotReportableReason.TYPE_ERROR_PRESENT})
+        for v in sliced.by_status.values()
+    )
+    # Unfiltered too: a failed approved cell blocks every class, never only its own.
+    unfiltered = plan_measure(spec, failed, CLASSIFIED)
+    assert unfiltered.by_status[StatusClass.PENDING].reasons == {
+        NotReportableReason.TYPE_ERROR_PRESENT
+    }
+    by_code = MEASURES["by_code.adjustment.amount"]
+    budget = [
+        _money(LineKind.BUDGET_CHANGE_LINE, "$1.00"),
+        _money(LineKind.BUDGET_CHANGE_LINE, "$1.00001"),
+    ]
+    total = plan_measure(by_code, budget[:1], CLASSIFIED, version_lines=budget).total
+    assert total is not None and total.reasons == {NotReportableReason.TYPE_ERROR_PRESENT}
+    commitments = MEASURES["buyout_summary.commitment_line.amount"]
+    keyed = [
+        _money(LineKind.COMMITMENT, "$10.00", key="commitment:SYN-0001-001.1@SYN-0001-A"),
+        _money(LineKind.COMMITMENT, "$1.00001", key="commitment:SYN-0001-002.1@SYN-0001-B"),
+    ]
+    answer = plan_measure(commitments, keyed[:1], CLASSIFIED, version_lines=keyed)
+    assert [v.reasons for v in answer.by_key.values()] == [{NotReportableReason.TYPE_ERROR_PRESENT}]
+
+
 def test_by_code_is_a_detail_sum_without_status() -> None:
     spec = MEASURES["by_code.adjustment.amount"]
     lines = [

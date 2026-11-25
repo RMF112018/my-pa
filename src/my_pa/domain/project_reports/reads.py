@@ -378,9 +378,10 @@ def plan_measure(
 
     `inputs` are always the whole version's: under a row filter `lines` are
     the filtered ones, but the blockers and the reconciliation still judge the
-    version (ruling B1, amended). So do a column's population and the
-    `unknown` status block: they are judged over `version_lines`, every
-    detail line of the version, when `lines` is a filtered slice of it.
+    version (ruling B1, amended). So do a column's population, a failed cell
+    (`type_error_present`, ruling R1-07) and the `unknown` status block: they
+    are judged over `version_lines`, every detail line of the version, when
+    `lines` is a filtered slice of it.
     """
     reasons = _blockers(spec, inputs)
     reconciliation = reconciliation_outcomes(inputs.reconciliation)

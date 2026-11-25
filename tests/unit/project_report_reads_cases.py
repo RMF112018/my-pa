@@ -269,6 +269,10 @@ def case_text_never_crosses_fields_and_dates_are_inclusive(scene: ReadsScene) ->
     assert text("okil") == []  # "Kilo" + "Kilo" in two fields: never one string
     assert text("synthetic person") == ["GMP-174"]
     assert text("50%") == []  # identifiers are not searched text
+    # Ruling R1-08: a non-ASCII needle is folded by the same engine as the value (in SQL
+    # on PostgreSQL), so `İ` matches itself; Python's `"İ".lower()` is 2 characters.
+    assert text("İota") == ["1740"]
+    assert text("délta İOTA") == ["1740"]  # ASCII case folds; non-ASCII matches as written
     assert (
         sorted(_number(line) for line in _lines(scene, latest, text="alpha", text_fields=())) == []
     )

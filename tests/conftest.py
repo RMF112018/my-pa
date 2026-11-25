@@ -37,6 +37,7 @@ import hashlib
 import os
 import re
 import stat
+import string
 import sys
 import threading
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
@@ -10964,6 +10965,14 @@ class _ProjectReports(ProjectReportsRepository):
         )
 
 
+_ASCII_LOWER: Final = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+
+
+def _ascii_lower(text: str) -> str:
+    """`lower()` as PostgreSQL applies it in every locale: the ASCII letters only."""
+    return text.translate(_ASCII_LOWER)
+
+
 class _ProjectReportReads(ProjectReportReadsRepository):
     """The WP4P project-report reads over the `World` (`ProjectReportsWorld`).
 
@@ -11156,11 +11165,13 @@ class _ProjectReportReads(ProjectReportReadsRepository):
         if query.group_keys and not any(step[1] in query.group_keys for step in line.group_path):
             return False
         if query.text is not None:
-            needle = query.text.lower()
+            # Ruling R1-08: PostgreSQL's `lower()` on both sides, as every locale
+            # folds it: ASCII letters only, so a non-ASCII letter matches as written.
+            needle = _ascii_lower(query.text)
             return any(
                 v.field_key in query.text_fields
                 and isinstance(v.value, str)
-                and needle in v.value.lower()
+                and needle in _ascii_lower(v.value)
                 for v in line.values
             )
         return True

@@ -18,7 +18,9 @@ holds that from the source.
   D4), the same rule as `snapshot_labels`; the path, the slug's filter
   description and the cells never leave as anything but the typed records.
 * **Text never crosses a field.** The `text` filter tests each value of the
-  searched field keys on its own (`strpos` over the lowered value).
+  searched field keys on its own: `strpos(lower(value), lower(:needle))`, so
+  PostgreSQL folds both sides (ruling R1-08). Folding is case-insensitive for
+  ASCII in every locale; non-ASCII letters fold only as the cluster's ctype does.
 * **RFI numbers match exactly**: the numeric suffix by equality, the prefix by
   equality when given (`normalize_rfi_prefix`), never a textual prefix.
 
@@ -444,7 +446,9 @@ class SqlProjectReportReadsRepository(ProjectReportReadsRepository):
             if not query.text_fields:
                 statement = statement.where(false())
             else:
-                needle = query.text.lower()
+                # Ruling R1-08: one engine folds both sides (never Python's `lower()`
+                # on the needle against PostgreSQL's on the value).
+                needle = func.lower(literal(query.text, Text))
                 statement = statement.where(
                     exists(
                         select(literal(1)).where(

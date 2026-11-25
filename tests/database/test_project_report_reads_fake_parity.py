@@ -124,6 +124,10 @@ def _answers(scene: ReadsScene) -> dict[str, Any]:
             "text": ProjectReportLineQuery(
                 derivation_ids=rfis, limit=1000, text="kilo", text_fields=fields
             ),
+            # Ruling R1-08: one engine folds both sides, so `İ` matches itself on both.
+            "text_non_ascii": ProjectReportLineQuery(
+                derivation_ids=rfis, limit=1000, text="délta İOTA", text_fields=fields
+            ),
             "boundary": ProjectReportLineQuery(
                 derivation_ids=rfis, limit=1000, text="okil", text_fields=fields
             ),

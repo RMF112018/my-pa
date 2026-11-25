@@ -99,7 +99,8 @@ RFI_ROWS_LATER: Final = (
     ("GMP-174", "Synthetic alpha", "Synthetic Person", "High", "11/1/2026", "11/8/2026", "3"),
     ("CD 50%-174", "Synthetic bravo", "", "Low", "11/5/2026", "11/9/2026", "1"),
     ("174", "Synthetic charlie", "", "", "11/6/2026", "", ""),
-    ("1740", "Synthetic delta", "", "", "11/10/2026", "", ""),
+    # Non-ASCII text (ruling R1-08): one engine folds both sides of the `text` filter.
+    ("1740", "Synthetic délta İota", "", "", "11/10/2026", "", ""),
     ("17", "Synthetic echo", "", "", "10/31/2026", "", ""),
     ("GMP-175", "Kilo", "Kilo", "", "11/2/2026", "", ""),
     ("GMP-176", "Synthetic foxtrot", "", "", "11/3/2026", "", ""),

@@ -10,7 +10,9 @@ section 11.7 table and the S6 section 3 rules:
   `ES = EF = max(D, prev_end(C, x))`;
 * backward, start milestone: `LS = LF = next_work(C, y)`; finish milestone:
   `LS = LF = prev_end(C, y)`;
-* a kept mandatory pin is never snapped; floats are working minutes.
+* a kept mandatory pin is never snapped; floats are working minutes;
+* gap-end rule: a predecessor's backward bound through a not-pinned finish
+  milestone is `next_work(C, LF)`, not `LF` (its own dates are unchanged).
 
 Every value is synthetic.
 """
@@ -186,9 +188,11 @@ V2_EXPECTED: Final[dict[str, tuple[dict[str, Row], list[list[str]], str]]] = {
     ),
     "twenty_four_hour_finish": (
         {
-            # The finish milestone is at the end of Monday's work (16:00), so A must
-            # finish 120 clock minutes earlier: 120 working minutes of negative float.
-            "A": ("01-04 08:00", "01-04 16:00", "01-01 14:00", "01-04 14:00", -120, -120),
+            # The finish milestone is at the end of Monday's work (16:00). Gap-end rule:
+            # A's bound is next_work(Mon 16:00) = Tue 08:00 less 120 clock minutes =
+            # Tue 06:00, whose previous std working end is Mon 16:00: TF 0 (S7-0 review
+            # F1; it read Fri 14:00 / Mon 14:00, -120, before the rule).
+            "A": ("01-04 08:00", "01-04 16:00", "01-04 08:00", "01-04 16:00", 0, 0),
             "F": ("01-04 16:00", "01-04 16:00", "01-04 16:00", "01-04 16:00", 0, 0),
         },
         [["A", "F"]],
@@ -205,9 +209,10 @@ V2_EXPECTED: Final[dict[str, tuple[dict[str, Row], list[list[str]], str]]] = {
     "fixed_lag_finish": (
         {
             # The lag ends Saturday 16:00 on c6; on std the previous working end is
-            # Friday 16:00. Backward, retreat(c6, Fri 16:00, 480) = Fri 08:00, whose
-            # previous std working end is Thursday 16:00: -480 for A.
-            "A": ("01-08 08:00", "01-08 16:00", "01-07 08:00", "01-07 16:00", -480, -480),
+            # Friday 16:00. Backward (gap-end rule), next_work(std, Fri 16:00) = Mon
+            # 01-11 08:00; retreat(c6, Mon 08:00, 480) = Sat 08:00, whose previous std
+            # working end is Friday 16:00: TF 0 (it read Thu, -480, before the rule).
+            "A": ("01-08 08:00", "01-08 16:00", "01-08 08:00", "01-08 16:00", 0, 0),
             "F": ("01-08 16:00", "01-08 16:00", "01-08 16:00", "01-08 16:00", 0, 0),
         },
         [["A", "F"]],
@@ -245,12 +250,12 @@ V2_EXPECTED: Final[dict[str, tuple[dict[str, Row], list[list[str]], str]]] = {
 #: Each v2 golden's frozen `result_sha256` (a change needs an engine version bump).
 V2_RESULT_SHA256: Final[dict[str, str]] = {
     "data_date_only": "c2a444680b3e4a0b374c9963b5094784c2fb14a3920288af4b67699826c2417c",
-    "fixed_lag_finish": "50f7d2bced1460330d6bf574be389f9eb21fa5f7eefa2a6128de0f164e9b9f16",
+    "fixed_lag_finish": "59a4502d1f9dbac400f6486bbe373ad1e228a55ba535e73d16051a087bae5ca9",
     "fixed_lag_start": "4b681eb8ec7fcd5726f513691335d8970f5dc98f3000b29c10f1cd4f6c897ad4",
     "late_dates": "95654fbdf3211ca1eb5b04e1d68b3cacc67f2ee0ec18dc6cc3c8fa7a381aeb86",
     "monday_1600": "6c446699d8824718b53fe2b89e30993a97c40b6aefcce5682797cde7d2f947dd",
     "pinned": "42110028beb65fec966bd3f603d4bb2d2c6220221a92a01f7c40ee89206f097a",
-    "twenty_four_hour_finish": "d7bdcceb7f66f6114d4c1586b99830dec59e97c46148f42ea1a960a6b2eac631",
+    "twenty_four_hour_finish": "42fb51037bdcf48b878ecbdc9a134541262793589eb0d706c85f8454ac9b2baa",
     "twenty_four_hour_start": "923dd865ca8ce4fccdc4d0f512bc3013677fc62de960331658e0b50f33d0940a",
 }
 
@@ -320,6 +325,33 @@ def test_v2_floats_equal_the_unsnapped_working_minutes(vector: str) -> None:
             v1[name].total_float_minutes,
             v1[name].free_float_minutes,
         ), name
+
+
+def test_gap_end_rule_gives_the_finish_milestone_predecessor_no_negative_float() -> None:
+    """Section 11.7 gap-end rule (S7-0 review F1): F's late date stays Monday 16:00,
+    but A's backward bound through it is next_work(Mon 16:00) = Tuesday 08:00."""
+    by_key = {item.key: item for item in run_cpm(TWENTY_FOUR_HOUR_FINISH).activities}
+    assert by_key["x:F"].late_finish == at("01-04 16:00")
+    assert by_key["x:A"].late_finish == at("01-04 16:00")
+    assert by_key["x:A"].total_float_minutes == 0
+
+
+def test_a_start_milestone_needs_no_gap_end_rule() -> None:
+    """The symmetric case: a start milestone only snaps later (to the next working
+    start) on both passes, so its late date is never before the anchor its predecessor
+    drives; lags on `twenty_four_hour` both sides leave every float non-negative."""
+    content = network(
+        [task("A", DAY), milestone("S", START), task("B", DAY)],
+        [link("A", "S", "FS", 120), link("S", "B", "FS", 120)],
+        lag_calendar=LagCalendar.TWENTY_FOUR_HOUR,
+    )
+    rows = _rows(run_cpm(content))
+    assert rows == {
+        # A ends Mon 16:00; +120 = Mon 18:00 -> S at Tue 08:00; +120 = Tue 10:00.
+        "A": ("01-04 08:00", "01-04 16:00", "01-04 08:00", "01-04 16:00", 0, 0),
+        "S": ("01-05 08:00", "01-05 08:00", "01-05 08:00", "01-05 08:00", 0, 0),
+        "B": ("01-05 10:00", "01-06 10:00", "01-05 10:00", "01-06 10:00", 0, 0),
+    }
 
 
 def test_edged_milestone_with_progress_is_complete_at_its_date() -> None:
@@ -402,9 +434,10 @@ def test_the_engine_follows_the_content_schema() -> None:
 
 
 def test_operation_budget_counts_each_snap() -> None:
-    """Each edge snap is one counted calendar call: 1 forward + 1 backward per milestone."""
+    """Each edge snap is one counted calendar call: 1 forward + 1 backward per milestone,
+    plus 1 gap-end call for the finish milestone F, which has a predecessor."""
     v2 = run_cpm(MONDAY_1600)
     v1 = run_cpm(_as_v1(MONDAY_1600))
-    assert v2.operations == v1.operations + 4
+    assert v2.operations == v1.operations + 5
     assert run_cpm(MONDAY_1600, operation_budget=v2.operations).status is CpmStatus.COMPUTED
     assert run_cpm(MONDAY_1600, operation_budget=v2.operations - 1).status is CpmStatus.REJECTED

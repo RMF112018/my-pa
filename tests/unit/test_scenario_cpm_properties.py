@@ -35,13 +35,15 @@ from my_pa.domain.schedule.scenario.model import (
     ActivityKind,
     ActivityState,
     ConstraintType,
+    FixedLagCalendar,
+    LagCalendar,
     ProgressPolicy,
     ScenarioActivity,
     ScenarioContent,
     format_instant,
     uses_v2_features,
 )
-from tests.fixtures.schedule_scenario import STD, at, link, network, task
+from tests.fixtures.schedule_scenario import C6, STD, at, link, milestone, network, task
 
 SEEDS: Final = range(60)
 CALENDAR: Final = compile_calendar(STD)
@@ -319,3 +321,81 @@ def test_v2_path_on_a_v1_network_differs_only_in_engine_version(seed: int) -> No
         ENGINE_VERSION_V2,
     )
     assert one == two
+
+
+_LAG_CALENDARS: Final = (
+    LagCalendar.PREDECESSOR,
+    LagCalendar.SUCCESSOR,
+    LagCalendar.TWENTY_FOUR_HOUR,
+    FixedLagCalendar("c6"),
+    FixedLagCalendar("std"),
+)
+
+
+def _gap_network(rng: random.Random) -> ScenarioContent:
+    """Section 11.7 gap-end rule (S7-0 review F1): FS/SS networks with non-negative
+    lags over `std` and `c6`, every lag calendar, edged milestones, and no constraint,
+    progress or `must_finish_by` (FF/SF and leads admit negative float on v1 as well
+    when a lag ends in non-working time)."""
+    count = rng.randint(2, 8)
+    names = [f"N{index}" for index in range(count)]
+    activities = []
+    for name in names:
+        calendar = rng.choice([None, None, "c6"])
+        if rng.random() < 0.5:
+            kind = rng.choice(
+                [
+                    ActivityKind.START_MILESTONE,
+                    ActivityKind.FINISH_MILESTONE,
+                    ActivityKind.MILESTONE,
+                ]
+            )
+            activities.append(milestone(name, kind, calendar=calendar))
+        else:
+            activities.append(task(name, rng.choice([60, 240, DAY, 1000]), calendar=calendar))
+    return network(
+        activities,
+        [
+            link(
+                names[i], names[j], rng.choice(["FS", "SS"]), rng.choice([0, 0, 60, 120, 480, 900])
+            )
+            for i in range(count)
+            for j in range(i + 1, count)
+            if rng.random() < 0.4
+        ],
+        calendars=(STD, C6),
+        lag_calendar=rng.choice(_LAG_CALENDARS),
+        data_date=rng.choice(["01-04 00:00", "01-04 10:00", "01-09 12:00"]),
+    )
+
+
+GAP_SEEDS: Final = range(400)
+
+
+@pytest.mark.parametrize("chunk", range(4))
+def test_no_activity_gets_negative_float_through_an_edged_milestone(chunk: int) -> None:
+    """Without constraints, progress, leads or finish-side relationships no activity has
+    negative total float: in particular no predecessor of a finish milestone that a lag
+    on another calendar drove into non-working time (the gap-end rule), and no
+    neighbour of a start milestone (which only ever snaps later)."""
+    for seed in GAP_SEEDS[chunk::4]:
+        result = run_cpm(_gap_network(_rng(30_000 + seed)))
+        assert result.status is CpmStatus.COMPUTED, seed
+        for item in result.activities:
+            assert item.total_float_minutes is not None
+            assert item.total_float_minutes >= 0, (seed, item.key)
+
+
+def test_the_gap_generator_reaches_a_lagged_finish_milestone_predecessor() -> None:
+    """The property above is not vacuous: some network has a finish milestone with a
+    predecessor whose lag is on `twenty_four_hour` or a fixed lag calendar."""
+    reached = set()
+    for seed in GAP_SEEDS:
+        content = _gap_network(_rng(30_000 + seed))
+        kinds = {item.key: item.kind for item in content.activities}
+        for item in content.relationships:
+            if kinds[item.succ] is ActivityKind.FINISH_MILESTONE and item.lag_minutes > 0:
+                reached.add(type(content.settings.lag_calendar).__name__)
+                if content.settings.lag_calendar is LagCalendar.TWENTY_FOUR_HOUR:
+                    reached.add("twenty_four_hour")
+    assert {"twenty_four_hour", "FixedLagCalendar"} <= reached

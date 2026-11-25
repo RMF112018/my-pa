@@ -35,6 +35,12 @@ never reach:
   milestone's back to the previous working end (`ES = EF = max(D,
   prev_end(C, x))`, `LS = LF = prev_end(C, y)`); a kept mandatory pin is never
   snapped; snapping crosses only non-working time, so floats are unchanged;
+* gap-end rule: a predecessor's backward bound through a not-complete,
+  not-pinned finish milestone uses `next_work(C, LF)` (the end of the
+  non-working gap the milestone was snapped across) instead of its `LF`, so a
+  lag on another calendar cannot give the predecessor negative float; the
+  milestone's own dates are unchanged (1 counted call per such milestone with
+  a predecessor);
 * an edged milestone with progress is complete at its one date;
 * a fixed lag calendar (`calendar:<key>`) measures every lag on that calendar.
 
@@ -552,6 +558,11 @@ class _Engine:
             return self._call(lambda: _next_work(calendar, y), j, None)
         return self._call(lambda: _prev_end(calendar, y), j, None)
 
+    def snap_gap_end(self, j: int, y: int) -> int:
+        """v2 backward (gap-end rule): the end of the non-working gap at `y`."""
+        calendar = self.calendars[j]
+        return self._call(lambda: _next_work(calendar, y), j, None)
+
     def worked(self, calendar: CompiledCalendar, a: int, b: int) -> int:
         self.tick()
         return _working_minutes(calendar, a, b)
@@ -731,6 +742,8 @@ class _Engine:
         count = len(self.keys)
         self.ls: list[int] = [0] * count
         self.lf: list[int] = [0] * count
+        # v2 only: a not-pinned finish milestone's gap end (section 11.7).
+        self.gap_end: dict[int, int] = {}
         must_finish_by = self.content.settings.must_finish_by
         for j in reversed(order):
             self.tick()
@@ -768,18 +781,30 @@ class _Engine:
                     y = self.advance(calendar, constraints[ConstraintType.MSO], duration, j)
             self.lf[j] = y
             self.ls[j] = self.retreat(calendar, y, duration, j)
+            if (
+                self.edges[j] is ActivityKind.FINISH_MILESTONE
+                and not self.kept_pin[j]
+                and self.incoming[j]
+            ):
+                # v2 only (section 11.7, gap-end rule): a predecessor's backward bound
+                # through this finish milestone is the end of the non-working gap its
+                # late date sits at, not the late date itself.
+                self.gap_end[j] = self.snap_gap_end(j, y)
 
     def _backward_bound(self, j: int, r: int, state: ActivityState) -> int | None:
         k = self.succs[r]
         kind = self.types[r]
         lag_calendar, lag = self.lag_calendars[r], self.lags[r]
+        # v2 only: through a finish milestone, its gap end (a milestone has LS = LF).
+        late_start = self.gap_end.get(k, self.ls[k])
+        late_finish = self.gap_end.get(k, self.lf[k])
         if kind is RelationshipType.FS:
-            return self.shift(lag_calendar, self.ls[k], -lag, j, r)
+            return self.shift(lag_calendar, late_start, -lag, j, r)
         if kind is RelationshipType.FF:
-            return self.shift(lag_calendar, self.lf[k], -lag, j, r)
+            return self.shift(lag_calendar, late_finish, -lag, j, r)
         if state is ActivityState.IN_PROGRESS:
             return None
-        origin = self.ls[k] if kind is RelationshipType.SS else self.lf[k]
+        origin = late_start if kind is RelationshipType.SS else late_finish
         shifted = self.shift(lag_calendar, origin, -lag, j, r)
         return self.advance(self.calendars[j], shifted, self.durations[j], j, r)
 

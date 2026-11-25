@@ -663,6 +663,39 @@ def test_edged_milestone_record_rules() -> None:
     assert constraint_fits_kind(ActivityKind.TASK, ConstraintType.MSO)
 
 
+def test_start_milestone_progress_is_normalised_to_its_one_date() -> None:
+    """Section 11.7 (S7-0 review F3): a start milestone's null actual finish is stored
+    as its actual start, at construction and on decoding, so both spellings are one
+    content with one hash; a v1 `milestone` and a task keep a null finish."""
+    at = parse_instant("2027-01-04T08:00")
+    started = ActivityProgress(actual_start=at)
+    record = ScenarioActivity(
+        key="x:m",
+        name="M",
+        kind=ActivityKind.START_MILESTONE,
+        original_minutes=0,
+        remaining_minutes=0,
+        progress=started,
+    )
+    assert record.progress == ActivityProgress(at, at)
+    plain = ScenarioActivity(
+        key="x:m", name="M", kind=ActivityKind.MILESTONE, original_minutes=0, remaining_minutes=0
+    )
+    assert replace(plain, progress=started).progress == started
+    content = network([task("A", DAY)], data_date="01-05 00:00")
+    content = replace(content, activities=(*content.activities, record))
+    obj = content_object(content)
+    activities = obj["activities"]
+    assert isinstance(activities, list)
+    (spelled,) = [item for item in activities if item["key"] == "x:m"]
+    assert spelled["progress"] == {
+        "actual_start": "2027-01-04T08:00",
+        "actual_finish": "2027-01-04T08:00",
+    }
+    spelled["progress"]["actual_finish"] = None
+    assert content_sha256(content_from_object(obj)) == content_sha256(content)
+
+
 def test_captured_fields_are_bounded_inert_values() -> None:
     reference = _reference()
     assert is_captured_field_key("xer:TASK.cstr_date2")

@@ -619,6 +619,19 @@ class ScenarioActivity:
             raise ValueError("at most 1 early and 1 late constraint, or 1 mandatory alone")
         if self.progress is not None and not isinstance(self.progress, ActivityProgress):
             raise ValueError("progress is an ActivityProgress record")
+        if (
+            self.kind is ActivityKind.START_MILESTONE
+            and self.progress is not None
+            and self.progress.actual_finish is None
+        ):
+            # Section 11.7 (S7-0 review F3): a start milestone's one date is both its
+            # actual start and finish, so a null finish is stored as the start (one
+            # canonical form; v1 has no start milestone).
+            object.__setattr__(
+                self,
+                "progress",
+                ActivityProgress(self.progress.actual_start, self.progress.actual_start),
+            )
         if self.distribution is not None and not isinstance(
             self.distribution, DurationDistribution
         ):

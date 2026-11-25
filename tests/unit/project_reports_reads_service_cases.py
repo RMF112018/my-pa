@@ -495,6 +495,53 @@ def case_an_absent_record_is_not_observed_never_closed(scene: ReadsScene) -> Non
     assert all(e.get("new_status_class") != "closed" for e in compared["changed"])
 
 
+def case_a_quarantined_latest_version_is_latest_unreadable(scene: ReadsScene) -> None:
+    """Ruling R1-01: absence from an unreadable latest version is never inferred."""
+    reads = service(scene)
+    history = record_history_payload(
+        reads.record_history(
+            scene.principal,
+            RecordHistoryRequest(
+                project_id=RFI_PROJECT[1], record_family="rfis", identity_key="rfi:GMP-201"
+            ),
+        )
+    )
+    (record,) = history["records"]
+    versions = {v["version"]: v for v in history["versions"]}
+    (presence,) = record["series"]
+    assert presence["presence"] == "latest_unreadable"
+    assert presence["reasons"] == ["snapshot_quarantined"]
+    # The history over the readable version still stands.
+    (observation,) = record["observations"]
+    assert presence["last_observed_version"] == observation["version"]
+    readable = versions[observation["version"]]
+    assert (readable["publication_date"], readable["derivation_state"]) == (
+        "2026-11-01",
+        "classified",
+    )
+    (latest,) = [v for v in versions.values() if v["is_latest"]]
+    assert (latest["publication_date"], latest["derivation_state"]) == (
+        "2026-11-15",
+        "quarantined",
+    )
+    # The same series, read by `compare`: nothing is compared either.
+    compared = compare_payload(
+        reads.compare(scene.principal, CompareRequest(series_id=_series_of(scene, "qxrfiq")))
+    )
+    assert compared["comparable"] is False
+    # A readable latest version keeps its presence and carries no reason.
+    readable_history = record_history_payload(
+        reads.record_history(
+            scene.principal,
+            RecordHistoryRequest(
+                project_id=RFI_PROJECT[1], record_family="rfis", identity_key="rfi:GMP-170"
+            ),
+        )
+    )
+    (series,) = readable_history["records"][0]["series"]
+    assert (series["presence"], series["reasons"]) == ("not_observed_in_latest", [])
+
+
 def case_not_found_is_indistinguishable_for_foreign_and_unknown(scene: ReadsScene) -> None:
     reads = service(scene)
     foreign = _refusal(lambda: reads.query(OTHER_PRINCIPAL, _rfi_query(scene)))
@@ -798,6 +845,7 @@ CASES: Final = (
     case_a_stale_cross_check_is_ignored_after_a_rederivation,
     case_record_history_spans_three_rfi_views,
     case_an_absent_record_is_not_observed_never_closed,
+    case_a_quarantined_latest_version_is_latest_unreadable,
     case_not_found_is_indistinguishable_for_foreign_and_unknown,
     case_the_facade_answers_absent_unbound_and_quarantined_projects,
     case_coverage_carries_per_version_filter_semantics,

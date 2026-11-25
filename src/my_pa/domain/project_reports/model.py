@@ -306,3 +306,6 @@ class VersionPresence(StrEnum):
 
     OBSERVED_IN_LATEST = "observed_in_latest"
     NOT_OBSERVED_IN_LATEST = "not_observed_in_latest"
+    #: The series' latest version is quarantined (WP4P-R1 ruling R1-01): it has
+    #: no lines, so whether the record is in it is unknown and nothing is inferred.
+    LATEST_UNREADABLE = "latest_unreadable"

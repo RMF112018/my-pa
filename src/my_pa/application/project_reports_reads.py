@@ -44,6 +44,9 @@ local caller).
   (`format_amount`); no float exists anywhere in the path.
 * **Closure is never inferred**: a record absent from a later version is
   `not_observed` / `not_observed_in_latest`, with its status as last observed.
+  Nor is absence inferred from an unreadable version: a quarantined side makes
+  `compare` answer `comparable: false`, and a quarantined latest version makes
+  `record_history` answer `latest_unreadable` with its reasons (ruling R1-01).
 
 The WP5 facade (`project_summary`, `match_rfis`, `availability`) takes plain
 types and is composed by the meeting context; it is not an MCP tool.
@@ -117,7 +120,7 @@ from my_pa.domain.project_reports.identity import (
     normalize_whitespace,
     split_rfi_number,
 )
-from my_pa.domain.project_reports.measures import MeasureValue
+from my_pa.domain.project_reports.measures import MeasureValue, derivation_blockers
 from my_pa.domain.project_reports.model import (
     FAMILY_OF_VIEW,
     BindingState,
@@ -412,6 +415,8 @@ class SeriesPresence:
     presence: VersionPresence
     last_observed_version: str
     last_status: StatusClass | None
+    #: Why the latest version is unreadable (`latest_unreadable` only, ruling R1-01).
+    reasons: frozenset[NotReportableReason] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1440,12 +1445,18 @@ class ProjectReportReads:
                         if o.series_id == series_id
                     ],
                 )[entry.record_id]
+                latest = _latest_of(members)
+                # Ruling R1-01: a quarantined latest version has no lines, so the
+                # record's absence from it is never inferred (as `compare` answers
+                # `comparable: false`); the readable versions' history still stands.
+                unreadable = derivation_blockers(latest.state, latest.quarantine_reason)
                 presences.append(
                     SeriesPresence(
                         series_id,
-                        presence.presence,
+                        VersionPresence.LATEST_UNREADABLE if unreadable else presence.presence,
                         presence.last_observed.snapshot_id,
                         presence.last_status,
+                        unreadable,
                     )
                 )
                 for member in members:
@@ -2128,6 +2139,7 @@ def record_history_payload(answer: RecordHistoryAnswer) -> dict[str, object]:
                         "last_status": None
                         if presence.last_status is None
                         else presence.last_status.value,
+                        "reasons": sorted(reason.value for reason in presence.reasons),
                     }
                     for presence in history.series
                 ],

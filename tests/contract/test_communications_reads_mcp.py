@@ -145,6 +145,9 @@ def test_the_tool_schemas_publish_the_section_16_bounds() -> None:
     assert (read["message_ids"]["minItems"], read["message_ids"]["maxItems"]) == (1, 25)
     assert read["conversation_id"]["maxLength"] == 2048
     assert read["include_text"]["type"] == "boolean"
+    # WP4-R2 G6: both cursors publish the section 16 bound the service enforces.
+    for cursor in (properties["cursor"], read["cursor"]):
+        assert (cursor["minLength"], cursor["maxLength"]) == (1, 2048)
     coverage = tools[COVERAGE.value]
     assert coverage["required"] == ["from_utc", "to_utc"]
     assert set(coverage["properties"]) == {"from_utc", "to_utc", "source"}

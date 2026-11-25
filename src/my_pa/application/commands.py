@@ -169,6 +169,9 @@ from my_pa.domain.common.identifiers import (
     validate_identifier,
 )
 from my_pa.domain.common.time import NaiveDatetimeError, ensure_utc
+from my_pa.domain.communications.cursor import (
+    MAX_CURSOR_CHARACTERS as COMMUNICATIONS_MAX_CURSOR_CHARACTERS,
+)
 from my_pa.domain.context import (
     MAX_SUBJECT_HINTS,
     ContextPlane,
@@ -13859,6 +13862,7 @@ _COMMUNICATIONS_CURSOR: Final[Mapping[str, object]] = MappingProxyType(
     {
         "type": "string",
         "minLength": 1,
+        "maxLength": COMMUNICATIONS_MAX_CURSOR_CHARACTERS,
         "description": (
             "The previous answer's next_cursor, with the same request otherwise. A "
             "cursor of another request is refused; an answer with cursor_state "

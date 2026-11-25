@@ -558,6 +558,25 @@ def test_an_unidentified_commitment_line_is_counted_never_keyed() -> None:
     assert identified.total is not None and identified.total.value == Decimal("10.0000")
 
 
+def test_a_failed_unidentified_line_still_blocks_every_key() -> None:
+    """R2-03: population and failure are judged over every line, identified or not.
+
+    The unidentified line is never keyed (R1-10), but its failed cell still
+    blocks the whole column (F1-2), so the one identified key is not reportable.
+    """
+    spec = MEASURES["buyout_summary.commitment_line.amount"]
+    lines = [
+        _money(LineKind.COMMITMENT, "$10.00", key="commitment:SYN-0001-001.1@SYN-0001-A"),
+        _money(LineKind.COMMITMENT, "$1.00001"),
+    ]
+    answer = plan_measure(spec, lines, CLASSIFIED)
+    assert answer.unidentified_lines == 1
+    ((key, value),) = answer.by_key.items()
+    assert key == ("commitment:SYN-0001-001.1@SYN-0001-A",)
+    assert value.value is None
+    assert set(value.reasons) == {NotReportableReason.TYPE_ERROR_PRESENT}
+
+
 def test_record_counts_are_distinct_records_per_status_class() -> None:
     spec = MEASURES["by_status.record_count"]
     lines = [

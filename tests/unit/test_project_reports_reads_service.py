@@ -255,22 +255,26 @@ def test_a_compared_count_carries_the_reconciliation_qualifier() -> None:
     clean = compare_payload(reads.compare(built.principal, CompareRequest(series_id=series)))
     counts = [d for d in clean["measures_delta"] if d["measure"].endswith("_count")]
     assert counts and all(d["qualifiers"] == [] for d in counts)
-    # The mismatch is planted on the later (`to`) side only.
     mismatch = {"column_groups": {"match": 1}, "grand": {"mismatch": 1}}
-    later = next(
-        v
-        for v in reads.compare(built.principal, CompareRequest(series_id=series)).versions
-        if v.is_latest
-    )
+    sides = reads.compare(built.principal, CompareRequest(series_id=series)).versions
+    (earlier,) = [v for v in sides if not v.is_latest]
+    (later,) = [v for v in sides if v.is_latest]
     derivations = world.project_reports.derivations
-    for key, derivation in list(derivations.items()):
-        if derivation.derivation_id == later.record.derivation_id:
-            derivations[key] = dataclasses.replace(derivation, reconciliation=mismatch)
-    compared = compare_payload(reads.compare(built.principal, CompareRequest(series_id=series)))
-    deltas = {
-        d["measure"]: d for d in compared["measures_delta"] if d["measure"].endswith("_count")
-    }
-    assert deltas == {
+    originals = dict(derivations)
+
+    def planted_on(side: str) -> dict[str, Any]:
+        derivations.clear()
+        derivations.update(originals)
+        target = (earlier if side == "from" else later).record.derivation_id
+        for key, derivation in list(derivations.items()):
+            if derivation.derivation_id == target:
+                derivations[key] = dataclasses.replace(derivation, reconciliation=mismatch)
+        compared = compare_payload(reads.compare(built.principal, CompareRequest(series_id=series)))
+        return {
+            d["measure"]: d for d in compared["measures_delta"] if d["measure"].endswith("_count")
+        }
+
+    expected = {
         "open_outstanding.record_count": {
             "measure": "open_outstanding.record_count",
             "status_class": None,
@@ -286,3 +290,7 @@ def test_a_compared_count_carries_the_reconciliation_qualifier() -> None:
             "qualifiers": ["reconciliation_mismatch"],
         },
     }
+    # R2-01: the qualifier is the union of both sides, so a mismatch planted on
+    # either side alone (the earlier `from` or the later `to`) qualifies the deltas.
+    assert planted_on("to") == expected
+    assert planted_on("from") == expected

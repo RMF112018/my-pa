@@ -1,7 +1,7 @@
 """WP4-S5: `communications.search`, `.read` and `.coverage` at the canonical boundary (FAST).
 
 Communications contract section 16, Manager rulings D7, D8, R11-R13, C2: the
-three names are declared, dispatched, built and published as reads
+3 names are declared, dispatched, built and published as reads
 (`read_only_hint`) under `communications_read` only; scopeless and not
 operator-only; `DATA_CONDITIONAL` on the `COMMUNICATIONS` prerequisite at
 `chatllm-data-v17`. With `MY_PA_COMMUNICATIONS_ENABLED` off (the default)

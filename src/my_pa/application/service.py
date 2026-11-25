@@ -18108,7 +18108,7 @@ class ApplicationService:
         transport dispatching straight through `_HANDLERS` meets the same
         refusal (ruling D8: the standard disabled refusal, not an empty answer).
         The reads run in this invocation's unit of work, scoped to the acting
-        Principal; the cursors bind to it and to its grants on the three names.
+        Principal; the cursors bind to it and to its grants on the 3 names.
         """
         if not self._communications_enabled:
             raise UnsupportedError()
@@ -18146,7 +18146,7 @@ class ApplicationService:
                 next_cursor = read.next_cursor
             elif isinstance(command, CommunicationsCoverage):
                 payload = coverage_payload(reads.coverage(principal_id, command.coverage_request()))
-            else:  # pragma: no cover - bound to exactly the three names below
+            else:  # pragma: no cover - bound to exactly the 3 names below
                 raise UnsupportedError()
         return _Result(
             payload=payload,

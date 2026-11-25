@@ -185,10 +185,10 @@ def test_an_unknown_signature_is_rederived_once_its_adapter_is_registered() -> N
     ]
     assert len(unknown) == 2
     scene.use_reader(PulseExportReader(_with_unknown_registered()))
+    count = len(scene.world.project_reports.derivations)
     dry = scene.rederiver().sweep(scene.principal, dry_run=True)
     assert dry.counts["derivations_due_rederive_adapter"] == 1
-    count = len(scene.world.project_reports.derivations)
-    assert len(scene.world.project_reports.derivations) == count
+    assert len(scene.world.project_reports.derivations) == count  # the dry run wrote nothing
     report = scene.rederiver().sweep(scene.principal)
     assert report.counts["derivations_written_rederive_adapter"] == 1
     assert report.counts["derivations_current"] == 2

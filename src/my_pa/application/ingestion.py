@@ -314,6 +314,11 @@ class IngestionLifecycle:
 
     # --- admission -----------------------------------------------------------
 
+    @property
+    def consumers(self) -> frozenset[IngestConsumer]:
+        """The consumers this lifecycle holds a handler for (the only ones it admits or runs)."""
+        return frozenset(self._handlers)
+
     def admit(
         self,
         principal_id: str,
@@ -324,16 +329,48 @@ class IngestionLifecycle:
         file_pattern: str,
         enabled: bool = True,
     ) -> IngestSourceRecord:
-        """Admit one source (operator CLI only, ruling m8); refused with a closed code."""
-        if consumer not in self._handlers:
-            raise IngestRefusedError(IngestRefusalCode.CONSUMER_NOT_REGISTERED)
-        if (
-            _WORKSPACE_ID.fullmatch(workspace_id) is None
-            or not _valid_prefix(path_prefix)
-            or not 1 <= len(file_pattern) <= _MAX_PATTERN
-            or "/" in file_pattern
+        """Admit one source (operator CLI only, ruling m8); refused with a closed code.
+
+        One transaction of its own around `admit_within`.
+        """
+        self._require_admissible(consumer, workspace_id, path_prefix, file_pattern)
+        with self._unit_of_work() as unit:
+            return self.admit_within(
+                unit,
+                principal_id,
+                consumer=consumer,
+                workspace_id=workspace_id,
+                path_prefix=path_prefix,
+                file_pattern=file_pattern,
+                enabled=enabled,
+            )
+
+    def admit_within(
+        self,
+        unit: UnitOfWork,
+        principal_id: str,
+        *,
+        consumer: IngestConsumer,
+        workspace_id: str,
+        path_prefix: str,
+        file_pattern: str,
+        enabled: bool = True,
+    ) -> IngestSourceRecord:
+        """`admit`, inside the caller's unit of work (WP3P ruling D7); never commits.
+
+        The same refusals as `admit`, in the same order: an unregistered
+        consumer, an invalid location, then a source already admitted at the
+        location. A caller that admits and binds in one transaction (the
+        project-report bindings apply) therefore commits or rolls back the
+        source together with everything else it wrote.
+        """
+        self._require_admissible(consumer, workspace_id, path_prefix, file_pattern)
+        location = (consumer, workspace_id, path_prefix, file_pattern)
+        if any(
+            (s.consumer, s.workspace_id, s.path_prefix, s.file_pattern) == location
+            for s in unit.ingestion.list_sources(principal_id)
         ):
-            raise IngestRefusedError(IngestRefusalCode.INVALID_LOCATION)
+            raise IngestRefusedError(IngestRefusalCode.SOURCE_ALREADY_ADMITTED)
         source = IngestSourceRecord(
             ingest_source_id=issue_identifier(IdKind.INGEST_SOURCE),
             consumer=consumer,
@@ -344,15 +381,21 @@ class IngestionLifecycle:
             admitted_at=self._clock(),
             admitted_by=INGEST_ADMITTED_BY_OPERATOR_CLI,
         )
-        with self._unit_of_work() as unit:
-            location = (consumer, workspace_id, path_prefix, file_pattern)
-            if any(
-                (s.consumer, s.workspace_id, s.path_prefix, s.file_pattern) == location
-                for s in unit.ingestion.list_sources(principal_id)
-            ):
-                raise IngestRefusedError(IngestRefusalCode.SOURCE_ALREADY_ADMITTED)
-            unit.ingestion.insert_source(principal_id, source)
+        unit.ingestion.insert_source(principal_id, source)
         return source
+
+    def _require_admissible(
+        self, consumer: IngestConsumer, workspace_id: str, path_prefix: str, file_pattern: str
+    ) -> None:
+        if consumer not in self._handlers:
+            raise IngestRefusedError(IngestRefusalCode.CONSUMER_NOT_REGISTERED)
+        if (
+            _WORKSPACE_ID.fullmatch(workspace_id) is None
+            or not _valid_prefix(path_prefix)
+            or not 1 <= len(file_pattern) <= _MAX_PATTERN
+            or "/" in file_pattern
+        ):
+            raise IngestRefusedError(IngestRefusalCode.INVALID_LOCATION)
 
     def set_enabled(self, principal_id: str, ingest_source_id: str, enabled: bool) -> None:
         """Enable or disable one source's scheduled polling."""

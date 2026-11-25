@@ -1,6 +1,6 @@
 # PULSE-IMPLEMENTATION-PLAN — Project Reporting Intelligence over Procore PULSE CSV exports
 
-**Status:** planning only, under scope extension `MYPA-PULSE-INTELLIGENCE-EXTENSION-20261121` of goal `MYPA-COMMS-MEETCTX-P1P3-20261121`. Written before any PULSE code exists, as the operator required. No PULSE module, table, migration, capability, purpose, identifier kind, switch or fixture exists; nothing is persisted, exposed, granted or deployed. Every work package below needs its own PR, independent review and merge decision; items marked operator-gated need the operator.
+**Status:** written as planning only, under scope extension `MYPA-PULSE-INTELLIGENCE-EXTENSION-20261121` of goal `MYPA-COMMS-MEETCTX-P1P3-20261121`, before any PULSE code existed, as the operator required. **As of 2026-11-24, WP3P is implemented on branch `feat/pulse-reports` (not merged) and its decision record is [ADR-024](../decisions/ADR-024-project-report-source-evidence.md). [Section 17](#17-as-built-wp3p-2026-11-24) records what was built and supersedes every passage of sections 2–14 it names; where they disagree, section 17 and the Manager rulings D1–D19 win.** Nothing is migrated, bound, enabled, exposed, granted or deployed. Every work package below needs its own PR, independent review and merge decision; items marked operator-gated need the operator.
 
 **Basis:** branch `feat/comms-intelligence` at `f586b6c97ee480d47503e450980c4768825ac808` (tree `eb1fb5fc4f7488eb3a0abf6ac406fb4bfe6805b6`) on `origin/main@092610d36b7d1493fc7fda6e352a4bd06e914f61`; Alembic single head `640aaacc78e8`. Shared lifecycle: [ADR-022](../decisions/ADR-022-communications-intelligence.md) decision 2 (Accepted under operator delegation 2026-11-22, Manager ruling R-OP-1; effective on merge of WP2) and [`communications-intelligence-contract.md`](../architecture/communications-intelligence-contract.md) ("contract"), sections 1, 9, 11, 18 and 19, with the Manager rulings of 2026-11-21 in its section 21. Evidence: [`docs/evidence/pulse/`](../evidence/pulse/README.md) ("evidence"), aggregates only. All counts are digits on purpose (spelled-count guard). Paths to files that do not exist yet are not written as links (CI relative-link check).
 
@@ -64,7 +64,7 @@ New modules (proposed names; each package follows the communications WP1 split: 
 | `src/my_pa/infrastructure/project_reports/aggregate_cli.py` | aggregate-only validation CLI over real files (Manager only; section 12.3) | WP3P |
 | `src/my_pa/infrastructure/persistence/project_reports.py` | Layer A and B repositories through the partition guard | WP3P |
 | `src/my_pa/application/project_reports.py` | ingestion step (a lifecycle consumer), binding apply/check, read services | WP3P, WP4P |
-| `apps/cli/project_reports.py` | operator commands: `bindings check`, `bindings apply`, `ingest --once`, `backfill`, `dry-run` | WP3P |
+| `apps/cli/project_reports.py` | operator commands: `bindings check`, `bindings apply`, `ingest --once`, `backfill`, `dry-run` (as built: `bindings check|apply`, `run-once`, `backfill [--dry-run]`, `rederive`, `coverage`, `aggregate`; section 17) | WP3P |
 
 Changed modules (one line each; exact edits belong to the WP):
 
@@ -135,6 +135,7 @@ Inherited context is stored as the ordered group path `[(level, key, header row 
 
 ### 4.5 Quarantine and reason codes
 
+- **As built (section 17, drift 5, 6):** there is no `oversize` code (an oversized file is the lifecycle's `skipped_too_large`, with no row), `nul_byte` is a rejection code, and quarantine is a derivation state of an `ingested` snapshot, not a snapshot state; `source_unbound` is not a quarantine but a refusal (the command refuses up front; the handler rolls the snapshot back).
 - **Snapshot-level:** `rejected` (unparseable: `malformed_csv`, `invalid_header`, `oversize`, `not_utf8`) or `quarantined` (`unknown_header_signature`, `malformed_ratio_exceeded`, `source_unbound`, `binding_project_number_mismatch`). A quarantined snapshot keeps its lifecycle row and **all rows in Layer A with role `unclassified`**, so nothing is lost and a later adapter can re-ingest it from the stored rows.
 - **Row-level:** `malformed`, `type_error`, `identity_missing`, `ambiguous_identity`.
 - Diagnostics carry codes, ordinals and counts only, never cell content (ADR-022 decision 18 applies equally).
@@ -259,7 +260,7 @@ Rules:
   ```
 
   Only these keys are accepted (unknown keys refuse); duplicate JSON keys refuse.
-- **Commands.** `apps/cli/project_reports.py bindings check --file F` (validate and print the diff as counts and project numbers, no write) and `bindings apply --file F --reason CODE` (whole file, one transaction). There is no client capability for bindings.
+- **Commands.** `apps/cli/project_reports.py bindings check --file F` (validate and print the diff as counts and project numbers, no write) and `bindings apply --file F --reason CODE` (whole file, one transaction). **As built:** there is no `--reason`; each revision records the reason its change kind names (section 17, drift 7). There is no client capability for bindings.
 - **Validation, fail-closed.** `apply` refuses the whole file, writing nothing, when any of these holds:
   1. a `project_id` does not exist for the Principal, or is not a Project identifier;
   2. `project_number` differs from that Project's own `project_number` (or the Project has none);
@@ -268,7 +269,7 @@ Rules:
   5. a folder is absolute, contains `..`, or is not inside the workspace's PULSE export area.
 - **Unmapped folders.** A folder holding CSV files with no `active` binding is **unbound**: its files are never ingested; each run counts them (`source_unbound`) and `bindings check` lists them by relative path. Retiring a binding stops ingestion of new snapshots and keeps existing rows.
 - **Run-time cross-check.** At ingest, if a budget code or commitment number's project-number prefix disagrees with the bound Project's number, the snapshot is quarantined (`binding_project_number_mismatch`).
-- **Audit.** Every apply writes 1 revision per changed binding (with `recorded_by`, `reason_code`, the file's SHA-256) and 1 `audit_events` row with codes and counts. Revisions are append-only; a correction is a new revision.
+- **Audit.** Every apply writes 1 revision per changed binding (with `recorded_by`, `reason_code`, the file's SHA-256) and 1 `audit_events` row with codes and counts. **As built:** no `audit_events` row; the revisions are the audit (ruling D6; section 17, drift 7). Revisions are append-only; a correction is a new revision.
 - **Tests** use synthetic folders, synthetic project numbers and synthetic `prj_` identifiers only.
 
 ### 6.5 Code versions
@@ -341,6 +342,7 @@ Cursors are opaque, grant-bound and keyed on a total order (`publication_date_la
 
 ## 11. Worker/NAS changes
 
+- **As built (section 17, drift 19):** a separate lifecycle instance and its own cycles step `project_reports_ingest`, with `MY_PA_PROJECT_REPORTS_INGEST_ENABLED`, `MY_PA_PROJECT_REPORTS_INGEST_POLL_SECONDS` and `PROJECT_REPORTS_POLL_LOCK_KEY`; the runbook is [`ops/runbooks/project-reports-ingestion.md`](../../ops/runbooks/project-reports-ingestion.md).
 - **No new process, plane, container, mount or cron.** The PULSE consumer runs in the lifecycle poll step on the cycles plane (`apps/worker.py run --plane cycles`, contract section 19), behind its own switch `MY_PA_PROJECT_REPORTS_INGEST_ENABLED` (default off) and its own advisory lock key, interval default 15 minutes.
 - **Reads** go through the files workspace store's read path (list, stat, streamed read) under the Manager ruling R1 (contract section 21), subject to the same ADR-019 decision 7 preflight WP3 runs; PULSE adds no source root.
 - **Environment.** 2 new settings in the operator's env file at deployment; no compose change is expected (the worker already composes the workspace read for communications after WP3). If WP3's preflight requires a compose change, PULSE inherits it.
@@ -408,7 +410,7 @@ One work package at a time (`AGENTS.md` section 8.3). Communications-only must w
 
 ### 14.3 ADR
 
-PULSE needs a decision record before WP3P merges: a new ADR (next free number after ADR-022; ADR-020 is taken by PR #368 and the number between by PR #370) or an ADR-022 amendment, recording sections 1.3, 1.4, 6.4 and 7. Operator ratification is required for it, as it was for ADR-022 (accepted under operator delegation 2026-11-22, R-OP-1).
+PULSE needs a decision record before WP3P merges: a new ADR (next free number after ADR-022; ADR-020 is taken by PR #368 and the number between by PR #370) or an ADR-022 amendment, recording sections 1.3, 1.4, 6.4 and 7. **Done:** [ADR-024](../decisions/ADR-024-project-report-source-evidence.md), accepted under operator delegation 2026-11-22, effective on the WP3P merge (ADR-023 was taken by the P6 XER import). Operator ratification is required for it, as it was for ADR-022 (accepted under operator delegation 2026-11-22, R-OP-1).
 
 ## 15. Acceptance criteria
 
@@ -463,3 +465,39 @@ Manager-level decision (not operator): section 7.1's money reuse. Decided by Man
 | Only 1 publication exists | longitudinal behaviour validated synthetically; first real second-generation export is re-checked by the Manager's aggregate run |
 | Storage growth from raw rows | about 360 KB for 20 files; append-only rows; retention is a later operator decision |
 | Over-broad trigram text search over minutes | bounded text length, per-row text caps, no FTS document in v1 |
+
+## 17. As built (WP3P, 2026-11-24)
+
+WP3P was built on branch `feat/pulse-reports`, stacked on WP3b, in slices S1–S6 under the Manager rulings D1–D19 of 2026-11-24 (made on the WP3P investigation; they override this plan where they differ). The decision record is [ADR-024](../decisions/ADR-024-project-report-source-evidence.md) and the operator procedure is [`ops/runbooks/project-reports-ingestion.md`](../../ops/runbooks/project-reports-ingestion.md). This section supersedes the passages of sections 2–14 named below; the rest of the plan stands as written.
+
+| # | Plan said | As built |
+| --- | --- | --- |
+| 1 | basis `f586b6c9`, the migration "on whichever head is current" | 1 additive revision `0d4e247d03cb` on `61fafdfd2986` (WP3b); no test spells the Alembic head (the pins accessors); pins are regenerated at the main merge |
+| 2 | 14.3: "next free number after ADR-022" | ADR-023 is the P6 XER import; PULSE is ADR-024, which landed with its index row and its first citations in 1 commit |
+| 3 | 5.1 `source_id` | `ingest_source_id` everywhere |
+| 4 | 5.1 index on `project_report_snapshots (…, first_seen_at DESC)` | `first_seen_at` is the lifecycle's; reads join `ingest_snapshots` (about 20 files) |
+| 5 | 4.5 `oversize` rejection | no such code: an oversized file (over 16 MiB) is the lifecycle's `skipped_too_large`, with no row; rejection codes are `not_utf8`, `malformed_csv`, `invalid_header`, `nul_byte` |
+| 6 | 4.5 and 14.2 item 3: a lifecycle `quarantined` snapshot | consumer-level quarantine (D3): an `ingested` snapshot whose current derivation is `quarantined` (`unknown_header_signature`, `malformed_ratio_exceeded`, `binding_project_number_mismatch`), every raw row kept |
+| 7 | 6.4 1 `audit_events` row per apply; `--reason CODE` | no audit row (D6): the append-only binding revisions are the audit (`recorded_by = operator_cli`); no `--reason` argument, each revision records the reason its change kind names (`initial`, `add`, `correction`, `filter_update`, `retire`) |
+| 8 | 6.2 a filter definition is an audited operator CLI action | an optional `reports[{slug, filter}]` declaration in the bindings file (D8, R-OP-5 OQ-01), applying to versions first seen at or after it |
+| 9 | OQ-02, OQ-03, OQ-06 defaults | unchanged (R-OP-5) |
+| 10 | OQ-04: no Program-level answer | per-Project by default; every typed row carries `project_id`, so a Program rollup is possible on a verified relationship (WP4P) |
+| 11 | OQ-05: no grant | `project_reports.*` grants to the operator profile at activation (R-OP-2, R-OP-3); WP4P |
+| 12 | OQ-07: `not_reportable`, picked up only by an operator rebuild | an unknown signature quarantines with rows kept and is re-derived automatically by the sweep once its adapter ships (D1, D9); the operator `rederive` remains |
+| 13 | 6.4 a run-time cross-check mismatch quarantines the snapshot | a mismatch quarantines the derivation (`binding_project_number_mismatch`, D11); a binding correction re-derives it automatically |
+| 14 | 6.4 rule 5 "inside the workspace's PULSE export area" | the bindings file declares `export_root`; each folder must sit strictly inside it (`folder_outside_export_root`) and exist (`folder_not_found`, D19) |
+| 15 | 5.2 mutable `latest_snapshot_id`, `latest_status_class` | none (D10): "current" is the derivation nothing supersedes, read through the view `project_report_current_derivations`; derivation and binding-revision chains are append-only, linear and acyclic |
+| 16 | 2: modules `domain/project_reports/*` | as planned; the lifecycle neutrality guard was widened to the project-reports modules |
+| 17 | 9: `project_reports.*` | no `Capability`, `Purpose`, `IdKind` or table name carries `pulse` or `procore` (guard `tests/architecture/test_project_reports_scope.py`); `continuity.pulse` already exists |
+| 18 | 9: `record_history` | a WP4P naming question, unchanged here |
+| 19 | 2, 11: `MY_PA_PROJECT_REPORTS_ENABLED` and `…_INGEST_ENABLED` in WP3P; the consumer joins the comms poll step | WP3P adds only `MY_PA_PROJECT_REPORTS_INGEST_ENABLED` (default off) and `MY_PA_PROJECT_REPORTS_INGEST_POLL_SECONDS` (900, 60–86,400); the read switch is WP4P's. A separate `IngestionLifecycle` instance runs as its own cycles step `project_reports_ingest` under `PROJECT_REPORTS_POLL_LOCK_KEY` (D5), then the re-derivation sweep; the cycles plane has 3 switches, any 1 of which starts it |
+| 20 | 12.3: 1 aggregate CLI over files and an isolated database | 2: the file-level `infrastructure/project_reports/aggregate_cli.py` and the operator command's DB `aggregate`, under the same keys, each with `--expect` against `tests/fixtures/project_reports/expected/evidence_aggregate_v1.json` (D14) |
+| 21 | 5: "schema placement follows WP3" | `knowledge.project_report_*` |
+| 22 | 3: 2 new `IdKind` prefixes | 3: `prbnd`, `prrec`, `prdrv` |
+| 23 | 7.1: amounts `NUMERIC(20,4)`, ADR-018 guard unchanged | as planned, and ADR-024 decision 2 records that PULSE money is source evidence, not the ADR-018 controlled financial source; no financial value is written to any product-owned record (D13) |
+| 24 | contract section 1.2 bullet list | PULSE follows the contract's "as built" block, which section 1.2 now cites for PULSE |
+| 25 | 12.2: no PULSE module imports a communications module or the reverse | as planned; composition is `bootstrap/project_reports.py`, separate from the communications bootstrap |
+
+**Also as built.** `bindings apply` admits, binds and enables in 1 transaction under the poll lock (`IngestionLifecycle.admit_within`, D7); a folder omitted from a later file is retired (source disabled, rows kept). `run-once` and `backfill` refuse `source_unbound` up front, writing nothing, when the source has no active binding (D12 and the Manager ruling on S5); the handler's in-transaction `source_unbound` stays as defence in depth. Row roles include `grouping_only` per level (evidence rule 7), so a level-1 header with no line beneath it is `grouping_only`, not a group header. Buyout's line kinds treat a vendor beside only the never-loaded original-budget cell as `vendor_only`.
+
+**Manager real-data result (counts only, 2026-11-24, scratch database at `013b3bcb1`).** `bindings apply` bound 3 sources; the backfill wrote 20 snapshots, 0 failed, 0 quarantined; the project-number check matched 3 and the cross-report check matched 1; the DB `aggregate --expect evidence_aggregate_v1.json` matched 340 of 340 (exit 0); a rerun was idempotent (20 already known). The earlier file-level run (S2) matched 333 of 340, then 340 of 340 after the 2 corrections noted in the evidence (the vendor-only rule; 96 grouping-only buyout level-1 headers the inventory had counted as headers against its own rule 7). PULSE-AC-17 is met on that run.

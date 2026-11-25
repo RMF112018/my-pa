@@ -1,0 +1,7 @@
+Observation > Assignee Company (Vendor) Name,Observation > Status,Observation > Count,Observation > Date Created,Observation > Number,Observation > Title,Observation > Type,Observation > Description
+Synthetic Vendor A,,2,,,,,
+,Open,2,,,,,
+,,1,2/1/2026,101,Synthetic observation,Quality,"Synthetic text
+with a CRLF"
+,,1,2/2/2026,102,Synthetic observation,Safety,Synthetic text
+Grand Totals,,2,,,,,

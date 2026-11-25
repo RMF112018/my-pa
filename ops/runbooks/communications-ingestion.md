@@ -35,7 +35,7 @@ workspace. my-pa **reads** them; it never writes, renames or trashes them.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `MY_PA_COMMUNICATIONS_INGEST_ENABLED` | `false` | Off: the cycles plane runs no ingestion poll, and so no scheduled meeting sync staging or apply (section 11.8). With it and `MY_PA_CYCLE_SCHEDULER_ENABLED` both off, the plane exits 2 (`plane cycles disabled`). |
+| `MY_PA_COMMUNICATIONS_INGEST_ENABLED` | `false` | Off: the cycles plane runs no ingestion poll, and so no scheduled meeting sync staging or apply (section 11.8). With it, `MY_PA_CYCLE_SCHEDULER_ENABLED` and `MY_PA_PROJECT_REPORTS_INGEST_ENABLED` all off, the plane exits 2 (`plane cycles disabled`). |
 | `MY_PA_COMMUNICATIONS_INGEST_POLL_SECONDS` | `900` | The poll interval, 60 to 86,400 s. |
 | `MY_PA_FILES_WORKSPACES` | unset | Set by the overlay to `mcp=/srv/my-pa/workspaces/mcp;mode=read_only`. |
 
@@ -227,7 +227,7 @@ applier (section 11), which writes nothing to Meetings until the reconciliation 
 - **Stop the poll.** Comment the switch out again and recreate the service, or `disable` each
   source. For a communications source `enable`/`disable` govern only the scheduled poll; a
   disabled `meeting_sync_v1` source also has its staged publications held from Meetings
-  (section 11.8). With the daily cycle also off the plane exits 2.
+  (section 11.8). With the daily cycle and the project-reports poll also off the plane exits 2.
 - **Rows stay.** Nothing here deletes a snapshot, run or communication row, and the revision's
   downgrade refuses while rows exist.
 

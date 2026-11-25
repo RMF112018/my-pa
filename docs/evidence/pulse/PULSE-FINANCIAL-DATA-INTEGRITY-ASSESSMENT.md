@@ -18,7 +18,7 @@ No `float` is used anywhere: binary floating point cannot represent cent values 
 
 Group headers carry subtotals and `Grand Totals` carries the report total (decimal checks, [grain analysis](PULSE-REPORT-GRAIN-AND-GROUPING-ANALYSIS.md) section 5):
 
-- buyout: 143 of 143 non-empty column-groups match (782 both-empty);
+- buyout: 143 of 143 non-empty column-groups match (782 both-empty; **Manager correction 2026-11-24:** 96 of the 185 level-1 headers have no line beneath them and are grouping-only under the grain analysis rule 7, so they are not reconciled and the code asserts 302 both-empty, 89 × 5 − 143; the 143 matches are unchanged);
 - budget changes: 9 of 9 groups match;
 - change-order reconciliation: 3 of 3 groups match on both amount columns;
 - every `Grand Totals` equals the sum of its first-level group headers.

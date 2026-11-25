@@ -167,6 +167,11 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # `_bound`, and the publication-to-snapshot join
         # `matching_partition_criterion`.
         "infrastructure/persistence/meeting_sync.py",
+        # Project reports WP3P-S3's raw-export, derivation and binding rows, in
+        # the same shape: every SELECT and UPDATE composes `_mine` (the
+        # current-derivations view included), every INSERT (the get-or-create
+        # record included) `_bound`. No join, no hand-written comparison.
+        "infrastructure/persistence/project_reports.py",
         # Record lineage S1's Issue plane, in the same shape: every SELECT and
         # UPDATE composes `_mine` or `principal_scoped`, every INSERT `_bound`,
         # and every correlated predicate `matching_partition_criterion`.
@@ -613,6 +618,12 @@ PER_MODULE_ONLY: Final = {
         "`partition_criterion`, every INSERT (the ON CONFLICT review mark included) "
         "`_bound` over `principal_bound_values`, the publication-to-snapshot join "
         "`matching_partition_criterion`; not yet in a dedicated statement-level scanner."
+    ),
+    "infrastructure/persistence/project_reports.py": (
+        "project reports WP3P-S3: every SELECT/UPDATE composes `_mine` over "
+        "`partition_criterion` (the current-derivations view included), every INSERT "
+        "(the ON CONFLICT record included) `_bound` over `principal_bound_values`; "
+        "not yet in a dedicated statement-level scanner."
     ),
     "infrastructure/persistence/issue_handoffs.py": (
         "record lineage S2: every SELECT composes `_mine` over `partition_criterion`, "

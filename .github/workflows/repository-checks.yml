@@ -606,7 +606,9 @@ jobs:
     # selection is FAST's, so a database-marked test in a listed module does
     # not run here; the static sweep found no database-only documentation
     # reader. Added since: `test_adr_numbers_are_unique_and_indexed.py`
-    # (reads `docs/decisions/` and every `docs/**/*.md`).
+    # (reads `docs/decisions/` and every `docs/**/*.md`), and
+    # `test_project_reports_fixtures_are_synthetic.py` and
+    # `test_project_reports_aggregate_cli.py` (read `docs/evidence/pulse/`).
     needs:
       - classify
     if: github.event_name == 'pull_request' && needs.classify.result == 'success' && needs.classify.outputs.docs_only == 'true'
@@ -676,6 +678,7 @@ jobs:
             tests/architecture/test_open_decision_counts.py \
             tests/architecture/test_pins_are_current.py \
             tests/architecture/test_platform_apple_mechanisms.py \
+            tests/architecture/test_project_reports_fixtures_are_synthetic.py \
             tests/architecture/test_readme_state_claims.py \
             tests/architecture/test_record_event_flush_discipline.py \
             tests/architecture/test_record_events_are_never_rewritten.py \
@@ -701,6 +704,7 @@ jobs:
             tests/unit/test_frontend_protection_ledger.py \
             tests/unit/test_goodnotes_rollout.py \
             tests/unit/test_goodnotes_tbr_preservation.py \
+            tests/unit/test_project_reports_aggregate_cli.py \
             tests/unit/test_sdcr_placement_gate.py
 
   validate:

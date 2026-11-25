@@ -165,7 +165,7 @@ def test_the_revision_is_directly_on_the_ingestion_revision_on_the_one_chain() -
     heads = script.get_heads()
     assert len(heads) == 1
     # This revision is the head or an ancestor of it; the head itself is not named.
-    assert REVISION in {revision.revision for revision in script.walk_revisions(heads[0])}
+    assert REVISION in {revision.revision for revision in script.walk_revisions("base", heads[0])}
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -357,8 +357,13 @@ def test_the_offline_downgrade_refuses_first_and_unwinds_everything(
 
 @pytest.fixture
 def engine(cloned_database_url: str) -> Iterator[Engine]:
-    """A current-head clone, which carries this revision."""
+    """A current-head clone, downgraded to this revision.
+
+    The project reports WP3P revision is additive on this one; it is unwound
+    (empty) so every case here measures this revision's own catalog and guards.
+    """
     built = create_database_engine(cloned_database_url)
+    command.downgrade(_config(), REVISION)
     try:
         yield built
     finally:

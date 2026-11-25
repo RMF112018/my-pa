@@ -429,6 +429,22 @@ class SqlIngestionRepository(IngestionRepository):
         )
         return tuple(_to_path(row) for row in rows)
 
+    def list_paths_of_snapshot(
+        self, principal_id: str, snapshot_id: str
+    ) -> tuple[IngestSnapshotPathRecord, ...]:
+        rows = self._connection.execute(
+            select(*_PATH_COLUMNS)
+            .where(
+                _mine(ingest_snapshot_paths, principal_id),
+                ingest_snapshot_paths.c.snapshot_id == snapshot_id,
+            )
+            .order_by(
+                ingest_snapshot_paths.c.first_seen_at,
+                ingest_snapshot_paths.c.relative_path,
+            )
+        )
+        return tuple(_to_path(row) for row in rows)
+
     def find_snapshot_path(
         self, principal_id: str, snapshot_id: str, relative_path: str
     ) -> IngestSnapshotPathRecord | None:

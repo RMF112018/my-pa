@@ -1,0 +1,8 @@
+Budget Change > Number,Budget Change > Date Created,Budget Change > Title,Budget Change > Status,Budget Code > Budget Code,Budget Code > Budget Code Description,Budget Change Adjustment Line Item > Amount,Budget Change Adjustment Line Item > Description
+1,,,,,,$0.00,
+,5/1/2026,Synthetic transfer,Approved,SYN-0001.01-100,Synthetic code,"$1,100.00",Synthetic move
+,5/1/2026,Synthetic transfer,Approved,SYN-0001.02-200,Synthetic code,"($1,100.00)",Synthetic move
+2,,,,,,$0.00,
+,5/2/2026,Synthetic transfer,Pending - Review,SYN-0001.01-100,Synthetic code,$50.25,Synthetic move
+,5/2/2026,Synthetic transfer,Pending - Review,SYN-0001.03-300,Synthetic code,($50.25),Synthetic move
+Grand Totals,,,,,,$0.00,

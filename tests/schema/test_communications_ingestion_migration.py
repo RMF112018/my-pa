@@ -86,6 +86,20 @@ LATER_TRUNCATE_GUARDED: Final = (
     "meeting_provider_bindings",
     "meeting_sync_publications",
     "meeting_sync_events",
+    # Project reports WP3P (`0d4e247d03cb`): every table reaches the lifecycle
+    # tables through a composite key, directly or through its parent.
+    "project_report_binding_revisions",
+    "project_report_filter_declarations",
+    "project_report_bindings",
+    "project_report_snapshots",
+    "project_report_rows",
+    "project_report_derivations",
+    "project_report_row_roles",
+    "project_report_records",
+    "project_report_lines",
+    "project_report_line_values",
+    "project_report_stated_totals",
+    "project_report_cross_checks",
 )
 INDEXES: Final = frozenset(
     {

@@ -18,7 +18,7 @@ import json
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Final
 
@@ -43,6 +43,7 @@ from my_pa.domain.schedule import (
     schedule_import_request_digest,
 )
 from my_pa.domain.schedule.p6.frame import frame_object
+from my_pa.domain.schedule.p6.model import P6Issue, P6IssueCode, P6Severity
 from my_pa.domain.schedule.p6_import import P6RenumberCandidate, match_p6_activities
 from my_pa.infrastructure.file_workspace.store import FilesystemFileWorkspaceStore
 from my_pa.infrastructure.jobs import schedule_p6 as p6_handler
@@ -740,6 +741,38 @@ def test_unknown_names_are_stored_only_when_they_match_the_pattern(w: World) -> 
     rows = _snapshot(w.engine)
     stored = repr({k: v for k, v in rows.items() if k != "schedule_p6_snapshots"})
     assert "9synbad" not in stored
+
+
+def test_the_worker_stores_a_name_outside_the_pattern_as_null(
+    w: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Defence in depth behind the parser's own `safe_name`: the worker re-checks 5.2."""
+    original = p6_handler._parse_p6
+
+    def with_bad_names(data: bytes, capture: object, wall: float) -> IsolatedP6Parse:
+        parsed = original(data, capture, wall)  # type: ignore[arg-type]
+        assert isinstance(parsed, ParsedP6Result)
+        planted = P6Issue(
+            P6IssueCode.UNKNOWN_FIELD,
+            P6Severity.WARNING,
+            table="9synbadtable",
+            line=1,
+            field="9synbadfield",
+        )
+        result = replace(parsed.result, issues=(*parsed.result.issues, planted))
+        return ParsedP6Result(result=result, frame_sha256=parsed.frame_sha256)
+
+    monkeypatch.setattr(p6_handler, "_parse_p6", with_bad_names)
+    answer = _import(w, _full())
+    _work(w.engine)
+    assert _status(w.engine, answer["publication_id"]) == "complete"
+    stored = _all(
+        w.engine,
+        "SELECT source_table, field FROM knowledge.schedule_import_issues "
+        "WHERE publication_id = :p AND code = 'p6_unknown_field' AND record_line = 1",
+        p=answer["publication_id"],
+    )
+    assert [tuple(row) for row in stored] == [(None, None)]
 
 
 def test_the_issue_list_is_capped_at_ten_thousand(

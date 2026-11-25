@@ -143,14 +143,14 @@
     "revision_files": 135
   },
   "census": {
-    "architecture": 10142,
-    "database": 7349,
+    "architecture": 10198,
+    "database": 7374,
     "evaluation": 2,
-    "fast_collected": 52913,
+    "fast_collected": 53118,
     "fast_skipped": 138,
-    "mypy_files": 786,
-    "src_modules": 587,
-    "test_modules": 1070
+    "mypy_files": 791,
+    "src_modules": 592,
+    "test_modules": 1073
   },
   "chatllm": {
     "classes": {
@@ -170,7 +170,7 @@
     "chatllm_policy_entries": 301,
     "id_kind": 197,
     "purpose": 70,
-    "safe_detail": 442
+    "safe_detail": 446
   },
   "vocabulary": {
     "capability": [
@@ -748,6 +748,7 @@
       "task_read"
     ],
     "safe_detail": [
+      "accept_project_identity_change",
       "acceptance_bases",
       "action",
       "active_only",
@@ -922,6 +923,7 @@
       "expected_review_version",
       "expected_revision",
       "expected_scope_version",
+      "expected_sha256",
       "expected_version",
       "expected_version_number",
       "external_change_detected",
@@ -1121,6 +1123,7 @@
       "selector",
       "sequence",
       "series_auto",
+      "series_format",
       "series_ical_uid",
       "series_id",
       "series_name",
@@ -1132,6 +1135,7 @@
       "size",
       "snippet_words",
       "source_file",
+      "source_format",
       "source_id",
       "source_lane",
       "source_object_id",

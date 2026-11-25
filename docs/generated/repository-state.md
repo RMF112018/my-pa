@@ -31,7 +31,7 @@ plans link here instead of restating them.
 | Capabilities | 301 |
 | Purposes | 70 |
 | IdKinds | 197 |
-| SafeDetails | 442 |
+| SafeDetails | 446 |
 | ChatLLM data profile version | `chatllm-data-v16` |
 | ChatLLM policy entries | 301 |
 | ChatLLM `CHATLLM_COMPATIBILITY_ONLY` entries | 2 |
@@ -57,10 +57,10 @@ measurable at collection and is carried (`regen --measure --fast-skipped N`).
 
 | Tier or corpus | Selection | Collected | A green execution requires |
 | --- | --- | --- | --- |
-| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 52,913 | 52,775 passed, 138 skipped |
-| Architecture | `pytest tests/architecture` | 10,142 | 10,142 passed, 0 skipped |
-| Database | `pytest -m "database or recovery or e2e"` | 7,349 | 7,349 passed, 0 skipped |
+| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 53,118 | 52,980 passed, 138 skipped |
+| Architecture | `pytest tests/architecture` | 10,198 | 10,198 passed, 0 skipped |
+| Database | `pytest -m "database or recovery or e2e"` | 7,374 | 7,374 passed, 0 skipped |
 | Evaluation | `pytest -m "evaluation"` | 2 | 2 passed |
-| mypy corpus | `mypy` (`[tool.mypy] files`) | 786 files | no issues found |
-| Source modules | `find src/my_pa -name "*.py"` | 587 |  |
-| Test modules | `find tests -name "test_*.py"` | 1,070 |  |
+| mypy corpus | `mypy` (`[tool.mypy] files`) | 791 files | no issues found |
+| Source modules | `find src/my_pa -name "*.py"` | 592 |  |
+| Test modules | `find tests -name "test_*.py"` | 1,073 |  |

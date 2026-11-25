@@ -1602,6 +1602,12 @@ class ProjectReportReads:
             old = _measure(reads, principal_id, spec, before, mismatched, cache).answer
             new = _measure(reads, principal_id, spec, after, mismatched, cache).answer
             money = _is_money(spec)
+            # Ruling R1-09: an amount is never set against one in another currency.
+            mixed = (
+                frozenset({NotReportableReason.CURRENCY_MIXED})
+                if money and before.currency != after.currency
+                else frozenset()
+            )
             pairs: list[tuple[StatusClass | None, MeasureValue | None, MeasureValue | None]] = []
             if old.total is not None or new.total is not None:
                 pairs.append((None, old.total, new.total))
@@ -1612,6 +1618,7 @@ class ProjectReportReads:
                 reasons = frozenset(
                     (first.reasons if first is not None else frozenset())
                     | (second.reasons if second is not None else frozenset())
+                    | mixed
                 )
                 delta = None
                 if (

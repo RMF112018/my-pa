@@ -583,6 +583,32 @@ def case_a_quarantined_side_is_never_compared(scene: ReadsScene) -> None:
     assert readable["not_observed"] == []
 
 
+def case_a_money_delta_across_two_currencies_is_currency_mixed(scene: ReadsScene) -> None:
+    """Ruling R1-09: a delta whose two sides are in different currencies gives no value."""
+    _reconciliation_project(scene, SOLO_PROJECT)
+    reads = service(scene)
+    data = _signature_bytes("reconciliation").replace(b"Synthetic line,$10", b"Synthetic void,$10")
+    scene.ingest(SOLO_PROJECT[0], "20261119-qxsolo.csv", data)
+    series = _series_of(scene, "qxsolo", SOLO_PROJECT[1])
+    same = compare_payload(reads.compare(scene.principal, CompareRequest(series)))
+    assert [v["currency"] for v in same["versions"]] == ["USD", "USD"]
+    money = [d for d in same["measures_delta"] if d["measure"] == PRIME]
+    assert money and all(d["state"] == "reportable" for d in money)
+    assert {d["delta"]["currency"] for d in money} == {"USD"}
+    # A correction of the binding's currency before the next version is derived.
+    scene.correct(SOLO_PROJECT[0], currency="CAD")
+    later = data.replace(b"Synthetic void,$10", b"Synthetic voided,$10")
+    assert later != data
+    scene.ingest(SOLO_PROJECT[0], "20261120-qxsolo.csv", later)
+    mixed = compare_payload(reads.compare(scene.principal, CompareRequest(series)))
+    assert [v["currency"] for v in mixed["versions"]] == ["USD", "CAD"]
+    deltas = [d for d in mixed["measures_delta"] if d["measure"] in (PRIME, COMMITMENT)]
+    assert len(deltas) == 8
+    for delta in deltas:
+        assert (delta["state"], delta["reasons"]) == ("not_reportable", ["currency_mixed"])
+        assert "delta" not in delta
+
+
 def case_not_found_is_indistinguishable_for_foreign_and_unknown(scene: ReadsScene) -> None:
     reads = service(scene)
     foreign = _refusal(lambda: reads.query(OTHER_PRINCIPAL, _rfi_query(scene)))
@@ -888,6 +914,7 @@ CASES: Final = (
     case_an_absent_record_is_not_observed_never_closed,
     case_a_quarantined_latest_version_is_latest_unreadable,
     case_a_quarantined_side_is_never_compared,
+    case_a_money_delta_across_two_currencies_is_currency_mixed,
     case_not_found_is_indistinguishable_for_foreign_and_unknown,
     case_the_facade_answers_absent_unbound_and_quarantined_projects,
     case_coverage_carries_per_version_filter_semantics,

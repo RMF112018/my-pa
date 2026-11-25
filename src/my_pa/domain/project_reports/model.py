@@ -289,6 +289,9 @@ class NotReportableReason(StrEnum):
     #: WP3P-S1 addition (for a ruling): a detail cell of the measured column
     #: failed its type, so the sum would silently omit it.
     TYPE_ERROR_PRESENT = "type_error_present"
+    #: Answer-only (WP4P-R1 ruling R1-09): the two sides of a compare delta are
+    #: in different currencies, so no delta is given.
+    CURRENCY_MIXED = "currency_mixed"
 
 
 class ReportQualifier(StrEnum):

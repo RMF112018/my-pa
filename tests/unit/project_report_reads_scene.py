@@ -232,12 +232,17 @@ class ReadsScene:
             )
         return declared_at
 
-    def correct(self, key: str) -> None:
-        """A binding correction (same Project and number), declarations carried over."""
+    def correct(self, key: str, *, currency: str | None = None) -> None:
+        """A binding correction (same Project and number), declarations carried over.
+
+        `currency` corrects the binding's currency too; versions are re-derived
+        under the new revision only by a later sweep (`rederive`).
+        """
         prior = self._revision(key)
         revision = dataclasses.replace(
             prior,
             binding_revision_id=issue_identifier(IdKind.PROJECT_REPORT_BINDING_REVISION),
+            currency=prior.currency if currency is None else currency,
             recorded_at=self.clock(),
             change_set_sha256="1" * 64,
             reason_code=BindingReason.CORRECTION,

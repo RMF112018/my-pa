@@ -134,7 +134,10 @@ __all__ = [
     "CommunicationsEvidenceHandler",
     "CommunicationsTotalsError",
     "ParsedPublication",
+    "communications_source_ids",
+    "coverage_facts",
     "message_projection",
+    "window_fact",
 ]
 
 #: Producer source keys stored by name as `key_kind`; any other key is `other`.
@@ -677,7 +680,8 @@ class CommunicationsEvidenceHandler(IngestConsumerHandler):
         return IngestApplied(record_counts=dict(sorted(counts.items())))
 
 
-def _window_fact(window: IngestCoverageWindowRecord) -> WindowFact:
+def window_fact(window: IngestCoverageWindowRecord) -> WindowFact:
+    """One stored coverage window as the pure coverage read takes it."""
     return WindowFact(
         start=window.start_utc,
         end=window.end_utc,
@@ -697,6 +701,26 @@ def _window_fact(window: IngestCoverageWindowRecord) -> WindowFact:
     )
 
 
+def communications_source_ids(unit: UnitOfWork, principal_id: str) -> tuple[str, ...]:
+    """The Principal's `communications_evidence_v2` sources, enabled or not, sorted."""
+    return tuple(
+        source.ingest_source_id
+        for source in unit.ingestion.list_sources(principal_id)
+        if source.consumer is IngestConsumer.COMMUNICATIONS_EVIDENCE_V2
+    )
+
+
+def coverage_facts(
+    unit: UnitOfWork, principal_id: str, ingest_source_ids: Sequence[str]
+) -> tuple[WindowFact, ...]:
+    """The stored windows of the given sources, inside the caller's unit of work (WP4-S4)."""
+    return tuple(
+        window_fact(window)
+        for source_id in sorted(set(ingest_source_ids))
+        for window in unit.ingestion.list_coverage_windows(principal_id, source_id)
+    )
+
+
 class CommunicationsCoverageReader:
     """The coverage read over one source's stored windows (contract sections 9 and 19)."""
 
@@ -711,8 +735,7 @@ class CommunicationsCoverageReader:
 
     def _facts(self, principal_id: str, ingest_source_id: str) -> tuple[WindowFact, ...]:
         with self._unit_of_work() as unit:
-            windows = unit.ingestion.list_coverage_windows(principal_id, ingest_source_id)
-        return tuple(_window_fact(window) for window in windows)
+            return coverage_facts(unit, principal_id, [ingest_source_id])
 
     def summary(self, principal_id: str, ingest_source_id: str) -> CoverageSummary:
         """Merged intervals, gaps, lanes, freshness and snapshot counts."""

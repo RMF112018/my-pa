@@ -106,6 +106,9 @@ IMPORTERS = {
     # WP4-S3: the rederive re-derives stored messages to the current search
     # text and identifier versions (rulings D2, D3).
     "application/communications_rederive.py",
+    # WP4-S4: the communications reads normalize identifier queries, parse the
+    # quoted phrases, compute coverage and encode the grant-bound cursor.
+    "application/communications_search.py",
 }
 
 

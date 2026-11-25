@@ -30,15 +30,19 @@ address, a provider id, an identifier value or a row id.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timedelta
 from typing import Any, Final
 
 from sqlalchemy import (
+    BigInteger,
     ColumnElement,
     ScalarSelect,
     Select,
     Table,
+    Text,
     and_,
     case,
+    exists,
     func,
     insert,
     literal,
@@ -46,11 +50,15 @@ from sqlalchemy import (
     not_,
     or_,
     select,
+    tuple_,
     union_all,
     update,
 )
+from sqlalchemy.dialects.postgresql import ARRAY, REGCONFIG, TSQUERY, aggregate_order_by
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Result, Row
+from sqlalchemy.sql.base import ReadOnlyColumnCollection
+from sqlalchemy.sql.selectable import Subquery
 
 from my_pa.contracts.ports import (
     CommunicationIdentifierRecord,
@@ -61,6 +69,9 @@ from my_pa.contracts.ports import (
     CommunicationProjection,
     CommunicationQuarantineRecord,
     CommunicationRederiveDueRecord,
+    CommunicationSearchQuery,
+    CommunicationSearchQueryShape,
+    CommunicationSearchRow,
     CommunicationSnapshotTally,
     CommunicationsRepository,
     RepositoryFailureError,
@@ -701,6 +712,129 @@ class SqlCommunicationsRepository(CommunicationsRepository):
             ).scalar_one()
         )
 
+    # --- the WP4 reads (contract sections 13, 14 and 16; WP4-S4) ---------------
+
+    def search_query_shape(self, query: str) -> CommunicationSearchQueryShape:
+        english, simple = self._connection.execute(
+            select(
+                func.numnode(_tsquery("english", query)),
+                func.numnode(_tsquery("simple", query)),
+            )
+        ).one()
+        return CommunicationSearchQueryShape(english_nodes=english, simple_nodes=simple)
+
+    def search_messages(
+        self, principal_id: str, query: CommunicationSearchQuery
+    ) -> tuple[CommunicationSearchRow, ...]:
+        return tuple(
+            CommunicationSearchRow(
+                message_id=row.message_id,
+                conversation_id=row.conversation_id,
+                message_time=row.message_time,
+                subject=row.subject,
+                sender_address=row.sender_address,
+                has_attachments=row.has_attachments,
+                body_state=row.body_state,
+                search_text_version=row.search_text_version,
+                search_text_flags=tuple(row.search_text_flags),
+                identity_conflict=row.identity_conflict,
+                participants_reconciled=row.participants_reconciled,
+                participants_disagreed=row.participants_disagreed,
+                source_unavailable=row.source_unavailable,
+                tier=row.tier,
+                rank=row.rank,
+                overlap=row.overlap,
+                matched_identifier_kinds=tuple(row.id_kinds),
+                conversation_hits=row.conversation_hits,
+                snippet=row.snippet,
+            )
+            for row in self._connection.execute(_search_statement(principal_id, query))
+        )
+
+    def list_message_lanes(
+        self, principal_id: str, message_ids: Sequence[str]
+    ) -> Mapping[str, tuple[tuple[str, str], ...]]:
+        if not message_ids:
+            return {}
+        observations, items = communication_observations, communication_mailbox_items
+        rows = self._connection.execute(
+            select(items.c.message_id, observations.c.folder_role, observations.c.lane_verification)
+            .distinct()
+            .join(
+                items,
+                matching_partition_criterion(items, observations)
+                & (items.c.item_id == observations.c.item_id),
+            )
+            .where(_mine(observations, principal_id), items.c.message_id.in_(list(message_ids)))
+            .order_by(
+                items.c.message_id, observations.c.folder_role, observations.c.lane_verification
+            )
+        )
+        lanes: dict[str, list[tuple[str, str]]] = {}
+        for row in rows:
+            lanes.setdefault(row.message_id, []).append((row.folder_role, row.lane_verification))
+        return {message_id: tuple(found) for message_id, found in lanes.items()}
+
+    def list_messages(
+        self, principal_id: str, message_ids: Sequence[str]
+    ) -> tuple[CommunicationMessageRecord, ...]:
+        if not message_ids:
+            return ()
+        rows = self._connection.execute(
+            select(*_MESSAGE_COLUMNS).where(
+                _mine(communication_messages, principal_id),
+                communication_messages.c.message_id.in_(sorted(set(message_ids))),
+            )
+        )
+        return tuple(_to_message(row) for row in rows)
+
+    def list_conversation_page(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        *,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[CommunicationMessageRecord, ...]:
+        messages = communication_messages
+        message_id = messages.c.message_id.collate("C")
+        statement = select(*_MESSAGE_COLUMNS).where(
+            _mine(messages, principal_id), messages.c.conversation_id == conversation_id
+        )
+        if after is not None:
+            at, last = after
+            statement = statement.where(
+                or_(
+                    messages.c.message_time > at,
+                    and_(messages.c.message_time == at, message_id > last),
+                )
+            )
+        rows = self._connection.execute(
+            statement.order_by(messages.c.message_time, message_id).limit(limit)
+        )
+        return tuple(_to_message(row) for row in rows)
+
+    def count_identifier_version_pending(self, principal_id: str, version: str) -> int:
+        messages = communication_messages
+        return int(
+            self._connection.execute(
+                select(func.count()).where(
+                    _mine(messages, principal_id),
+                    messages.c.identifiers_version.is_distinct_from(version),
+                )
+            ).scalar_one()
+        )
+
+    def list_search_text_versions(self, principal_id: str) -> tuple[str, ...]:
+        messages = communication_messages
+        rows = self._connection.execute(
+            select(messages.c.search_text_version)
+            .distinct()
+            .where(_mine(messages, principal_id))
+            .order_by(messages.c.search_text_version)
+        )
+        return tuple(rows.scalars())
+
 
 def _source_snapshots(principal_id: str, ingest_source_ids: Sequence[str]) -> ScalarSelect[str]:
     """The snapshot ids of the given sources, as a scalar subquery."""
@@ -734,6 +868,279 @@ def _rederive_due(
             messages.c.text_snapshot_id.in_(_source_snapshots(principal_id, [ingest_source_id])),
         )
     return criteria
+
+
+# --- the search statement (contract sections 13 and 14; WP4 D4-final, D9, R6-R8) ------
+
+#: Quoted phrases are confirmed by exact substring over this fold of both
+#: sides: lower case, every whitespace run one space; punctuation is kept.
+_FOLD_PATTERN: Final = r"\s+"
+#: `ts_headline` options for a snippet; it runs on the returned page only.
+_HEADLINE_OPTIONS: Final = 'MaxFragments=2,MaxWords=30,MinWords=10,StartSel="",StopSel=""'
+SNIPPET_CHARACTERS: Final = 300
+_NO_TEXT_BODY_STATES: Final = ("withheld", "truncated")
+
+
+type _Columns = ReadOnlyColumnCollection[str, Any]
+
+
+def _config(name: str) -> ColumnElement[Any]:
+    return literal(name).cast(REGCONFIG)
+
+
+def _tsquery(config: str, query: str) -> ColumnElement[Any]:
+    return func.websearch_to_tsquery(_config(config), literal(query), type_=TSQUERY)
+
+
+def _fold(expression: ColumnElement[Any]) -> ColumnElement[Any]:
+    return func.regexp_replace(func.lower(expression), _FOLD_PATTERN, " ", "g")
+
+
+def _simple_document() -> ColumnElement[Any]:
+    """D4-final: the `simple` tsvector of subject and text, computed on the fly."""
+    messages = communication_messages
+    return func.to_tsvector(
+        _config("simple"),
+        func.coalesce(messages.c.subject, "") + " " + func.coalesce(messages.c.search_text, ""),
+    )
+
+
+def _integer_rank(document: ColumnElement[Any], tsquery: ColumnElement[Any]) -> ColumnElement[Any]:
+    return func.floor(func.ts_rank_cd(document, tsquery) * 1_000_000).cast(BigInteger)
+
+
+def _text_criteria(
+    query: CommunicationSearchQuery,
+) -> tuple[ColumnElement[bool], ColumnElement[Any]]:
+    """`(text_hit, rank)` for a query with searchable terms (section 14 rank)."""
+    if query.query is None:
+        raise ValueError("a text criterion needs a query")
+    messages = communication_messages
+    matches: list[ColumnElement[bool]] = []
+    ranks: list[ColumnElement[Any]] = []
+    if query.english_terms:
+        english = _tsquery("english", query.query)
+        matches.append(messages.c.search_document.bool_op("@@")(english))
+        ranks.append(_integer_rank(messages.c.search_document, english))
+    if query.text_fallback:
+        simple = _tsquery("simple", query.query)
+        matches.append(_simple_document().bool_op("@@")(simple))
+        ranks.append(_integer_rank(_simple_document(), simple))
+    haystack = _fold(
+        func.coalesce(messages.c.subject, "") + "\n" + func.coalesce(messages.c.search_text, "")
+    )
+    confirmed = [func.strpos(haystack, _fold(literal(phrase))) > 0 for phrase in query.phrases]
+    text_hit = and_(or_(*matches), *confirmed)
+    rank = ranks[0] if len(ranks) == 1 else func.greatest(*ranks)
+    return text_hit, case((text_hit, rank), else_=literal(0, BigInteger))
+
+
+def _after(columns: _Columns, after: tuple[int, int, int, datetime, str]) -> ColumnElement[bool]:
+    """Strictly after `after` in (tier ASC, rank DESC, overlap DESC, time DESC, id DESC)."""
+    tier, rank, overlap, at, message_id = after
+    return or_(
+        columns.tier > tier,
+        and_(
+            columns.tier == tier,
+            or_(
+                columns.rank < rank,
+                and_(
+                    columns.rank == rank,
+                    or_(
+                        columns.overlap < overlap,
+                        and_(
+                            columns.overlap == overlap,
+                            or_(
+                                columns.message_time < at,
+                                and_(
+                                    columns.message_time == at,
+                                    columns.message_id.collate("C") < message_id,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def _total_order(columns: _Columns) -> tuple[ColumnElement[Any], ...]:
+    """Section 14: tier, rank, participant overlap, time, then id -- a total order."""
+    return (
+        columns.tier.asc(),
+        columns.rank.desc(),
+        columns.overlap.desc(),
+        columns.message_time.desc(),
+        columns.message_id.collate("C").desc(),
+    )
+
+
+def _search_statement(principal_id: str, query: CommunicationSearchQuery) -> Select[Any]:
+    """One statement: candidates, tiers, collapse, keyset, page, snippets (module docstring)."""
+    messages = communication_messages
+    identifiers = communication_identifiers
+    participants = communication_participants
+    observations, items = communication_observations, communication_mailbox_items
+    n_ids = len(query.identifiers)
+
+    # The requested identifiers each message matched (the (principal, kind, value) index).
+    id_hit: ColumnElement[Any] = literal(0)
+    id_kinds: ColumnElement[Any] = literal([], ARRAY(Text))
+    source: Any = messages
+    if n_ids:
+        matched = (
+            select(
+                identifiers.c.message_id,
+                func.count(tuple_(identifiers.c.kind, identifiers.c.value).distinct()).label("hit"),
+                func.array_agg(
+                    aggregate_order_by(identifiers.c.kind.distinct(), identifiers.c.kind)
+                ).label("kinds"),
+            )
+            .where(
+                _mine(identifiers, principal_id),
+                identifiers.c.extractor_version == query.identifier_version,
+                tuple_(identifiers.c.kind, identifiers.c.value).in_(list(query.identifiers)),
+            )
+            .group_by(identifiers.c.message_id)
+            .subquery("matched")
+        )
+        source = messages.outerjoin(matched, matched.c.message_id == messages.c.message_id)
+        id_hit = func.coalesce(matched.c.hit, 0)
+        id_kinds = func.coalesce(matched.c.kinds, literal([], ARRAY(Text)))
+
+    # The criteria: a requested identifier, or the text; neither asked is a browse (R8).
+    text_hit: ColumnElement[bool] | None = None
+    rank: ColumnElement[Any] = literal(0, BigInteger)
+    if query.query is not None:
+        text_hit, rank = _text_criteria(query)
+    criteria: list[ColumnElement[bool]] = []
+    if n_ids and text_hit is not None:
+        criteria.append(or_(id_hit > 0, text_hit))
+    elif n_ids:
+        criteria.append(id_hit > 0)
+    elif text_hit is not None:
+        criteria.append(text_hit)
+
+    # Structured filters intersect.
+    if query.from_utc is not None:
+        criteria.append(messages.c.message_time >= query.from_utc)
+    if query.to_utc is not None:
+        criteria.append(messages.c.message_time < query.to_utc + timedelta(seconds=1))
+    if query.conversation_id is not None:
+        criteria.append(messages.c.conversation_id == query.conversation_id)
+    if query.folder_role is not None:
+        criteria.append(
+            exists(
+                select(literal(1))
+                .select_from(observations)
+                .join(
+                    items,
+                    matching_partition_criterion(items, observations)
+                    & (items.c.item_id == observations.c.item_id),
+                )
+                .where(
+                    _mine(observations, principal_id),
+                    items.c.message_id == messages.c.message_id,
+                    observations.c.folder_role == query.folder_role,
+                )
+            )
+        )
+    overlap: ColumnElement[Any] = literal(0)
+    if query.participants:
+        overlap = (
+            select(func.count(participants.c.address.distinct()))
+            .where(
+                _mine(participants, principal_id),
+                participants.c.message_id == messages.c.message_id,
+                participants.c.address.in_(list(query.participants)),
+            )
+            .scalar_subquery()
+        )
+        if query.participants_all:
+            criteria.append(overlap == len(query.participants))
+        else:
+            criteria.append(overlap >= 1)
+
+    tier: ColumnElement[Any] = literal(3)
+    if n_ids:
+        tier = case((id_hit == n_ids, 1), (id_hit > 0, 2), else_=3)
+    group = func.coalesce(messages.c.conversation_id, messages.c.message_id)
+    candidates = (
+        select(
+            messages.c.message_id,
+            messages.c.conversation_id,
+            messages.c.message_time,
+            messages.c.subject,
+            messages.c.sender_address,
+            messages.c.has_attachments,
+            messages.c.body_state,
+            messages.c.search_text_version,
+            messages.c.search_text_flags,
+            messages.c.identity_conflict,
+            messages.c.participants_reconciled,
+            messages.c.participants_disagreed,
+            messages.c.source_unavailable,
+            (text_hit if text_hit is not None else literal(False)).label("text_hit"),
+            tier.label("tier"),
+            rank.label("rank"),
+            overlap.label("overlap"),
+            id_kinds.label("id_kinds"),
+            group.label("group_key"),
+        )
+        .select_from(source)
+        .where(_mine(messages, principal_id), *criteria)
+        .subquery("candidates")
+    )
+    hits = func.count().over(partition_by=candidates.c.group_key).label("conversation_hits")
+    ranked = select(candidates, hits)
+    if query.collapse:
+        # D9: the representative is the best message of its conversation by the
+        # full total order; the keyset is applied after the collapse.
+        ranked = ranked.distinct(candidates.c.group_key).order_by(
+            candidates.c.group_key, *_total_order(candidates.c)
+        )
+    representatives = ranked.subquery("representatives")
+    page = select(representatives)
+    if query.after is not None:
+        page = page.where(_after(representatives.c, query.after))
+    page_rows = page.order_by(*_total_order(representatives.c)).limit(query.limit).subquery("page")
+    return select(page_rows, _snippet(principal_id, query, page_rows).label("snippet")).order_by(
+        *_total_order(page_rows.c)
+    )
+
+
+def _snippet(
+    principal_id: str, query: CommunicationSearchQuery, page: Subquery
+) -> ColumnElement[Any]:
+    """At most 300 characters of a page row's text; `NULL` when it has none.
+
+    A text match gets `ts_headline` (the `simple` configuration under the
+    stop-word fallback); any other row the start of its text. A withheld or
+    truncated body has no text (the table's CHECK), and is refused here too.
+    """
+    messages = communication_messages
+    text = messages.c.search_text
+    plain: ColumnElement[Any] = func.left(text, SNIPPET_CHARACTERS)
+    if query.query is not None:
+        config = "simple" if query.text_fallback else "english"
+        headline = func.left(
+            func.ts_headline(
+                _config(config), text, _tsquery(config, query.query), _HEADLINE_OPTIONS
+            ),
+            SNIPPET_CHARACTERS,
+        )
+        plain = case((page.c.text_hit, headline), else_=plain)
+    return (
+        select(
+            case(
+                (messages.c.body_state.in_(_NO_TEXT_BODY_STATES), literal(None, Text)),
+                else_=plain,
+            )
+        )
+        .where(_mine(messages, principal_id), messages.c.message_id == page.c.message_id)
+        .scalar_subquery()
+    )
 
 
 def _counts(rows: Result[Any]) -> dict[str, int]:

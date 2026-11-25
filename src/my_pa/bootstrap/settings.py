@@ -52,7 +52,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Final
+from typing import Final, Literal
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -667,6 +667,22 @@ class Settings(StrictModel):
     #: across two consecutive polls, so one is ingested 1-2 intervals after
     #: the collector finishes writing it.
     communications_ingest_poll_seconds: int = Field(default=900, ge=60, le=86_400)
+    #: Communications read switch (communications contract section 16, WP4
+    #: ruling D7), env `MY_PA_COMMUNICATIONS_ENABLED`. Default off. On, the
+    #: `communications.search`, `communications.read` and
+    #: `communications.coverage` reads are served (their MCP wiring is WP4-S5);
+    #: off, they are withheld and answer the standard disabled refusal. It
+    #: changes no row by being set.
+    communications_enabled: bool = False
+    #: The identifier extractor version the communications reads match and
+    #: normalize queries with (WP4 rulings D3, R10), env
+    #: `MY_PA_COMMUNICATIONS_IDENTIFIER_VERSION`. Default
+    #: `comms_identifiers_v2`, the version ingestion and rederive write.
+    #: `comms_identifiers_v1` is a documented rollback lever: it answers only
+    #: for messages that still carry v1 rows (nothing is pruned in WP4, ruling R4).
+    communications_identifier_version: Literal["comms_identifiers_v1", "comms_identifiers_v2"] = (
+        "comms_identifiers_v2"
+    )
     #: Project-reports ingestion poll switch (WP3P ruling D5), env
     #: `MY_PA_PROJECT_REPORTS_INGEST_ENABLED`. Default off. On, the `cycles`
     #: plane runs its own step (`project_reports_ingest`, under its own lock):

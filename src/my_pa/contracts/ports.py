@@ -470,6 +470,9 @@ __all__ = [
     "CommunicationProjection",
     "CommunicationQuarantineRecord",
     "CommunicationRederiveDueRecord",
+    "CommunicationSearchQuery",
+    "CommunicationSearchQueryShape",
+    "CommunicationSearchRow",
     "CommunicationSnapshotTally",
     "CommunicationsRepository",
     "ConstraintManagementRepository",
@@ -14716,6 +14719,67 @@ class CommunicationSnapshotTally:
     quarantined: int
 
 
+@dataclass(frozen=True, slots=True)
+class CommunicationSearchQueryShape:
+    """`numnode(websearch_to_tsquery(config, q))` for `english` and `simple` (WP4 D4-final)."""
+
+    english_nodes: int
+    simple_nodes: int
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationSearchQuery:
+    """A normalized `communications.search` request, as the SQL reads it (WP4-S4).
+
+    `query` is `None` when no text criterion applies (no query, or one with no
+    searchable terms). `english_terms` says the `english` query keeps a
+    lexeme; `text_fallback` adds the on-the-fly `simple` match and rank (ruling
+    D4-final). `to_utc` is inclusive of its whole second. `after` is the last
+    emitted `(tier, rank, overlap, message_time, message_id)`.
+    """
+
+    query: str | None
+    english_terms: bool
+    text_fallback: bool
+    phrases: tuple[str, ...]
+    identifiers: tuple[tuple[str, str], ...]
+    identifier_version: str
+    participants: tuple[str, ...]
+    participants_all: bool
+    from_utc: datetime | None
+    to_utc: datetime | None
+    folder_role: str | None
+    conversation_id: str | None
+    collapse: bool
+    after: tuple[int, int, int, datetime, str] | None
+    limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationSearchRow:
+    """One search result: the message's metadata and its section 14 key."""
+
+    message_id: str
+    conversation_id: str | None
+    message_time: datetime
+    subject: str | None
+    sender_address: str | None
+    has_attachments: bool | None
+    body_state: str
+    search_text_version: str
+    search_text_flags: tuple[str, ...]
+    identity_conflict: bool
+    participants_reconciled: bool
+    participants_disagreed: bool
+    source_unavailable: bool
+    tier: int
+    rank: int
+    overlap: int
+    matched_identifier_kinds: tuple[str, ...]
+    conversation_hits: int
+    snippet: str | None
+
+
 class CommunicationsRepository(ABC):
     """The communications tables (contract sections 5.1 and 5.2), inside one transaction.
 
@@ -14901,6 +14965,53 @@ class CommunicationsRepository(ABC):
         ingest_source_id: str | None = None,
     ) -> int:
         """How many messages `list_rederive_due` would answer with no limit."""
+
+    # --- the WP4 reads (contract sections 13, 14 and 16; WP4-S4) -------------------
+
+    @abstractmethod
+    def search_query_shape(self, query: str) -> CommunicationSearchQueryShape:
+        """How many nodes `websearch_to_tsquery` keeps for `query` under each configuration."""
+
+    @abstractmethod
+    def search_messages(
+        self, principal_id: str, query: CommunicationSearchQuery
+    ) -> tuple[CommunicationSearchRow, ...]:
+        """One page of the section 14 order, after `query.after`, at most `query.limit` rows.
+
+        Collapse (when asked) keeps the best-ranked message of each
+        conversation, and the keyset is applied after it.
+        """
+
+    @abstractmethod
+    def list_message_lanes(
+        self, principal_id: str, message_ids: Sequence[str]
+    ) -> Mapping[str, tuple[tuple[str, str], ...]]:
+        """Per message, its distinct observed `(folder_role, lane_verification)`, sorted."""
+
+    @abstractmethod
+    def list_messages(
+        self, principal_id: str, message_ids: Sequence[str]
+    ) -> tuple[CommunicationMessageRecord, ...]:
+        """The Principal's messages among `message_ids` (any order; absent ids are omitted)."""
+
+    @abstractmethod
+    def list_conversation_page(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        *,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[CommunicationMessageRecord, ...]:
+        """A conversation's messages by `(message_time, message_id COLLATE "C")` ascending."""
+
+    @abstractmethod
+    def count_identifier_version_pending(self, principal_id: str, version: str) -> int:
+        """How many messages' `identifiers_version` is distinct from `version`."""
+
+    @abstractmethod
+    def list_search_text_versions(self, principal_id: str) -> tuple[str, ...]:
+        """The distinct stored `search_text_version` values, sorted."""
 
 
 # --- Communications intelligence WP3b: meeting sync staging and reconciliation

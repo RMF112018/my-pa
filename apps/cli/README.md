@@ -184,6 +184,36 @@ refused with a closed code, `2` usage, `3` a run finished `partial` or
 [`ops/runbooks/communications-ingestion.md`](/ops/runbooks/communications-ingestion.md)
 covers admission, backfill, monitoring and recovery.
 
+## `project_reports.py` — the project-report bindings
+
+Checks and applies the operator's bindings file
+(`my_pa_project_report_bindings_v1`, held outside the repository): the
+folder-to-Project crosswalk of the project-report exports (WP3P rulings D5 to
+D8 and D19).
+
+```text
+python apps/cli/project_reports.py <assertions> bindings check --file F
+python apps/cli/project_reports.py <assertions> bindings apply --file F --reason CODE
+```
+
+`<assertions>` is `--expected-database` and `--expected-alembic-head`, both
+required, compared as in `communications_ingest.py`; the URL is never an
+argument and never printed. `check` validates the file against the database
+and the read-only workspace and prints its diff (adds, corrections, filter
+updates, retires, unchanged) and the count of unbound CSV folders under
+`export_root` to a stated depth; it writes nothing. `apply` applies the whole
+file in one transaction under the project-reports poll lock (`lock_held` when
+busy): it admits each new folder's source, writes the append-only binding
+revisions (the audit: no `audit_events` row) and moves the pointers, and
+retires an omitted folder (its source disabled, its rows kept); re-applying
+the same file writes nothing. `--reason` is a closed `BindingReason` code,
+checked and echoed. It reaches the bindings service in `my_pa.application`, so
+it is `EXEMPT` in `tests/architecture/test_operator_commands_are_not_capabilities.py`
+and governed by `tests/unit/test_project_reports_cli.py`. Output is one JSON
+line of closed codes, counts and project numbers only (never a folder, path,
+file name or filter text); exit `0` done, `1` refused with a closed code, `2`
+usage, `3` reserved for the run commands of a later slice.
+
 ## `sources.py` — the source configuration plane
 
 `sources.py` configures a root as a source and observes it, which is the

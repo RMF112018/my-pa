@@ -102,6 +102,36 @@ SUPPORT_UNIQUES: Final = (
     ("source_object_versions", "a_source_version_is_identified_with_its_object", "version_id"),
 )
 LIVE_TABLES: Final = ("enrollments", "enrollment_objects", "source_object_versions", "projects")
+#: Constraints `tables.py` declares on these tables that a later revision adds:
+#: the P6 XER import S7-2 revision (`d8383150cf72`).
+LATER_CONSTRAINTS: Final[dict[str, frozenset[str]]] = {
+    "schedule_publications": frozenset(
+        {
+            "p6_snapshot_id_is_an_opaque_identifier",
+            "p6_capture_event_id_is_an_opaque_identifier",
+            "a_schedule_source_format_is_known",
+            "a_schedule_publication_source_matches_its_format",
+            "a_p6_schedule_publication_is_an_update",
+            "a_schedule_workspace_is_an_alias",
+            "a_schedule_workspace_path_is_bounded",
+            "a_schedule_workspace_version_is_a_token",
+            "a_schedule_snapshot_is_published_once_per_series",
+            "a_schedule_publication_names_a_snapshot_of_its_principal",
+            "a_schedule_publication_names_a_capture_event_of_its_series",
+        }
+    ),
+    "schedule_parser_runs": frozenset({"a_schedule_parser_engine_matches_its_profile"}),
+    "schedule_import_issues": frozenset(
+        {
+            "a_schedule_issue_source_table_is_a_name",
+            "a_schedule_issue_record_line_is_positive",
+            "a_schedule_issue_is_positioned_by_its_format",
+        }
+    ),
+}
+#: The later tables the declared publications reference (S7-2), built beside
+#: the seven so the declaration can be created at all.
+LATER_REFERENCED: Final = ("schedule_p6_snapshots", "schedule_p6_capture_events")
 P: Final = "prn_cpmmigration01"
 RESTRICT_VIOLATION: Final = "23001"
 LOCK_NOT_AVAILABLE: Final = "55P03"
@@ -253,6 +283,7 @@ def test_frozen_ddl_names_every_declared_constraint() -> None:
     for table in DECLARED:
         declared = {str(c.name) for c in table.constraints if c.name}
         declared |= {str(index.name) for index in table.indexes}
+        declared -= LATER_CONSTRAINTS.get(table.name, frozenset())
         assert declared == created[table.name], (
             table.name,
             sorted(declared ^ created[table.name]),
@@ -486,7 +517,10 @@ def test_runtime_metadata_matches_the_revision(disposable_database: str, engine:
                 else referred
             ),
         )
-        for table in DECLARED
+        for table in (
+            *DECLARED,
+            *(tables.METADATA.tables[f"{SCHEMA}.{name}"] for name in LATER_REFERENCED),
+        )
     ]
     with engine.begin() as connection:
         connection.execute(text("CREATE SCHEMA cpm_parity"))

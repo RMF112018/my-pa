@@ -2138,7 +2138,8 @@ _PURPOSES_ADMITTED_AFTER_THIS_REVISION: Final = (
     | S5B2_PURPOSES
     | S63_PURPOSES
     | FILES_PURPOSES
-    # Every purpose admitted after the files workspace revision (WP4 ruling R17).
+    # Every purpose family admitted after the files workspace revision (P6 XER
+    # import S7-2 onward): `vocabulary_admissions.py`.
     | purposes_admitted_after(ADMISSIONS_SINCE)
     # Reports Modernization WP03: admitted by `4c37731671fc` and declared with it.
     | frozenset({"report_lifecycle", "report_hold", "report_retention"})

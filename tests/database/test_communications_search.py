@@ -308,6 +308,9 @@ def test_a_quoted_phrase_never_spans_the_subject_and_the_text(
     assert _ids(spanning) == []
     in_subject = search(migrated_engine, query='"pour schedule"', collapse="none")
     assert set(_ids(in_subject)) == {world["slab"], world["slab_reply"]}
+    # WP4-R3 R3-2: the subject is case-folded too ("Slab pour schedule").
+    folded = search(migrated_engine, query='"slab pour schedule"', collapse="none")
+    assert set(_ids(folded)) == {world["slab"], world["slab_reply"]}
     in_text = search(migrated_engine, query='"moves to friday"', collapse="none")
     assert _ids(in_text) == [world["slab"]]
 

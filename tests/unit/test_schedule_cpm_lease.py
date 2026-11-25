@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -24,15 +24,16 @@ from my_pa.contracts.ports import (
     CpmComputeBusyError,
     PlaneReservation,
     PlaneReservationOutcome,
+    ScenarioIntegrityError,
     StoredCpmRun,
     VerifiedScenarioContent,
 )
 from my_pa.domain.schedule.plane import PlaneProvenance
 from my_pa.domain.schedule.scenario.canonical import content_bytes
 from my_pa.domain.schedule.scenario.cpm import CpmResult, CpmStatus, run_cpm
-from my_pa.domain.schedule.scenario.model import ScenarioContent
+from my_pa.domain.schedule.scenario.model import ActivityKind, ScenarioContent
 from my_pa.infrastructure.persistence import schedule_cpm_lease as lease
-from tests.fixtures.schedule_scenario import link, network, task
+from tests.fixtures.schedule_scenario import link, milestone, network, task
 
 P: Final = "prn_cpmlease0001"
 VERSION: Final = "sscv_cpmlease0001"
@@ -94,12 +95,16 @@ class _Repository:
     def find_request(self, *_: object) -> PlaneReservation | None:
         return None
 
-    def get_cpm_run(self, *_: object) -> StoredCpmRun | None:
-        return None
+    def get_cpm_run(
+        self, _principal: str, _version: str, engine_version: str
+    ) -> StoredCpmRun | None:
+        self._world.lookups.append(engine_version)
+        return self._world.stored.get(engine_version)
 
     def load_content(self, *_: object) -> VerifiedScenarioContent:
-        canonical = content_bytes(CONTENT)
-        return VerifiedScenarioContent(content=CONTENT, canonical=canonical, size=len(canonical))
+        content = self._world.content
+        canonical = content_bytes(content)
+        return VerifiedScenarioContent(content=content, canonical=canonical, size=len(canonical))
 
     def lock_principal(self, *_: object) -> None:
         self._world.steps.append("lock_principal")
@@ -143,6 +148,10 @@ class _World:
     steps: list[str] = field(default_factory=list)
     units_read_fails: bool = False
     write_fails: bool = False
+    content: ScenarioContent = CONTENT
+    #: S7-0: the engine versions the natural-key probe asked for, and stored runs.
+    lookups: list[str] = field(default_factory=list)
+    stored: dict[str, StoredCpmRun] = field(default_factory=dict)
 
 
 class _UnitOfWork:
@@ -297,3 +306,72 @@ def test_the_lease_engine_is_cached_per_url_and_disposed() -> None:
     lease.dispose_lease_engines()
     with pytest.raises(TypeError, match="parsed URL"):
         lease.lease_engine("postgresql+psycopg://lease.invalid/d")  # type: ignore[arg-type]
+
+
+# --- S7-0 (import contract section 11.7, E8): the run follows the content schema ----------------
+
+V2_CONTENT: Final = network(
+    [task("A", 480), milestone("M", ActivityKind.FINISH_MILESTONE)], [link("A", "M")]
+)
+
+
+@pytest.mark.parametrize(
+    ("content", "engine_version"),
+    [(CONTENT, "my-pa-cpm-v1"), (V2_CONTENT, "my-pa-cpm-v2")],
+)
+def test_the_run_is_looked_up_and_stored_under_the_content_engine(
+    monkeypatch: pytest.MonkeyPatch, world: _World, content: ScenarioContent, engine_version: str
+) -> None:
+    """E8: a v1 version's run is `my-pa-cpm-v1`, a v2 version's `my-pa-cpm-v2`."""
+    engine = _serve(monkeypatch, _LeaseConnection(held=True))
+    world.content = content
+    written = _run(engine)
+    assert world.lookups == [engine_version]
+    assert written.created is True
+    assert written.cpm_run.engine_version == engine_version
+    assert _free()
+
+
+def test_an_existing_run_of_the_content_engine_is_answered_without_compute(
+    monkeypatch: pytest.MonkeyPatch, world: _World
+) -> None:
+    engine = _serve(monkeypatch)
+    world.content = V2_CONTENT
+    canonical = run_cpm(V2_CONTENT)
+    world.stored["my-pa-cpm-v2"] = StoredCpmRun(
+        cpm_run_id="scpm_cpmlease0002",
+        version_id=VERSION,
+        engine_version="my-pa-cpm-v2",
+        input_content_sha256=canonical.input_content_sha256,
+        status=canonical.status,
+        result_sha256="e" * 64,
+        result_size_bytes=10,
+        activity_count=2,
+        relationship_count=1,
+        project_finish=None,
+        provenance=WRITER,
+        created_at=datetime(2026, 11, 3, tzinfo=UTC),
+    )
+
+    def never(_content: ScenarioContent) -> CpmResult:
+        raise AssertionError("a natural-key hit never computes")
+
+    written = _run(engine, compute=never)
+    assert world.lookups == ["my-pa-cpm-v2"]
+    assert written.created is False
+    assert written.cpm_run.engine_version == "my-pa-cpm-v2"
+
+
+def test_a_compute_under_another_engine_is_never_stored(
+    monkeypatch: pytest.MonkeyPatch, world: _World
+) -> None:
+    engine = _serve(monkeypatch, _LeaseConnection(held=True))
+    world.content = V2_CONTENT
+
+    def crossed(content: ScenarioContent) -> CpmResult:
+        return replace(run_cpm(content), engine_version="my-pa-cpm-v1")
+
+    with pytest.raises(ScenarioIntegrityError, match="cpm_engine_version"):
+        _run(engine, compute=crossed)
+    assert "insert" not in world.steps
+    assert _free()

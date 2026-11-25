@@ -12,6 +12,12 @@ against the data date, bounds) are checked by `content_problem`, so the CPM
 engine can still be handed, and must still reject, a network whose references
 dangle (section 3.4). Every collection is stored in its canonical order, so
 two contents built from permuted inputs are equal.
+
+S7-0 (`docs/architecture/schedule-xer-import-contract.md` section 11.7) adds the
+edged milestone kinds `start_milestone` and `finish_milestone`, the fixed lag
+calendar `calendar:<key>` and the optional inert `published_reference.fields`.
+A content that uses none of them is exactly an S6 content: `uses_v2_features`
+is false and nothing about it changes.
 """
 
 from __future__ import annotations
@@ -31,10 +37,14 @@ from my_pa.domain.schedule.model import (
 )
 
 __all__ = [
+    "EDGED_MILESTONE_KINDS",
+    "FINISH_SIDE_CONSTRAINTS",
     "HORIZON_MINUTES",
     "MAX_ACTIVITIES",
     "MAX_ACTIVITY_NAME_CHARACTERS",
     "MAX_CALENDARS",
+    "MAX_CAPTURED_FIELDS",
+    "MAX_CAPTURED_TEXT_CHARACTERS",
     "MAX_CHANGE_SET_BYTES",
     "MAX_CHANGE_SET_OPS",
     "MAX_CONTENT_BYTES",
@@ -47,16 +57,21 @@ __all__ = [
     "MAX_RELATIONSHIPS",
     "MAX_VERSIONS_PER_SCENARIO",
     "MAX_WBS_LABELS",
+    "MILESTONE_KINDS",
     "MINUTES_PER_DAY",
+    "START_SIDE_CONSTRAINTS",
     "ActivityConstraint",
     "ActivityKind",
     "ActivityProgress",
     "ActivityState",
     "CalendarException",
+    "CapturedValue",
     "ConstraintType",
     "DistributionKind",
     "DurationDistribution",
+    "FixedLagCalendar",
     "LagCalendar",
+    "LagCalendarSetting",
     "ProgressPolicy",
     "PublishedReference",
     "RelationshipType",
@@ -67,12 +82,17 @@ __all__ = [
     "ScenarioSettings",
     "VersionLabel",
     "activity_state",
+    "constraint_fits_kind",
     "content_problem",
     "format_instant",
     "is_added_activity_key",
     "is_calendar_key",
+    "is_captured_field_key",
     "is_source_activity_key",
+    "milestone_progress_fits",
     "parse_instant",
+    "parse_lag_calendar",
+    "uses_v2_features",
 ]
 
 # --- time axis (section 3.1) ----------------------------------------------------
@@ -181,6 +201,19 @@ def _is_display_text(value: object, limit: int) -> bool:
 class ActivityKind(StrEnum):
     TASK = "task"
     MILESTONE = "milestone"
+    # S7-0 (section 11.7): a milestone whose one date is a start / a finish.
+    START_MILESTONE = "start_milestone"
+    FINISH_MILESTONE = "finish_milestone"
+
+
+#: The kinds whose two durations are 0 (`milestone` keeps its v1 meaning).
+MILESTONE_KINDS: Final = frozenset(
+    {ActivityKind.MILESTONE, ActivityKind.START_MILESTONE, ActivityKind.FINISH_MILESTONE}
+)
+#: The S7-0 kinds: a content holding one is a `schedule-scenario-content-v2` document.
+EDGED_MILESTONE_KINDS: Final = frozenset(
+    {ActivityKind.START_MILESTONE, ActivityKind.FINISH_MILESTONE}
+)
 
 
 class RelationshipType(StrEnum):
@@ -205,12 +238,62 @@ _EARLY: Final = frozenset({ConstraintType.SNET, ConstraintType.FNET})
 _LATE: Final = frozenset({ConstraintType.SNLT, ConstraintType.FNLT})
 _MANDATORY: Final = frozenset({ConstraintType.MSO, ConstraintType.MFO})
 _CONSTRAINT_ORDER: Final = {member: index for index, member in enumerate(ConstraintType)}
+#: Section 11.7: the constraints a start milestone / a finish milestone may take.
+START_SIDE_CONSTRAINTS: Final = frozenset(
+    {ConstraintType.SNET, ConstraintType.SNLT, ConstraintType.MSO}
+)
+FINISH_SIDE_CONSTRAINTS: Final = frozenset(
+    {ConstraintType.FNET, ConstraintType.FNLT, ConstraintType.MFO}
+)
+
+
+def constraint_fits_kind(kind: ActivityKind, constraint: ConstraintType) -> bool:
+    """Section 11.7: an edged milestone takes constraints on its own side only."""
+    if kind is ActivityKind.START_MILESTONE:
+        return constraint in START_SIDE_CONSTRAINTS
+    if kind is ActivityKind.FINISH_MILESTONE:
+        return constraint in FINISH_SIDE_CONSTRAINTS
+    return True
 
 
 class LagCalendar(StrEnum):
     PREDECESSOR = "predecessor"
     SUCCESSOR = "successor"
     TWENTY_FOUR_HOUR = "twenty_four_hour"
+
+
+_FIXED_LAG_PREFIX: Final = "calendar:"
+
+
+@dataclass(frozen=True, slots=True)
+class FixedLagCalendar:
+    """Section 11.7: every lag is measured on one named calendar of the version.
+
+    Written `calendar:<key>`; it carries P6 `rcal_Project`. Its `value` is that
+    text, so it serializes exactly like a `LagCalendar` member.
+    """
+
+    key: str
+
+    def __post_init__(self) -> None:
+        if not is_calendar_key(self.key):
+            raise ValueError("a fixed lag calendar names a calendar key")
+
+    @property
+    def value(self) -> str:
+        return f"{_FIXED_LAG_PREFIX}{self.key}"
+
+
+LagCalendarSetting = LagCalendar | FixedLagCalendar
+
+
+def parse_lag_calendar(text: object) -> LagCalendarSetting:
+    """`predecessor` | `successor` | `twenty_four_hour` | `calendar:<key>`, or `ValueError`."""
+    if not isinstance(text, str):
+        raise ValueError("a lag calendar is a string")
+    if text.startswith(_FIXED_LAG_PREFIX):
+        return FixedLagCalendar(text.removeprefix(_FIXED_LAG_PREFIX))
+    return LagCalendar(text)
 
 
 class ProgressPolicy(StrEnum):
@@ -312,7 +395,7 @@ class ScenarioCalendar:
 @dataclass(frozen=True, slots=True)
 class ScenarioSettings:
     default_calendar: str
-    lag_calendar: LagCalendar = LagCalendar.PREDECESSOR
+    lag_calendar: LagCalendarSetting = LagCalendar.PREDECESSOR
     progress_policy: ProgressPolicy = ProgressPolicy.RETAINED_LOGIC
     must_finish_by: int | None = None
     critical_float_threshold_minutes: int = 0
@@ -320,8 +403,8 @@ class ScenarioSettings:
     def __post_init__(self) -> None:
         if not is_calendar_key(self.default_calendar):
             raise ValueError("the default calendar is a calendar key")
-        if not isinstance(self.lag_calendar, LagCalendar):
-            raise ValueError("the lag calendar is a LagCalendar")
+        if not isinstance(self.lag_calendar, LagCalendar | FixedLagCalendar):
+            raise ValueError("the lag calendar is a LagCalendar or a FixedLagCalendar")
         if not isinstance(self.progress_policy, ProgressPolicy):
             raise ValueError("the progress policy is a ProgressPolicy")
         if self.must_finish_by is not None and not _is_instant(self.must_finish_by):
@@ -413,9 +496,37 @@ class DurationDistribution:
         }
 
 
+#: Section 11.5 (S7-0): at most 50 captured fields travel inert on one activity.
+MAX_CAPTURED_FIELDS: Final = 50
+#: Section 7.7 of the import contract: a captured text value.
+MAX_CAPTURED_TEXT_CHARACTERS: Final = 4_000
+_CAPTURED_FIELD_KEY: Final = re.compile(
+    r"\A(xer:[A-Z][A-Z0-9_]{0,31}\.[A-Za-z][A-Za-z0-9_]{0,63}"
+    r"|udf:[A-Z]{1,16}:.{1,120}"
+    r"|code:.{1,120})\Z"
+)
+#: A captured value is inert data: text, an integer, a flag or null.
+CapturedValue = str | int | bool | None
+
+
+def is_captured_field_key(value: object) -> bool:
+    """The captured-field key grammar of the import contract section 7.7."""
+    return isinstance(value, str) and _CAPTURED_FIELD_KEY.fullmatch(value) is not None
+
+
+def _is_captured_value(value: object) -> bool:
+    if value is None or type(value) is bool or type(value) is int:
+        return True
+    return isinstance(value, str) and len(value) <= MAX_CAPTURED_TEXT_CHARACTERS
+
+
 @dataclass(frozen=True, slots=True)
 class PublishedReference:
-    """The inert published row a baseline activity came from (section 2.5)."""
+    """The inert published row a baseline activity came from (section 2.5).
+
+    `fields` (S7-0, section 11.5) is null or the captured fields a P6 snapshot
+    carries inert, sorted by key; the engine never reads them.
+    """
 
     publication_id: str
     published_activity_id: str
@@ -423,6 +534,7 @@ class PublishedReference:
     remaining_duration: ScheduleDurationCell
     start: ScheduleDateCell
     finish: ScheduleDateCell
+    fields: tuple[tuple[str, CapturedValue], ...] | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.publication_id, IdKind.SCHEDULE_PUBLICATION)
@@ -433,6 +545,22 @@ class PublishedReference:
             raise ValueError("published durations are ScheduleDurationCell records")
         if not all(isinstance(cell, ScheduleDateCell) for cell in (self.start, self.finish)):
             raise ValueError("published dates are ScheduleDateCell records")
+        if self.fields is not None:
+            raw: tuple[object, ...] = tuple(self.fields)
+            if len(raw) > MAX_CAPTURED_FIELDS:
+                raise ValueError("a published reference carries at most 50 captured fields")
+            if not all(
+                isinstance(item, tuple)
+                and len(item) == 2
+                and is_captured_field_key(item[0])
+                and _is_captured_value(item[1])
+                for item in raw
+            ):
+                raise ValueError("captured fields are (field key, inert value) pairs")
+            fields = tuple(sorted(self.fields, key=lambda item: item[0]))
+            object.__setattr__(self, "fields", fields)
+            if _duplicated([name for name, _ in fields]):
+                raise ValueError("a captured field key is unique")
 
 
 # --- activities and relationships (sections 2.4, 2.6) --------------------------------------
@@ -491,6 +619,19 @@ class ScenarioActivity:
             raise ValueError("at most 1 early and 1 late constraint, or 1 mandatory alone")
         if self.progress is not None and not isinstance(self.progress, ActivityProgress):
             raise ValueError("progress is an ActivityProgress record")
+        if (
+            self.kind is ActivityKind.START_MILESTONE
+            and self.progress is not None
+            and self.progress.actual_finish is None
+        ):
+            # Section 11.7 (S7-0 review F3): a start milestone's one date is both its
+            # actual start and finish, so a null finish is stored as the start (one
+            # canonical form; v1 has no start milestone).
+            object.__setattr__(
+                self,
+                "progress",
+                ActivityProgress(self.progress.actual_start, self.progress.actual_start),
+            )
         if self.distribution is not None and not isinstance(
             self.distribution, DurationDistribution
         ):
@@ -499,7 +640,7 @@ class ScenarioActivity:
             self.published_reference, PublishedReference
         ):
             raise ValueError("a published reference is a PublishedReference record")
-        if self.kind is ActivityKind.MILESTONE and (
+        if self.kind in MILESTONE_KINDS and (
             self.original_minutes != 0 or self.remaining_minutes != 0
         ):
             raise ValueError("a milestone has both durations 0")
@@ -509,6 +650,22 @@ class ScenarioActivity:
             and self.remaining_minutes != 0
         ):
             raise ValueError("a complete activity has remaining_minutes 0")
+        if not all(constraint_fits_kind(self.kind, item.type) for item in constraints):
+            raise ValueError("an edged milestone takes constraints on its own side only")
+        if not milestone_progress_fits(self.kind, self.progress):
+            raise ValueError("an edged milestone's progress is its one date")
+
+
+def milestone_progress_fits(kind: ActivityKind, progress: ActivityProgress | None) -> bool:
+    """Section 11.7: a start milestone's date is `actual_start` (`actual_finish` null
+    or equal); a finish milestone's is `actual_finish` (`actual_start` equal)."""
+    if progress is None:
+        return True
+    if kind is ActivityKind.START_MILESTONE:
+        return progress.actual_finish is None or progress.actual_finish == progress.actual_start
+    if kind is ActivityKind.FINISH_MILESTONE:
+        return progress.actual_finish == progress.actual_start
+    return True
 
 
 def activity_state(activity: ScenarioActivity) -> ActivityState:
@@ -543,7 +700,8 @@ class ScenarioRelationship:
 
 @dataclass(frozen=True, slots=True)
 class ScenarioContent:
-    """One version's `schedule-scenario-content-v1` document (section 2.3)."""
+    """One version's `schedule-scenario-content-v1` document (section 2.3), or a
+    `schedule-scenario-content-v2` one when it uses an S7-0 feature (section 11.7)."""
 
     data_date: int
     settings: ScenarioSettings
@@ -574,6 +732,24 @@ def _duplicated(values: Sequence[object]) -> bool:
     return len(set(values)) != len(values)
 
 
+def uses_v2_features(content: ScenarioContent) -> bool:
+    """Section 11.7: an edged milestone, a fixed lag calendar or captured fields.
+
+    The content schema follows the content: false is a `schedule-scenario-content-v1`
+    document (run on `my-pa-cpm-v1`), true a `-v2` one (run on `my-pa-cpm-v2`).
+    """
+    if isinstance(content.settings.lag_calendar, FixedLagCalendar):
+        return True
+    return any(
+        activity.kind in EDGED_MILESTONE_KINDS
+        or (
+            activity.published_reference is not None
+            and activity.published_reference.fields is not None
+        )
+        for activity in content.activities
+    )
+
+
 def content_problem(content: ScenarioContent) -> str | None:
     """The first cross-reference or bound a stored version must satisfy, else `None`.
 
@@ -590,6 +766,9 @@ def content_problem(content: ScenarioContent) -> str | None:
     known = set(calendar_keys)
     if content.settings.default_calendar not in known:
         return "the default calendar exists"
+    lag_calendar = content.settings.lag_calendar
+    if isinstance(lag_calendar, FixedLagCalendar) and lag_calendar.key not in known:
+        return "the fixed lag calendar exists"
     keys = [activity.key for activity in content.activities]
     if len(keys) > MAX_ACTIVITIES or _duplicated(keys):
         return "at most 25000 activities with unique keys"

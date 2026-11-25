@@ -358,3 +358,14 @@ def test_the_26_commands_are_the_plane_capabilities() -> None:
     assert {command.capability for command in SCHEDULE_SCENARIO_COMMAND_TYPES.values()} == set(
         SCHEDULE_SCENARIO_COMMAND_TYPES
     )
+
+
+def test_a_snapshot_may_omit_both_calendars_and_default() -> None:
+    """S7-0 (import contract section 11.5): neither = the MY-PA standard calendar.
+
+    One without the other stays `invalid_request(calendar)` (the 2 cases above).
+    """
+    built = _build(_CREATE, _with(_CREATE, calendars=..., default_calendar=...))
+    assert built.calendars is None
+    assert built.default_calendar is None
+    assert built.minutes_per_source_unit == _SAMPLES[_CREATE]["minutes_per_source_unit"]

@@ -12,6 +12,14 @@ constraint, progress or distribution is invented.
 
 Eligibility of the publication (owned, effective `complete`/`partial`, not in an
 intake Series) is the caller's check (S6-2/S6-3); this module is pure.
+
+S7-0 (`docs/architecture/schedule-xer-import-contract.md` section 11.5): the
+`calendars` and `default_calendar` inputs are optional together. Omitted, the
+MY-PA standard calendar `my-pa-us-40h-v1` (section 11.6), materialized for the
+data date's year, is the only calendar and the default
+(`Snapshot.default_calendar_standard`). Supplied, the content and its hash are
+exactly what they were before S7-0. PDF rows keep the kind `milestone` (the
+PDF does not say which edge), so a PDF snapshot is always a v1 content.
 """
 
 from __future__ import annotations
@@ -43,6 +51,7 @@ from my_pa.domain.schedule.scenario.model import (
     content_problem,
     parse_instant,
 )
+from my_pa.domain.schedule.scenario.standard_calendar import standard_calendar
 
 __all__ = [
     "MAX_MINUTES_PER_SOURCE_UNIT",
@@ -88,6 +97,9 @@ class SnapshotReport:
 class Snapshot:
     content: ScenarioContent
     report: SnapshotReport
+    #: S7-0 count `default_calendar_standard`: the request named no calendar, so
+    #: the standard calendar is the default. Not part of the stored S6 report.
+    default_calendar_standard: bool = False
 
 
 class _Counter:
@@ -134,11 +146,17 @@ def snapshot_from_publication(
     data_date: date,
     rows: Sequence[ScheduleActivityRowView],
     minutes_per_source_unit: int,
-    calendars: Sequence[ScenarioCalendar],
-    default_calendar: str,
+    calendars: Sequence[ScenarioCalendar] | None = None,
+    default_calendar: str | None = None,
     data_date_time: str = "00:00",
 ) -> Snapshot:
-    """Build version 1 from the accepted run's activity and milestone rows."""
+    """Build version 1 from the accepted run's activity and milestone rows.
+
+    `calendars` and `default_calendar` are given together or omitted together
+    (S7-0); omitted, the standard calendar is the only calendar and the default.
+    """
+    if (calendars is None) != (default_calendar is None):
+        raise SnapshotRefusalError(SnapshotRefusalReason.CALENDAR)
     factor = minutes_per_source_unit
     if type(factor) is not int or not 1 <= factor <= MAX_MINUTES_PER_SOURCE_UNIT:
         raise SnapshotRefusalError(SnapshotRefusalReason.MINUTES_PER_SOURCE_UNIT)
@@ -152,6 +170,10 @@ def snapshot_from_publication(
         isinstance(row, ScheduleActivityRowView) for row in rows
     ):
         raise SnapshotRefusalError(SnapshotRefusalReason.ROWS)
+    standard = calendars is None
+    if calendars is None or default_calendar is None:
+        calendar = standard_calendar(data_date.year)
+        calendars, default_calendar = (calendar,), calendar.key
     counter = _Counter()
     activities: list[ScenarioActivity] = []
     milestones = 0
@@ -213,4 +235,4 @@ def snapshot_from_publication(
         original_missing=counter.original_missing,
         remaining_missing=counter.remaining_missing,
     )
-    return Snapshot(content=content, report=report)
+    return Snapshot(content=content, report=report, default_calendar_standard=standard)

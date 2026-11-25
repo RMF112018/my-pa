@@ -23,6 +23,7 @@ from tests.pins import ALEMBIC_REVISION_COUNT
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.knowledge_schema_ahead_contract import GAP_ROWS, admitted_ahead
 from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
+from tests.schema.vocabulary_admissions import admitted_ahead_of_the_domain
 
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
@@ -252,10 +253,16 @@ def test_the_revisions_run_empty_to_head_and_prior_to_head(disposable_database: 
             member.value for member in NativeSourceCapability
         }
         assert _admitted(engine, "capability_is_known") == declared | (
-            admitted_ahead("capability") | lineage_admitted_ahead("capability") | FILES_CAPABILITIES
+            admitted_ahead("capability")
+            | lineage_admitted_ahead("capability")
+            | FILES_CAPABILITIES
+            | admitted_ahead_of_the_domain("capability")
         )
         assert _admitted(engine, "purpose_is_known") == {member.value for member in Purpose} | (
-            admitted_ahead("purpose") | lineage_admitted_ahead("purpose") | FILES_PURPOSES
+            admitted_ahead("purpose")
+            | lineage_admitted_ahead("purpose")
+            | FILES_PURPOSES
+            | admitted_ahead_of_the_domain("purpose")
         )
         assert {"context_runs", "context_run_items"} <= _tables(engine)
         # KLP-AC-109 / 132: at head the context item CHECKs equal the domain

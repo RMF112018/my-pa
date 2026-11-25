@@ -1,14 +1,14 @@
 """Communications intelligence WP4-S1: the communications search revision, `fa18ef3d9bc0`.
 
-`fa18ef3d9bc0` is additive on `0d4e247d03cb` (WP3P). It gives
+`fa18ef3d9bc0` is additive on `d8383150cf72` (P6 XER storage S7-2). It gives
 `communication_messages` the two rederive columns `source_unavailable` and
 `identifiers_version` and admits both to the named-mutable trigger (rulings R2,
 R3), widens the identifier kind CHECK with `cor` and `pco` (R5) and restates the
-audit vocabulary: 312 -> 315 capabilities and 70 -> 71 purposes (D7). Ruling R4
+audit vocabulary: 319 -> 322 capabilities and 72 -> 73 purposes (D7). Ruling R4
 defers the prune: `communication_identifiers` stays append-only exactly as
 before. This module proves:
 
-* **the graph** -- this revision is directly on `0d4e247d03cb`; no test here
+* **the graph** -- this revision is directly on `d8383150cf72`; no test here
   names the chain head;
 * **the freeze** -- the revision imports nothing from the package it migrates;
   its before texts are byte copies of the revisions that last stated them, and
@@ -54,11 +54,11 @@ from my_pa.infrastructure.persistence.tables import (
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "fa18ef3d9bc0"
-PREVIOUS: Final = "0d4e247d03cb"
+PREVIOUS: Final = "d8383150cf72"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20261125_fa18ef3d9bc0_communications_search.py"
-PRIOR_CAPABILITY_MIGRATION: Final = MIGRATIONS / "20261123_61fafdfd2986_meeting_sync_staging.py"
-PRIOR_PURPOSE_MIGRATION: Final = MIGRATIONS / "20261113_640aaacc78e8_files_workspace.py"
+PRIOR_CAPABILITY_MIGRATION: Final = MIGRATIONS / "20261125_d8383150cf72_schedule_p6_xer_storage.py"
+PRIOR_PURPOSE_MIGRATION: Final = MIGRATIONS / "20261125_d8383150cf72_schedule_p6_xer_storage.py"
 INGESTION_MIGRATION: Final = MIGRATIONS / "20261122_52a829ef718a_communications_ingestion.py"
 
 NEW_CAPABILITIES: Final = frozenset(
@@ -110,7 +110,7 @@ def _literals(expression: object) -> list[str]:
 # ---- the graph and the freeze ------------------------------------------------------
 
 
-def test_the_revision_is_directly_on_the_project_report_revision() -> None:
+def test_the_revision_is_directly_on_the_p6_storage_revision() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
@@ -147,13 +147,13 @@ def test_the_audit_before_texts_are_byte_copies_and_the_at_texts_add_exactly_the
     assert mine["_PURPOSES_BEFORE_THIS_REVISION"] == purposes["_PURPOSES_AT_THIS_REVISION"]
     before = _literals(mine["_CAPABILITIES_BEFORE_THIS_REVISION"])
     at = _literals(mine["_CAPABILITIES_AT_THIS_REVISION"])
-    assert (len(before), len(at)) == (312, 315)
+    assert (len(before), len(at)) == (319, 322)
     assert at == sorted(at)
     assert set(at) - set(before) == NEW_CAPABILITIES
     assert set(before) <= set(at)
     purposes_before = _literals(mine["_PURPOSES_BEFORE_THIS_REVISION"])
     purposes_at = _literals(mine["_PURPOSES_AT_THIS_REVISION"])
-    assert (len(purposes_before), len(purposes_at)) == (70, 71)
+    assert (len(purposes_before), len(purposes_at)) == (72, 73)
     assert purposes_at == sorted(purposes_at)
     assert set(purposes_at) - set(purposes_before) == NEW_PURPOSES
     assert set(purposes_before) <= set(purposes_at)

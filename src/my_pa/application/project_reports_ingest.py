@@ -366,13 +366,17 @@ def _read_stored(unit: UnitOfWork, principal_id: str, snapshot_id: str) -> Expor
 def bound_revision(
     unit: UnitOfWork, principal_id: str, ingest_source_id: str
 ) -> ProjectReportBindingRevisionRecord:
-    """The source's active binding revision, or `source_unbound` (ruling D12)."""
+    """The source's active binding revision, or `source_unbound` (ruling D12).
+
+    The pointer's state is its revision's (a composite foreign key holds the
+    two equal), so the pointer alone decides.
+    """
     repository = unit.project_reports
     binding = repository.get_binding(principal_id, ingest_source_id)
     if binding is None or binding.state is not BindingState.ACTIVE:
         raise ProjectReportsSourceUnboundError
     revision = repository.get_binding_revision(principal_id, binding.binding_revision_id)
-    if revision is None or revision.state is not BindingState.ACTIVE:
+    if revision is None:
         raise ProjectReportsSourceUnboundError
     return revision
 

@@ -89,6 +89,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from tests import pins
 
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
@@ -188,465 +189,12 @@ SWEPT_FILES = (
 #: of `README.md`; correcting it would be correcting a file `pip` rewrites.
 SKIPPED_SUFFIXES = (".egg-info",)
 
-_UNITS = (
-    "zero",
-    "one",
-    "two",
-    "three",
-    "four",
-    "five",
-    "six",
-    "seven",
-    "eight",
-    "nine",
-    "ten",
-    "eleven",
-    "twelve",
-    "thirteen",
-    "fourteen",
-    "fifteen",
-    "sixteen",
-    "seventeen",
-    "eighteen",
-    "nineteen",
-)
-_TENS = {
-    20: "twenty",
-    30: "thirty",
-    40: "forty",
-    50: "fifty",
-    60: "sixty",
-    70: "seventy",
-    80: "eighty",
-    90: "ninety",
-}
-
-_ORDINAL_UNITS = (
-    "zeroth",
-    "first",
-    "second",
-    "third",
-    "fourth",
-    "fifth",
-    "sixth",
-    "seventh",
-    "eighth",
-    "ninth",
-    "tenth",
-    "eleventh",
-    "twelfth",
-    "thirteenth",
-    "fourteenth",
-    "fifteenth",
-    "sixteenth",
-    "seventeenth",
-    "eighteenth",
-    "nineteenth",
-    # The twenties, added when the capability set reached nineteen and
-    # `a twentieth capability` became the ordinal a correct claim would use. The
-    # tuple is indexed by value, so it has to be dense and in order; the next
-    # boundary announces itself the same way this one did, with an `IndexError`
-    # in the green-half plant rather than with a false pass.
-    "twentieth",
-    "twenty-first",
-    "twenty-second",
-    "twenty-third",
-    "twenty-fourth",
-    "twenty-fifth",
-    "twenty-sixth",
-    "twenty-seventh",
-    "twenty-eighth",
-    "twenty-ninth",
-    "thirtieth",
-    "thirty-first",
-    "thirty-second",
-    # The thirties/forties, added when local task-management and origin
-    # context.prepare were merged and the public set reached forty-five.
-    "thirty-third",
-    "thirty-fourth",
-    "thirty-fifth",
-    "thirty-sixth",
-    "thirty-seventh",
-    "thirty-eighth",
-    "thirty-ninth",
-    "fortieth",
-    "forty-first",
-    "forty-second",
-    "forty-third",
-    "forty-fourth",
-    "forty-fifth",
-    "forty-sixth",
-    "forty-seventh",
-    "forty-eighth",
-    "forty-ninth",
-    # The fifties, added when WP-RI-05 admitted the five `entities.*` capabilities
-    # and the public set reached fifty-four, so `a fifty-fifth capability` became
-    # the ordinal a correct claim would use. This boundary announced itself exactly
-    # as the two above did — an `IndexError` in the green-half plant rather than a
-    # false pass — which is the property the density of this tuple buys.
-    "fiftieth",
-    "fifty-first",
-    "fifty-second",
-    "fifty-third",
-    "fifty-fourth",
-    "fifty-fifth",
-    "fifty-sixth",
-    "fifty-seventh",
-    "fifty-eighth",
-    "fifty-ninth",
-    "sixtieth",
-    # The sixties, added when the Intelligence Artifact plane admitted eight
-    # `reports.*` capabilities and the public set crossed sixty, so the next
-    # capability ordinal entered this range. It
-    # announced itself the same way the three boundaries above did: the prose was
-    # corrected into this range, the tuple could not read it, and the claim was
-    # reported as saying *three* — a false finding rather than a false pass, which
-    # is what the density of this tuple is for.
-    "sixty-first",
-    "sixty-second",
-    "sixty-third",
-    "sixty-fourth",
-    "sixty-fifth",
-    "sixty-sixth",
-    "sixty-seventh",
-    "sixty-eighth",
-    "sixty-ninth",
-    "seventieth",
-    # The seventies, added when the Relationship Memory plane admitted eight
-    # `relationship_memory.*` capabilities and the public set reached seventy, so
-    # `a seventy-first capability` became the ordinal a correct claim would use.
-    # This boundary announced itself in both the ways the four above did at once:
-    # the green-half plant raised `IndexError` on index seventy-one, and
-    # `tests/contract/test_http_transport.py` — whose prose already said
-    # `seventy-first` — was reported as claiming *one*, because the longest-match
-    # scan could find no compound ordinal here and fell back to the bare `first`
-    # inside it. A false finding rather than a false pass, which is what the
-    # density of this tuple buys.
-    "seventy-first",
-    "seventy-second",
-    "seventy-third",
-    "seventy-fourth",
-    "seventy-fifth",
-    "seventy-sixth",
-    "seventy-seventh",
-    "seventy-eighth",
-    "seventy-ninth",
-    "eightieth",
-    # The eighties, added when `WP-RI-A-02` gave the entity plane its authoring
-    # half and the public set reached eighty-five, so `an eighty-sixth
-    # capability` became the ordinal a correct claim would use. This boundary
-    # announced itself the way every one before it did, and in the sharper of
-    # the two ways: the corrected prose read `eighty-sixth`, the longest-match
-    # scan could find no compound ordinal in range, and it fell back to the bare
-    # `sixth` inside the word -- reporting a claim of *six* against a set of
-    # eighty-six. A false finding rather than a false pass, which is what the
-    # density of this tuple buys.
-    "eighty-first",
-    "eighty-second",
-    "eighty-third",
-    "eighty-fourth",
-    "eighty-fifth",
-    "eighty-sixth",
-    "eighty-seventh",
-    "eighty-eighth",
-    "eighty-ninth",
-    "ninetieth",
-    # The nineties, added when Phase A's three entity work packages integrated
-    # and the public set reached ninety-five, so `a ninety-sixth capability`
-    # became the ordinal a correct claim would use. Added ahead of the boundary
-    # announcing itself this time, because the boundary above records what
-    # happens when it does not: the longest-match scan finds no compound ordinal
-    # in range, falls back to the bare ordinal inside the word, and reports a
-    # claim of *six* against a set of ninety-six -- a false finding rather than a
-    # false pass, and still a finding nobody can act on without reading this
-    # tuple first.
-    "ninety-first",
-    "ninety-second",
-    "ninety-third",
-    "ninety-fourth",
-    "ninety-fifth",
-    "ninety-sixth",
-    "ninety-seventh",
-    "ninety-eighth",
-    "ninety-ninth",
-    "hundredth",
-    "hundred-first",
-    "hundred-second",
-    "hundred-third",
-    "hundred-fourth",
-    "hundred-fifth",
-    # `RI-ENT-WP-10` took the capability set to a hundred and nine, so
-    # `a hundred-tenth capability` became the ordinal a correct claim would use
-    # and the green-half plant indexes one past the set. The boundary announced
-    # itself exactly as every one above it did -- `IndexError` in the plant
-    # rather than a false pass -- which is the property the density of this
-    # tuple buys.
-    "hundred-sixth",
-    "hundred-seventh",
-    "hundred-eighth",
-    "hundred-ninth",
-    "hundred-tenth",
-    # `RI-ENT-WP-11`'s first record family took the public set past a hundred and
-    # ten, and the green-half plant indexes one past the set. The boundary
-    # announced itself exactly as every one above it did -- `IndexError` in the
-    # plant rather than a false pass -- which is the property the density of this
-    # tuple buys, and extending it is what this note has always asked for.
-    "hundred-eleventh",
-    "hundred-twelfth",
-    "hundred-thirteenth",
-    "hundred-fourteenth",
-    "hundred-fifteenth",
-    "hundred-sixteenth",
-    "hundred-seventeenth",
-    "hundred-eighteenth",
-    "hundred-nineteenth",
-    "hundred-twentieth",
-    "hundred-twenty-first",
-    "hundred-twenty-second",
-    "hundred-twenty-third",
-    "hundred-twenty-fourth",
-    "hundred-twenty-fifth",
-    # UI-IMP-WP21 takes the public set past one hundred and thirty.
-    # so the green-half plant needs the next ordinal. Keep this tuple dense: a
-    # gap makes a readable compound ordinal fall back to its final unit.
-    "hundred-twenty-sixth",
-    "hundred-twenty-seventh",
-    "hundred-twenty-eighth",
-    "hundred-twenty-ninth",
-    # UI-IMP-WP21 admits the six browser contracts and takes the public set to
-    # one hundred and thirty-six, so the green-half plant indexes one past the set.
-    "hundred-thirtieth",
-    "hundred-thirty-first",
-    "hundred-thirty-second",
-    "hundred-thirty-third",
-    "hundred-thirty-fourth",
-    "hundred-thirty-fifth",
-    "hundred-thirty-sixth",
-    "hundred-thirty-seventh",
-    # `PC-CM-IMP-WP04`'s six Constraint Management reads took the public set past
-    # a hundred and thirty-six, and the green-half plant indexes one past the
-    # set. The boundary announced itself exactly as every one above it did --
-    # `IndexError` in the plant rather than a false pass -- which is the property
-    # the density of this tuple buys.
-    "hundred-thirty-eighth",
-    "hundred-thirty-ninth",
-    "hundred-fortieth",
-    "hundred-forty-first",
-    "hundred-forty-second",
-    # `PC-CM-IMP-WP07`'s twelve Constraint Management mutations took the public
-    # set past a hundred and forty-two, and the green-half plant indexes one
-    # past the set. The boundary announced itself exactly as every one above it
-    # did -- `IndexError` in the plant rather than a false pass.
-    "hundred-forty-third",
-    "hundred-forty-fourth",
-    "hundred-forty-fifth",
-    "hundred-forty-sixth",
-    "hundred-forty-seventh",
-    "hundred-forty-eighth",
-    "hundred-forty-ninth",
-    "hundred-fiftieth",
-    "hundred-fifty-first",
-    "hundred-fifty-second",
-    "hundred-fifty-third",
-    "hundred-fifty-fourth",
-    "hundred-fifty-fifth",
-    "hundred-fifty-sixth",
-    "hundred-fifty-seventh",
-    "hundred-fifty-eighth",
-    "hundred-fifty-ninth",
-    "hundred-sixtieth",
-    "hundred-sixty-first",
-    "hundred-sixty-second",
-    # The one-sixties continue: WP-MCP-PROJ-02's Project read took the
-    # public set to one hundred and sixty-six, so `a hundred-sixty-seventh
-    # capability` became the ordinal a correct claim would use. Same density
-    # rule as every earlier decade boundary.
-    "hundred-sixty-third",
-    "hundred-sixty-fourth",
-    "hundred-sixty-fifth",
-    "hundred-sixty-sixth",
-    "hundred-sixty-seventh",
-    # R01-WP03 admitted six declared names and took the public set to one hundred
-    # and seventy-two; WP-MTG-04's six Meeting records names take it to one
-    # hundred and seventy-eight. The green-half plant indexes the next ordinal,
-    # so keep this table dense through one hundred and seventy-ninth.
-    "hundred-sixty-eighth",
-    "hundred-sixty-ninth",
-    "hundred-seventieth",
-    "hundred-seventy-first",
-    "hundred-seventy-second",
-    "hundred-seventy-third",
-    "hundred-seventy-fourth",
-    "hundred-seventy-fifth",
-    "hundred-seventy-sixth",
-    "hundred-seventy-seventh",
-    "hundred-seventy-eighth",
-    "hundred-seventy-ninth",
-    # WP-RE-06's `record_events.list` takes the public set to one hundred and
-    # seventy-nine, so the plant now indexes the one hundred and eightieth.
-    "hundred-eightieth",
-    # CRL-WP-03 adds `capture.archive` and `capture.restore` and takes the
-    # public set to one hundred and eighty-one. The plant indexes the next
-    # ordinal, so this table stays dense through a hundred-eighty-second.
-    "hundred-eighty-first",
-    "hundred-eighty-second",
-    # KLP-WP-03 adds the six `knowledge.assertions.` names and takes the public
-    # set to one hundred and eighty-seven; dense through a hundred-eighty-eighth.
-    "hundred-eighty-third",
-    "hundred-eighty-fourth",
-    "hundred-eighty-fifth",
-    "hundred-eighty-sixth",
-    "hundred-eighty-seventh",
-    "hundred-eighty-eighth",
-    # KLP-WP-04 adds submit and checkpoint and takes the public set to one
-    # hundred and eighty-nine; dense through a hundred-ninetieth.
-    "hundred-eighty-ninth",
-    "hundred-ninetieth",
-    # KLP-WP-05 adds `record_events.provenance` and takes the public set to one
-    # hundred and ninety; dense through a hundred-ninety-first.
-    "hundred-ninety-first",
-    # The report type registry adds `reports.types.create` and
-    # `reports.types.list` and takes the public set to one hundred and
-    # ninety-two; dense through a hundred-ninety-third.
-    "hundred-ninety-second",
-    "hundred-ninety-third",
-    # Record lineage S1 adds the six Issue-plane names and takes the public set
-    # to one hundred and ninety-eight; dense through a hundred-ninety-ninth.
-    "hundred-ninety-fourth",
-    "hundred-ninety-fifth",
-    "hundred-ninety-sixth",
-    "hundred-ninety-seventh",
-    "hundred-ninety-eighth",
-    "hundred-ninety-ninth",
-    # Record lineage S1's memberships, associations, reverse read and note
-    # history take the public set to two hundred and six; dense through the
-    # two-hundred-seventh.
-    "two-hundredth",
-    "two-hundred-first",
-    "two-hundred-second",
-    "two-hundred-third",
-    "two-hundred-fourth",
-    "two-hundred-fifth",
-    "two-hundred-sixth",
-    "two-hundred-seventh",
-    # Record lineage S2 takes the public set to two hundred and fourteen; dense
-    # through the two-hundred-fifteenth.
-    "two-hundred-eighth",
-    "two-hundred-ninth",
-    "two-hundred-tenth",
-    "two-hundred-eleventh",
-    "two-hundred-twelfth",
-    "two-hundred-thirteenth",
-    "two-hundred-fourteenth",
-    "two-hundred-fifteenth",
-    # Record lineage S3 takes it to two hundred and twenty-two; dense through
-    # the two-hundred-twenty-third.
-    "two-hundred-sixteenth",
-    "two-hundred-seventeenth",
-    "two-hundred-eighteenth",
-    "two-hundred-nineteenth",
-    "two-hundred-twentieth",
-    "two-hundred-twenty-first",
-    "two-hundred-twenty-second",
-    "two-hundred-twenty-third",
-    # Record lineage S4 takes it to two hundred and twenty-nine; dense through
-    # the two-hundred-thirtieth.
-    "two-hundred-twenty-fourth",
-    "two-hundred-twenty-fifth",
-    "two-hundred-twenty-sixth",
-    "two-hundred-twenty-seventh",
-    "two-hundred-twenty-eighth",
-    "two-hundred-twenty-ninth",
-    "two-hundred-thirtieth",
-    # Record lineage S3.1 takes it to two hundred and thirty-three; dense through
-    # the two-hundred-thirty-fourth.
-    "two-hundred-thirty-first",
-    "two-hundred-thirty-second",
-    "two-hundred-thirty-third",
-    "two-hundred-thirty-fourth",
-    # CPM Workbench S5b-2 takes it to two hundred and forty; dense through the
-    # two-hundred-forty-first.
-    "two-hundred-thirty-fifth",
-    "two-hundred-thirty-sixth",
-    "two-hundred-thirty-seventh",
-    "two-hundred-thirty-eighth",
-    "two-hundred-thirty-ninth",
-    "two-hundred-fortieth",
-    "two-hundred-forty-first",
-    # Reports Modernization WP02 takes it to two hundred and forty-one; dense
-    # through the two-hundred-forty-second.
-    "two-hundred-forty-second",
-    # Reports Modernization WP03 takes it to two hundred and forty-six; dense
-    # through the two-hundred-forty-seventh.
-    "two-hundred-forty-third",
-    "two-hundred-forty-fourth",
-    "two-hundred-forty-fifth",
-    "two-hundred-forty-sixth",
-    "two-hundred-forty-seventh",
-    # Reports Modernization WP05b takes it to two hundred and fifty; dense
-    # through the two-hundred-fifty-first.
-    "two-hundred-forty-eighth",
-    "two-hundred-forty-ninth",
-    "two-hundred-fiftieth",
-    "two-hundred-fifty-first",
-    # Reports Modernization WP06 takes it to two hundred and fifty-five; dense
-    # through the two-hundred-fifty-sixth.
-    "two-hundred-fifty-second",
-    "two-hundred-fifty-third",
-    "two-hundred-fifty-fourth",
-    "two-hundred-fifty-fifth",
-    "two-hundred-fifty-sixth",
-    # Schedule Scenarios S6-3 takes it to two hundred and eighty-one; dense
-    # through the two-hundred-eighty-second.
-    "two-hundred-fifty-seventh",
-    "two-hundred-fifty-eighth",
-    "two-hundred-fifty-ninth",
-    "two-hundred-sixtieth",
-    "two-hundred-sixty-first",
-    "two-hundred-sixty-second",
-    "two-hundred-sixty-third",
-    "two-hundred-sixty-fourth",
-    "two-hundred-sixty-fifth",
-    "two-hundred-sixty-sixth",
-    "two-hundred-sixty-seventh",
-    "two-hundred-sixty-eighth",
-    "two-hundred-sixty-ninth",
-    "two-hundred-seventieth",
-    "two-hundred-seventy-first",
-    "two-hundred-seventy-second",
-    "two-hundred-seventy-third",
-    "two-hundred-seventy-fourth",
-    "two-hundred-seventy-fifth",
-    "two-hundred-seventy-sixth",
-    "two-hundred-seventy-seventh",
-    "two-hundred-seventy-eighth",
-    "two-hundred-seventy-ninth",
-    "two-hundred-eightieth",
-    "two-hundred-eighty-first",
-    "two-hundred-eighty-second",
-    # The files workspace WP5 takes it to two hundred and ninety-eight; dense
-    # through the two-hundred-ninety-ninth.
-    "two-hundred-eighty-third",
-    "two-hundred-eighty-fourth",
-    "two-hundred-eighty-fifth",
-    "two-hundred-eighty-sixth",
-    "two-hundred-eighty-seventh",
-    "two-hundred-eighty-eighth",
-    "two-hundred-eighty-ninth",
-    "two-hundred-ninetieth",
-    "two-hundred-ninety-first",
-    "two-hundred-ninety-second",
-    "two-hundred-ninety-third",
-    "two-hundred-ninety-fourth",
-    "two-hundred-ninety-fifth",
-    "two-hundred-ninety-sixth",
-    "two-hundred-ninety-seventh",
-    "two-hundred-ninety-eighth",
-    "two-hundred-ninety-ninth",
-    # Communications intelligence WP2-W3 takes it to two hundred and ninety-nine;
-    # dense through the three-hundredth.
-    "three-hundredth",
-)
+#: The ordinals the sweep reads, dense from zero. Built by `tests.pins.ordinal`
+#: (phase P5) rather than written out: the hand tuple this replaced was extended
+#: at every boundary the capability set crossed, and a sparse one reads
+#: `eighty-sixth` as the bare `sixth` inside it, a false finding. It runs past
+#: the capability count, so the ordinal of the next capability is always readable.
+_ORDINAL_LIMIT = max(300, len(Capability) + 1)
 
 
 def _cardinals(limit: int = 999) -> dict[str, int]:
@@ -676,35 +224,9 @@ def _cardinals(limit: int = 999) -> dict[str, int]:
     `WIDE_CARDINALS`. That reader admits at most four words, so a count past
     one thousand and ninety-nine also needs its pattern widened.
     """
-    words = {word: value for value, word in enumerate(_UNITS) if value <= limit}
-    for base, tens_word in _TENS.items():
-        if base > limit:
-            continue
-        words[tens_word] = base
-        for unit in range(1, 10):
-            if base + unit <= limit:
-                words[f"{tens_word}-{_UNITS[unit]}"] = base + unit
-    below_a_hundred = dict(words)
-    for hundreds in range(1, 10):
-        if hundreds * 100 > limit:
-            break
-        prefix = f"{_UNITS[hundreds]} hundred"
-        words[prefix] = hundreds * 100
-        for word, value in below_a_hundred.items():
-            if value and hundreds * 100 + value <= limit:
-                words[f"{prefix} and {word}"] = hundreds * 100 + value
-    below_a_thousand = dict(words)
-    for thousands in range(1, 10):
-        if thousands * 1000 > limit:
-            break
-        prefix = f"{_UNITS[thousands]} thousand"
-        words[prefix] = thousands * 1000
-        for word, value in below_a_thousand.items():
-            total = thousands * 1000 + value
-            if value and total <= limit:
-                joiner = " and " if value < 100 else " "
-                words[f"{prefix}{joiner}{word}"] = total
-    return words
+    # The spelling itself is `tests.pins.spell` (phase P5): one speller for the
+    # corpus rather than three. This is its inverse, over `0..limit`.
+    return {pins.spell(value): value for value in range(limit + 1)}
 
 
 CARDINALS = _cardinals()
@@ -715,7 +237,7 @@ WIDE_CARDINALS = _cardinals(1999)
 #: a derived count, so the spelling works past nineteen (a bare `_UNITS[n]` index
 #: raised once the Alembic chain crossed twenty).
 SPELLED = {value: word for word, value in CARDINALS.items()}
-ORDINALS = {word: value for value, word in enumerate(_ORDINAL_UNITS)}
+ORDINALS = {pins.ordinal(value): value for value in range(_ORDINAL_LIMIT + 1)}
 
 #: The article, not a count. See the boundary note in the module docstring.
 UNREAD_CARDINALS = frozenset({"one"})
@@ -836,16 +358,6 @@ def capability_count() -> int:
 
 def purpose_count() -> int:
     return len(Purpose)
-
-
-def source_modules() -> int:
-    """Section 3's own command: `find src/my_pa -name "*.py"`."""
-    return len(list((ROOT / "src" / "my_pa").rglob("*.py")))
-
-
-def counted_test_modules() -> int:
-    """Section 3's own command: `find tests -name "test_*.py"`."""
-    return len(list((ROOT / "tests").rglob("test_*.py")))
 
 
 def revision_files() -> list[Path]:
@@ -1591,35 +1103,37 @@ def test_every_excused_claim_is_still_there() -> None:
     )
 
 
-def test_section_3_states_the_module_counts_it_says_it_derives() -> None:
-    """Section 3 names its own two commands. This runs them.
+#: Where the plan's current figures now live (phase P5, O1-a).
+GENERATED_STATE = "docs/generated/repository-state.md"
 
-    The paragraph says the figures were "recomputed at WP-4B3 rather than
-    restated" and prints the `find` commands that produce them — and then went
-    stale across the six packages that followed, which is the whole argument for
-    a rule instead of a recomputation.
+#: Section 3's module-count sentence, in the shape it was written while it stated
+#: the current figures. Up to four words per figure, because a count above
+#: ninety-nine is spelled with spaces in it.
+MODULE_COUNT_SENTENCE = re.compile(
+    r"(?P<modules>(?:[A-Za-z-]+ ){0,3}[A-Za-z-]+) Python modules under `src/my_pa` and\s+"
+    r"(?P<tests>(?:[A-Za-z-]+ ){0,3}[A-Za-z-]+) test modules"
+)
+
+
+def test_section_3_links_to_the_generated_module_counts() -> None:
+    """Section 3's module counts live in the generated page, bound to `find` there.
+
+    The paragraph printed the two `find` commands and restated their output, and
+    went stale across every package that added a module until a rule ran them.
+    That rule now runs against the committed census
+    (`test_the_census_matches_a_fresh_measurement[src_modules]` and
+    `[test_modules]`), and the plan links to the page instead: the sentence
+    shape that stated the current figures may not come back here.
     """
-    # Up to four words per figure, because a count above ninety-nine is spelled
-    # with spaces in it — "one hundred and three". A single-word capture read
-    # that as "three" and compared 3 against 103, which is a wrong answer rather
-    # than the unreadable-word refusal the assertion below is written for.
-    match = re.search(
-        r"(?P<modules>(?:[A-Za-z-]+ ){0,3}[A-Za-z-]+) Python modules under `src/my_pa` and\s+"
-        r"(?P<tests>(?:[A-Za-z-]+ ){0,3}[A-Za-z-]+) test modules",
-        plan_current_state_text(),
+    text = plan_current_state_text()
+    assert GENERATED_STATE in text, (
+        f"the plan's current-state sections no longer link to {GENERATED_STATE}"
     )
-    assert match is not None, (
-        "Section 3's module-count sentence no longer matches the shape this test "
-        "reads. Update the sentence and this test together."
+    restated = [match.group(0) for match in MODULE_COUNT_SENTENCE.finditer(text)]
+    assert not restated, (
+        f"section 3 restates the current module counts {restated}; they are generated "
+        f"into {GENERATED_STATE}, so link to it"
     )
-    for key, derived in (("modules", source_modules()), ("tests", counted_test_modules())):
-        word = match[key].lower()
-        assert word in WIDE_CARDINALS, (
-            f"section 3 states '{match[key]}', which this test cannot read"
-        )
-        assert WIDE_CARDINALS[word] == derived, (
-            f"section 3 states {WIDE_CARDINALS[word]} for '{key}' and the tree holds {derived}"
-        )
 
 
 #: A spelled count of Alembic revisions, wherever a current-state section states
@@ -1633,13 +1147,12 @@ REVISION_COUNT = re.compile(rf"\b(?P<count>{_NUMBER})\s+revisions\b", re.IGNOREC
 #: section 1's `Local \`main\` head` row is not read as a revision.
 CHAIN_HEAD = re.compile(r"\bhead\b[^`\n]{0,12}`(?P<head>[0-9a-f]{12})`", re.IGNORECASE)
 
-#: The fewest of each before this rule is deciding anything. Set at the
-#: measurement rather than under it, because the universe is two rows and both
-#: are load-bearing: section 1's identity table and section 3's row. Losing
-#: either — by rewording it out of this shape, which is exactly how a stale
-#: figure escapes a rule — reddens here rather than silently halving the check.
-FEWEST_REVISION_COUNTS = 2
-FEWEST_CHAIN_HEADS = 2
+#: The two rows that stated the current chain, by their opening, and what each
+#: must now open with instead.
+CHAIN_ROWS = (
+    ("| Alembic head | ", "| Alembic head | Current head and revision count: see"),
+    ("| Alembic revisions — ", "| Implemented; current head and revision count: see"),
+)
 
 
 def chain_claims() -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
@@ -1654,46 +1167,32 @@ def chain_claims() -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
     return counts, heads
 
 
-def test_every_current_state_section_states_the_chain_it_derives() -> None:
-    """Both places the plan names the chain, not only the lower one.
+def test_the_current_state_sections_link_to_the_generated_chain() -> None:
+    """Both rows that named the chain now point at the generated page.
 
-    The count is spelled and the head is not, but they rot together and from the
-    same cause, so they are derived together — and they are stated **twice**, in
-    section 1's identity table and in section 3's row, 48 lines apart. The
-    predecessor of this test read section 3 alone. The branch that added
-    `1a4c9e77b2d5` corrected the row that was read and left the row that was
-    not, so the plan asserted ten revisions and eleven revisions at the same
-    head, and every rule in this module stayed green. The derivation was already
-    here; only the universe was wrong.
+    The count and head rot together and were stated **twice**, in section 1's
+    identity table and in section 3's row; the predecessor of this test derived
+    both and compared, and before that a branch corrected one row and left the
+    other. Phase P5 moves the current pair into `docs/generated/repository-state.md`,
+    where `test_pins_are_current[alembic]` binds it to the chain. What is bound
+    here is the replacement: each row opens with the link, and no spelled
+    revision count (the shape `N revisions`) remains in either section. The dated
+    `measured …: N files and single head` entries are history and use `files`.
     """
-    counts, heads = chain_claims()
-    assert len(counts) >= FEWEST_REVISION_COUNTS, (
-        f"only {len(counts)} spelled revision count(s) found in the plan's current-state "
-        "sections; both the section 1 identity table and the section 3 row state one, so "
-        "a rewording that hides one from this rule is the way a stale figure escapes"
-    )
-    assert len(heads) >= FEWEST_CHAIN_HEADS, (
-        f"only {len(heads)} chain head(s) found in the plan's current-state sections; "
-        "see the note on the revision count above"
-    )
-
-    expected_count = len(revision_files())
-    expected_head = alembic_head()
-    wrong = [
-        f"{PLAN.relative_to(ROOT)}:{line} states {stated(word)} revisions and "
-        f"`migrations/versions/` holds {expected_count}"
-        for line, word in counts
-        if word.lower() not in CARDINALS or CARDINALS[word.lower()] != expected_count
-    ]
-    wrong += [
-        f"{PLAN.relative_to(ROOT)}:{line} states head {head} and the chain's head is "
-        f"{expected_head}"
-        for line, head in heads
-        if head != expected_head
-    ]
-    assert not wrong, (
-        f"{len(wrong)} Alembic claim(s) in the plan's current-state sections disagree with "
-        f"`migrations/versions/`, which is what the repository actually declares: {wrong}"
+    sections = plan_current_state_text()
+    for opening, lead in CHAIN_ROWS:
+        rows = [line for line in sections.splitlines() if line.startswith(opening)]
+        assert len(rows) == 1, f"expected one {opening!r} row, found {len(rows)}"
+        assert lead in rows[0] and GENERATED_STATE in rows[0], (
+            f"the {opening.strip()!r} row no longer opens with {lead!r} and the link"
+        )
+        assert not CHAIN_HEAD.search(rows[0].split(lead, 1)[0]), (
+            f"the {opening.strip()!r} row states a head before its link"
+        )
+    counts, _heads = chain_claims()
+    assert not counts, (
+        f"the plan's current-state sections restate a revision count {counts}; it is "
+        f"generated into {GENERATED_STATE}"
     )
 
 
@@ -1819,15 +1318,14 @@ def test_a_correct_claim_of_every_shape_passes(tmp_path: Path) -> None:
     bare index raised `IndexError` — a refusal rather than a false pass, which is
     the direction it was built to fail in. `SPELLED` is the inverse of the
     *built* cardinal map and so keeps spelling past every boundary the map
-    itself covers. `_ORDINAL_UNITS` is still indexed directly, because it is a
-    written tuple whose next boundary announces itself the same way this one did.
+    itself covers. The ordinal is `tests.pins.ordinal`, built the same way.
     """
     planted = tmp_path / "planted.md"
     planted.write_text(
         f"The set is closed at {SPELLED[capability_count()]}. There are "
         f"{SPELLED[capability_count()]} capability names and "
         f"{SPELLED[purpose_count()]} purposes, so a "
-        f"{_ORDINAL_UNITS[capability_count() + 1]} capability would be new.\n",
+        f"{pins.ordinal(capability_count() + 1)} capability would be new.\n",
         encoding="utf-8",
     )
 

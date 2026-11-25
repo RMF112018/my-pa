@@ -139,6 +139,16 @@
     ],
     "revision_files": 132
   },
+  "census": {
+    "architecture": 9512,
+    "database": 7040,
+    "evaluation": 2,
+    "fast_collected": 50534,
+    "fast_skipped": 138,
+    "mypy_files": 745,
+    "src_modules": 551,
+    "test_modules": 1025
+  },
   "chatllm": {
     "classes": {
       "CHATLLM_COMPATIBILITY_ONLY": 2,

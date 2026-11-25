@@ -17,10 +17,14 @@ The other tests keep the snapshot honest without restating a figure: its
 counts are the lengths of its own lists, it records one head that is the end
 of its chain, it is byte-identical to its canonical rendering (a hand edit is
 caught even when it is semantically equal), the accessors read it, and
-`spell()` agrees with the two spellings the corpus already uses.
+`spell()` and `ordinal()` agree with the spellings the corpus already uses.
+`test_generated_repository_state_is_rendered` (phase P5) holds
+`docs/generated/repository-state.md` to a fresh render of the snapshot; the
+snapshot's measured `census` is compared with collection in
+`test_claimed_test_counts_match_collection.py`, which already takes one.
 
-Unmarked: FAST. Reads `migrations/`, `src/` and `tests/pins.json`; writes
-nothing.
+Unmarked: FAST. Reads `migrations/`, `src/`, `tests/pins.json`, the v1 digest
+file and `docs/generated/repository-state.md`; writes nothing.
 """
 
 from __future__ import annotations
@@ -29,7 +33,6 @@ from typing import Any, Final
 
 import pytest
 from tests import pins
-from tests.architecture.test_readme_state_claims import SPELLED_COUNTS
 
 
 @pytest.fixture(scope="module")
@@ -168,24 +171,66 @@ CORPUS_SPELLINGS: Final = {
 }
 
 
-#: `SPELLED_COUNTS` (tests/architecture/test_readme_state_claims.py) spells
-#: these without the "and" that `_cardinals` and every other entry use. The
-#: README prose it guards was written that way; unifying the spellers is phase
-#: P5. Pinned exactly, so the divergence cannot grow unseen.
-SPELLED_COUNTS_WITHOUT_AND: Final = frozenset({101, 102, 103, 105, 106, 107, 108})
-
-
 def test_spell_agrees_with_the_corpus_spellings() -> None:
+    """`spell()` is the one cardinal speller (phase P5 dropped the hand dict)."""
     for value, word in CORPUS_SPELLINGS.items():
         assert pins.spell(value) == word, (value, word)
-    diverging = set()
-    for value, word in SPELLED_COUNTS.items():
-        if pins.spell(value) != word.lower():
-            assert pins.spell(value).replace(" and ", " ") == word.lower(), (value, word)
-            diverging.add(value)
-    assert diverging == SPELLED_COUNTS_WITHOUT_AND
     spelled = [pins.spell(value) for value in range(10_000)]
     assert len(set(spelled)) == len(spelled), "two values share a spelling"
     for bad in (-1, 10_000):
         with pytest.raises(ValueError):
             pins.spell(bad)
+
+
+#: Ordinals at each boundary of the hand list `ordinal()` replaced, and past it.
+CORPUS_ORDINALS: Final = {
+    0: "zeroth",
+    1: "first",
+    12: "twelfth",
+    20: "twentieth",
+    21: "twenty-first",
+    86: "eighty-sixth",
+    90: "ninetieth",
+    100: "hundredth",
+    101: "hundred-first",
+    120: "hundred-twentieth",
+    200: "two-hundredth",
+    299: "two-hundred-ninety-ninth",
+    300: "three-hundredth",
+    1000: "thousandth",
+    1001: "thousand-first",
+    1300: "thousand-three-hundredth",
+}
+
+
+def test_ordinal_agrees_with_the_corpus_ordinals() -> None:
+    for value, word in CORPUS_ORDINALS.items():
+        assert pins.ordinal(value) == word, (value, word)
+    ordinals = [pins.ordinal(value) for value in range(10_000)]
+    assert len(set(ordinals)) == len(ordinals), "two values share an ordinal"
+    for bad in (-1, 10_000):
+        with pytest.raises(ValueError):
+            pins.ordinal(bad)
+
+
+def test_generated_repository_state_is_rendered(committed: dict[str, Any]) -> None:
+    """`docs/generated/repository-state.md` is exactly a fresh render of the snapshot.
+
+    The page is the current-state statement the docs link to (O1-a). A hand edit
+    of any figure, or a `pins.json` change without `regen`, fails here; the
+    snapshot it renders is itself bound to the source (`test_pins_are_current`)
+    and to collection (`test_the_census_matches_a_fresh_measurement`).
+    """
+    assert pins.STATE_PATH.is_file(), "docs/generated/repository-state.md is missing; run regen"
+    text = pins.STATE_PATH.read_text(encoding="utf-8")
+    assert text == pins.render_state(committed, pins.load_digests()), (
+        "docs/generated/repository-state.md is not the render of tests/pins.json; it is "
+        "generated, do not edit: run `PYTHONPATH=src .venv/bin/python -m tests.pins regen`"
+    )
+
+
+def test_the_census_records_every_measured_figure(committed: dict[str, Any]) -> None:
+    census = committed["census"]
+    assert sorted(census) == sorted((*pins.MEASURED, "fast_skipped"))
+    assert all(isinstance(value, int) and value >= 0 for value in census.values()), census
+    assert census["fast_skipped"] < census["fast_collected"]

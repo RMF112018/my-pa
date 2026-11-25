@@ -754,6 +754,7 @@ NAMES_WITHOUT_READING: Final = {
     "tests/unit/test_frontend_ci_classify.py": "frontend-quality classifier patterns, not reads",
     "tests/database/test_file_workspace_persistence.py": "a synthetic path inside a temp workspace",
     "tests/architecture/test_remote_nas_runtime.py": "asserts compose text names a runbook",
+    "tests/pins.py": "writes the generated page; its reader, test_pins_are_current.py, is listed",
 }
 
 

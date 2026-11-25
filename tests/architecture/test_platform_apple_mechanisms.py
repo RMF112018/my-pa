@@ -240,4 +240,5 @@ def test_current_docs_name_the_inert_handoff_and_deferred_goodnotes_model_route(
         encoding="utf-8"
     )
     assert "set is thirty" in cli_source and "twelve since WP-6" not in cli_source
-    assert "two hundred and ninety-nine capabilities" in module_boundaries
+    # The capability total is generated (phase P5); the doc links to it.
+    assert "generated/repository-state.md" in module_boundaries

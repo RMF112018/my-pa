@@ -21,16 +21,14 @@ collected count that a reader takes "19 tests" to mean.
 
 from __future__ import annotations
 
-import json
 import re
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 from typing import Final
 
 import pytest
-from _pytest.mark.expression import Expression
+from tests import pins
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 PLAN: Final = ROOT / "docs" / "plans" / "relationship-intelligence-implementation-plan.md"
@@ -174,275 +172,155 @@ def test_every_claimed_corpus_size_matches_the_corpus() -> None:
     assert not wrong, wrong
 
 
+# --- the current tier and corpus figures: bound through the generated page ------
+#
+# The plan's evidence table used to state the current FAST, architecture,
+# database and evaluation figures and the `mypy` corpus by hand, and the four
+# readers below bound each one to a fresh collection. That guard was right and
+# its cost was every pull request that added a test: the plan was edited each
+# time, and the two plan files were permanently contended.
+#
+# Phase P5 (operator decision O1-a, GENERATE) moves the *current* figures into
+# `tests/pins.json`'s `census` section, rendered into
+# `docs/generated/repository-state.md`. The equality survives unchanged in
+# strength: `test_the_census_matches_a_fresh_measurement` compares each committed
+# figure with the same single collection this module always took, so a test
+# added without `regen --measure` fails here, one figure per test. The page is
+# held to the snapshot by `test_generated_repository_state_is_rendered`.
+#
+# The plan keeps its dated paragraphs as history. They are no longer current, so
+# they are no longer bound; what is bound instead is that the plan *restates no
+# current figure* in any of the four shapes these readers recognise, and that
+# each evidence row links to the generated page. A current figure re-added to the
+# plan, right or wrong, fails `test_the_plan_restates_no_current_tier_figure`.
+
 #: A claim of the form `` `pytest -m "<expr>"` … **N passed** ``: a whole-tier
 #: figure, stated as a bare number beside the exact command that produces it.
 #:
 #: **This is the shape that carried the largest wrong number this plan has
 #: held.** The database-tier row claimed 1,926 passed for a selection that
-#: collects 951 — the figure was produced by running whole directories with no
-#: `-m` filter and then described as partitioning the marker selection. Every
-#: guard in the repository was green: the spelled-count sweep reads words and
-#: not digits, and the file-claim pattern above requires a backticked test
-#: *path*, which a tier figure does not have. An independent reviewer found it
-#: with one `--collect-only`, which is the check this closes.
-#:
-#: Collection, not execution: this asserts the claim is about the right *set*.
-#: A tier's pass count may legitimately sit below its collected count when tests
-#: are skipped — so a claim states its skips, and pass + skipped must equal what
-#: the selection collects.
-#:
-#: **It was an upper bound, and that is what let the defect through.** The ninth
-#: review found the plan claiming `8080 passed` for a tier collecting 8082,
-#: stale by exactly the two tests the same commit added one row above the figure
-#: — an *understatement*, which an upper bound admits. Planting `8083` reddened;
-#: planting `1` did not. Nothing is skipped in either tier, so the equality was
-#: available the whole time, and the escape hatch the one-sidedness existed for
-#: is now written down instead: a claim that needs to sit below collection says
-#: how far below, and why is legible from the number.
+#: collects 951. An independent reviewer found it with one `--collect-only`;
+#: this reader closed it, and now keeps the shape out of the plan.
 TIER_CLAIM: Final = re.compile(
     r"`pytest\s+-m\s+\"(?P<expr>[^\"]+)\"[^`]*`[^|]{0,400}?\*\*(?P<count>[\d,]+)\s+passed"
     r"(?P<tail>[^|]{0,200})",
 )
 
-#: One collection, reused by every selection this module checks.
-#:
-#: **Four selections meant four full-tree collections, and that broke CI.** Each
-#: `pytest --collect-only` re-imports the whole suite -- measured at 38 to 40
-#: seconds apiece, 158 seconds of the architecture tier's 311 -- and the
-#: `dependency-floor` job, which runs the FAST tier under a ten-minute budget,
-#: timed out at 10m16s. A guard that makes the suite too slow to run is a guard
-#: that gets deleted, and the cost bought nothing: the marker sets and node ids
-#: from a single collection answer every question the four asked.
-_CENSUS: list[tuple[str, frozenset[str]]] = []
-
-_CENSUS_SCRIPT: Final = """
-import json, sys
-import pytest
-
-
-class Census:
-    def __init__(self):
-        self.rows = []
-
-    def pytest_collection_modifyitems(self, items):
-        for item in items:
-            self.rows.append([item.nodeid, sorted({m.name for m in item.iter_markers()})])
-
-
-census = Census()
-pytest.main(["--collect-only", "-q", "-p", "no:cacheprovider", "tests"], plugins=[census])
-sys.stderr.write(json.dumps(census.rows))
-"""
-
-
-def _census() -> list[tuple[str, frozenset[str]]]:
-    """Every collected test, with the markers it carries and the path it sits at."""
-    if not _CENSUS:
-        result = subprocess.run(  # noqa: S603
-            [sys.executable, "-c", _CENSUS_SCRIPT],
-            capture_output=True,
-            text=True,
-            cwd=ROOT,
-            check=False,
-        )
-        try:
-            rows = json.loads(result.stderr)
-        except json.JSONDecodeError:
-            raise AssertionError(
-                f"could not take a collection census:\n{result.stdout[-2000:]}\n"
-                f"{result.stderr[-2000:]}"
-            ) from None
-        _CENSUS.extend((node, frozenset(marks)) for node, marks in rows)
-    return _CENSUS
-
-
-def _tier_collected(expression: str) -> int:
-    """What `-m expression` would select, evaluated against the census.
-
-    `Expression.compile` is pytest's own parser for `-m`, so this agrees with
-    the command the plan prints by construction rather than by a second
-    implementation of the same grammar.
-    """
-    compiled = Expression.compile(expression)
-    return sum(1 for _, marks in _census() if compiled.evaluate(marks.__contains__))
-
-
-def _path_collected(path: str) -> int:
-    """What collecting one directory would report."""
-    return sum(1 for node, _ in _census() if node.startswith(path))
-
-
-#: `**8080 passed, 0 failed, 987 deselected**` — a skip count if one is stated.
-#: `deselected` is not read: a `-m` collection already excludes those, so they
-#: are not part of the set the claim is about.
-_SKIPPED: Final = re.compile(r"([\d,]+)\s+skipped")
-
-
-def _tier_claims() -> list[tuple[str, int, int, int]]:
-    text = PLAN.read_text(encoding="utf-8")
-    found: list[tuple[str, int, int, int]] = []
-    for match in TIER_CLAIM.finditer(text):
-        line = text.count("\n", 0, match.start()) + 1
-        skipped = _SKIPPED.search(match.group("tail"))
-        found.append(
-            (
-                match.group("expr"),
-                int(match.group("count").replace(",", "")),
-                int(skipped.group(1).replace(",", "")) if skipped else 0,
-                line,
-            )
-        )
-    return found
-
-
-def test_the_plan_claims_a_pass_count_for_at_least_one_tier() -> None:
-    """If this pattern stops matching, the guard guards nothing — and it did once."""
-    assert _tier_claims(), (
-        'no `pytest -m "..."` — **N passed** claim found in the plan; either the '
-        "evidence table changed shape or this pattern went stale"
-    )
-
-
-@pytest.mark.parametrize(("expression", "claimed", "skipped", "line"), _tier_claims())
-def test_every_claimed_tier_pass_count_accounts_for_what_that_selection_collects(
-    expression: str, claimed: int, skipped: int, line: int
-) -> None:
-    """A tier figure, against the selection the sentence beside it names.
-
-    An equality rather than an upper bound, for the reason recorded on
-    `TIER_CLAIM`: the bound admitted the understatement that actually happened,
-    twice, and both times the figure was stale by exactly the tests the same
-    commit had added. A pass count that must sit below collection states its own
-    skip count and is checked against the sum, so the shortfall is a written
-    number rather than an unexamined gap.
-    """
-    collected = _tier_collected(expression)
-    assert claimed + skipped == collected, (
-        f"{PLAN.name}:{line} claims {claimed} passed"
-        + (f" and {skipped} skipped" if skipped else "")
-        + f" for `-m {expression!r}`, which collects {collected}. "
-        + (
-            "The figure is stale — most likely by exactly the tests the commit carrying it added."
-            if claimed + skipped < collected
-            else "The figure was measured against a different selection than the one it names."
-        )
-        + " Correct the plan rather than this test."
-    )
-
-
-# --- the two tool-corpus figures beside the tier figures ---------------------
-#
-# `ruff format --check .` and `mypy` each report the size of the corpus they
-# cleaned, and the plan restates both by hand. That is the same shape as the
-# tier counts above and fails the same way: the ruff figure said 923 for a tree
-# holding 925, stale by exactly the two test modules the commit carrying it
-# added -- caught by cross-reading a commit message rather than by anything
-# here. Both are derived now.
-
+#: `mypy` only. `ruff` was bound once and should not have been: it walks the
+#: working directory rather than the index, so its corpus size is a property of
+#: what happens to be on disk (925 locally, 927 in CI, at one commit).
 _TOOL_CLAIM: Final = re.compile(
-    # `mypy` only. `ruff` was bound here too and should not have been: it walks
-    # the working directory rather than the index, so its corpus size is a
-    # property of what happens to be on disk. Measured locally as 925 and by CI
-    # as 927 at the same commit, which failed the run -- a guard that reddens on
-    # a correct tree because the tree is somewhere else. `mypy`'s figure is
-    # derived from configured targets and is the same everywhere.
     r"`(?P<tool>mypy)[^`]*`[^|]{0,200}?clean over (?P<count>[\d,]+) files"
 )
 
-
-def _tool_claims() -> list[tuple[str, int, int]]:
-    text = PLAN.read_text(encoding="utf-8")
-    found: list[tuple[str, int, int]] = []
-    for match in _TOOL_CLAIM.finditer(text):
-        line = text.count("\n", 0, match.start()) + 1
-        found.append((match.group("tool"), int(match.group("count").replace(",", "")), line))
-    return found
-
-
-def _measured(tool: str) -> int:
-    """`mypy`'s corpus, derived from its configuration rather than by running it.
-
-    Running `mypy` here duplicated the job's own `mypy` step -- cheap locally on
-    a warm cache, a cold full type-check in CI -- inside a tier already under a
-    ten-minute budget. The figure it printed is just the number of Python files
-    under `[tool.mypy] files`, so it is read from there: the same number,
-    without the second type-check, and derived from the declaration rather than
-    from a run.
-    """
-    assert tool == "mypy", tool
-    configuration = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    targets = configuration["tool"]["mypy"]["files"]
-    return sum(1 for target in targets for _ in (ROOT / target).rglob("*.py"))
-
-
-def test_the_plan_claims_a_corpus_size_for_mypy() -> None:
-    """An anti-vacuity floor: a pattern that matches nothing checks nothing."""
-    tools = {tool for tool, _, _ in _tool_claims()}
-    assert tools == {"mypy"}, (
-        f"expected a `clean over N files` claim for `mypy`, found {sorted(tools)}"
-    )
-
-
-@pytest.mark.parametrize(("tool", "claimed", "line"), _tool_claims())
-def test_every_claimed_tool_corpus_size_matches_what_that_tool_reports(
-    tool: str, claimed: int, line: int
-) -> None:
-    """The figure beside the tool, against the figure the tool prints."""
-    measured = _measured(tool)
-    assert claimed == measured, (
-        f"{PLAN.name}:{line} says `{tool}` is clean over {claimed} files; it "
-        f"reports {measured}. Correct the plan rather than this test."
-    )
-
-
-# --- the two tier figures no `-m "…"` claim reaches ---------------------------
-#
-# `TIER_CLAIM` matches a bolded pass count following a `pytest -m "…"` command.
-# Two figures in the same evidence table are stated another way and were bound
-# to nothing: the architecture tier, which is named by path rather than by
-# marker and sits as a *second* bolded figure inside a cell whose first one the
-# tier rule already claimed; and the evaluation tier, whose marker is written
-# without quotes. Both were correct when the tenth review measured them, and
-# nothing kept them so.
-
+#: The architecture tier, named by path rather than by marker, and the
+#: evaluation tier, whose marker is written without quotes.
 _PATH_TIER_CLAIM: Final = re.compile(r"Architecture tier \*\*(?P<count>[\d,]+)\s+passed")
 _BARE_MARKER_CLAIM: Final = re.compile(
     r"`pytest\s+-m\s+(?P<expr>[a-z_]+)`[^|]{0,120}?(?P<count>[\d,]+)\s+passed"
 )
 
+#: Every reader of a current tier or corpus figure, by name.
+CURRENT_FIGURE_READERS: Final = {
+    "tier": TIER_CLAIM,
+    "tool": _TOOL_CLAIM,
+    "path tier": _PATH_TIER_CLAIM,
+    "bare marker": _BARE_MARKER_CLAIM,
+}
 
-def _extra_tier_claims() -> list[tuple[str, str, int, int]]:
-    """`(kind, selector, claimed, line)` for the two the marker rule cannot see."""
-    text = PLAN.read_text(encoding="utf-8")
-    found: list[tuple[str, str, int, int]] = []
-    for match in _PATH_TIER_CLAIM.finditer(text):
-        line = text.count("\n", 0, match.start()) + 1
-        found.append(
-            ("path", "tests/architecture", int(match.group("count").replace(",", "")), line)
-        )
-    for match in _BARE_MARKER_CLAIM.finditer(text):
-        line = text.count("\n", 0, match.start()) + 1
-        found.append(
-            ("marker", match.group("expr"), int(match.group("count").replace(",", "")), line)
-        )
-    return found
+#: The plan's evidence rows that used to carry the current figures, by label.
+#: Each must now point at the generated page.
+LINKED_ROWS: Final = (
+    "FAST tier validation",
+    "Architecture tier",
+    "Types",
+    "Full database tier disposition",
+    "Evaluation tier",
+)
+GENERATED_STATE: Final = "docs/generated/repository-state.md"
+
+#: One collection, reused by every figure this module checks.
+#:
+#: **Four selections meant four full-tree collections, and that broke CI.** Each
+#: `pytest --collect-only` re-imports the whole suite (38 to 40 seconds apiece)
+#: and the `dependency-floor` job timed out at 10m16s. One census answers every
+#: selection; the script is `tests.pins.CENSUS_SCRIPT`, which `regen --measure`
+#: runs too.
+_CENSUS: list[tuple[str, frozenset[str]]] = []
 
 
-def test_the_plan_states_both_of_the_other_tier_figures() -> None:
-    """An anti-vacuity floor: two patterns, both of which must still match."""
-    kinds = {kind for kind, _, _, _ in _extra_tier_claims()}
-    assert kinds == {"path", "marker"}, (
-        f"expected an architecture figure and an evaluation figure, found {sorted(kinds)}"
+def _census() -> list[tuple[str, frozenset[str]]]:
+    """Every collected test, with the markers it carries and the path it sits at."""
+    if not _CENSUS:
+        _CENSUS.extend(pins.census_rows())
+    return _CENSUS
+
+
+@pytest.mark.parametrize("figure", pins.MEASURED)
+def test_the_census_matches_a_fresh_measurement(figure: str) -> None:
+    """A committed tier or corpus figure, against a fresh collection and `find`.
+
+    An equality, for the reason the plan-bound version recorded: an upper bound
+    admitted the understatement that actually happened, twice, each time stale
+    by exactly the tests the same commit added.
+    """
+    committed = pins.load()["census"][figure]
+    measured = pins.measure(_census())[figure]
+    assert committed == measured, (
+        f"tests/pins.json census {figure!r} is {committed}; a fresh measurement finds "
+        f"{measured}. Run `PYTHONPATH=src .venv/bin/python -m tests.pins regen --measure` "
+        f"(it also rewrites {GENERATED_STATE}) rather than editing this test."
     )
 
 
-@pytest.mark.parametrize(("kind", "selector", "claimed", "line"), _extra_tier_claims())
-def test_every_other_claimed_tier_figure_matches_collection(
-    kind: str, selector: str, claimed: int, line: int
-) -> None:
-    """The same equality the marker rule applies, for the two it cannot reach."""
-    collected = _path_collected(selector) if kind == "path" else _tier_collected(selector)
-    assert claimed == collected, (
-        f"{PLAN.name}:{line} claims {claimed} passed for {selector!r}, which "
-        f"collects {collected}. Correct the plan rather than this test."
+def _current_figures(text: str) -> list[tuple[str, str, int]]:
+    """`(reader, matched text, line)` for every current-figure shape in `text`."""
+    found: list[tuple[str, str, int]] = []
+    for name, reader in CURRENT_FIGURE_READERS.items():
+        for match in reader.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            found.append((name, match.group(0)[:160], line))
+    return found
+
+
+def test_the_plan_restates_no_current_tier_figure() -> None:
+    """The replacement guard for the plan-bound figures (O1-a).
+
+    Current figures live in the generated page; a figure in the plan's shape is a
+    second, hand-maintained copy that the census no longer binds.
+    """
+    found = _current_figures(PLAN.read_text(encoding="utf-8"))
+    assert not found, (
+        f"{PLAN.name} restates a current tier or corpus figure: {found}. Current figures "
+        f"are generated into {GENERATED_STATE}; link to it and keep dated figures as "
+        "unbolded history."
+    )
+
+
+def test_each_plan_evidence_row_links_to_the_generated_state() -> None:
+    rows = {
+        label: [
+            line
+            for line in PLAN.read_text(encoding="utf-8").splitlines()
+            if line.startswith(f"| {label} |")
+        ]
+        for label in LINKED_ROWS
+    }
+    missing = [label for label, lines in rows.items() if len(lines) != 1]
+    assert not missing, f"{PLAN.name} no longer has exactly one row for {missing}"
+    unlinked = [label for label, (line,) in rows.items() if GENERATED_STATE not in line]
+    assert not unlinked, f"{PLAN.name} rows {unlinked} do not link to {GENERATED_STATE}"
+
+
+def test_every_current_figure_reader_still_reads_its_shape() -> None:
+    """The plan-side guard is only as good as its readers, so each is planted."""
+    planted = (
+        '| a | `pytest -m "not slow"` — collects 9; a green execution requires '
+        "**9 passed**, 0 skipped |\n"
+        "| b | `mypy` (configured targets) — clean over 745 files |\n"
+        "| c | the tier guard binds Architecture tier **9,508 passed** |\n"
+        "| d | `pytest -m evaluation` — 2 passed |\n"
+    )
+    assert sorted(name for name, _, _ in _current_figures(planted)) == sorted(
+        CURRENT_FIGURE_READERS
     )

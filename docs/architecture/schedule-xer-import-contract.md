@@ -1,6 +1,7 @@
 # P6 XER/XML schedule import — whole-slice contract (S7-0 to S7-6)
 
-**Status:** proposed implementation contract. Design only; nothing in it is implemented,
+**Status:** proposed implementation contract. S7-0 is merged (#384) and S7-1 is implemented
+on `feat/schedule-xer-parser`, not merged; nothing else in it is implemented, and nothing is
 migrated, granted, switched on or deployed. The decision record is
 [`ADR-023`](../decisions/ADR-023-p6-xer-xml-schedule-import.md), which loosens
 [`ADR-016`](../decisions/ADR-016-cpm-workbench-schedule-evidence.md) decision 4 for the P6
@@ -134,6 +135,8 @@ beyond `%T`/`%F`/`%R` adjacency.
   `p6_encoding_invalid`. The chosen encoding is recorded. Accept CRLF or LF line ends; a bare
   CR, NUL, or a C0 control other than tab (and `0x7F` inside `clndr_data`) in a value is
   `p6_value_invalid` for that field.
+- A byte-order mark is not stripped: the first line then does not start with `ERMHDR`, and
+  the file fails `p6_header_invalid`.
 
 ### 3.3 Identifiers and value forms [S]
 
@@ -294,10 +297,10 @@ applied to versions already imported.
 - A field present in the catalogue for some versions and absent in a file is handled by its
   tier (R fatal, T null, O nothing).
 - An enumeration value not in the catalogue: in an **R** field (`task_type`, `status_code`,
-  `pred_type`, `cstr_type`, `clndr_type`) it is fatal `p6_unknown_enum_value` unless the
-  catalogue marks the value set open; in a T or O field it is stored as its raw token
-  (≤ 64 characters, pattern `[A-Za-z0-9_]{1,64}`, else null) with the non-fatal
-  `p6_unknown_enum_value`.
+  `pred_type`, `cstr_type`, `clndr_type`) it is fatal `p6_unknown_enum_value`; R value sets
+  are closed. In a T or O field a token (≤ 64 characters, pattern `[A-Za-z0-9_]{1,64}`) is
+  stored as its raw token with the non-fatal `p6_unknown_enum_value`; a value that is not a
+  token is `p6_value_invalid` and stored null.
 - Multiple `PROJECT` rows: fatal `p6_multiple_projects` (single-project exports only;
   operator decision 2026-11-23: multi-project exports are not common, keep refusing them).
 
@@ -314,23 +317,36 @@ applied to versions already imported.
 | `UDFTYPE` / `ACTVTYPE` / `ACTVCODE` | ≤ 2,000 / ≤ 2,000 / ≤ 100,000 |
 | `UDFVALUE` / `TASKACTV` / `TASKRSRC` | ≤ 1,000,000 / ≤ 500,000 / ≤ 500,000 |
 | value length | ≤ 65,536 characters; `clndr_data` ≤ 1,048,576 |
-| calendar tree | depth ≤ 16, nodes ≤ 200,000 |
+| calendar tree | depth ≤ 16, nodes ≤ 100,000 (200,000 could not be reached under the 1,048,576-character `clndr_data` cap) |
 | WBS depth | ≤ 64 |
-| numbers | `-?\d{1,15}(\.\d{1,6})?` |
-| dates | `YYYY-MM-DD HH:MM` (`:SS` tolerated [D]), years 1900–2199 |
+| numbers | `-?\d{1,15}(\.\d{1,6})?`: up to 15 integer digits and 6 decimals are kept (section 6.2 widths) |
+| dates | `YYYY-MM-DD HH:MM`; seconds are accepted only when zero (`HH:MM:SS` with `SS` = `00`) [D] (any other seconds value is `p6_value_invalid`); years 1900–2199 |
 
 ### 5.5 Structural validation (fatal, in order)
 
 `p6_encoding_invalid`, `p6_header_invalid` (first line not `ERMHDR`), `p6_structure_invalid`
 (record before `%T`, `%R` before `%F`, duplicate table, duplicate field, missing `%E`, content
-after `%E`), `p6_record_width_mismatch`, `p6_bound_exceeded`, `p6_required_table_missing`,
-`p6_required_field_missing`, `p6_multiple_projects`, `p6_value_invalid` (R field),
-`p6_unknown_enum_value` (R field), `p6_duplicate_activity_id` (`task_code` repeated or empty),
-`p6_reference_dangling` (a `TASK.wbs_id` or same-project `TASKPRED` end that names no
-row), `p6_wbs_cycle`. A missing or unparseable activity calendar is **not** fatal (operator
-decision 2026-11-23): it is `p6_calendar_missing` below.
+after `%E` other than blank lines, which are tolerated), `p6_record_width_mismatch`,
+`p6_bound_exceeded`, `p6_required_table_missing`, `p6_required_field_missing`,
+`p6_multiple_projects`, `p6_value_invalid` (R field), `p6_unknown_enum_value` (R field),
+`p6_duplicate_activity_id` (`task_code` repeated or empty), `p6_structure_invalid` (the number
+of `PROJWBS` rows with `proj_node_flag = Y` is not exactly 1; the issue names the table and
+field, not a value), `p6_reference_dangling` (a `TASK.wbs_id` or same-project `TASKPRED` end
+that names no row; a non-project `PROJWBS` row whose `parent_wbs_id` names no row; a `TASK` or
+`PROJWBS` `proj_id` that differs from the `PROJECT` row's), `p6_wbs_cycle`. A missing or
+unparseable activity calendar is **not** fatal (operator decision 2026-11-23): it is
+`p6_calendar_missing` below.
 
-Non-fatal: `p6_unknown_table`, `p6_unknown_field`, `p6_unknown_field_unnamed`,
+Order details. The parse stops at the first fatal issue, and within one check at the first
+by line. The calendar-tree bounds of 5.4 are checked (every `clndr_data` blob is parsed)
+before the required-table check. Duplicate P6 ids (`task_id`, `wbs_id`, `clndr_id`,
+`task_pred_id`) are `p6_structure_invalid`, raised with `p6_duplicate_activity_id` after the
+value checks; the WBS depth bound (`p6_bound_exceeded`) is raised with `p6_wbs_cycle`, after
+the reference checks. The returned issue list is capped at 10,000 issues; the counts by code
+are always complete.
+
+Non-fatal: `p6_tolerated_field_missing` (info: a T field with no `%F` column, once per table
+and field, section 5.1), `p6_unknown_table`, `p6_unknown_field`, `p6_unknown_field_unnamed`,
 `p6_unknown_enum_value` (T/O), `p6_export_version_untested`, `p6_value_invalid` (T/O field:
 stored null), `p6_external_relationship` (`pred_proj_id ≠ proj_id`: stored, flagged),
 `p6_calendar_invalid` (unused calendar), `p6_calendar_base_substituted`,
@@ -339,6 +355,10 @@ unparseable: the activity is stored with its P6 calendar id and the scenario sna
 the MY-PA standard calendar, section 11.6),
 `p6_capture_cap_reached` (section 7.7), `p6_project_identity_changed` (section 11.1: makes the
 publication `review_required`).
+
+Implementation notes (no rule of their own): an empty file is `p6_structure_invalid`; with
+several `SCHEDOPTIONS` rows the first (of the project) is taken; a "used" calendar is one named
+by a `TASK.clndr_id` (the project default calendar does not make a calendar used).
 
 ---
 
@@ -358,6 +378,10 @@ drift. Adding a catalogued field later is a data edit to that module plus a cata
 bump — no migration, no handler or schema change — and until then the field is still
 capturable as text through the observed-fields path (section 7).
 
+Type rule for fields listed by name only (6.7 and 6.8 optional lists, 6.9 and 6.10 field
+lists): a name ending `_flag` is `flag`, `_date` is `ts`, `_id`, `_id1` or `_id2` is `id`;
+every other field is `text(4000)`.
+
 `field_key` grammar: `xer:<TABLE>.<field>` for a fixed field; `udf:<owner>:<label>` for a
 UDF (owner `TASK`, `PROJWBS`, `PROJECT`, `TASKRSRC`, `RSRC`; label normalized NFC, ≤ 120
 characters); `code:<type label>` for an activity-code type. UDF and code keys use the
@@ -370,7 +394,8 @@ guessed).
 - **XML**: the `APIBusinessObjects` path; `—` when no 1:1 element was identified; seen in the
   sample unless marked [D].
 - **Type**: `id` (bigint), `text(n)`, `name` (normalized display text ≤ 2,000), `enum`,
-  `flag`, `ts` (naive minute timestamp), `hours` (numeric(18,6)), `num`, `int`, `blob`.
+  `flag`, `ts` (naive minute timestamp), `hours` (numeric(21,6)), `num` (numeric(21,6)), `int`,
+  `blob`. The numeric widths hold the 15 integer digits and 6 decimals of 5.4; S7-2 uses them.
 - **Tier**: R, T, O (`O+` captured by default, `O−` not by default), N, V (section 5.1).
 - **Use**: `E` scenario snapshot / engine, `Δ` delta, `—` neither.
 - **Target**: the MY-PA storage target (section 8): a typed column `table.column`, `FS` (the
@@ -451,7 +476,8 @@ guessed).
 
 Derived activity columns: `start_at` = `actual_start` if set else `early_start`, `finish_at` =
 `actual_finish` if set else `early_finish` (equal to XML `StartDate`/`FinishDate`, section 4);
-`wbs_path` (labels from the project node's children down, ≤ 64); `kind` (`task` for
+`wbs_path` (the `wbs_short_name` labels below the project node, from its children down; the
+depth, ≤ 64, counts those levels and not the project node); `kind` (`task` for
 `TT_Task` and the other non-milestone types, `start_milestone` for `TT_Mile`,
 `finish_milestone` for `TT_FinMile`; mapped faithfully, never collapsed, section 11.7).
 
@@ -477,6 +503,9 @@ Enumerations: `task_type` {`TT_Task`, `TT_Mile`, `TT_FinMile`} [S], {`TT_LOE`, `
 | float_path | — | int | — | O− | — | FS | S |
 | aref | — | ts | — | O− | — | FS | S |
 | arls | — | ts | — | O− | — | FS | S |
+
+`is_external` is true when `pred_proj_id` differs from `proj_id` or `proj_id` differs from
+the `PROJECT` row's `proj_id`.
 
 `pred_type` {`PR_FS`, `PR_SS`, `PR_FF`} [S], {`PR_SF`} [D]. Relationships are matched across
 publications by the (predecessor, successor) Activity-ID pair, never by `task_pred_id`.
@@ -644,7 +673,13 @@ for itself), subject to the caps of section 7.7.
 | LOCATION | location_id, location_name, location_type, address_line1, address_line2, address_line3, city_name, municipality_name, state_name, state_code, country_name, country_code, postal_code, longitude, latitude | personal/address data; not in XML sample |
 | NONWORK | nonwork_type_id, seq_num, nonwork_code, nonwork_type | not in XML sample |
 | OBS | obs_id, parent_obs_id, guid, seq_num, obs_name, obs_descr | personal names; XML `OBS/*` |
-| RSRC, TASKRSRC, ROLES, ACCOUNT, PROJCOST, TASKMEMO, MEMOTYPE, TASKPROC, PCATTYPE, PCATVAL, PROJPCAT, RCATTYPE, RCATVAL, RSRCRCAT, UMEASURE, SHIFT, SHIFTPER, COSTTYPE, EXPTYPE | per the P6 documentation [D] | entity `resource` / `assignment` for `RSRC` / `TASKRSRC`, else `project`; catalogued in S7-1 from documentation, marked `documented` |
+| ROLES, ACCOUNT, PROJCOST, TASKMEMO, MEMOTYPE, TASKPROC, PCATTYPE, PCATVAL, PROJPCAT, RCATTYPE, RCATVAL, RSRCRCAT, UMEASURE, SHIFT, SHIFTPER, COSTTYPE, EXPTYPE | none listed [D] | entity `project`; catalogued in S7-1 from documentation without fields |
+
+`RSRC` and `TASKRSRC` are tolerated tables (5.1), not rows of this table: their fields are
+all O− and belong to entity `resource` and `assignment`. Documentation-only tables (the last
+row above, and `RSRC` and `TASKRSRC` while v1 lists none of their fields) are catalogued
+without fields: their fields are observed as unknown (`p6_unknown_field`, section 5.2) until a
+documented field list is added with a catalogue version bump.
 
 `ERMHDR` fields 2 (version) and 3 (export date) are stored on the project row
 (`export_version`, `export_date`); its remaining fields (user, database, currency labels) are
@@ -676,7 +711,9 @@ re-capture).
 
 The operator's choice of captured optional fields is a **per-Series** set, recorded as an
 append-only chain of events in `schedule_p6_capture_events`; the current set is the last
-event's set (default: the catalogue defaults, O+). Per Series, because each project defines
+event's set (default: the catalogue defaults, O+). With no selection the default is the O+
+fields plus every UDF and activity-code key the file defines; more than 300 default keys are
+sorted, truncated to the first 300 and raise `p6_capture_cap_reached`. Per Series, because each project defines
 its own UDFs, codes and export options and a Series is one project's schedule over time: a
 per-Principal set would apply one project's labels to another's, and a per-publication set
 would make versions of one project incomparable. A selection applies from the **next** import
@@ -692,8 +729,11 @@ N fields; R/T/V fields (always captured as typed columns). Selecting a field mar
 `(parser_run_id, entity_kind, entity_p6_id, field_key, ordinal)` with `principal_id`,
 `publication_id`, `series_id`, `schedule_activity_id` (activities only, for cross-version
 reads), and exactly 1 typed value column set: `value_text` (≤ 4,000), `value_number`
-(numeric(28,6)), `value_ts`, `value_flag`, plus `code_path` (activity code parent chain,
-≤ 8 labels) and `record_line`. `ordinal` > 0 only for multi-valued keys (several codes of one
+(numeric(28,6)), `value_ts`, `value_flag`, plus `code_path` (activity code parent chain from
+the root value down to the value, ≤ 8 labels) and `record_line`. A static-type
+(`FT_STATICTYPE`) UDF value is resolved through `UDFCODE.short_name`. Optional fields of a
+table that is not an entity table attach to the `project` entity, with the row index (from 0)
+as `ordinal`. `ordinal` > 0 only for multi-valued keys (several codes of one
 type are not allowed by P6 [D]; ordinal stays for `TASKRSRC`-style repetition). Entity kinds:
 `project`, `wbs`, `activity`, `relationship`, `calendar`, `resource`, `assignment`.
 
@@ -757,8 +797,8 @@ earlier values are never changed; reads use the latest capture run per publicati
 | imports per Principal | ≤ 60 per hour, ≤ 500 per day (`rate_limited`); placeholders kept by the same decision |
 | selection events per Series | ≤ 1,000 |
 
-Reaching the per-entity or per-publication cap stops capture for that publication's further
-optional values with the non-fatal `p6_capture_cap_reached` (typed data is unaffected).
+Reaching any capture cap stops all further capture for that publication's optional values
+with the non-fatal `p6_capture_cap_reached` (typed data is unaffected).
 
 ---
 
@@ -780,7 +820,7 @@ by `(parser_run_id, …)` and mint no identifier.
 | `schedule_p6_wbs` | `(parser_run_id, p6_wbs_id)` | 6.5 typed columns, `depth`, `record_line` |
 | `schedule_p6_activities` | `(parser_run_id, p6_task_id)`; unique `(parser_run_id, activity_id)` | 6.3 typed and derived columns, `schedule_activity_id` (Stable Activity, `sact_`), `record_line` |
 | `schedule_p6_relationships` | `(parser_run_id, p6_relationship_id)` | 6.4 columns, `pred_activity_id`, `succ_activity_id` (Activity IDs; null predecessor when external), `is_external`, `record_line` |
-| `schedule_p6_calendars` | `(parser_run_id, p6_calendar_id)` | 6.6 columns, `week` (canonical JSON: 7 lists Monday first of `[start, end]` minutes), `exceptions` (canonical JSON, sorted), `exception_count`, `data_sha256`, `record_line` |
+| `schedule_p6_calendars` | `(parser_run_id, p6_calendar_id)` | 6.6 columns, `week` (canonical JSON: 7 lists Monday first of `[start, end]` minutes), `exceptions` (canonical JSON, sorted), `exception_count`, `data_sha256` (the SHA-256 over the canonical parsed week and exceptions, so `VIEW` display state does not change it), `record_line` |
 | `schedule_p6_field_values` | section 7.3 | generic captured values |
 | `schedule_p6_observed_fields` | `(parser_run_id, source_table, field_name)` | section 7.4 |
 | `schedule_p6_capture_events` | `event_id`; unique `(series_id, sequence)` | `principal_id`, `series_id`, `sequence`, `field_keys` (sorted array ≤ 300), `include_personal`, `catalogue_version`, `provenance`, `created_at` |
@@ -882,7 +922,7 @@ frame `cpm-workbench-p6-frame-v1`, capped at the existing 134,217,728 bytes); H5
 observed fields and issues in batches of ≤ 1,000; H7 Stable Activities by exact `task_code`
 in the Series; H8 finalize and the ADR-017 series-match hook. Status: `failed` on any fatal
 issue; `review_required` on `p6_project_identity_changed`; else `complete` (non-fatal issues
-listed). `partial` is not used by `p6_xer_v1`. Budgets: the S5 handler budget and parse wall;
+listed, at most 10,000, with complete counts by code, section 5.5). `partial` is not used by `p6_xer_v1`. Budgets: the S5 handler budget and parse wall;
 a measurement on a bounds-maximal synthetic file is an S7-3 acceptance item.
 
 ---
@@ -1248,7 +1288,9 @@ as the worker (one definition, no drift). It never writes to the database, the n
 file it reads, and its output never contains a value: only table and field names (names that
 fail the field-name pattern are reported by position), counts, lengths, shape histograms and,
 for enumerated fields, unknown tokens matching `[A-Za-z]{1,8}_[A-Za-z0-9_]{1,40}` (P6
-vocabulary; anything else is counted, not printed).
+vocabulary; anything else is counted, not printed). It prints no version string: the export
+version appears only as `export_version_tested` (true or false). An unexpected error prints
+the error's type name only and exits 1.
 
 Report: per table (catalogued or unknown; records), per field (tier, present, non-empty, min
 and max length, shapes, over-length against the catalogue bound, unknown enum tokens), and a

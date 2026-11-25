@@ -523,6 +523,14 @@ REFUSED: Final = (
     ),
     ("folder_nested", _document(_a(), _entry(FOLDER_A + "/Inner", PB)), "folder_nested"),
     ("duplicate_key", '{"schema": "a", "schema": "b"}', "duplicate_json_key"),
+    # Valid under last-key-wins: only the duplicate-key refusal stands between it and a write.
+    (
+        "duplicate_key_otherwise_valid",
+        json.dumps(_document(_a(currency="CAD"))).replace(
+            '"currency": "CAD"', '"currency": "USD", "currency": "CAD"'
+        ),
+        "duplicate_json_key",
+    ),
     ("unknown_key", {**_document(_a()), "comment": "x"}, "unknown_key"),
 )
 

@@ -458,6 +458,12 @@ def test_apply_writes_once_then_finds_nothing_to_change(
     ("document", "code"),
     [
         ('{"schema": "a", "schema": "b"}', "duplicate_json_key"),
+        (
+            json.dumps(_document(_a())).replace(
+                '"schema": ', '"schema": "my_pa_project_report_bindings_v1", "schema": ', 1
+            ),
+            "duplicate_json_key",
+        ),
         ({**_document(_a()), "extra": True}, "unknown_key"),
         (_document({**_a(), "project_id": "prj_synclimissing"}), "project_not_found"),
         (_document({**_a(), "project_number": "SYN-0000"}), "project_number_mismatch"),
@@ -470,6 +476,7 @@ def test_apply_writes_once_then_finds_nothing_to_change(
     ],
     ids=[
         "duplicate-key",
+        "duplicate-key-otherwise-valid",
         "unknown-key",
         "project-not-found",
         "number-mismatch",

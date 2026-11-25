@@ -143,13 +143,16 @@ class Clock:
 @dataclass
 class ReadsScene:
     unit: Callable[[], UnitOfWork]
-    add_project: Callable[[str, str], None]
+    #: `(principal, project_id, project number)`: adds a Project of that Principal.
+    add_project: Callable[[str, str, str], None]
     store: FakeStore = field(default_factory=FakeStore)
     clock: Clock = field(default_factory=Clock)
     sources: dict[str, str] = field(default_factory=dict)
+    #: Another Principal's scene over the same unit of work (the local one by default).
+    principal_id: str | None = None
 
     def __post_init__(self) -> None:
-        self.principal = local_principal().principal_id
+        self.principal = self.principal_id or local_principal().principal_id
         self.lifecycle = IngestionLifecycle(
             unit_of_work=self.unit,
             stores=self._stores,
@@ -167,7 +170,7 @@ class ReadsScene:
         return f"{ROOT}/Qx {key.title()} Readsfolder"
 
     def bind(self, key: str, project_id: str, number: str) -> str:
-        self.add_project(project_id, number)
+        self.add_project(self.principal, project_id, number)
         source = self.lifecycle.admit(
             self.principal,
             consumer=IngestConsumer.PULSE_CSV_EXPORT,
@@ -298,11 +301,11 @@ def build_world(scene: ReadsScene) -> None:
 def fast_scene() -> tuple[ReadsScene, IngestWorld, World]:
     ingest, world = IngestWorld(), World()
 
-    def add_project(project_id: str, number: str) -> None:
+    def add_project(principal: str, project_id: str, number: str) -> None:
         world.projects.append(
             Project(
                 project_id=project_id,
-                principal_id=local_principal().principal_id,
+                principal_id=principal,
                 name="Synthetic project",
                 state=ProjectState.ACTIVE,
                 opened_at=WHEN,
@@ -320,9 +323,8 @@ def fast_scene() -> tuple[ReadsScene, IngestWorld, World]:
 
 def database_scene(engine: Engine) -> ReadsScene:
     """The same scene over a head-migrated database (the `database` tier only)."""
-    principal = local_principal().principal_id
 
-    def add_project(project_id: str, number: str) -> None:
+    def add_project(principal: str, project_id: str, number: str) -> None:
         with engine.begin() as connection:
             connection.execute(
                 insert(projects).values(

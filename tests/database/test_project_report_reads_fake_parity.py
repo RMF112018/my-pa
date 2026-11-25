@@ -8,7 +8,15 @@ equal once the identifiers each side issued at random (sources, snapshots,
 derivations, binding revisions, records, series) are replaced by what they
 name. Answers are compared in order, except those ordered by an identifier
 each side issued at random (`lines_of_records` by record, the stated totals,
-cross-checks and RFI candidates by derivation), compared as sets. Every value is synthetic.
+cross-checks and RFI candidates by derivation), compared as sets.
+
+The world is `build_world` plus the service cases' `extend_world` (Decimal
+money in the buyout and reconciliation exports, a current cross-check and,
+after the buyout alone is re-derived, a stale one beside it, ruling A4), and a
+second Principal's world that must never be answered to the first (ruling
+R1-05). Every answer but the ones meant to be empty must be non-empty, so a
+read the fake answers wrongly cannot pass by answering nothing on both sides.
+Every value is synthetic.
 """
 
 from __future__ import annotations
@@ -32,16 +40,30 @@ from my_pa.domain.project_reports.catalogue import searchable_text_fields
 from my_pa.domain.project_reports.model import RecordFamily, StatusClass
 from tests.unit.project_report_reads_scene import (
     OBS_PROJECT,
+    RFI_LATER,
     RFI_PROJECT,
+    RFI_ROWS_LATER,
     ReadsScene,
     build_world,
     database_scene,
     fast_scene,
+    rfi_export,
     unknown_adapter_registry,
+)
+from tests.unit.project_reports_reads_service_cases import (
+    PAIR_PROJECT,
+    extend_world,
+    rederive_the_buyout_alone,
 )
 
 pytestmark = pytest.mark.database
 
+OTHER_PRINCIPAL: Final = "prn_synotherreads01"
+#: The second Principal's Project: its own id, the first Principal's number.
+OTHER_PROJECT: Final = ("rfis", "prj_synreadsother1x", RFI_PROJECT[2])
+#: Answers meant to be empty: no Project named, a text across two fields, and
+#: every read of the first Principal over the second Principal's identifiers.
+_EMPTY: Final = frozenset({"no_projects", "lines:boundary", "foreign"})
 _ISSUED: Final = re.compile(r"\A(isrc|isnp|prdrv|prbnd|prrec|prser)_[A-Za-z0-9]+\Z")
 
 
@@ -82,8 +104,7 @@ def _sorted(named: object) -> tuple[object, ...]:
     return tuple(sorted(named, key=repr))
 
 
-def _answers(scene: ReadsScene) -> dict[str, Any]:
-    principal = scene.principal
+def _answers(scene: ReadsScene, principal: str) -> dict[str, Any]:
     with scene.unit() as unit:
         reads = unit.project_report_reads
         name = _Names(reads, principal)
@@ -156,7 +177,70 @@ def _answers(scene: ReadsScene) -> dict[str, Any]:
         answers["rfi_candidates"] = _sorted(
             name(reads.rfi_candidates(principal, rfis, [174, 17, 9]))
         )
+        # A record names the derivation that created it, which may since be superseded.
+        answers["find_records"] = tuple(
+            name(
+                tuple(
+                    dataclasses.replace(
+                        entry,
+                        created_by_derivation_id=name.names.get(
+                            entry.created_by_derivation_id, "derivation:superseded"
+                        ),
+                    )
+                    for entry in reads.find_records(principal, project, family, key)
+                )
+            )
+            for project, family, key in (
+                (RFI_PROJECT[1], RecordFamily.RFIS, "rfi:GMP-174"),
+                (RFI_PROJECT[1], RecordFamily.RFIS, "rfi:GMP-170"),
+                (OTHER_PROJECT[1], RecordFamily.RFIS, "rfi:GMP-174"),
+            )
+            if reads.find_records(principal, project, family, key)
+        )
     return answers
+
+
+def _foreign(scene: ReadsScene) -> tuple[object, ...]:
+    """The first Principal's reads over every identifier the second Principal holds."""
+    with scene.unit() as unit:
+        reads = unit.project_report_reads
+        theirs = reads.list_report_versions(OTHER_PRINCIPAL)
+        derivations = tuple(v.derivation_id for v in theirs)
+        assert derivations, "the second Principal's world was seeded"
+        lines = reads.query_lines(
+            OTHER_PRINCIPAL, ProjectReportLineQuery(derivation_ids=derivations, limit=1000)
+        )
+        records = [line.record_id for line in lines if line.record_id]
+        assert records
+        mine = scene.principal
+        return tuple(
+            answer
+            for answer in (
+                reads.list_report_versions(mine, project_ids=[OTHER_PROJECT[1]]),
+                reads.query_lines(
+                    mine, ProjectReportLineQuery(derivation_ids=derivations, limit=1000)
+                ),
+                reads.lines_of_records(mine, records),
+                reads.stated_totals_of(mine, derivations),
+                reads.cross_checks_of(mine, derivations),
+                reads.rfi_candidates(mine, derivations, [174]),
+                reads.find_records(mine, OTHER_PROJECT[1], RecordFamily.RFIS, "rfi:GMP-174"),
+            )
+            if answer
+        )
+
+
+def _other_world(scene: ReadsScene) -> ReadsScene:
+    """A second Principal's RFI world over the same unit of work and clock."""
+    other = ReadsScene(
+        unit=scene.unit,
+        add_project=scene.add_project,
+        clock=scene.clock,
+        principal_id=OTHER_PRINCIPAL,
+    )
+    other.bind(*OTHER_PROJECT)
+    other.ingest("rfis", RFI_LATER, rfi_export(RFI_ROWS_LATER))
+    return other
 
 
 def _both(
@@ -164,22 +248,47 @@ def _both(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     fast, _ingest, _world = fast_scene()
     database = database_scene(engine)
+    answered: list[dict[str, Any]] = []
     for scene in (fast, database):
         build_world(scene)
+        extend_world(scene)
+        other = _other_world(scene)
         if step is not None:
             step(scene)
-    return _answers(fast), _answers(database)
+        answers = _answers(scene, scene.principal)
+        answers["foreign"] = _foreign(scene)
+        answers["other"] = _answers(other, OTHER_PRINCIPAL)
+        answered.append(answers)
+    return answered[0], answered[1]
 
 
 def _assert_equal(fast: dict[str, Any], database: dict[str, Any]) -> None:
     assert fast.keys() == database.keys()
     for key in fast:
         assert fast[key] == database[key], key
-    assert fast["lines:all"] and fast["records"] and fast["totals"]
+    for key, answer in fast.items():
+        assert (not answer) is (key in _EMPTY), key
+    other = fast["other"]
+    assert other["versions"] and other["lines:all"] and other["records"]
+    assert other["find_records"]
+    # Real Decimal money crosses the comparison, and both checks are stored (A4).
+    assert any("buyout" in repr(entry) for entry in fast["lines:all"])
+    assert "Decimal(" in repr(fast["lines:all"])
+
+
+def _rederive_the_buyout(scene: ReadsScene) -> None:
+    """Ruling A4: the first cross-check now names a superseded buyout, so it is stale."""
+    rederive_the_buyout_alone(scene)
+    with scene.unit() as unit:
+        checks = unit.project_reports.list_cross_checks(scene.principal, PAIR_PROJECT[1])
+    assert sorted(c.outcome.value for c in checks) == ["match", "mismatch"]
 
 
 def test_the_fake_reads_what_the_database_reads(migrated_engine: Engine) -> None:
-    _assert_equal(*_both(migrated_engine))
+    fast, database = _both(migrated_engine, _rederive_the_buyout)
+    _assert_equal(fast, database)
+    # Only the current check is answered: the stale one names a superseded side.
+    assert len(fast["checks"]) == 1
 
 
 def test_the_fake_reads_what_the_database_reads_after_rederivation(
@@ -187,6 +296,7 @@ def test_the_fake_reads_what_the_database_reads_after_rederivation(
 ) -> None:
     def rederive(scene: ReadsScene) -> None:
         scene.correct("rfis")
+        scene.correct("observations")
         scene.rederive()
         scene.rederive(unknown_adapter_registry())
 

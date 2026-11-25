@@ -128,6 +128,8 @@ def test_the_s61_module_set_is_the_contract_set() -> None:
         "scenario/model.py",
         "scenario/outputs.py",
         "scenario/snapshot.py",
+        # S7-0 (import contract section 11.6): the standard calendar, under the same guard.
+        "scenario/standard_calendar.py",
         "series_match.py",
     ]
 

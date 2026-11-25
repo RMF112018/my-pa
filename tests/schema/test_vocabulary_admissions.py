@@ -18,12 +18,17 @@ from typing import Final
 
 from tests import pins
 from tests.schema.vocabulary_admissions import (
+    AHEAD_OF_THE_DOMAIN,
     CAPABILITY_ADMISSIONS,
     PURPOSE_ADMISSIONS,
     SINCE,
+    admitted_ahead_of_the_domain,
     capabilities_admitted_after,
     purposes_admitted_after,
 )
+
+from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.purpose import Purpose
 
 MIGRATIONS: Final = Path(__file__).resolve().parents[2] / "migrations" / "versions"
 _NAME: Final = "_CAPABILITIES_AT_THIS_REVISION"
@@ -74,10 +79,7 @@ def test_admitted_after_selects_only_the_later_rows() -> None:
     assert capabilities_admitted_after(pins.ALEMBIC_HEAD) == frozenset()
 
 
-# ---- purposes (ruling R17) ----------------------------------------------------------
-
-
-def test_the_newest_purpose_revision_admits_since_plus_the_purpose_rows() -> None:
+def test_the_newest_purpose_revision_admits_since_plus_the_rows() -> None:
     newest = next(
         revision
         for revision in reversed(pins.ALEMBIC_CHAIN)
@@ -90,6 +92,37 @@ def test_the_newest_purpose_revision_admits_since_plus_the_purpose_rows() -> Non
         f"{newest} admits purposes that no row of vocabulary_admissions.py records"
     )
     assert not since & rows
+    for family, (revision, names) in PURPOSE_ADMISSIONS.items():
+        spelled = _spelled(revision, _PURPOSE_NAME)
+        assert spelled is not None, family
+        assert names <= spelled, family
+        before = pins.ALEMBIC_CHAIN[pins.ALEMBIC_CHAIN.index(revision) - 1]
+        assert names <= purposes_admitted_after(before)
+        assert not names & purposes_admitted_after(revision)
+
+
+def test_the_ahead_families_are_exactly_the_rows_the_domain_does_not_declare() -> None:
+    """A family is ahead exactly while none of its names is declared.
+
+    Measured against the live enums: a family the domain has started to
+    declare must leave `AHEAD_OF_THE_DOMAIN` in the same change, and a family
+    left out of it must be declared whole.
+    """
+    declared = {
+        "capability": {member.value for member in Capability},
+        "purpose": {member.value for member in Purpose},
+    }
+    tables = {"capability": CAPABILITY_ADMISSIONS, "purpose": PURPOSE_ADMISSIONS}
+    assert set(CAPABILITY_ADMISSIONS) | set(PURPOSE_ADMISSIONS) >= AHEAD_OF_THE_DOMAIN
+    for kind, table in tables.items():
+        for family, (_revision, names) in table.items():
+            if family in AHEAD_OF_THE_DOMAIN:
+                assert not names & declared[kind], (kind, family)
+            else:
+                assert names <= declared[kind], (kind, family)
+        assert admitted_ahead_of_the_domain(kind).isdisjoint(declared[kind])
+    assert len(admitted_ahead_of_the_domain("capability")) == 7
+    assert len(admitted_ahead_of_the_domain("purpose")) == 2
 
 
 def test_each_purpose_row_is_admitted_after_since_by_the_revision_it_names() -> None:
@@ -97,16 +130,5 @@ def test_each_purpose_row_is_admitted_after_since_by_the_revision_it_names() -> 
     seen: set[str] = set()
     for family, (revision, names) in PURPOSE_ADMISSIONS.items():
         assert pins.ALEMBIC_CHAIN.index(revision) > pins.ALEMBIC_CHAIN.index(SINCE), family
-        spelled = _spelled(revision, _PURPOSE_NAME)
-        assert spelled is not None, f"{revision} spells no {_PURPOSE_NAME}"
-        assert names <= spelled, family
         assert not names & seen, f"{family} repeats another row's name"
         seen |= names
-
-
-def test_purposes_admitted_after_selects_only_the_later_rows() -> None:
-    for revision, names in PURPOSE_ADMISSIONS.values():
-        before = pins.ALEMBIC_CHAIN[pins.ALEMBIC_CHAIN.index(revision) - 1]
-        assert names <= purposes_admitted_after(before)
-        assert not names & purposes_admitted_after(revision)
-    assert purposes_admitted_after(pins.ALEMBIC_HEAD) == frozenset()

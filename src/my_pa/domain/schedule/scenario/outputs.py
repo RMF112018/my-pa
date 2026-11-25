@@ -64,6 +64,8 @@ class OutputEngine(StrEnum):
     MY_PA_CPM_V1 = "my-pa-cpm-v1"
     SERVER_RUNS = "server_runs"
     OTHER = "other"
+    #: S7-0 (import contract section 11.7): appended; no database CHECK lists these.
+    MY_PA_CPM_V2 = "my-pa-cpm-v2"
 
 
 class SensitivityMetric(StrEnum):

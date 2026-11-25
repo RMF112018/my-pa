@@ -143,7 +143,7 @@ from my_pa.domain.schedule.plane import (
 )
 from my_pa.domain.schedule.scenario.canonical import (
     CHANGE_SET_SCHEMA,
-    CONTENT_SCHEMA,
+    CONTENT_SCHEMAS,
     OUTPUT_SCHEMA,
     RESULT_SCHEMA,
     ScenarioDecodeError,
@@ -151,6 +151,7 @@ from my_pa.domain.schedule.scenario.canonical import (
     change_set_sha256,
     content_bytes,
     content_from_object,
+    content_schema,
     content_sha256,
     distribution_spec_sha256,
     result_bytes,
@@ -339,6 +340,31 @@ def new_scenario_version(
         change_set=change_set,
         snapshot=snapshot,
     )
+
+
+def _verified_content(blob: bytes, sha256: str, size_bytes: int) -> tuple[bytes, str]:
+    """The stored canonical content and the schema its digest was taken under.
+
+    S7-0 (import contract section 11.7): a content is digested under the
+    `schedule-scenario-content-v1` prefix, or `-v2` when it uses a v2 feature.
+    The digest decides; any other integrity failure is raised at once.
+    """
+    for schema in CONTENT_SCHEMAS:
+        try:
+            canonical = verified_canonical(
+                blob,
+                kind="content",
+                schema=schema,
+                sha256=sha256,
+                size_bytes=size_bytes,
+                limit=MAX_CONTENT_BYTES,
+            )
+        except ScenarioIntegrityError as failed:
+            if failed.code != "content_digest":
+                raise
+            continue
+        return canonical, schema
+    raise ScenarioIntegrityError("content_digest")
 
 
 def new_cpm_run(version_id: str, result: CpmResult) -> NewCpmRun:
@@ -1297,19 +1323,15 @@ class SqlScenarioRepository(ScenarioRepository):
         ).one_or_none()
         if found is None:
             return None
-        canonical = verified_canonical(
-            bytes(found.content_zlib),
-            kind="content",
-            schema=CONTENT_SCHEMA,
-            sha256=found.content_sha256,
-            size_bytes=found.content_size_bytes,
-            limit=MAX_CONTENT_BYTES,
+        canonical, schema = _verified_content(
+            bytes(found.content_zlib), found.content_sha256, found.content_size_bytes
         )
         try:
             content = content_from_object(json.loads(canonical))
         except (ValueError, ScenarioDecodeError):
             raise ScenarioIntegrityError("content_decode") from None
-        if content_problem(content) is not None:
+        # S7-0: the digest's schema prefix is the schema the content implies.
+        if content_problem(content) is not None or content_schema(content) != schema:
             raise ScenarioIntegrityError("content_decode")
         return VerifiedScenarioContent(content=content, canonical=canonical, size=len(canonical))
 

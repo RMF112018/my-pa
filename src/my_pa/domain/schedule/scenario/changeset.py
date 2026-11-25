@@ -13,6 +13,14 @@ Each op is a JSON object `{"op": <name>, ...fields}`; an unknown name is
 has no `*_absent` token (`constraint.clear`, `distribution.clear`,
 `progress.clear`, `calendar.exception.remove`) is an empty effective change,
 which is allowed.
+
+S7-0 (`docs/architecture/schedule-xer-import-contract.md` section 11.7) widens
+the grammar additively: `activity.add`/`activity.edit` accept the kinds
+`start_milestone` and `finish_milestone`, `settings.set` accepts the fixed lag
+calendar `calendar:<key>`, a constraint on the wrong side of an edged milestone
+is `constraint_conflict`, and a calendar named as the fixed lag calendar is
+`calendar_in_use`. `op_error` gains no member. The child's content schema
+follows its content (`canonical.content_schema`).
 """
 
 from __future__ import annotations
@@ -37,22 +45,27 @@ from my_pa.domain.schedule.scenario.model import (
     MAX_EXCEPTIONS_PER_CALENDAR,
     MAX_EXCEPTIONS_PER_VERSION,
     MAX_RELATIONSHIPS,
+    MILESTONE_KINDS,
     ActivityConstraint,
     ActivityKind,
     ActivityProgress,
     CalendarException,
     ConstraintType,
     DurationDistribution,
-    LagCalendar,
+    FixedLagCalendar,
+    LagCalendarSetting,
     ProgressPolicy,
     RelationshipType,
     ScenarioActivity,
     ScenarioCalendar,
     ScenarioContent,
     ScenarioRelationship,
+    constraint_fits_kind,
     content_problem,
     is_added_activity_key,
+    milestone_progress_fits,
     parse_instant,
+    parse_lag_calendar,
 )
 
 __all__ = [
@@ -295,7 +308,7 @@ class _Working:
         if not is_added_activity_key(key):
             raise _fail(_INVALID)
         kind = _enum(ActivityKind, fields["kind"])
-        default = 0 if kind is ActivityKind.MILESTONE else None
+        default = 0 if kind in MILESTONE_KINDS else None
         name = _display(fields["name"])
         wbs = _wbs(fields.get("wbs_path"))
         original = _optional_int(fields.get("original_minutes", default))
@@ -328,7 +341,14 @@ class _Working:
         if "name" in fields:
             changes["name"] = _display(fields["name"])
         if "kind" in fields:
-            changes["kind"] = _enum(ActivityKind, fields["kind"])
+            kind = _enum(ActivityKind, fields["kind"])
+            # Section 11.7: an edged milestone keeps only its own side's constraints
+            # and has its one date as progress; anything else is refused, never dropped.
+            if not all(constraint_fits_kind(kind, item.type) for item in activity.constraints):
+                raise _fail(ChangeOpError.CONSTRAINT_CONFLICT)
+            if not milestone_progress_fits(kind, activity.progress):
+                raise _fail(ChangeOpError.PROGRESS_INVALID)
+            changes["kind"] = kind
         if "wbs_path" in fields:
             changes["wbs_path"] = _wbs(fields["wbs_path"])
         if "calendar" in fields:
@@ -438,8 +458,11 @@ class _Working:
     def calendar_remove(self, op: Mapping[str, object]) -> None:
         fields = _fields(op, frozenset({"key"}))
         key = self.calendar_key(fields["key"])
-        in_use = key == self.settings.default_calendar or any(
-            activity.calendar == key for activity in self.activities.values()
+        lag_calendar = self.settings.lag_calendar
+        in_use = (
+            key == self.settings.default_calendar
+            or (isinstance(lag_calendar, FixedLagCalendar) and lag_calendar.key == key)
+            or any(activity.calendar == key for activity in self.activities.values())
         )
         if in_use:
             raise _fail(ChangeOpError.CALENDAR_IN_USE)
@@ -469,6 +492,8 @@ class _Working:
         kind = _enum(ConstraintType, fields["type"])
         when = _instant(fields["at"])
         activity = self.activity(fields["key"])
+        if not constraint_fits_kind(activity.kind, kind):
+            raise _fail(ChangeOpError.CONSTRAINT_CONFLICT)
         slot = _slot(kind)
         kept = [item for item in activity.constraints if item.type not in slot]
         mixes_mandatory = (slot is _MANDATORY and bool(kept)) or any(
@@ -503,6 +528,8 @@ class _Working:
                 raise _fail(ChangeOpError.PROGRESS_INVALID)
             remaining, remaining_given = 0, True
         progress = ActivityProgress(actual_start=start, actual_finish=finish)
+        if not milestone_progress_fits(activity.kind, progress):
+            raise _fail(ChangeOpError.PROGRESS_INVALID)
         changes: dict[str, Any] = {"progress": progress}
         if remaining_given:
             changes["remaining_minutes"] = remaining
@@ -531,7 +558,7 @@ class _Working:
             raise _fail(_INVALID)
         changes: dict[str, Any] = {}
         if "lag_calendar" in fields:
-            changes["lag_calendar"] = _enum(LagCalendar, fields["lag_calendar"])
+            changes["lag_calendar"] = self._lag_calendar(fields["lag_calendar"])
         if "progress_policy" in fields:
             changes["progress_policy"] = _enum(ProgressPolicy, fields["progress_policy"])
         if "must_finish_by" in fields:
@@ -544,6 +571,16 @@ class _Working:
             changes["default_calendar"] = self.calendar_key(fields["default_calendar"])
         current = self.settings
         self.settings = _build(lambda: replace(current, **changes))
+
+    def _lag_calendar(self, value: object) -> LagCalendarSetting:
+        """A closed lag calendar, or `calendar:<key>` naming a calendar of the version."""
+        try:
+            setting = parse_lag_calendar(_text(value))
+        except ValueError:
+            raise _fail(_INVALID) from None
+        if isinstance(setting, FixedLagCalendar):
+            self.calendar_key(setting.key)
+        return setting
 
 
 _HANDLERS: Final[dict[ChangeOp, Callable[[_Working, Mapping[str, object]], None]]] = {

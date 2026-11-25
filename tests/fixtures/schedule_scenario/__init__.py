@@ -20,6 +20,7 @@ from my_pa.domain.schedule.scenario.model import (
     CalendarException,
     ConstraintType,
     LagCalendar,
+    LagCalendarSetting,
     ProgressPolicy,
     RelationshipType,
     ScenarioActivity,
@@ -73,13 +74,30 @@ def task(
     )
 
 
-def milestone(name: str) -> ScenarioActivity:
+def milestone(
+    name: str,
+    kind: ActivityKind = ActivityKind.MILESTONE,
+    *,
+    calendar: str | None = None,
+    constraints: Sequence[tuple[ConstraintType, str]] = (),
+    started: str | None = None,
+    finished: str | None = None,
+) -> ScenarioActivity:
+    """A milestone; `kind` = `start_milestone`/`finish_milestone` is an S7-0 edged one."""
+    progress = None
+    if started is not None:
+        progress = ActivityProgress(
+            actual_start=at(started), actual_finish=None if finished is None else at(finished)
+        )
     return ScenarioActivity(
         key=key(name),
         name=f"Milestone {name}",
-        kind=ActivityKind.MILESTONE,
+        kind=kind,
         original_minutes=0,
         remaining_minutes=0,
+        calendar=calendar,
+        constraints=tuple(ActivityConstraint(item, at(when)) for item, when in constraints),
+        progress=progress,
     )
 
 
@@ -94,7 +112,7 @@ def network(
     data_date: str = "01-04 00:00",
     calendars: Sequence[ScenarioCalendar] = (STD,),
     default_calendar: str = "std",
-    lag_calendar: LagCalendar = LagCalendar.PREDECESSOR,
+    lag_calendar: LagCalendarSetting = LagCalendar.PREDECESSOR,
     progress_policy: ProgressPolicy = ProgressPolicy.RETAINED_LOGIC,
     must_finish_by: str | None = None,
     threshold: int = 0,

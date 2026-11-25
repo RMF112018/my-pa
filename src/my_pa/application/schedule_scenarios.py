@@ -168,18 +168,20 @@ from my_pa.domain.schedule.plane import (
     writer_bucket,
 )
 from my_pa.domain.schedule.scenario.canonical import (
+    CONTENT_SCHEMA_V2,
     ScenarioDecodeError,
     activity_object,
     calendar_from_object,
     content_bytes,
     content_object,
+    content_schema,
     scenario_request_digest,
 )
 from my_pa.domain.schedule.scenario.changeset import (
     ChangeSetRefusal,
     apply_change_set,
 )
-from my_pa.domain.schedule.scenario.cpm import ENGINE_VERSION, CpmStatus
+from my_pa.domain.schedule.scenario.cpm import CpmStatus
 from my_pa.domain.schedule.scenario.model import (
     MAX_CONTENT_BYTES,
     ScenarioCalendar,
@@ -246,7 +248,13 @@ _GOVERNING_RACES: Final = frozenset(
 
 #: Section 15.6.3: each answer's trust basis (`TrustLevel.MODEL_PROPOSED`).
 _SCENARIO_BASIS: Final = ("schedule_scenario", "client_authored")
-_RUN_BASIS: Final = (*_SCENARIO_BASIS, "schedule_cpm", ENGINE_VERSION, "server_computed")
+
+
+def _run_basis(engine_version: str) -> tuple[str, ...]:
+    """A run's trust basis names the engine that computed it (S7-0: v1 or v2)."""
+    return (*_SCENARIO_BASIS, "schedule_cpm", engine_version, "server_computed")
+
+
 _OUTPUT_BASIS: Final = (*_SCENARIO_BASIS, "schedule_scenario_output", "client_asserted")
 _CURRENT_BASIS: Final = ("schedule_series", "currency-v1", "server_computed")
 _MATCH_BASIS: Final = ("schedule_series", "series-match-v1", "server_computed")
@@ -1016,7 +1024,9 @@ class ScheduleScenarioApplication:
             if state is None or state[1]:
                 raise NotFoundError(SafeDetail.FROM_PUBLICATION_ID)
             raise ConflictError(SafeDetail.STATUS)
-        calendars = self._calendars(command.calendars)
+        # S7-0 (import contract section 11.5): no calendars and no default (the
+        # command admits only both or neither) is the MY-PA standard calendar.
+        calendars = None if command.calendars is None else self._calendars(command.calendars)
         snapshot = None
         refusal: SnapshotRefusalReason | None = None
         try:
@@ -1026,7 +1036,7 @@ class ScheduleScenarioApplication:
                 rows=source.rows,
                 minutes_per_source_unit=int(command.minutes_per_source_unit or 0),
                 calendars=calendars,
-                default_calendar=str(command.default_calendar),
+                default_calendar=command.default_calendar,
                 data_date_time=command.data_date_time or "00:00",
             )
         except SnapshotRefusalError as refused:
@@ -1403,7 +1413,7 @@ class ScheduleScenarioApplication:
             "replayed": replayed,
             "labels": _RUN_LABELS,
         }
-        return self._answer(authorization, payload, roots, _RUN_BASIS)
+        return self._answer(authorization, payload, roots, _run_basis(run.engine_version))
 
     # ---- schedule_scenario_outputs.record -----------------------------------------------
 
@@ -1925,9 +1935,10 @@ class ScheduleScenarioApplication:
             version, content, roots = self._content(work, principal_id, command.version_id)
         ordered = sorted(content.activities, key=lambda activity: activity.key)
         page, truncation = _page_offset(paging, ordered)
+        v2 = content_schema(content) == CONTENT_SCHEMA_V2
         payload = {
             "version_id": version.version_id,
-            "activities": [activity_object(activity) for activity in page],
+            "activities": [activity_object(activity, v2=v2) for activity in page],
             "page_size": paging.page_size,
             "labels": _SCENARIO_LABELS,
         }
@@ -2012,7 +2023,7 @@ class ScheduleScenarioApplication:
             "critical_paths": document.get("critical_paths"),
             "labels": _RUN_LABELS,
         }
-        return self._answer(authorization, payload, roots, _RUN_BASIS)
+        return self._answer(authorization, payload, roots, _run_basis(run.engine_version))
 
     def list_cpm_run_activities(
         self, authorization: Authorization, command: ListScheduleCpmRunActivities
@@ -2038,7 +2049,9 @@ class ScheduleScenarioApplication:
             "page_size": paging.page_size,
             "labels": _RUN_LABELS,
         }
-        return self._answer(authorization, payload, roots, _RUN_BASIS, truncation)
+        return self._answer(
+            authorization, payload, roots, _run_basis(run.engine_version), truncation
+        )
 
     def list_outputs(
         self, authorization: Authorization, command: ListScheduleScenarioOutputs

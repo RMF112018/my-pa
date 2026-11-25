@@ -1362,7 +1362,16 @@ def test_every_foreign_key_has_a_cross_binding_case(db_engine: Engine) -> None:
                 {"t": list(CPM_TABLES)},
             ).scalars()
         )
-    assert declared == set(_FOREIGN_KEYS) | {"a_schedule_publication_supersedes_within_its_series"}
+    # The P6 XER import S7-2 keys on `schedule_publications` have their crossing
+    # cases in `tests/schema/test_schedule_p6_storage_migration.py`.
+    p6_keys = {
+        "a_schedule_publication_names_a_snapshot_of_its_principal",
+        "a_schedule_publication_names_a_capture_event_of_its_series",
+    }
+    assert (
+        declared
+        == set(_FOREIGN_KEYS) | {"a_schedule_publication_supersedes_within_its_series"} | p6_keys
+    )
 
 
 def test_publication_cannot_cross_enrollment_object_or_version(

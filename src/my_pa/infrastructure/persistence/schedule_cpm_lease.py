@@ -18,6 +18,11 @@ already lost), invalidates and closes that connection -- it never returns to
 any pool, so no pooled connection can carry a session lock -- and releases the
 process lock.
 
+S7-0 (import contract section 11.7): the engine is chosen by the version's
+content schema (`engine_version_for`), so the natural-key probe loads and
+verifies the content first and looks the run up under that engine only; a
+v1 version is never answered with a v2 run, nor the reverse.
+
 C has its own namespace so that a 32-bit `hashtext` collision can never make a
 held lease block the P or J lock of its own request (a wait PostgreSQL cannot
 detect). Lease connections sit outside the gateway's pool of 5: at most 1 extra
@@ -58,7 +63,7 @@ from my_pa.contracts.ports import (
 )
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.schedule.plane import PlaneProvenance
-from my_pa.domain.schedule.scenario.cpm import ENGINE_VERSION, CpmResult, run_cpm
+from my_pa.domain.schedule.scenario.cpm import CpmResult, engine_version_for, run_cpm
 from my_pa.domain.schedule.scenario.model import ScenarioContent
 from my_pa.infrastructure.persistence.schedule_scenarios import (
     SqlAlchemyScenarioUnitOfWork,
@@ -196,21 +201,21 @@ def compute_and_store_cpm_run(
     stores (0 for a natural-key hit). It raises to refuse.
     """
     validate_identifier(principal_id, IdKind.PRINCIPAL)
-    # Step 1: the ledger probe, the natural-key probe and the verified content.
+    # Step 1: the ledger probe, the verified content (whose schema chooses the
+    # engine, S7-0) and the natural-key probe under that engine.
     with SqlAlchemyScenarioUnitOfWork(engine) as uow:
         replay = uow.scenarios.find_request(
             principal_id, CPM_RUN_CAPABILITY, capability_key, request_digest
         )
         if replay is not None:
             return _replayed(uow.scenarios, principal_id, replay)
-        existing = uow.scenarios.get_cpm_run(principal_id, version_id, ENGINE_VERSION)
-        verified = (
-            None if existing is not None else uow.scenarios.load_content(principal_id, version_id)
-        )
-        if existing is None and verified is None:
+        verified = uow.scenarios.load_content(principal_id, version_id)
+        if verified is None:
             raise PlaneSubjectAbsentError()
+        engine_version = engine_version_for(verified.content)
+        existing = uow.scenarios.get_cpm_run(principal_id, version_id, engine_version)
     stored = None
-    if verified is not None:
+    if existing is None:
         # R10-F02/R10-N01: the read-only pre-check, never reached by a replay or
         # a natural-key hit, with no new bytes (step 5 re-checks the actual size).
         with SqlAlchemyScenarioUnitOfWork(engine) as uow:
@@ -292,7 +297,11 @@ def _leased_compute(
                 used = uow.scenarios.cpm_units_since(principal_id, clock() - _HOUR)
             admit_compute(used, len(content.activities))
             # Step 4: the compute, outside any transaction.
-            return new_cpm_run(version_id, compute(content))
+            result = compute(content)
+            if result.engine_version != engine_version_for(content):
+                # S7-0: a run is stored only under the engine its content chooses.
+                raise ScenarioIntegrityError("cpm_engine_version")
+            return new_cpm_run(version_id, result)
         finally:
             _end_lease(connection, principal_id, held=held)
     finally:

@@ -14,7 +14,12 @@ from typing import Final
 
 import pytest
 
-from my_pa.domain.schedule.scenario.canonical import content_sha256
+from my_pa.domain.schedule.scenario.canonical import (
+    CONTENT_SCHEMA,
+    CONTENT_SCHEMA_V2,
+    content_schema,
+    content_sha256,
+)
 from my_pa.domain.schedule.scenario.changeset import (
     ApplicationReport,
     ChangeOp,
@@ -27,6 +32,7 @@ from my_pa.domain.schedule.scenario.model import (
     ActivityKind,
     ActivityState,
     ConstraintType,
+    FixedLagCalendar,
     LagCalendar,
     ScenarioActivity,
     ScenarioContent,
@@ -523,3 +529,196 @@ def test_progress_finish_after_the_data_date_is_refused_at_its_op() -> None:
         {"op": "data_date.set", "at": "2027-01-06T00:00"},
     ]
     assert _refused(ops, parent) == ChangeSetRefusal(0, E.PROGRESS_INVALID)
+
+
+# --- S7-0 (import contract section 11.7): edged milestones, fixed lag calendar ------------
+
+
+def _add(key: str, kind: str) -> dict[str, object]:
+    return {"op": "activity.add", "key": key, "name": key, "kind": kind}
+
+
+def test_activity_add_and_edit_accept_the_edged_kinds() -> None:
+    added = _applied([_add("x:S", "start_milestone"), _add("x:F", "finish_milestone")])
+    start, finish = _activity(added.content, "x:S"), _activity(added.content, "x:F")
+    assert (start.kind, start.original_minutes, start.remaining_minutes) == (
+        ActivityKind.START_MILESTONE,
+        0,
+        0,
+    )
+    assert (finish.kind, finish.original_minutes, finish.remaining_minutes) == (
+        ActivityKind.FINISH_MILESTONE,
+        0,
+        0,
+    )
+    edited = _applied(
+        [{"op": "activity.edit", "key": "x:S", "kind": "finish_milestone"}], added.content
+    )
+    assert _activity(edited.content, "x:S").kind is ActivityKind.FINISH_MILESTONE
+    # Like `milestone`, an edged kind needs both durations 0.
+    assert _refused([{"op": "activity.edit", "key": "x:A", "kind": "start_milestone"}]) == (
+        ChangeSetRefusal(0, E.INVALID_FIELD)
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "constraint"),
+    [
+        ("start_milestone", "FNET"),
+        ("start_milestone", "FNLT"),
+        ("start_milestone", "MFO"),
+        ("finish_milestone", "SNET"),
+        ("finish_milestone", "SNLT"),
+        ("finish_milestone", "MSO"),
+    ],
+)
+def test_a_wrong_side_constraint_on_an_edged_milestone_is_a_conflict(
+    kind: str, constraint: str
+) -> None:
+    """E4: a finish-side constraint on a start milestone, and the reverse."""
+    ops: list[object] = [
+        _add("x:M", kind),
+        {"op": "constraint.set", "key": "x:M", "type": constraint, "at": "2027-01-05T08:00"},
+    ]
+    assert _refused(ops) == ChangeSetRefusal(1, E.CONSTRAINT_CONFLICT)
+
+
+@pytest.mark.parametrize(
+    ("kind", "constraints"),
+    [
+        ("start_milestone", ("SNET", "SNLT")),
+        ("start_milestone", ("MSO",)),
+        ("finish_milestone", ("FNET", "FNLT")),
+        ("finish_milestone", ("MFO",)),
+    ],
+)
+def test_an_own_side_constraint_on_an_edged_milestone_is_kept(
+    kind: str, constraints: tuple[str, ...]
+) -> None:
+    ops: list[object] = [_add("x:M", kind)] + [
+        {"op": "constraint.set", "key": "x:M", "type": name, "at": "2027-01-05T08:00"}
+        for name in constraints
+    ]
+    content = _applied(ops).content
+    assert [item.type.value for item in _activity(content, "x:M").constraints] == list(constraints)
+
+
+def test_a_kind_edit_onto_a_wrong_side_constraint_is_a_conflict() -> None:
+    parent = _applied(
+        [
+            _add("x:M", "milestone"),
+            {"op": "constraint.set", "key": "x:M", "type": "FNLT", "at": "2027-01-05T16:00"},
+        ]
+    ).content
+    assert _refused(
+        [{"op": "activity.edit", "key": "x:M", "kind": "start_milestone"}], parent
+    ) == ChangeSetRefusal(0, E.CONSTRAINT_CONFLICT)
+    kept = _applied([{"op": "activity.edit", "key": "x:M", "kind": "finish_milestone"}], parent)
+    assert _activity(kept.content, "x:M").kind is ActivityKind.FINISH_MILESTONE
+
+
+def test_edged_milestone_progress_is_its_one_date() -> None:
+    parent = _applied([_add("x:S", "start_milestone"), _add("x:F", "finish_milestone")]).content
+    start_only = _applied(
+        [{"op": "progress.set", "key": "x:S", "actual_start": "2027-01-01T08:00"}], parent
+    )
+    assert _activity(start_only.content, "x:S").progress is not None
+    for ops in (
+        # A start milestone's actual finish is null or its actual start.
+        [
+            {
+                "op": "progress.set",
+                "key": "x:S",
+                "actual_start": "2027-01-01T08:00",
+                "actual_finish": "2027-01-01T09:00",
+            }
+        ],
+        # A finish milestone's date is its actual finish (the actual start equal).
+        [{"op": "progress.set", "key": "x:F", "actual_start": "2027-01-01T08:00"}],
+        [
+            {
+                "op": "progress.set",
+                "key": "x:F",
+                "actual_start": "2027-01-01T08:00",
+                "actual_finish": "2027-01-01T16:00",
+            }
+        ],
+    ):
+        assert _refused(ops, parent) == ChangeSetRefusal(0, E.PROGRESS_INVALID), ops
+    done = _applied(
+        [
+            {
+                "op": "progress.set",
+                "key": "x:F",
+                "actual_start": "2027-01-01T16:00",
+                "actual_finish": "2027-01-01T16:00",
+            }
+        ],
+        parent,
+    )
+    assert activity_state(_activity(done.content, "x:F")) is ActivityState.COMPLETE
+
+
+def test_settings_set_accepts_a_fixed_lag_calendar() -> None:
+    parent = _applied(
+        [
+            {
+                "op": "calendar.put",
+                "calendar": {"key": "proj", "week": [[[480, 960]]] * 7, "exceptions": []},
+            }
+        ]
+    ).content
+    fixed = _applied([{"op": "settings.set", "lag_calendar": "calendar:proj"}], parent)
+    assert fixed.content.settings.lag_calendar == FixedLagCalendar("proj")
+    assert content_schema(fixed.content) == CONTENT_SCHEMA_V2
+    assert _refused([{"op": "settings.set", "lag_calendar": "calendar:none"}], parent) == (
+        ChangeSetRefusal(0, E.CALENDAR_ABSENT)
+    )
+    for wrong in ("calendar:", "calendar:UPPER", "project", 1):
+        assert _refused([{"op": "settings.set", "lag_calendar": wrong}], parent) == (
+            ChangeSetRefusal(0, E.INVALID_FIELD)
+        ), wrong
+
+
+def test_a_calendar_named_as_the_fixed_lag_calendar_cannot_be_removed() -> None:
+    """E4: removal of a calendar named as the fixed lag calendar is `calendar_in_use`."""
+    parent = _applied(
+        [
+            {
+                "op": "calendar.put",
+                "calendar": {"key": "proj", "week": [[[480, 960]]] * 7, "exceptions": []},
+            },
+            {"op": "settings.set", "lag_calendar": "calendar:proj"},
+        ]
+    ).content
+    assert _refused([{"op": "calendar.remove", "key": "proj"}], parent) == ChangeSetRefusal(
+        0, E.CALENDAR_IN_USE
+    )
+    released = _applied(
+        [
+            {"op": "settings.set", "lag_calendar": "predecessor"},
+            {"op": "calendar.remove", "key": "proj"},
+        ],
+        parent,
+    )
+    assert content_schema(released.content) == CONTENT_SCHEMA
+
+
+def test_the_child_schema_follows_the_content() -> None:
+    """E5: a v2 feature makes a v2 child; removing every one returns the identical v1 hash."""
+    parent = _parent()
+    v1_digest = content_sha256(parent)
+    assert content_schema(parent) == CONTENT_SCHEMA
+    v2 = _applied([_add("x:S", "start_milestone")], parent).content
+    assert content_schema(v2) == CONTENT_SCHEMA_V2
+    back = _applied([{"op": "activity.remove", "key": "x:S"}], v2).content
+    assert content_schema(back) == CONTENT_SCHEMA
+    assert content_sha256(back) == v1_digest
+    # Turning the kind back to `milestone` also returns to v1 (with that activity added).
+    plain = _applied([_add("x:S", "milestone")], parent).content
+    edged = _applied([{"op": "activity.edit", "key": "x:S", "kind": "finish_milestone"}], plain)
+    unedged = _applied(
+        [{"op": "activity.edit", "key": "x:S", "kind": "milestone"}], edged.content
+    ).content
+    assert content_sha256(unedged) == content_sha256(plain)
+    assert content_schema(unedged) == CONTENT_SCHEMA

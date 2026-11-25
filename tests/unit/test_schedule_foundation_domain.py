@@ -247,6 +247,9 @@ def test_schedule_id_kinds_have_their_prefixes() -> None:
         IdKind.SCHEDULE_BASELINE: "sbl",
         IdKind.SCHEDULE_BASELINE_EVENT: "sbev",
         IdKind.SCHEDULE_GOVERNING_EVENT: "sgov",
+        # P6 XER import S7-2 (schedule XER import contract section 8.1).
+        IdKind.SCHEDULE_P6_SNAPSHOT: "sp6n",
+        IdKind.SCHEDULE_P6_CAPTURE_EVENT: "sp6e",
     }
     others = [kind.value for kind in IdKind if not kind.name.startswith("SCHEDULE_")]
     for kind in IdKind:

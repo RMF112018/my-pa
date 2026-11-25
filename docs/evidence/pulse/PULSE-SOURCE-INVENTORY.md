@@ -6,6 +6,8 @@
 
 Exactly 20 CSV files, in 3 project folders of the PULSE export area of the `mcp` file workspace; no other file sits in that area. All 20 were written to the NAS on 2026-11-21 between 12:31Z and 12:32Z (fresh writes; no earlier versions exist in the workspace). Totals: about 360 KB, 2,593 data rows.
 
+> **Manager note 2026-11-24 (recorded contradiction).** The 2,593 above contradicts the per-file Data rows column of section 3, which sums to **2,398**; the unit of 2,593 is not stated. The code and the expected-figures file assert 2,398 (`rows.data`), and the real-data runs reproduced it.
+
 | Project number | Files | Report families present |
 | --- | --- | --- |
 | `P250357` | 8 | OAC meeting items; observations (3 views); coordination issues; RFIs (3 views) |
@@ -50,12 +52,18 @@ Roles are the Manager's verified row-role counts ([grain analysis](PULSE-REPORT-
 
 Summary: 12 populated, 6 valid empty exports (header only), 2 grouping-only. Every row of every file is accounted for by a role: the role counts sum to the data-row count in each file.
 
+> **Manager notes 2026-11-24 (after the real-data run; counts only).**
+>
+> - **Recorded contradiction.** The summary's 12 / 6 / 2 contradicts the Completeness class column of this same table, which counts **13 populated, 5 valid empty, 2 grouping-only** (one daily-log weather file is listed as populated with 1 detail). The code asserts the per-file values, 13 / 5 / 2.
+> - **Correction: buyout grouping-only headers.** of the 185 buyout level-1 headers (the 184 code headers and the `(Blank)` header), 96 have no line beneath them, so under this evidence's own rule 7 ([grain analysis](PULSE-REPORT-GRAIN-AND-GROUPING-ANALYSIS.md) section 2) they are `grouping_only`, not group headers; the inventory counted them as headers. The code asserts 89 buyout group headers and 96 grouping-only level-1 rows (117 group headers and 98 grouping-only rows across the 20 files).
+> - **Correction: the vendor-only rule.** A buyout row that names a vendor and whose only other filled cell is the never-loaded original-budget column is a vendor-only line, not a budget line (a budget line carries no vendor). With that rule the code reproduces the 25 vendor-only rows and 50 budget lines stated above; reading such a row as a budget line was 1 of the 7 differences of the first file-level run (333 of 340 figures, then 340 of 340).
+
 ## 4. Completeness classes
 
 | Class | Meaning | Count |
 | --- | --- | ---: |
-| populated | at least 1 detail row | 12 |
-| valid empty export | a well-formed header and no data row; evidence that the report returned nothing **under its unknown filter**, never evidence that the project has no such records | 6 |
+| populated | at least 1 detail row | 12 (13 by the per-file column; see the note in section 3) |
+| valid empty export | a well-formed header and no data row; evidence that the report returned nothing **under its unknown filter**, never evidence that the project has no such records | 6 (5 by the per-file column) |
 | grouping-only | group rows and no detail; the export says a group exists and gives no record | 2 |
 
 "Sparse" (buyout) is a property of a populated file: most cells are empty because a row carries only the columns of its line kind.

@@ -21,8 +21,8 @@ plans link here instead of restating them.
 
 | Figure | Current |
 |---|---|
-| Alembic head | `0d4e247d03cb` |
-| Alembic revisions | 134 |
+| Alembic head | `d8383150cf72` |
+| Alembic revisions | 135 |
 
 ## Vocabulary
 
@@ -30,7 +30,7 @@ plans link here instead of restating them.
 |---|---|
 | Capabilities | 301 |
 | Purposes | 70 |
-| IdKinds | 195 |
+| IdKinds | 197 |
 | SafeDetails | 442 |
 | ChatLLM data profile version | `chatllm-data-v16` |
 | ChatLLM policy entries | 301 |
@@ -57,10 +57,10 @@ measurable at collection and is carried (`regen --measure --fast-skipped N`).
 
 | Tier or corpus | Selection | Collected | A green execution requires |
 | --- | --- | --- | --- |
-| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 52,882 | 52,744 passed, 138 skipped |
+| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 52,905 | 52,767 passed, 138 skipped |
 | Architecture | `pytest tests/architecture` | 10,142 | 10,142 passed, 0 skipped |
-| Database | `pytest -m "database or recovery or e2e"` | 7,231 | 7,231 passed, 0 skipped |
+| Database | `pytest -m "database or recovery or e2e"` | 7,349 | 7,349 passed, 0 skipped |
 | Evaluation | `pytest -m "evaluation"` | 2 | 2 passed |
-| mypy corpus | `mypy` (`[tool.mypy] files`) | 785 files | no issues found |
+| mypy corpus | `mypy` (`[tool.mypy] files`) | 786 files | no issues found |
 | Source modules | `find src/my_pa -name "*.py"` | 587 |  |
-| Test modules | `find tests -name "test_*.py"` | 1,069 |  |
+| Test modules | `find tests -name "test_*.py"` | 1,070 |  |

@@ -1,6 +1,7 @@
 # P6 XER/XML schedule import — whole-slice contract (S7-0 to S7-6)
 
-**Status:** proposed implementation contract. Design only; nothing in it is implemented,
+**Status:** proposed implementation contract. S7-0 is merged (#384) and S7-1 is implemented
+on `feat/schedule-xer-parser`, not merged; nothing else in it is implemented, and nothing is
 migrated, granted, switched on or deployed. The decision record is
 [`ADR-023`](../decisions/ADR-023-p6-xer-xml-schedule-import.md), which loosens
 [`ADR-016`](../decisions/ADR-016-cpm-workbench-schedule-evidence.md) decision 4 for the P6

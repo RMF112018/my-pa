@@ -176,9 +176,15 @@ def test_identifiers_are_stored_with_their_extractor_version() -> None:
     scene = Scene()
     scene.ingest("20261117-comms.json", s.encode(s.lean_publication()))
     identifiers = {(i.kind, i.value, i.extractor_version) for i in scene.world.identifiers.values()}
-    assert ("rfi", "174", "comms_identifiers_v1") in identifiers
-    assert ("rfi", "999", "comms_identifiers_v1") not in identifiers  # quoted chain cut
+    assert ("rfi", "174", "comms_identifiers_v2") in identifiers
+    assert ("rfi", "999", "comms_identifiers_v2") not in identifiers  # quoted chain cut
     assert {kind for kind, _, _ in identifiers} >= {"rfi", "cb", "gmp", "fpl", "submittal"}
+    # WP4 ruling R10: the current versions only, and every message records it (R2).
+    assert {version for _, _, version in identifiers} == {"comms_identifiers_v2"}
+    messages = scene.world.messages.values()
+    assert messages
+    assert {m.identifiers_version for m in messages} == {"comms_identifiers_v2"}
+    assert {m.projection.search_text_version for m in messages} == {"comms_search_text_v2"}
 
 
 def test_participants_carry_their_first_observation_and_flags_are_raised() -> None:

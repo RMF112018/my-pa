@@ -52,17 +52,19 @@ are raised on the message when an item reports them, never lowered.
 `(has text, window end, window start, snapshot SHA-256, lowest ordinal)`: any
 observation with a usable text basis beats every one without, then the latest
 declared window wins -- a total order, so the projection does not depend on
-arrival order. `search_text` is `derive_search_text` (`comms_search_text_v1`,
-frozen) and is `NULL` whenever the body is withheld, truncated or empty.
+arrival order. `search_text` is `derive_search_text` (`comms_search_text_v2`
+since WP4; ingestion writes the current version only, ruling R10) and is
+`NULL` whenever the body is withheld, truncated or empty.
 `latest_snapshot_id` is the observing snapshot with the greatest `(window end,
 window start, SHA-256)`. The message's identity columns (subject, sender,
 time, conversation) are set once, by the snapshot that created it.
 
 **Identifiers** are `extract_identifiers(subject + "\\n" + search_text)`
-(`comms_identifiers_v1`), added whenever a message is created or its text is
-replaced; set-like, so earlier versions' rows stay. The message's
-`identifiers_version` then records that version (WP4 ruling R2), so a rederive
-can tell in SQL which messages still lack the current version's rows.
+(`comms_identifiers_v2` since WP4, the current version only), added whenever
+a message is created or its text is replaced; set-like, so earlier versions'
+rows stay. The message's `identifiers_version` then records that version
+(WP4 ruling R2), so a rederive can tell in SQL which messages still lack the
+current version's rows.
 
 **Coverage.** `prepare` declares the window and one lane object per declared
 source: `key_kind` (`inbox`, `sent`, `procore_rfis`, else `other` -- the
@@ -502,7 +504,9 @@ class _Apply:
                 if replaced and candidate is not None
                 else record.projection.search_text
             )
-            identifiers = extract_identifiers(f"{record.subject or ''}\n{text or ''}")
+            identifiers = extract_identifiers(
+                f"{record.subject or ''}\n{text or ''}", version=IDENTIFIER_VERSION
+            )
             self.counts["identifiers_added"] += self.repo.insert_identifiers(
                 self.principal_id,
                 [

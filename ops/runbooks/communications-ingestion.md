@@ -512,3 +512,18 @@ answers name lookups by address. Run it after the rederive so the identifier row
 - Rederive and identifiers: the v1 identifier rows are never pruned in WP4 (ruling R4); a message
   whose file stays missing stays `source_unavailable` with its v1 text, and every rederive
   re-checks it.
+- `measure-fts` refuses `statement_timeout` when the statement timeout cancels it; rerun with a
+  lower `--limit`. In the `identifier` class every probe is covered by the identifier index by
+  construction, so `english_miss_uncovered` is 0 there and `material` is decided by the `name`
+  class alone.
+- Search text v2 (review WP4-R1, finding F3, accepted as design of record): in a short message
+  (at most 15 non-blank lines, so the whole message is the trailing region) a paragraph that
+  starts with "Disclaimer" or "If you have received this email in error" is cut, with every
+  identifier after it. For example, a greeting, a blank line, then "Disclaimer language for the
+  contract is attached; please review RFI 12 ..." keeps only the greeting. The Manager's corpus
+  count is 89 messages with `disclaimer_removed` under v2.
+- Identifiers v2 (review WP4-R1, finding F6, accepted residuals): `CO: 25 ppm` (a carbon
+  monoxide reading) reads as `co:25`, and the spaced thousands form `RFI 1 740` reads as
+  `rfi:1`. A number followed by `:` and a digit (`RFI 10:30`) or directly by a letter
+  (`PCO 12a`, `RFI 174A`) yields nothing, so a revision suffix is not searchable as an
+  identifier; full-text search still finds it. `fpl` accepts exactly `FPL`, `FP&L` and `F.P.L.`.

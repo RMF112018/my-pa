@@ -386,6 +386,20 @@ def test_v2_still_cuts_a_trailing_paragraph_start_marker(text: str) -> None:
     assert strip_disclaimer(text, version=SEARCH_TEXT_VERSION_V1) == ("Main text.", True)
 
 
+def test_v2_cuts_a_disclaimer_paragraph_in_a_short_message_a_known_residual() -> None:
+    """WP4-R1 F3, accepted as design of record: pinned so the limitation is explicit.
+
+    In a message of at most `SIGNATURE_TAIL_LINES` non-blank lines the whole
+    text is the trailing region, so a paragraph that starts with "Disclaimer"
+    is cut with the identifiers in it. A change here is a new search-text version.
+    """
+    text = (
+        "Hi team,\n\nDisclaimer language for the contract is attached; please review"
+        " RFI 12 and PCO 4 by Friday.\n\nThanks,\nBob"
+    )
+    assert strip_disclaimer(text) == ("Hi team,", True)
+
+
 def _fixture_messages() -> list[NormalizedMessage]:
     documents = [builder() for builder in s.COMMITTED.values()]
     documents += [s.lean_publication(), s.rich_publication()]

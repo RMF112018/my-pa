@@ -27,6 +27,22 @@ Pure decisions over state the application has already read under lock:
    A no-change record still stores its stamp, so a later older record is
    recognised.
 
+8. an unknown key that was unbound before (a per-key tombstone, WP3b Manager
+   ruling D5) is skipped (`unbound_key_suppressed`) and nothing is written:
+   the unbind's intent outlives the binding, so the next publication cannot
+   re-create the Meeting the Principal detached. The binding is read first, so
+   a later explicit bind of the key wins and the tombstone, which stays, no
+   longer matters.
+
+**`not_seen` (WP3b, ruling D7).** `marks_not_seen` decides, for one binding
+read under the binding-writer lock, whether a publication that declares
+coverage, has no quarantined record and does not carry the binding's key
+proves the provider event gone: the binding's calendar is covered, its bound
+Meeting's current start lies in the inclusive window, and the binding has not
+already applied this publication's stamp or a newer one. The state is the
+binding's only; the Meeting is never touched, and a later sighting restores
+the state through `refreshed_binding` like any other attribute change.
+
 A single meeting and occurrences of one `(calendar_ref, ical_uid)` are mutually
 exclusive in v1 (D9): an event whose UID is already bound as the other kind is
 refused (`binding_kind_conflict`) rather than given a second identity.
@@ -56,6 +72,7 @@ from my_pa.domain.meeting_sync.model import (
     OccurrenceKey,
     ProviderBindingState,
     ProviderEventIdFormat,
+    PublicationCoverage,
 )
 
 __all__ = [
@@ -66,6 +83,7 @@ __all__ = [
     "Resolution",
     "ResolutionDiagnostic",
     "ResolutionKind",
+    "marks_not_seen",
     "ordering_skip",
     "provider_create",
     "provider_update",
@@ -94,6 +112,8 @@ class ResolutionDiagnostic(StrEnum):
     BINDING_KIND_CONFLICT = "binding_kind_conflict"
     STALE_RECORD_SKIPPED = "stale_record_skipped"
     ORDERING_CONFLICT_SKIPPED = "ordering_conflict_skipped"
+    #: WP3b ruling D5: an unbound key with a tombstone is never re-created.
+    UNBOUND_KEY_SUPPRESSED = "unbound_key_suppressed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,18 +156,25 @@ def resolve_event(
     series_id: str | None,
     other_kind_bound: bool,
     source_sha256: str,
+    tombstoned: bool,
 ) -> Resolution:
-    """Rules 1-7 above. `series_id` is the series the event's series UID is bound to.
+    """Rules 1-8 above. `series_id` is the series the event's series UID is bound to.
 
     `other_kind_bound` is whether the event's `(calendar_ref, ical_uid)` is bound
     as the other kind (a single meeting when this is an occurrence, or the
     reverse). `source_sha256` is the digest of the event's publication (rule 7).
+    `tombstoned` is whether the event's exact key has an unbind tombstone (rule
+    8); it is consulted only when the key has no binding.
     """
     if bound is not None:
         skipped = ordering_skip(event, bound, source_sha256=source_sha256)
         if skipped is not None:
             return Resolution(ResolutionKind.SKIP, meeting_id=bound.meeting_id, diagnostic=skipped)
         return Resolution(ResolutionKind.UPDATE_BOUND, meeting_id=bound.meeting_id)
+    if tombstoned:
+        return Resolution(
+            ResolutionKind.SKIP, diagnostic=ResolutionDiagnostic.UNBOUND_KEY_SUPPRESSED
+        )
     if event.meeting_status is MeetingStatus.CANCELLED:
         return Resolution(
             ResolutionKind.SKIP, diagnostic=ResolutionDiagnostic.CANCELLED_UNKNOWN_SKIPPED
@@ -287,6 +314,37 @@ def refreshed_binding(
     if same_observation and not material:
         return None
     return after, material
+
+
+def marks_not_seen(
+    *,
+    key: OccurrenceKey,
+    provider_state: ProviderBindingState,
+    last_applied_generated_at_utc: datetime | None,
+    meeting_start_at: datetime,
+    coverage: PublicationCoverage,
+    generated_at_utc: datetime,
+    accepted_keys: frozenset[OccurrenceKey],
+) -> bool:
+    """Whether a covered, quarantine-free publication marks this binding `not_seen` (D7).
+
+    Every condition must hold: the binding's calendar is in the coverage, its
+    bound Meeting's **current** start lies in the inclusive window, the key is
+    absent from the publication's accepted keys, the binding has applied no
+    stamp of this publication or a newer one, and it is not already
+    `not_seen`. The caller has already refused a publication with any
+    quarantined record or no coverage.
+    """
+    return (
+        key.calendar_ref in coverage.calendar_refs
+        and coverage.start_utc <= meeting_start_at <= coverage.end_utc
+        and key not in accepted_keys
+        and (
+            last_applied_generated_at_utc is None
+            or last_applied_generated_at_utc < generated_at_utc
+        )
+        and provider_state is not ProviderBindingState.NOT_SEEN
+    )
 
 
 def sync_idempotency_key(key: OccurrenceKey, *, source_sha256: str, record_ordinal: int) -> str:

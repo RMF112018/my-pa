@@ -41,7 +41,7 @@ Exit status (closed):
 | `0` | done; for `run-once` and `backfill`, the run's outcome is `completed` |
 | `1` | refused, with one closed code (below) |
 | `2` | usage error (argparse) |
-| `3` | `run-once` or `backfill` finished `partial` or `failed` (the counts are printed) |
+| `3` | `run-once` or `backfill` finished `partial` or `failed`, or a publication failed to apply |
 
 Refusal codes: the lifecycle's `IngestRefusalCode` values, plus
 `target_mismatch`, `settings_invalid`, `workspace_misconfigured`,
@@ -62,6 +62,13 @@ neither for every candidate. Files are applied oldest window first, each in its
 own transaction, so a stopped backfill leaves a consistent prefix and a rerun
 skips the SHA-256 values already ingested (`snapshots_already_known`).
 `--dry-run` lists, reads, parses and counts and writes nothing at all.
+
+**Applying the meeting sync (WP3b-S3).** After `run-once` and `backfill` (not
+`--dry-run`), still under `COMMS_INGEST_LOCK_KEY`, the staged `meeting_sync_v1`
+publications are applied (`MeetingSyncApplier.apply_pending`): nothing applies
+until the reconciliation latch exists. Its counts are printed under
+`meeting_sync_apply`, closed names and integers only; a publication that failed
+to apply (`publications_failed`) makes the exit `3`.
 """
 
 from __future__ import annotations
@@ -69,7 +76,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Final, Protocol
@@ -82,6 +89,7 @@ from my_pa.bootstrap.communications_ingest import (
     coverage_reader,
     ingest_unit_of_work,
     ingestion_lifecycle,
+    meeting_sync_applier,
 )
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.settings import Settings, load_settings
@@ -162,24 +170,47 @@ def _assert_connected(connection: Connection, args: argparse.Namespace) -> None:
 # --- the commands -----------------------------------------------------------
 
 
-def _run_report(command: str, report: IngestRunReport) -> int:
-    _emit(
-        {
-            "command": command,
-            "ingest_source_id": report.ingest_source_id,
-            "trigger": report.trigger.value,
-            "dry_run": report.dry_run,
-            "run_id": report.run_id,
-            "outcome": report.outcome.value,
-            "counts": dict(report.counts),
-        }
+def _run_report(command: str, report: IngestRunReport, applied: _Applied | None = None) -> int:
+    fields: dict[str, object] = {
+        "command": command,
+        "ingest_source_id": report.ingest_source_id,
+        "trigger": report.trigger.value,
+        "dry_run": report.dry_run,
+        "run_id": report.run_id,
+        "outcome": report.outcome.value,
+        "counts": dict(report.counts),
+    }
+    if applied is not None:
+        fields["meeting_sync_apply"] = dict(sorted(applied.counts.items()))
+    _emit(fields)
+    complete = report.outcome is IngestRunOutcome.COMPLETED and not (
+        applied is not None and applied.counts.get("publications_failed")
     )
-    return EXIT_OK if report.outcome is IngestRunOutcome.COMPLETED else EXIT_RUN_INCOMPLETE
+    return EXIT_OK if complete else EXIT_RUN_INCOMPLETE
+
+
+def _run_and_apply(engine: Engine, command: str, principal_id: str, run: _Run) -> int:
+    """Run under the poll lock, then apply the staged meeting sync (WP3b-S3), still under it."""
+    with _poll_lock(engine):
+        report = run()
+        applied = meeting_sync_applier(engine).apply_pending(principal_id)
+    return _run_report(command, report, applied)
 
 
 def _backfill_paths(prefix: str, names: Sequence[str]) -> list[str]:
     directory = prefix.removesuffix("/")
     return [name if "/" in name or not directory else f"{directory}/{name}" for name in names]
+
+
+class _Applied(Protocol):
+    """The applier's report (`MeetingSyncApplyReport`), named without importing the slice."""
+
+    @property
+    def counts(self) -> Mapping[str, int]: ...
+
+
+class _Run(Protocol):
+    def __call__(self) -> IngestRunReport: ...
 
 
 class _Span(Protocol):
@@ -335,8 +366,12 @@ def _dispatch(engine: Engine, settings: Settings, args: argparse.Namespace) -> i
             )
             return EXIT_OK
         case "run-once":
-            with _poll_lock(engine):
-                return _run_report("run-once", lifecycle.run_once(principal_id, args.source))
+            return _run_and_apply(
+                engine,
+                "run-once",
+                principal_id,
+                lambda: lifecycle.run_once(principal_id, args.source),
+            )
         case "backfill":
             paths = None
             if args.file is not None:
@@ -350,13 +385,14 @@ def _dispatch(engine: Engine, settings: Settings, args: argparse.Namespace) -> i
                         principal_id, args.source, paths=paths, name_pattern=args.glob, dry_run=True
                     ),
                 )
-            with _poll_lock(engine):
-                return _run_report(
-                    "backfill",
-                    lifecycle.backfill(
-                        principal_id, args.source, paths=paths, name_pattern=args.glob
-                    ),
-                )
+            return _run_and_apply(
+                engine,
+                "backfill",
+                principal_id,
+                lambda: lifecycle.backfill(
+                    principal_id, args.source, paths=paths, name_pattern=args.glob
+                ),
+            )
         case unknown:  # pragma: no cover - argparse rejects an unknown command first
             raise SystemExit(f"unhandled command {unknown!r}")
 

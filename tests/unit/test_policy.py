@@ -432,6 +432,9 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.MEETINGS_SERIES_UPDATE, Purpose.MEETING_AUTHORING),
         # Communications intelligence WP2-W3: the provider reconciliation write.
         (Capability.MEETINGS_PROVIDER_BIND, Purpose.MEETING_AUTHORING),
+        # WP3b-S4: the reconciliation pass's review read and reconcile write.
+        (Capability.MEETINGS_PROVIDER_REVIEW, Purpose.MEETING_READ),
+        (Capability.MEETINGS_PROVIDER_RECONCILE, Purpose.MEETING_AUTHORING),
         (Capability.RECORD_EVENTS_LIST, Purpose.RECORD_EVENT_READ),
         # KLP-WP-03: five Knowledge reads under `knowledge_assertion_read` and the
         # explicit create under `knowledge_assertion_authoring`, nothing else.

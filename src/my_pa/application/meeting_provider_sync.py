@@ -18,13 +18,19 @@ carries out the decision:
 * an unknown key creates the Meeting through `MeetingApplication.create_meeting`
   -- standalone, in the bound series, or with a new series titled by the event --
   and inserts the series binding (for a new series) and the occurrence binding;
-* a cancelled unknown event and a UID bound as the other kind are skipped with
-  a content-free diagnostic, and nothing is written;
+* a cancelled unknown event, a UID bound as the other kind and an unbound key
+  with an unbind tombstone (`unbound_key_suppressed`, WP3b ruling D5) are
+  skipped with a content-free diagnostic, and nothing is written;
 * a known key's record from an older publication (`stale_record_skipped`), or
   from a different publication with the same `generated_at_utc`
   (`ordering_conflict_skipped`), is skipped the same way (resolution rule 7):
   the binding's `last_applied_generated_at_utc` is the ordering stamp, written
   with `last_seen_*` on every applied record, a no-change one included.
+
+**Locking** (WP3b ruling D8). `apply_event` first takes the Principal's
+binding-writer advisory lock (`MeetingRepository.lock_provider_binding_writers`),
+then the key's binding `FOR UPDATE`, then the Meeting: the one order every
+binding writer uses.
 
 **Writes are the system's** (ruling D12): every Meeting write records actor
 `system` and the source token `system.meeting_provider.sync`
@@ -150,9 +156,16 @@ class MeetingProviderSync:
         event: MeetingSyncEvent,
         *,
         source_sha256: str,
+        source_snapshot_id: str,
         now: datetime,
     ) -> MeetingSyncOutcome:
-        """Resolve and apply one event (module docstring)."""
+        """Resolve and apply one event (module docstring).
+
+        `source_snapshot_id` is the ingest snapshot whose bytes have digest
+        `source_sha256` (WP3b, Manager ruling D10): a binding records it with
+        every observation, and a created binding as its immutable origin. The
+        database refuses a snapshot of any other digest or Principal.
+        """
         if _SHA256.fullmatch(source_sha256) is None:
             raise ValueError("source_sha256 must be lowercase SHA-256 hex")
         at = ensure_utc(now)
@@ -162,6 +175,10 @@ class MeetingProviderSync:
             key, source_sha256=source_sha256, record_ordinal=event.ordinal
         )
 
+        # Every binding writer serializes on the Principal's binding-writer
+        # lock first (WP3b ruling D8); re-entrant, so the applier's own hold
+        # over the whole publication transaction is unaffected.
+        repository.lock_provider_binding_writers(principal_id)
         bound = repository.lock_provider_binding(
             principal_id, key.calendar_ref, key.ical_uid, key.original_start_utc
         )
@@ -174,6 +191,13 @@ class MeetingProviderSync:
         )
         other_kind_bound = bound is None and repository.provider_uid_bound_as_other_kind(
             principal_id, key.calendar_ref, key.ical_uid, occurrence=key.is_occurrence
+        )
+        # Rule 8 (WP3b ruling D5): read only for an unbound key, so an explicit
+        # bind after the unbind wins and the tombstone, which stays, is moot.
+        tombstoned = bound is None and bool(
+            uow.meeting_sync.list_key_tombstones(
+                principal_id, key.calendar_ref, key.ical_uid, key.original_start_utc
+            )
         )
         resolution = resolve_event(
             event,
@@ -188,11 +212,13 @@ class MeetingProviderSync:
             series_id=None if series_binding is None else series_binding.meeting_series_id,
             other_kind_bound=other_kind_bound,
             source_sha256=source_sha256,
+            tombstoned=tombstoned,
         )
 
         if resolution.kind is ResolutionKind.SKIP:
-            # A stale or ordering-conflicted record of a known key, a cancelled
-            # unknown, or a kind conflict: nothing is written, Meeting or binding.
+            # A stale or ordering-conflicted record of a known key, a tombstoned
+            # unbound key, a cancelled unknown, or a kind conflict: nothing is
+            # written, Meeting or binding.
             return MeetingSyncOutcome(
                 event.ordinal,
                 SyncOutcomeKind.SKIPPED,
@@ -201,7 +227,16 @@ class MeetingProviderSync:
                 diagnostic=resolution.diagnostic,
             )
         if bound is not None:
-            return self._update(uow, principal_id, event, bound, source_sha256, idempotency_key, at)
+            return self._update(
+                uow,
+                principal_id,
+                event,
+                bound,
+                source_sha256,
+                source_snapshot_id,
+                idempotency_key,
+                at,
+            )
         return self._create(
             uow,
             principal_id,
@@ -209,6 +244,7 @@ class MeetingProviderSync:
             resolution.kind,
             resolution.meeting_series_id,
             source_sha256,
+            source_snapshot_id,
             idempotency_key,
             at,
         )
@@ -220,6 +256,7 @@ class MeetingProviderSync:
         event: MeetingSyncEvent,
         bound: MeetingProviderBindingRecord,
         source_sha256: str,
+        source_snapshot_id: str,
         idempotency_key: str,
         at: datetime,
     ) -> MeetingSyncOutcome:
@@ -273,6 +310,7 @@ class MeetingProviderSync:
                 last_seen_source_sha256=attributes.last_seen_source_sha256,
                 last_seen_record_ordinal=attributes.last_seen_record_ordinal,
                 last_seen_at=attributes.last_seen_at,
+                last_seen_snapshot_id=source_snapshot_id,
                 # Stored even for a no-change record (rule 7), so a later older
                 # record of this key is recognised as stale.
                 last_applied_generated_at_utc=attributes.last_applied_generated_at_utc,
@@ -297,6 +335,7 @@ class MeetingProviderSync:
         kind: ResolutionKind,
         meeting_series_id: str | None,
         source_sha256: str,
+        source_snapshot_id: str,
         idempotency_key: str,
         at: datetime,
     ) -> MeetingSyncOutcome:
@@ -356,6 +395,8 @@ class MeetingProviderSync:
             last_seen_source_sha256=source_sha256,
             last_seen_record_ordinal=event.ordinal,
             last_seen_at=at,
+            last_seen_snapshot_id=source_snapshot_id,
+            origin_snapshot_id=source_snapshot_id,
             version=1,
             created_at=at,
             updated_at=at,

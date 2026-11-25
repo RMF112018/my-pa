@@ -568,6 +568,9 @@ SCOPED_CAPABILITIES = [
         # WP2-W3: `meetings.provider.bind`, on the identical reading; also in
         # `_SCOPELESS`.
         Capability.MEETINGS_PROVIDER_BIND,
+        # WP3b-S4: the review and the reconcile, also in `_SCOPELESS`.
+        Capability.MEETINGS_PROVIDER_REVIEW,
+        Capability.MEETINGS_PROVIDER_RECONCILE,
         # WP-RE-06: `record_events.list` names only the acting Principal's own
         # change feed and no `src_...` or `enr_...`; also in `_SCOPELESS`.
         Capability.RECORD_EVENTS_LIST,

@@ -58,6 +58,13 @@ STORED_ROOTS: Final = frozenset(
         # `apps/cli/clients.py` already uses. It is refused (no Principal) in
         # entra mode and has no `--principal-id` flag.
         "settings.admissible_client_principal_id()",
+        # WP3b-S3: the meeting sync applier (`MeetingSyncApplier.apply_pending`)
+        # stages the system sync's Meeting events for the one durable local
+        # operator the cycles plane (`apps/worker.py`) and the ingestion CLI
+        # (`apps/cli/communications_ingest.py`) serve: `local_principal()` is
+        # derived from the durable local-operator binding, never minted, and
+        # neither command takes a principal argument.
+        "local_principal().principal_id",
     }
 )
 #: MR-10: the ONE enumerated argument-supplied root, named by path.
@@ -87,10 +94,6 @@ UNCALLED_ENTRIES: Final = frozenset(
             "src/my_pa/infrastructure/persistence/knowledge_assertions.py",
             "record_evidence_availability",
         ),
-        # Communications intelligence WP2: the provider sync entry. Its production
-        # caller (the shared ingestion lifecycle's meeting-sync consumer) lands in
-        # WP3, which removes this entry; until then only tests call it.
-        ("src/my_pa/application/meeting_provider_sync.py", "apply_event"),
     }
 )
 

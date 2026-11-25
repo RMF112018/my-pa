@@ -477,7 +477,10 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # withheld figure grows by seventeen.
     # Communications intelligence WP2-W3's `meetings.provider.bind` is core and
     # in no withheld family: the default grows by one, the withheld figure holds.
-    assert default == 125 and withheld == 174
+    # Communications intelligence WP3b-S4's `meetings.provider.review` and
+    # `meetings.provider.reconcile` are core and in no withheld family: the
+    # default grows by two, the withheld figure holds.
+    assert default == 127 and withheld == 174
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -504,7 +507,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert authenticated_mcp_capabilities == {
         capability.value for capability in application_capabilities
     }
-    assert len(local_mcp_capabilities) == default - 3 == 122
+    assert len(local_mcp_capabilities) == default - 3 == 124
     assert authenticated_mcp_capabilities - local_mcp_capabilities == {
         "goodnotes.pull",
         "goodnotes.complete",

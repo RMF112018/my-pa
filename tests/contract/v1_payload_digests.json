@@ -6,9 +6,27 @@
       "kind": "baseline",
       "reason": "P4 (operator decision O3): per-name digests measured at 32e59aeec replace the aggregate pins; the 186 tool payloads and 37 views the aggregates covered still reproduce V1_PAYLOAD_SCHEMA_SHA256_WITHOUT_MEETING_PREP (ae0f97c4) and _V1_VIEW_FIELDS_SHA256_WITHOUT_MEETING_VIEW (f78a9edb) at this baseline",
       "section": "tools, views"
+    },
+    {
+      "date": "2026-11-24",
+      "kind": "added",
+      "names": [
+        "meetings.provider.reconcile",
+        "meetings.provider.review"
+      ],
+      "section": "tools"
+    },
+    {
+      "date": "2026-11-24",
+      "from": "c7737b3857a1ca732c3c1581305e0809ed29ab8fcf5c3c49cf5d83b65947ee5e",
+      "kind": "changed",
+      "name": "meetings.provider.bind",
+      "reason": "ADR-022 ruling D6 (WP3b-S4): optional occurrence-only adopt_provider_series on bind, additive, default false",
+      "section": "tools",
+      "to": "6d71474937529164398b0dfebabd7f54bd45b90adcd08200a45a341ba9544243"
     }
   ],
-  "seal": "38305d85e52208a7f1f7cb7fe99f2c159b47ee46e96ba60a00ffa14e25124f23",
+  "seal": "fa545dd9b79d41412c023a9f7d12ebf610a0abc9178cf84bfa547168bffdfb6e",
   "tools": {
     "canvas.workspace.get": "65876ad8f7197a4e8465b3a9019dd234b782f605dfda37d10c1026b660941fb3",
     "canvas.workspace.put": "985bbd6cd28bbaffe0520daa1883b0503a592f4369171a366ca14de8b43a5a8b",
@@ -201,7 +219,9 @@
     "meetings.list": "fd6b857004d8905d125a22fc4afba8ee5121cac22c7d87a34bd9c47ddba18cb2",
     "meetings.notes.read_version": "6d33ed547df8c869cd05db054a28740fd7f0be2d107ab9b64e152441d7b753ea",
     "meetings.notes.versions": "1bec6beb3971a0b8410a6a046fec53a4cef321f6119e0d2740d962e8808652ed",
-    "meetings.provider.bind": "c7737b3857a1ca732c3c1581305e0809ed29ab8fcf5c3c49cf5d83b65947ee5e",
+    "meetings.provider.bind": "6d71474937529164398b0dfebabd7f54bd45b90adcd08200a45a341ba9544243",
+    "meetings.provider.reconcile": "da0dbdbbde99ad86f2382c8c6988435dd7895e47421456fe4622b15fe8249367",
+    "meetings.provider.review": "48c1a83ce97a1799981d711fd50c88b0b2997f60e51deb5cc94af430e49f5d9a",
     "meetings.read": "62769c8f5a56c5426f848f042553009fc788f963787ee25430ee9a69e0308524",
     "meetings.search": "31dcc2da31d50bb32ee75151e6917affc1c30b5a91c7fd98728699537f972551",
     "meetings.series.update": "b91375d183fbb97d4fd8c5869b44c8fd3f0ae92d5de8d532e6ed8f381a342e4d",

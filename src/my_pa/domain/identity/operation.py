@@ -988,6 +988,18 @@ class Capability(StrEnum):
     #: binding), so not additive; not operator-only (ordinary Principal work in
     #: the Principal's own partition). Equals `MEETINGS_PROVIDER_BIND_NAME`.
     MEETINGS_PROVIDER_BIND = "meetings.provider.bind"
+    #: Communications intelligence WP3b-S4 (spec section 12.7, Manager rulings
+    #: D2, D3, D12): the reconciliation pass's read -- the pass state, the
+    #: in-scope Meetings not yet bound or marked, and the staged provider events
+    #: whose key is unbound, side by side and never paired. A read under
+    #: `Purpose.MEETING_READ` only; scopeless; not operator-only.
+    MEETINGS_PROVIDER_REVIEW = "meetings.provider.review"
+    #: Communications intelligence WP3b-S4 (rulings D2, D4, D6): the batch of
+    #: explicit binds and `no_provider_event` marks that completes the pass and
+    #: records the one-way latch. A write under `Purpose.MEETING_AUTHORING`
+    #: only; destructive (a bind versions an existing Meeting), so not
+    #: additive; idempotency key required; not operator-only.
+    MEETINGS_PROVIDER_RECONCILE = "meetings.provider.reconcile"
     #: The Record Event change feed (WP-RE-06): one read over the Principal's own
     #: invalidation feed -- which canonical record changed, to which version,
     #: through which operation, and nothing else. A read, never a write and
@@ -1763,6 +1775,8 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.MEETINGS_UPDATE: frozenset({Purpose.MEETING_AUTHORING}),
         Capability.MEETINGS_SERIES_UPDATE: frozenset({Purpose.MEETING_AUTHORING}),
         Capability.MEETINGS_PROVIDER_BIND: frozenset({Purpose.MEETING_AUTHORING}),
+        Capability.MEETINGS_PROVIDER_REVIEW: frozenset({Purpose.MEETING_READ}),
+        Capability.MEETINGS_PROVIDER_RECONCILE: frozenset({Purpose.MEETING_AUTHORING}),
         # The Record Event feed (WP-RE-06): exactly one purpose of its own.
         Capability.RECORD_EVENTS_LIST: frozenset({Purpose.RECORD_EVENT_READ}),
         # The Knowledge Assertion plane (KLP-WP-03): each name maps to exactly
@@ -2088,6 +2102,10 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.MEETINGS_SERIES_UPDATE,
         # WP2-W3: a bind or unbind versions an existing Meeting.
         Capability.MEETINGS_PROVIDER_BIND,
+        # WP3b-S4: a reconcile bind versions an existing Meeting, and its marks
+        # and latch are product-owned rows. The review read stays out, which
+        # keeps its generated MCP tool annotated `read_only_hint`.
+        Capability.MEETINGS_PROVIDER_RECONCILE,
         # KLP-WP-03. The explicit Knowledge Assertion create persists a
         # submission ledger row and, when admitted, an assertion, its mutation
         # receipt and evidence links. The five Knowledge reads stay out, which

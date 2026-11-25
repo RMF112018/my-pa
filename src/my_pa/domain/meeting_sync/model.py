@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Final
 
@@ -41,17 +41,22 @@ from my_pa.domain.meeting.model import (
 from my_pa.domain.meeting_sync.diagnostics import ReasonCode
 
 __all__ = [
+    "COLLECTOR_LOOKBACK",
+    "COVERAGE_MINOR",
     "MAX_CALENDAR_REF_CHARACTERS",
+    "MAX_COVERAGE_CALENDAR_REFS",
     "MAX_ICAL_UID_CHARACTERS",
     "MAX_PROVIDER_EVENT_ID_CHARACTERS",
     "SCHEMA_NAME",
     "SUPPORTED_MAJOR",
+    "SUPPORTED_MINOR",
     "EventStatus",
     "MeetingSyncEvent",
     "MeetingSyncPublication",
     "OccurrenceKey",
     "ProviderBindingState",
     "ProviderEventIdFormat",
+    "PublicationCoverage",
     "QuarantinedEvent",
     "SchemaVersion",
     "SyncAttendee",
@@ -61,6 +66,19 @@ __all__ = [
 
 SCHEMA_NAME: Final = "meeting_sync_v1"
 SUPPORTED_MAJOR: Final = 1
+#: The newest minor this parser knows (contract 1.1.0); a newer one is accepted
+#: and reported `schema_minor_newer`.
+SUPPORTED_MINOR: Final = 1
+#: The first minor whose top-level `coverage` is read; in a 1.0.x publication
+#: the key is unknown and ignored, exactly as the 1.0 parser treated it.
+COVERAGE_MINOR: Final = 1
+#: The `meeting_sync_publications.coverage_calendar_refs` cardinality bound.
+MAX_COVERAGE_CALENDAR_REFS: Final = 100
+#: The collector lookback L (contract section 8.1, Manager ruling D3): the
+#: collector sends every timed event whose current start is at or after
+#: `generated_at_utc - COLLECTOR_LOOKBACK`. A Meeting that starts earlier can
+#: never meet a sync record, so the reconciliation pass need not review it.
+COLLECTOR_LOOKBACK: Final = timedelta(days=30)
 
 #: The binding table bounds (migration frozen literals).
 MAX_CALENDAR_REF_CHARACTERS: Final = 320
@@ -85,7 +103,12 @@ class ProviderEventIdFormat(StrEnum):
 
 
 class ProviderBindingState(StrEnum):
-    """A binding's last observed provider state (C10). WP2 never writes `not_seen`."""
+    """A binding's last observed provider state (C10).
+
+    `not_seen` is written only by the WP3b applier, from a publication that
+    declares coverage (ruling D7); a later sighting restores `active` or
+    `cancelled`.
+    """
 
     ACTIVE = "active"
     CANCELLED = "cancelled"
@@ -182,12 +205,27 @@ class QuarantinedEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class PublicationCoverage:
+    """A 1.1.0 completeness claim: every event of each of `calendar_refs` whose
+    current start lies in `[start_utc, end_utc]` (inclusive) is in the publication.
+
+    `calendar_refs` is non-empty, distinct and sorted. Absent, nothing is
+    claimed and `not_seen` is never written from that publication (ruling D7).
+    """
+
+    start_utc: datetime
+    end_utc: datetime
+    calendar_refs: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class MeetingSyncPublication:
     schema_version: SchemaVersion
     generated_at_utc: datetime
     record_count: int
     events: tuple[MeetingSyncEvent, ...]
     quarantined: tuple[QuarantinedEvent, ...]
+    coverage: PublicationCoverage | None = None
 
 
 def _refused(check: Callable[[object], object], value: object) -> bool:

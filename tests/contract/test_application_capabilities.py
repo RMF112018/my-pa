@@ -728,7 +728,8 @@ def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derive
     # WP06: `reports.transfer.read_chunk` is ungated (T14); its 4 uploads are not.
     # Schedule Scenarios S6-3: its 26 names are all gated, so the count holds.
     # Files workspace WP5: its 17 names are all gated on the root, likewise.
-    assert len(expected_available) == 192
+    # Communications intelligence WP3b-S4: the review and the reconcile are ungated.
+    assert len(expected_available) == 194
     assert readiness["implemented_capabilities"] == len(expected_available)
     assert readiness["limitations"]
     assert "Worker-plane health" in readiness["limitations"][-1]

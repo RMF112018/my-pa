@@ -196,6 +196,9 @@ _MEETING_PURPOSES = {
     Capability.MEETINGS_SERIES_UPDATE: Purpose.MEETING_AUTHORING,
     # Communications intelligence WP2-W3 (chatllm-data-v15).
     Capability.MEETINGS_PROVIDER_BIND: Purpose.MEETING_AUTHORING,
+    # Communications intelligence WP3b-S4 (chatllm-data-v16).
+    Capability.MEETINGS_PROVIDER_REVIEW: Purpose.MEETING_READ,
+    Capability.MEETINGS_PROVIDER_RECONCILE: Purpose.MEETING_AUTHORING,
 }
 _MEETING_WRITES = frozenset(
     {
@@ -203,6 +206,7 @@ _MEETING_WRITES = frozenset(
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
         Capability.MEETINGS_PROVIDER_BIND,
+        Capability.MEETINGS_PROVIDER_RECONCILE,
     }
 )
 #: A synthetic, fully composed deployment. Stands in for `Settings` so the
@@ -794,7 +798,13 @@ _NONEXISTENT_NEXT_VERSION: Final = _PROFILE_VERSION_PREFIX + str(
 
 @pytest.mark.parametrize(
     "refused",
-    ["chatllm-data-v12", "chatllm-data-v13", "chatllm-data-v14", _NONEXISTENT_NEXT_VERSION],
+    [
+        "chatllm-data-v12",
+        "chatllm-data-v13",
+        "chatllm-data-v14",
+        "chatllm-data-v15",
+        _NONEXISTENT_NEXT_VERSION,
+    ],
 )
 def test_v15_profile_commands_refuse_earlier_versions_and_the_nonexistent_next_version(
     refused: str, capsys: pytest.CaptureFixture[str]

@@ -158,7 +158,8 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
     # `reports.transfer.read_chunk` is listed. Schedule Scenarios S6-3: the 26
     # plane names need the plane switch this world leaves off. Files workspace
     # WP5: the 17 `files.*` names need a workspace root this world lacks.
-    assert len(listed.tools) == 247
+    # Communications intelligence WP3b-S4 adds the review and the reconcile.
+    assert len(listed.tools) == 249
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 

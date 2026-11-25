@@ -20,7 +20,10 @@ tables composes `matching_partition_criterion` with `_mine` on the outer table.
 There is no hand-written partition comparison, and the Principal is only ever a
 parameter: nothing here reads it back from a row or a record.
 
-**Lock order is the package section 35.10 order, and it is structural.** The
+**Lock order is the package section 35.10 order, and it is structural.** Every
+provider binding writer first takes the per-Principal binding-writer advisory
+lock (`lock_provider_binding_writers`, class
+`MEETING_PROVIDER_BINDING_LOCK_CLASS`, WP3b ruling D8). The
 only row locks this module takes are, first, a Meeting provider binding row `FOR
 UPDATE` when the write is a provider bind, unbind or sync (communications
 intelligence WP2: binding before Meeting, the one order every provider path
@@ -55,6 +58,7 @@ from typing import Any, Final, cast
 from sqlalchemy import (
     ColumnElement,
     DateTime,
+    Integer,
     Select,
     Table,
     Text,
@@ -69,11 +73,13 @@ from sqlalchemy import (
     tuple_,
     update,
 )
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import REGCONFIG
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Row, RowMapping
 
 from my_pa.contracts.ports import (
+    CoveredProviderBinding,
     MeetingAttachmentRecord,
     MeetingAttendeeRecord,
     MeetingCursorAnchor,
@@ -143,7 +149,14 @@ from my_pa.infrastructure.persistence.tables import (
     projects,
 )
 
-__all__ = ["SqlMeetingRepository"]
+__all__ = ["MEETING_PROVIDER_BINDING_LOCK_CLASS", "SqlMeetingRepository"]
+
+#: The advisory-lock class of the per-Principal binding-writer lock (WP3b,
+#: Manager ruling D8): `pg_advisory_xact_lock(class, hashtext(principal_id))`,
+#: the two-key form, so it shares no key space with any one-key lock. ASCII
+#: "MPSB" (meeting provider sync binding), distinct from every other two-key
+#: class in the repository (`LINE`, `SCPM`, `SSCP`).
+MEETING_PROVIDER_BINDING_LOCK_CLASS: Final = 0x4D505342
 
 
 def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
@@ -1256,6 +1269,56 @@ class SqlMeetingRepository(MeetingRepository):
 
     # --- provider bindings (communications intelligence WP2) -----------------
 
+    def lock_provider_binding_writers(self, principal_id: str) -> None:
+        self._connection.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    sql_cast(literal(MEETING_PROVIDER_BINDING_LOCK_CLASS), Integer),
+                    func.hashtext(literal(principal_id, Text)),
+                )
+            )
+        ).all()
+
+    def lock_provider_bindings_in_window(
+        self,
+        principal_id: str,
+        calendar_refs: Collection[str],
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> tuple[CoveredProviderBinding, ...]:
+        refs = sorted(set(calendar_refs))
+        if not refs:
+            return ()
+        binding = meeting_provider_bindings
+        rows = self._connection.execute(
+            principal_scoped(
+                select(*_BINDING_COLUMNS, meetings.c.start_at.label("meeting_start_at")),
+                binding,
+                capture_context(principal_id),
+            )
+            .join(
+                meetings,
+                matching_partition_criterion(meetings, binding)
+                & (meetings.c.meeting_id == binding.c.meeting_id),
+            )
+            .where(
+                binding.c.calendar_ref.in_(refs),
+                meetings.c.start_at >= start_utc,
+                meetings.c.start_at <= end_utc,
+            )
+            .order_by(
+                binding.c.calendar_ref,
+                binding.c.ical_uid,
+                binding.c.occurrence_original_start_utc.asc().nulls_first(),
+                binding.c.binding_id,
+            )
+            .with_for_update(of=binding)
+        )
+        return tuple(
+            CoveredProviderBinding(binding=_to_binding(row), meeting_start_at=row.meeting_start_at)
+            for row in rows
+        )
+
     def lock_provider_binding(
         self,
         principal_id: str,
@@ -1427,6 +1490,8 @@ class SqlMeetingRepository(MeetingRepository):
                         "occurrence_original_start_utc": binding.occurrence_original_start_utc,
                         "series_ical_uid": binding.series_ical_uid,
                         "created_at": binding.created_at,
+                        # Set once, here; the WP3b origin trigger refuses a change.
+                        "origin_snapshot_id": binding.origin_snapshot_id,
                         **_mutable_binding_values(binding),
                     },
                 )
@@ -1668,6 +1733,8 @@ _BINDING_COLUMNS: Final = (
     meeting_provider_bindings.c.last_seen_record_ordinal,
     meeting_provider_bindings.c.last_seen_at,
     meeting_provider_bindings.c.last_applied_generated_at_utc,
+    meeting_provider_bindings.c.origin_snapshot_id,
+    meeting_provider_bindings.c.last_seen_snapshot_id,
     meeting_provider_bindings.c.version,
     meeting_provider_bindings.c.created_at,
     meeting_provider_bindings.c.updated_at,
@@ -1689,6 +1756,8 @@ def _to_binding(row: Row[Any]) -> MeetingProviderBindingRecord:
         last_seen_record_ordinal=row.last_seen_record_ordinal,
         last_seen_at=row.last_seen_at,
         last_applied_generated_at_utc=row.last_applied_generated_at_utc,
+        origin_snapshot_id=row.origin_snapshot_id,
+        last_seen_snapshot_id=row.last_seen_snapshot_id,
         version=row.version,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -1705,6 +1774,7 @@ def _mutable_binding_values(binding: MeetingProviderBindingRecord) -> dict[str, 
         "last_seen_record_ordinal": binding.last_seen_record_ordinal,
         "last_seen_at": binding.last_seen_at,
         "last_applied_generated_at_utc": binding.last_applied_generated_at_utc,
+        "last_seen_snapshot_id": binding.last_seen_snapshot_id,
         "version": binding.version,
         "updated_at": binding.updated_at,
     }

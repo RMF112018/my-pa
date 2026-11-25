@@ -2020,6 +2020,12 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "calendar_ref": "cal-synthetic",
             "ical_uid": "uid-parity@example.invalid",
         },
+        # WP3b-S4: the review page, and one mark of the staged Meeting.
+        Capability.MEETINGS_PROVIDER_REVIEW: {"page_size": 10},
+        Capability.MEETINGS_PROVIDER_RECONCILE: {
+            "items": [{"action": "no_provider_event", "meeting_id": scene.meeting_id}],
+            "idempotency_key": "parity-meetings-provider-reconcile-0001",
+        },
         Capability.RECORD_EVENTS_LIST: {"page_size": 10},
         Capability.KNOWLEDGE_ASSERTIONS_READ: {"assertion_id": "kasr_parityknowledge0001"},
         Capability.KNOWLEDGE_ASSERTIONS_LIST: {"page_size": 10, "lifecycle": "active"},

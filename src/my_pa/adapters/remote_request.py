@@ -352,6 +352,8 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # WP2-W3: `meetings.provider.bind` carries the same required key over
         # the same `meeting_write_requests` arbitration.
         Capability.MEETINGS_PROVIDER_BIND,
+        # WP3b-S4: the reconcile batch key derives each bind item's key.
+        Capability.MEETINGS_PROVIDER_RECONCILE,
         # KLP-WP-03 (R6 6.3). The remote explicit-create key is this set's
         # server-stamped payload hash, so an identical retry replays its stored
         # result permanently and a changed request hashes to a new key. The

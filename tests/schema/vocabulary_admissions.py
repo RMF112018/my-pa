@@ -40,6 +40,11 @@ CAPABILITY_ADMISSIONS: Final[Mapping[str, tuple[str, frozenset[str]]]] = Mapping
     {
         # Communications intelligence WP2-W3 (ADR-022): the provider-binding revision.
         "meetings_provider_bind": ("6418b57081c3", frozenset({"meetings.provider.bind"})),
+        # Communications intelligence WP3b (ADR-022): the meeting sync staging revision.
+        "meetings_provider_review_reconcile": (
+            "61fafdfd2986",
+            frozenset({"meetings.provider.reconcile", "meetings.provider.review"}),
+        ),
     }
 )
 

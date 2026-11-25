@@ -1,4 +1,4 @@
-"""The `meeting_sync_v1` source-contract parser (WP2, Manager ruling D1).
+"""The `meeting_sync_v1` source-contract parser (WP2, Manager ruling D1; v2 WP3b, D7).
 
 `parse_publication(data)` turns the bytes of one publication into a
 `PublicationParse`: either `accepted` with a domain `MeetingSyncPublication`, or
@@ -13,14 +13,25 @@ Publication validation, in order (the first failure decides), mirroring
    key and no `NaN`/`Infinity` (`malformed_json` carries line/column/offset only);
 2. a JSON object whose `schema` is `meeting_sync_v1`;
 3. `schema_version` is `MAJOR.MINOR.PATCH`; major `1` only
-   (`unsupported_major_version`); a newer minor is accepted and reported
-   (`schema_minor_newer`);
+   (`unsupported_major_version`); `1.0.x` and `1.1.x` are known; a newer minor
+   is accepted and reported (`schema_minor_newer`);
 4. required keys `schema`, `schema_version`, `events`; `events` a list;
 5. required `generated_at_utc`, an aware timestamp (`missing_required_key` when
    absent, `invalid_top_level_field` when not a timestamp): the publication's
    ordering stamp, carried onto every accepted event so a re-application of an
    older publication can never rewind a bound Meeting (WP2-F1);
-6. optional `cycle_run_id` (a non-empty string).
+6. optional `cycle_run_id` (a non-empty string);
+7. from minor `1` (contract 1.1.0), optional `coverage` `{start_utc, end_utc,
+   calendar_refs}`: the publication is complete for those calendars over the
+   inclusive window. All-or-none; both stamps UTC with `start_utc <= end_utc`;
+   `calendar_refs` 1..100 distinct calendar references within the binding
+   bound. A malformed coverage rejects the publication (`invalid_coverage`,
+   its `CoverageDefect` in the diagnostic detail): a completeness claim is
+   never half-read. In a `1.0.x` publication `coverage` is an unknown
+   top-level key, ignored and counted, as parser v1 treated it.
+
+Parser v2 (`meeting_sync_v1_parser_v2`) gives every `1.0.x` publication exactly
+the outcome parser v1 gave it.
 
 An event record carries `calendar_ref`, `ical_uid`, `series_ical_uid` and
 `occurrence_original_start_utc` (both null for a single meeting), `start_utc`,
@@ -54,6 +65,7 @@ from typing import Final
 from zoneinfo import available_timezones
 
 from my_pa.domain.meeting_sync.diagnostics import (
+    CoverageDefect,
     DiagnosticCode,
     DiagnosticCollector,
     Diagnostics,
@@ -61,13 +73,18 @@ from my_pa.domain.meeting_sync.diagnostics import (
     ReasonCode,
 )
 from my_pa.domain.meeting_sync.model import (
+    COVERAGE_MINOR,
+    MAX_CALENDAR_REF_CHARACTERS,
+    MAX_COVERAGE_CALENDAR_REFS,
     SCHEMA_NAME,
     SUPPORTED_MAJOR,
+    SUPPORTED_MINOR,
     EventStatus,
     MeetingSyncEvent,
     MeetingSyncPublication,
     OccurrenceKey,
     ProviderEventIdFormat,
+    PublicationCoverage,
     QuarantinedEvent,
     SchemaVersion,
     normalized_attendees,
@@ -82,12 +99,15 @@ __all__ = [
     "parse_publication",
 ]
 
-PARSER_VERSION: Final = "meeting_sync_v1_parser_v1"
+PARSER_VERSION: Final = "meeting_sync_v1_parser_v2"
 MAX_PUBLICATION_BYTES: Final = 16 * 1024 * 1024
 
 REQUIRED_TOP_LEVEL: Final = ("schema", "schema_version", "events", "generated_at_utc")
 OPTIONAL_TOP_LEVEL: Final = frozenset({"cycle_run_id"})
 KNOWN_TOP_LEVEL: Final = frozenset(REQUIRED_TOP_LEVEL) | OPTIONAL_TOP_LEVEL
+#: Known from minor `COVERAGE_MINOR` (contract 1.1.0).
+COVERAGE_KEY: Final = "coverage"
+COVERAGE_KEYS: Final = frozenset({"start_utc", "end_utc", "calendar_refs"})
 
 REQUIRED_RECORD_KEYS: Final = (
     "calendar_ref",
@@ -237,7 +257,7 @@ def _schema_version(document: Mapping[str, object], d: DiagnosticCollector) -> S
     if version.major != SUPPORTED_MAJOR:
         d.add(PublicationRejection.UNSUPPORTED_MAJOR_VERSION, "schema_version", major=version.major)
         raise _RejectedError(PublicationRejection.UNSUPPORTED_MAJOR_VERSION)
-    if version.minor > 0:
+    if version.minor > SUPPORTED_MINOR:
         d.add(DiagnosticCode.SCHEMA_MINOR_NEWER, "schema_version", minor=version.minor)
     return version
 
@@ -267,7 +287,13 @@ def _parse(data: bytes, d: DiagnosticCollector) -> MeetingSyncPublication:
         run_id = document["cycle_run_id"]
         if not isinstance(run_id, str) or not run_id.strip():
             raise _reject(d, PublicationRejection.INVALID_TOP_LEVEL_FIELD, "cycle_run_id")
-    unknown = sum(1 for key in document if key not in KNOWN_TOP_LEVEL)
+    known = KNOWN_TOP_LEVEL
+    coverage: PublicationCoverage | None = None
+    if version.minor >= COVERAGE_MINOR:
+        known = known | {COVERAGE_KEY}
+        if COVERAGE_KEY in document:
+            coverage = _coverage(document[COVERAGE_KEY], d)
+    unknown = sum(1 for key in document if key not in known)
     if unknown:
         d.add(DiagnosticCode.UNKNOWN_TOP_LEVEL_KEYS, "$", count=unknown)
 
@@ -297,7 +323,62 @@ def _parse(data: bytes, d: DiagnosticCollector) -> MeetingSyncPublication:
         record_count=len(events),
         events=tuple(kept),
         quarantined=tuple(sorted(quarantined, key=lambda entry: entry.ordinal)),
+        coverage=coverage,
     )
+
+
+def _utc_stamp(value: object) -> datetime | CoverageDefect:
+    """A coverage stamp: a valid timestamp (`_parse_utc`) written in UTC."""
+    parsed = _parse_utc(value)
+    if parsed is None:
+        return CoverageDefect.INVALID_TIMESTAMP
+    assert isinstance(value, str)  # noqa: S101 - `_parse_utc` accepts strings only
+    if not value.endswith(("Z", "+00:00")):
+        return CoverageDefect.NOT_UTC
+    return parsed
+
+
+def _coverage_defect(raw: object) -> PublicationCoverage | CoverageDefect:
+    if not isinstance(raw, dict):
+        return CoverageDefect.NOT_AN_OBJECT
+    if not raw.keys() >= COVERAGE_KEYS:
+        return CoverageDefect.INCOMPLETE
+    if raw.keys() != COVERAGE_KEYS:
+        return CoverageDefect.UNKNOWN_KEY
+    start = _utc_stamp(raw["start_utc"])
+    if isinstance(start, CoverageDefect):
+        return start
+    end = _utc_stamp(raw["end_utc"])
+    if isinstance(end, CoverageDefect):
+        return end
+    if end < start:
+        return CoverageDefect.END_BEFORE_START
+    refs = raw["calendar_refs"]
+    if not isinstance(refs, list):
+        return CoverageDefect.CALENDAR_REFS_NOT_A_LIST
+    if not refs:
+        return CoverageDefect.CALENDAR_REFS_EMPTY
+    if len(refs) > MAX_COVERAGE_CALENDAR_REFS:
+        return CoverageDefect.CALENDAR_REFS_TOO_MANY
+    for ref in refs:
+        if (
+            not isinstance(ref, str)
+            or not 1 <= len(ref) <= MAX_CALENDAR_REF_CHARACTERS
+            or not ref.strip()
+        ):
+            return CoverageDefect.CALENDAR_REF_UNREPRESENTABLE
+    if len(set(refs)) != len(refs):
+        return CoverageDefect.DUPLICATE_CALENDAR_REF
+    return PublicationCoverage(start_utc=start, end_utc=end, calendar_refs=tuple(sorted(refs)))
+
+
+def _coverage(raw: object, d: DiagnosticCollector) -> PublicationCoverage:
+    """The declared coverage, or the publication's `invalid_coverage` rejection."""
+    checked = _coverage_defect(raw)
+    if isinstance(checked, CoverageDefect):
+        d.add(PublicationRejection.INVALID_COVERAGE, COVERAGE_KEY, defect=checked)
+        raise _RejectedError(PublicationRejection.INVALID_COVERAGE)
+    return checked
 
 
 def _quarantine(ordinal: int, reasons: set[ReasonCode], d: DiagnosticCollector) -> QuarantinedEvent:

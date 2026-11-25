@@ -260,6 +260,8 @@ def test_capability_names_match_the_published_contract() -> None:
         "meetings.update",
         "meetings.series.update",
         "meetings.provider.bind",
+        "meetings.provider.review",
+        "meetings.provider.reconcile",
         "record_events.list",
         "knowledge.assertions.read",
         "knowledge.assertions.list",

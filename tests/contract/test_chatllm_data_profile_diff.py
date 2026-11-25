@@ -257,10 +257,12 @@ def test_full_plane_effective_target_is_one_hundred_forty_nine() -> None:
     `reports.transfer.*` names, `DATA_REQUIRED` on the core plane).
     `chatllm-data-v15` (communications intelligence WP2-W3) moved it by one
     (`meetings.provider.bind`, `DATA_REQUIRED` on the core plane).
+    `chatllm-data-v16` (WP3b-S4) moved it by two (`meetings.provider.review`
+    and `meetings.provider.reconcile`, `DATA_REQUIRED` on the core plane).
     """
     composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
     desired = desired_effective_capabilities(composed)
-    assert len(desired) == 176
+    assert len(desired) == 178
     assert Capability.MEETINGS_PROVIDER_BIND in desired
     assert Capability.REPORTS_PUBLISH in desired
     assert desired >= _WP06_TRANSFER
@@ -282,8 +284,8 @@ def test_default_plane_effective_target_is_eighty_three() -> None:
     # does WP-RE-06's `record_events.list`, and v9's two `reports.types.*` names,
     # and v12's eleven Reports Modernization names (`reports.publish`, the five
     # report management names and the five `reports.transfer.*` names), and
-    # v15's `meetings.provider.bind`.
-    assert len(desired) == 110
+    # v15's `meetings.provider.bind`, and v16's review and reconcile.
+    assert len(desired) == 112
     assert Capability.MEETINGS_PROVIDER_BIND in desired
     assert desired >= _WP06_TRANSFER
     assert Capability.REPORTS_PUBLISH in desired
@@ -1363,3 +1365,45 @@ def test_v15_adds_exactly_meetings_provider_bind_on_every_composition() -> None:
             composed_capabilities(frozenset(Capability) - {bind}, planes)
         )
         assert with_bind - without == {bind}, planes
+
+
+def test_v16_adds_exactly_the_two_meeting_provider_pass_names_on_every_composition() -> None:
+    """chatllm-data-v16 = v15 + `meetings.provider.review` and `.reconcile` (WP3b-S4, D13).
+
+    Both `DATA_REQUIRED` on the core plane: the review a read under
+    `meeting_read`, the reconcile a write under `meeting_authoring`. Across all
+    512 compositions removing the two leaves exactly the v15 desired set. The
+    grants and the profile activation stay operator-gated; nothing here issues one.
+    """
+    review = Capability.MEETINGS_PROVIDER_REVIEW
+    reconcile = Capability.MEETINGS_PROVIDER_RECONCILE
+    for capability, purpose, write in (
+        (review, Purpose.MEETING_READ, False),
+        (reconcile, Purpose.MEETING_AUTHORING, True),
+    ):
+        policy = CHATLLM_CAPABILITY_POLICY[capability]
+        assert policy.classification is ChatLLMCapabilityClass.DATA_REQUIRED
+        assert policy.composition_prerequisite is ChatLLMCompositionPrerequisite.ALWAYS
+        assert chatllm_grant_purpose(capability) is purpose
+        assert resolve_remote_purpose(capability, None) is purpose
+        assert is_write_capability(capability) is write
+    added = {review, reconcile}
+    for bits in range(512):
+        planes = ChatLLMCompositionPlanes(
+            managed_documents=bool(bits & 1),
+            relationship_intelligence=bool(bits & 2),
+            relationship_intelligence_writes=bool(bits & 4),
+            relationship_memory=bool(bits & 8),
+            constraints=bool(bits & 16),
+            knowledge_assertions=bool(bits & 32),
+            lineage=bool(bits & 64),
+            program_reporting=bool(bits & 128),
+            schedule=bool(bits & 256),
+        )
+        with_pass = desired_effective_capabilities(
+            composed_capabilities(frozenset(Capability), planes)
+        )
+        without = desired_effective_capabilities(
+            composed_capabilities(frozenset(Capability) - added, planes)
+        )
+        assert with_pass - without == added, planes

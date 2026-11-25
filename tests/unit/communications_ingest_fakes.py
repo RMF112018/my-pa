@@ -566,8 +566,10 @@ class FakeCommunications(CommunicationsRepository):
 class IngestUnitOfWork(FakeUnitOfWork):
     """`FakeUnitOfWork` with the two WP3a planes modelled, and real rollback."""
 
-    def __init__(self, world: IngestWorld) -> None:
-        super().__init__(World())
+    def __init__(self, world: IngestWorld, meetings: World | None = None) -> None:
+        # `meetings`: a shared general `World` (the WP3b-S3 applier reads the
+        # ingestion plane beside the Meeting and staging planes); fresh otherwise.
+        super().__init__(World() if meetings is None else meetings)
         self._ingest_world = world
         self._saved: dict[str, Any] | None = None
 

@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v15"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v16"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -116,6 +116,12 @@ _DATA_REQUIRED: Final[frozenset[Capability]] = frozenset(
         # v15 is activated at the consolidated deploy, with operator-profile
         # grants only): classified as `meetings.update` is.
         Capability.MEETINGS_PROVIDER_BIND,
+        # chatllm-data-v16 (communications intelligence WP3b-S4, Manager ruling
+        # D13): the reconciliation pass's review and reconcile, classified as
+        # the Meeting read and `meetings.provider.bind` are. Activated at the
+        # consolidated deploy instead of v15; the grants stay operator-gated.
+        Capability.MEETINGS_PROVIDER_REVIEW,
+        Capability.MEETINGS_PROVIDER_RECONCILE,
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_COMMIT,
         Capability.REPORTS_LATEST,

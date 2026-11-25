@@ -303,6 +303,12 @@ class MeetingErrorField(StrEnum):
     PROVIDER_BINDING_KIND_CONFLICT = "provider_binding_kind_conflict"
     PROVIDER_BINDING_REQUIRES_SERIES = "provider_binding_requires_series"
     PROVIDER_SERIES_BINDING_CONFLICT = "provider_series_binding_conflict"
+    # Communications intelligence WP3b-S4 (`meetings.provider.review` and
+    # `meetings.provider.reconcile`, rulings D2, D6): the adopt flag, the batch
+    # and the opaque staged-event reference. Each names a field, never a value.
+    ADOPT_PROVIDER_SERIES = "adopt_provider_series"
+    ITEMS = "items"
+    PROVIDER_EVENT_REF = "provider_event_ref"
     # Existing `SafeDetail` members, reused.
     ACTION = "action"
     TITLE = "title"

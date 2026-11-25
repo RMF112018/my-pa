@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from my_pa.application.ingestion import IngestRunReport
+from my_pa.application.meeting_sync_apply import MeetingSyncApplyReport
 from my_pa.bootstrap.settings import load_settings
 from my_pa.contracts.ports import FileWorkspaceRootError, IngestRunOutcome, IngestRunTrigger
 from my_pa.infrastructure.jobs import cycle_scheduler
@@ -279,6 +280,18 @@ class _Lifecycle:
         )
 
 
+class _Applier:
+    """The WP3b-S3 applier the step calls after the poll."""
+
+    def __init__(self, counts: dict[str, int] | None = None) -> None:
+        self.calls: list[str] = []
+        self.counts = {"unapplied_awaiting_reconciliation": 1} if counts is None else counts
+
+    def apply_pending(self, principal_id: str) -> MeetingSyncApplyReport:
+        self.calls.append(principal_id)
+        return MeetingSyncApplyReport(counts=self.counts)
+
+
 def _env(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]) -> None:
     for key in [key for key in os.environ if key.startswith("MY_PA_")]:
         monkeypatch.delenv(key)
@@ -288,15 +301,21 @@ def _env(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]) -> None:
 
 
 def _plane(
-    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], *, real_loop: bool = False
+    monkeypatch: pytest.MonkeyPatch,
+    env: dict[str, str],
+    *,
+    real_loop: bool = False,
+    applier: _Applier | None = None,
 ) -> tuple[int, list[str], _Lifecycle]:
     from apps import worker as worker_app
 
     _env(monkeypatch, env)
     lifecycle = _Lifecycle()
+    applying = _Applier() if applier is None else applier
     seen: list[str] = []
     monkeypatch.setattr(worker_app, "create_database_engine", lambda *a, **k: _Engine())
     monkeypatch.setattr(worker_app, "ingestion_lifecycle", lambda *a, **k: lifecycle)
+    monkeypatch.setattr(worker_app, "meeting_sync_applier", lambda *a, **k: applying)
     monkeypatch.setattr(worker_app, "_install_stop_handlers", lambda stop: None)
     if real_loop:
         monkeypatch.setattr(cycle_scheduler, "single_flight", _Locks())
@@ -362,8 +381,12 @@ def test_each_switch_composes_only_its_own_step(
 def test_once_runs_the_ingest_poll_once_with_a_counts_only_line(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    applier = _Applier()
     code, _, lifecycle = _plane(
-        monkeypatch, {"MY_PA_COMMUNICATIONS_INGEST_ENABLED": "true"}, real_loop=True
+        monkeypatch,
+        {"MY_PA_COMMUNICATIONS_INGEST_ENABLED": "true"},
+        real_loop=True,
+        applier=applier,
     )
     assert code == 0
     assert len(lifecycle.polls) == 1
@@ -375,7 +398,26 @@ def test_once_runs_the_ingest_poll_once_with_a_counts_only_line(
         "outcomes": {"completed": 1},
         "sources": 1,
     }
+    # WP3b-S3: the staged meeting sync is applied after the poll, counts only.
+    assert applier.calls == lifecycle.polls
+    assert json.loads(out[1]) == {
+        "counts": {"unapplied_awaiting_reconciliation": 1},
+        "event": "meeting_sync.apply",
+    }
     assert "step         comms_ingest runs=1 skipped=0 failed=0" in out
+
+
+def test_a_failed_meeting_sync_apply_fails_the_step(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, _, _ = _plane(
+        monkeypatch,
+        {"MY_PA_COMMUNICATIONS_INGEST_ENABLED": "true"},
+        real_loop=True,
+        applier=_Applier({"publications_applied": 1, "publications_failed": 1}),
+    )
+    assert code == 0
+    assert "step         comms_ingest runs=0 skipped=0 failed=1" in capsys.readouterr().out
 
 
 def test_a_misconfigured_workspace_refuses_the_plane(

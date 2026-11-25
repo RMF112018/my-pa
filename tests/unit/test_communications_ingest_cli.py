@@ -32,6 +32,7 @@ from apps.cli import communications_ingest as cli
 
 from my_pa.application.communications_ingest import CommunicationsCoverageReader
 from my_pa.application.ingestion import IngestionLifecycle, StabilityMemory
+from my_pa.application.meeting_sync_apply import MeetingSyncApplier
 from my_pa.bootstrap.communications_ingest import communications_handler
 from tests.fixtures.communications_evidence import synthetic as s
 from tests.unit.communications_ingest_fakes import FakeStore, IngestWorld, unit_of_work_factory
@@ -160,6 +161,13 @@ class _Scene:
             lambda *_a, **_k: CommunicationsCoverageReader(unit_of_work=unit),
         )
         monkeypatch.setattr(cli, "ingest_unit_of_work", lambda _engine: unit)
+        # WP3b-S3: run-once and backfill apply the staged meeting sync after the
+        # run; no latch in these worlds, so it applies nothing.
+        monkeypatch.setattr(
+            cli,
+            "meeting_sync_applier",
+            lambda *_a, **_k: MeetingSyncApplier(unit_of_work=unit),
+        )
 
     def _store(self, workspace_id: str) -> FakeStore:
         if workspace_id != "mcp":
@@ -413,6 +421,50 @@ def test_a_free_poll_lock_is_taken_and_released_and_a_dry_run_takes_none(
     assert calls == ["try", "unlock"]
 
 
+class _Applying:
+    """Records whether, and under which lock state, the CLI applied the meeting sync."""
+
+    def __init__(self, connection: _Connection, counts: dict[str, int]) -> None:
+        self.connection = connection
+        self.counts_out = counts
+        self.locks_when_called: list[list[str]] = []
+
+    def apply_pending(self, principal_id: str) -> object:
+        self.locks_when_called.append(list(self.connection.lock_calls))
+
+        class _Report:
+            counts = self.counts_out
+
+        return _Report()
+
+
+@pytest.mark.parametrize("command", [["run-once"], ["backfill"]])
+def test_run_once_and_backfill_apply_the_meeting_sync_under_the_lock(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], command: list[str]
+) -> None:
+    """WP3b-S3: applied after the run, while the poll lock is still held; dry run applies none."""
+    scene = _Scene(monkeypatch)
+    source = scene.admit(capsys)
+    scene.put_fixtures()
+    applying = _Applying(scene.engine.connection, {"unapplied_awaiting_reconciliation": 3})
+    monkeypatch.setattr(cli, "meeting_sync_applier", lambda *_a, **_k: applying)
+    assert (
+        run(capsys, "backfill", "--source", source, "--dry-run")[1].get("meeting_sync_apply")
+        is None
+    )
+    assert applying.locks_when_called == []
+    code, out = run(capsys, *command, "--source", source)
+    assert out["meeting_sync_apply"] == {"unapplied_awaiting_reconciliation": 3}
+    assert applying.locks_when_called == [["try"]]  # taken, not yet released
+    assert code == cli.EXIT_OK or out["outcome"] != "completed"
+    applying.counts_out = {"publications_failed": 1}
+    code, out = run(capsys, *command, "--source", source)
+    assert (code, out["meeting_sync_apply"]) == (
+        cli.EXIT_RUN_INCOMPLETE,
+        {"publications_failed": 1},
+    )
+
+
 @pytest.mark.parametrize("command", ["coverage", "aggregate"])
 def test_reads_of_an_unknown_source_refuse_source_not_found(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], command: str
@@ -541,6 +593,25 @@ def test_coverage_reports_intervals_gaps_freshness_and_the_rolling_window(
     assert run(
         capsys, "coverage", "--source", source, "--from", "2026-11-20T00:00:00Z", "--to", "x"
     )[1] == {"command": "coverage", "refused": "invalid_range"}
+
+
+def test_coverage_of_an_admitted_source_with_no_snapshot_prints_rolling_none(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """W1 nit: nothing ingested, so the rolling read has no anchor and prints `none`."""
+    scene = _Scene(monkeypatch)
+    source = scene.admit(capsys)
+    code, out = run(capsys, "coverage", "--source", source)
+    assert code == cli.EXIT_OK
+    assert out["snapshots"] == 0
+    assert out["rolling_30d"] == {
+        "start": None,
+        "end": None,
+        "state": "none",
+        "covered_seconds": 0,
+        "gap_count": 0,
+        "gap_seconds": 0,
+    }
 
 
 # ---- the governed rules (operator-commands EXEMPT entry) ---------------------------

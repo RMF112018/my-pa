@@ -1657,6 +1657,21 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "communication_participants_refuse_truncate",
             "communication_identifiers_refuse_truncate",
             "communication_quarantine_refuse_truncate",
+            # Communications intelligence WP3b. The meeting sync revision installs
+            # the publication's apply-once guard, an append-only guard on the
+            # other four tables, a TRUNCATE refusal on all five and the binding
+            # origin guard.
+            "meeting_sync_publications_apply_once",
+            "meeting_sync_events_are_append_only",
+            "meeting_provider_review_marks_are_append_only",
+            "meeting_provider_reconciliation_passes_are_append_only",
+            "meeting_provider_key_tombstones_are_append_only",
+            "meeting_sync_publications_refuse_truncate",
+            "meeting_sync_events_refuse_truncate",
+            "meeting_provider_review_marks_refuse_truncate",
+            "meeting_provider_reconciliation_passes_refuse_truncate",
+            "meeting_provider_key_tombstones_refuse_truncate",
+            "meeting_provider_binding_origin_is_immutable",
             "meeting_series_history_rows_are_append_only",
             "meeting_write_requests_complete_once",
             # WP-RE-01. The Record Event revision installs the feed's append-only

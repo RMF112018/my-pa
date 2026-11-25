@@ -65,6 +65,7 @@ from my_pa.contracts.ports import (
     LineageBackfillRepository,
     ManagedDocumentRepository,
     MeetingRepository,
+    MeetingSyncRepository,
     OperationQueue,
     ProjectRepository,
     PulseRepository,
@@ -295,6 +296,10 @@ class _FailsAfterTheWork(UnitOfWork):
     @property
     def communications(self) -> CommunicationsRepository:
         return self._inner.communications
+
+    @property
+    def meeting_sync(self) -> MeetingSyncRepository:
+        return self._inner.meeting_sync
 
     @property
     def issues(self) -> IssueRepository:

@@ -132,42 +132,43 @@
       "640aaacc78e8",
       "4d1069a7d84f",
       "6418b57081c3",
-      "52a829ef718a"
+      "52a829ef718a",
+      "61fafdfd2986"
     ],
     "heads": [
-      "52a829ef718a"
+      "61fafdfd2986"
     ],
-    "revision_files": 132
+    "revision_files": 133
   },
   "census": {
-    "architecture": 9512,
-    "database": 7040,
+    "architecture": 9594,
+    "database": 7100,
     "evaluation": 2,
-    "fast_collected": 50534,
+    "fast_collected": 50940,
     "fast_skipped": 138,
-    "mypy_files": 745,
-    "src_modules": 551,
-    "test_modules": 1025
+    "mypy_files": 751,
+    "src_modules": 556,
+    "test_modules": 1039
   },
   "chatllm": {
     "classes": {
       "CHATLLM_COMPATIBILITY_ONLY": 2,
       "CHATLLM_CONTROL_PLANE_EXCLUDED": 33,
       "CHATLLM_DATA_CONDITIONAL": 176,
-      "CHATLLM_DATA_REQUIRED": 86,
+      "CHATLLM_DATA_REQUIRED": 88,
       "CHATLLM_OPERATOR_DECISION_REQUIRED": 2,
       "CHATLLM_RETIRED": 0
     },
-    "policy_sha256": "e9aa7da9e2ed3927cb5b77edb5939528a083fafb50ec2291490996f19ede34fc",
-    "version": "chatllm-data-v15"
+    "policy_sha256": "3d7220c1ed41248b928f8f180c8ccec64ff80e14452a437e0d9e909b0f6d8dd3",
+    "version": "chatllm-data-v16"
   },
   "counts": {
-    "alembic_revisions": 132,
-    "capability": 299,
-    "chatllm_policy_entries": 299,
-    "id_kind": 191,
+    "alembic_revisions": 133,
+    "capability": 301,
+    "chatllm_policy_entries": 301,
+    "id_kind": 192,
     "purpose": 70,
-    "safe_detail": 439
+    "safe_detail": 442
   },
   "vocabulary": {
     "capability": [
@@ -363,6 +364,8 @@
       "meetings.notes.read_version",
       "meetings.notes.versions",
       "meetings.provider.bind",
+      "meetings.provider.reconcile",
+      "meetings.provider.review",
       "meetings.read",
       "meetings.search",
       "meetings.series.update",
@@ -662,7 +665,8 @@
       "cmsg",
       "cmitm",
       "cobs",
-      "cqrn"
+      "cqrn",
+      "msevt"
     ],
     "purpose": [
       "bounded_enrollment",
@@ -741,6 +745,7 @@
       "action",
       "active_only",
       "address_type_code",
+      "adopt_provider_series",
       "advisory_digest",
       "affiliation_id",
       "affiliation_type_code",
@@ -947,6 +952,7 @@
       "invalid_path",
       "is_preferred",
       "issue_id",
+      "items",
       "job_title",
       "kind",
       "kinds",
@@ -1055,6 +1061,7 @@
       "provider_binding_requires_series",
       "provider_event_id",
       "provider_event_id_format",
+      "provider_event_ref",
       "provider_key_bound_to_another_meeting",
       "provider_series_binding_conflict",
       "publication_id",

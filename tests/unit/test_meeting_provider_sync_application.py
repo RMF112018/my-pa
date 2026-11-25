@@ -110,7 +110,15 @@ def _apply(
 ) -> MeetingSyncOutcome:
     stamped = _stamped(event, sha, stamp)
     with FakeUnitOfWork(world) as uow:
-        return SYNC.apply_event(uow, principal, stamped, source_sha256=sha, now=NOW)
+        return SYNC.apply_event(
+            uow,
+            principal,
+            stamped,
+            source_sha256=sha,
+            # The FAST world models no ingest snapshot; any `isnp_` names it.
+            source_snapshot_id=f"isnp_{sha[:16]}",
+            now=NOW,
+        )
 
 
 @pytest.fixture

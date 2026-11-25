@@ -1051,8 +1051,10 @@ def test_error_tokens_are_safe_detail_values() -> None:
         "provider_binding_requires_series",
         "provider_series_binding_conflict",
     }
+    # WP3b-S4 review and reconcile: three fields, each with its twin.
+    wp3b_s4 = {"adopt_provider_series", "items", "provider_event_ref"}
     assert {token.value for token in MeetingErrorField} == (
-        section_35_16 | existing_safe_detail | adr_020 | wp2 | wp2_bind
+        section_35_16 | existing_safe_detail | adr_020 | wp2 | wp2_bind | wp3b_s4
     )
 
 

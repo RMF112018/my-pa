@@ -138,7 +138,11 @@ from my_pa.domain.meeting.model import (
     MeetingStatus,
     NormalizedAttendee,
 )
-from my_pa.domain.meeting_sync.model import ProviderBindingState, ProviderEventIdFormat
+from my_pa.domain.meeting_sync.model import (
+    EventStatus,
+    ProviderBindingState,
+    ProviderEventIdFormat,
+)
 from my_pa.domain.policy.decision import validate_policy_version
 from my_pa.domain.program.membership import BridgeLink, EntityNode, MemberEdge
 from my_pa.domain.program.reportability import MetricId, SyncTarget
@@ -475,6 +479,7 @@ __all__ = [
     "ContinuityReadRepository",
     "ContinuityRepository",
     "CounterpartyOption",
+    "CoveredProviderBinding",
     "DirectedReceipt",
     "EnrollmentRepository",
     "EntitiesRepository",
@@ -573,9 +578,17 @@ __all__ = [
     "MeetingPrepRecord",
     "MeetingPrepVersionRecord",
     "MeetingProviderBindingRecord",
+    "MeetingProviderKeyTombstoneRecord",
+    "MeetingProviderReconciliationPassRecord",
+    "MeetingProviderReviewMarkRecord",
     "MeetingRecord",
     "MeetingRepository",
+    "MeetingReviewScopeCounts",
     "MeetingSeriesProviderBindingRecord",
+    "MeetingSyncApplyOutcome",
+    "MeetingSyncEventRecord",
+    "MeetingSyncPublicationRecord",
+    "MeetingSyncRepository",
     "MeetingWriteRequestRecord",
     "MemoryFeedFacts",
     "Operation",
@@ -628,6 +641,7 @@ __all__ = [
     "SituationRepository",
     "SourceProviders",
     "SourceRepository",
+    "StagedProviderEvent",
     "TaskManagementRepository",
     "TaskManagementUnitOfWork",
     "TimelineLinkRevision",
@@ -639,6 +653,7 @@ __all__ = [
     "TransferSession",
     "UnitOfWork",
     "UnknownScopeError",
+    "UnreviewedMeetingRecord",
     "WorkerHealthRepository",
     "WorkerPlaneStatus",
     "WriteRequestConflictError",
@@ -5977,6 +5992,14 @@ class RecordEventStager(ABC):
     def pending_count(self) -> int:
         """How many drafts this transaction has staged and not yet flushed."""
 
+    @abstractmethod
+    def truncate(self, count: int) -> None:
+        """Drop every draft staged after the first `count` (a SAVEPOINT rollback).
+
+        A caller that rolls back part of the transaction to a savepoint also
+        drops the drafts staged since, so no Record Event outlives its write.
+        """
+
 
 class RecordEventWriter(ABC):
     """The persistence half of a flush: allocate one batch, then insert it.
@@ -6493,6 +6516,16 @@ class UnitOfWork(ABC):
     @abstractmethod
     def communications(self) -> CommunicationsRepository:
         """The communications rows, inside this transaction (communications WP3a)."""
+
+    @property
+    @abstractmethod
+    def meeting_sync(self) -> MeetingSyncRepository:
+        """The meeting sync staging and reconciliation rows, inside this transaction (WP3b).
+
+        On the general unit of work so a staged publication commits with its
+        snapshot's lifecycle rows, and a review mark, the latch or a tombstone
+        with the Meeting write that records it.
+        """
 
     @property
     @abstractmethod
@@ -11247,6 +11280,21 @@ class MeetingProviderBindingRecord:
     #: the ordering stamp a later, older record is refused against. `None`
     #: after an explicit bind, until a sync applies a record.
     last_applied_generated_at_utc: datetime | None = None
+    #: The ingest snapshot whose record created this binding (WP3b, Manager
+    #: ruling D10): set once by a sync create, `None` after an explicit bind,
+    #: and immutable.
+    origin_snapshot_id: str | None = None
+    #: The ingest snapshot of the `last_seen_*` observation: present exactly
+    #: when `last_seen_source_sha256` is, and naming a snapshot of that digest.
+    last_seen_snapshot_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CoveredProviderBinding:
+    """A binding a coverage window reaches, with its bound Meeting's current start (WP3b D7)."""
+
+    binding: MeetingProviderBindingRecord
+    meeting_start_at: datetime
 
 
 class MeetingRepository(ABC):
@@ -11552,6 +11600,35 @@ class MeetingRepository(ABC):
         """One note version under that Meeting of this Principal, or `None`."""
 
     # --- provider bindings (communications intelligence WP2) -----------------
+
+    @abstractmethod
+    def lock_provider_binding_writers(self, principal_id: str) -> None:
+        """Serialize this Principal's binding writers until the transaction ends (WP3b D8).
+
+        `pg_advisory_xact_lock(MEETING_PROVIDER_BINDING_LOCK_CLASS,
+        hashtext(principal_id))`: every writer of a provider binding takes it
+        first -- the sync apply of a publication, its `not_seen` pass, the
+        `meetings.provider.bind` bind and unbind, and the WP3b-S4 reconcile --
+        so no two of them interleave row locks for one Principal. Re-entrant
+        within a transaction; released only by commit or rollback.
+        """
+
+    @abstractmethod
+    def lock_provider_bindings_in_window(
+        self,
+        principal_id: str,
+        calendar_refs: Collection[str],
+        start_utc: datetime,
+        end_utc: datetime,
+    ) -> tuple[CoveredProviderBinding, ...]:
+        """`SELECT … FOR UPDATE` the bindings a coverage window reaches (WP3b D7).
+
+        Every binding whose `calendar_ref` is one of `calendar_refs` and whose
+        bound Meeting's current `start_at` lies in `[start_utc, end_utc]`
+        (inclusive), with that start. Only the binding rows are locked, in key
+        order `(calendar_ref, ical_uid, occurrence_original_start_utc NULLS
+        FIRST)`; the Meeting is read, never locked or written.
+        """
 
     @abstractmethod
     def lock_provider_binding(
@@ -14740,3 +14817,342 @@ class CommunicationsRepository(ABC):
     @abstractmethod
     def tally_snapshot(self, principal_id: str, snapshot_id: str) -> CommunicationSnapshotTally:
         """How many observation and quarantine rows one snapshot left."""
+
+
+# --- Communications intelligence WP3b: meeting sync staging and reconciliation
+# (Manager rulings D1, D3, D4, D5, D10; the WP3b revision on `52a829ef718a`).
+#
+# Plain records over five tables. `meeting_sync_publications` and
+# `meeting_sync_events` stage an ingested `meeting_sync_v1` snapshot (D1:
+# stage-then-apply); a publication is applied, or skipped, exactly once.
+# `meeting_provider_review_marks`, `meeting_provider_reconciliation_passes` and
+# `meeting_provider_key_tombstones` are append-only: a Meeting explicitly marked
+# as having no provider event (D3), the one-way reconciliation latch (D4) and
+# the per-key unbind tombstone (D5). The Principal is a parameter on every
+# method, never a record field.
+
+
+class MeetingSyncApplyOutcome(StrEnum):
+    """What applying one staged publication did (Manager ruling D8)."""
+
+    APPLIED = "applied"
+    #: Older than the newest publication already applied for its source.
+    SKIPPED_STALE = "skipped_stale"
+    #: The same `generated_at_utc` as an applied publication of its source,
+    #: with different bytes.
+    SKIPPED_ORDERING_CONFLICT = "skipped_ordering_conflict"
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingSyncPublicationRecord:
+    """One staged `meeting_sync_v1` snapshot: its stamp, coverage and tallies.
+
+    The coverage is all-or-none (`coverage_calendar_refs is None` exactly when
+    the publication declared none, D7). `applied_at`, `apply_outcome` and
+    `apply_counts` are set together, once, from `None`.
+    """
+
+    snapshot_id: str
+    ingest_source_id: str
+    generated_at_utc: datetime
+    record_count: int
+    accepted_count: int
+    quarantined_count: int
+    staged_at: datetime
+    coverage_start_utc: datetime | None = None
+    coverage_end_utc: datetime | None = None
+    coverage_calendar_refs: tuple[str, ...] | None = None
+    applied_at: datetime | None = None
+    apply_outcome: MeetingSyncApplyOutcome | None = None
+    #: Code-count JSON: names to non-negative integers, never content.
+    apply_counts: Mapping[str, int] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingSyncEventRecord:
+    """One staged accepted event record: its key and the provider-owned fields (D2).
+
+    No attendee and no body or description is staged.
+    """
+
+    event_id: str
+    snapshot_id: str
+    record_ordinal: int
+    calendar_ref: str
+    ical_uid: str
+    series_ical_uid: str | None
+    occurrence_original_start_utc: datetime | None
+    start_utc: datetime
+    end_utc: datetime
+    timezone_name: str
+    status: EventStatus
+    title: str
+    location_text: str | None
+    virtual_meeting_url: str | None
+    provider_event_id: str | None
+    provider_event_id_format: ProviderEventIdFormat
+    staged_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingProviderReviewMarkRecord:
+    """A Meeting the Principal marked as having no provider event (D3). Append-only."""
+
+    meeting_id: str
+    marked_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingProviderReconciliationPassRecord:
+    """The Principal's one-way reconciliation latch (D4). Recorded once, never changed."""
+
+    completed_at: datetime
+    reviewed_meetings: int
+    #: The correlation identifier of the `meetings.provider.reconcile` call
+    #: that completed the pass (its audit row).
+    reconcile_correlation_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingProviderKeyTombstoneRecord:
+    """The provider key of a binding the unbind deleted (D5). Append-only.
+
+    `binding_id` is the deleted binding's own identifier; the key columns are a
+    copy of its identity. A sync skips a key that has a tombstone and no
+    binding; a later bind supersedes the tombstone, which stays.
+    """
+
+    binding_id: str
+    meeting_id: str
+    calendar_ref: str
+    ical_uid: str
+    occurrence_original_start_utc: datetime | None
+    series_ical_uid: str | None
+    unbound_at: datetime
+    meeting_history_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class UnreviewedMeetingRecord:
+    """One in-scope Meeting with neither a binding nor a review mark (WP3b-S4, D3).
+
+    Exactly the fields `meetings.provider.review` answers: no description,
+    attendee, note, prep, link or location.
+    """
+
+    meeting_id: str
+    version: int
+    title: str
+    start_at: datetime
+    end_at: datetime | None
+    timezone_name: str
+    meeting_series_id: str | None
+    status: MeetingStatus
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingReviewScopeCounts:
+    """The reconciliation pass's two counts over the in-scope Meetings (D3)."""
+
+    #: In scope: not cancelled, `start_at >= since`.
+    in_scope: int
+    #: In scope with neither a binding nor a review mark.
+    unreviewed: int
+
+
+@dataclass(frozen=True, slots=True)
+class StagedProviderEvent:
+    """One staged event whose provider key has no binding (WP3b-S4 review).
+
+    `suppressed` is whether the key has an unbind tombstone (D5): the sync
+    skips it, and the review lists it so the Principal can still bind it.
+    """
+
+    event: MeetingSyncEventRecord
+    suppressed: bool
+
+    @property
+    def review_order(self) -> tuple[datetime, str, str, bool, datetime, str]:
+        """The review's deterministic order: start, then key, then the staged id.
+
+        A series master (no original start) sorts before its occurrences.
+        """
+        event = self.event
+        original = event.occurrence_original_start_utc
+        return (
+            event.start_utc,
+            event.calendar_ref,
+            event.ical_uid,
+            original is not None,
+            event.start_utc if original is None else original,
+            event.event_id,
+        )
+
+
+class MeetingSyncRepository(ABC):
+    """The WP3b meeting sync staging and reconciliation tables, inside one transaction.
+
+    Every method takes the authenticated Principal's capture-plane identifier
+    and reaches the partition through `principal_scope`. Nothing here commits.
+    A write the guards refuse (a second apply, any change to an append-only
+    row) raises the database error rather than being absorbed.
+    """
+
+    # --- staging -------------------------------------------------------------
+
+    @abstractmethod
+    def insert_publication(
+        self, principal_id: str, publication: MeetingSyncPublicationRecord
+    ) -> None:
+        """Stage one publication (normally unapplied)."""
+
+    @abstractmethod
+    def get_publication(
+        self, principal_id: str, snapshot_id: str
+    ) -> MeetingSyncPublicationRecord | None:
+        """One staged publication, or `None`."""
+
+    @abstractmethod
+    def list_publications(
+        self, principal_id: str, ingest_source_id: str, *, unapplied_only: bool = False
+    ) -> tuple[MeetingSyncPublicationRecord, ...]:
+        """The source's staged publications in apply order (D8).
+
+        Ordered by `generated_at_utc`, then the snapshot's `file_sha256`, then
+        the snapshot id.
+        """
+
+    @abstractmethod
+    def complete_publication(
+        self,
+        principal_id: str,
+        snapshot_id: str,
+        *,
+        applied_at: datetime,
+        apply_outcome: MeetingSyncApplyOutcome,
+        apply_counts: Mapping[str, int],
+    ) -> None:
+        """Record what applying the publication did, once.
+
+        `RepositoryFailureError` when no such publication exists; the trigger
+        refuses a second completion.
+        """
+
+    @abstractmethod
+    def insert_events(self, principal_id: str, events: Sequence[MeetingSyncEventRecord]) -> None:
+        """Stage the accepted event records of one publication."""
+
+    @abstractmethod
+    def list_events(
+        self, principal_id: str, snapshot_id: str
+    ) -> tuple[MeetingSyncEventRecord, ...]:
+        """Every staged event of one publication, ordered by record ordinal."""
+
+    @abstractmethod
+    def get_event(self, principal_id: str, event_id: str) -> MeetingSyncEventRecord | None:
+        """One staged event by its opaque reference (`msevt_`), or `None`."""
+
+    @abstractmethod
+    def list_staging_sources(self, principal_id: str) -> tuple[str, ...]:
+        """Every ingest source id with a staged publication, sorted (WP3b-S4 review)."""
+
+    @abstractmethod
+    def list_unbound_events(
+        self, principal_id: str, snapshot_id: str
+    ) -> tuple[StagedProviderEvent, ...]:
+        """The publication's staged events whose key no binding names (WP3b-S4).
+
+        Ordered `(calendar_ref, ical_uid, occurrence_original_start_utc NULLS
+        FIRST, record_ordinal)`; each says whether its key is tombstoned.
+        Nonlocking.
+        """
+
+    # --- the reconciliation pass (WP3b-S4) -----------------------------------
+
+    @abstractmethod
+    def savepoint(self) -> AbstractContextManager[None]:
+        """Run a block under a SAVEPOINT of this unit of work's transaction.
+
+        A block that raises rolls back only its own writes -- on every plane of
+        the transaction -- and the exception propagates; one that ends normally
+        releases the savepoint. `meetings.provider.reconcile` runs each item in
+        one, so a refused item never affects the others. The unit of work's
+        Record Event buffer is not rows: the caller truncates it back to its
+        count at the savepoint (`RecordEventStager.truncate`).
+        """
+
+    @abstractmethod
+    def list_unreviewed_meetings(
+        self,
+        principal_id: str,
+        *,
+        since: datetime,
+        after_meeting_id: str | None,
+        limit: int,
+    ) -> tuple[UnreviewedMeetingRecord, ...]:
+        """One keyset page of in-scope Meetings with no binding and no mark (D3).
+
+        In scope: not cancelled and `start_at >= since`. Ordered by
+        `(start_at, meeting_id)`, strictly after the anchor Meeting's position
+        when `after_meeting_id` is given. Raises `MeetingCursorError` when the
+        anchor names no Meeting of this Principal. Nonlocking.
+        """
+
+    @abstractmethod
+    def count_review_scope(self, principal_id: str, *, since: datetime) -> MeetingReviewScopeCounts:
+        """How many Meetings are in scope, and how many of them are unreviewed (D3)."""
+
+    # --- review marks --------------------------------------------------------
+
+    @abstractmethod
+    def insert_review_mark(self, principal_id: str, mark: MeetingProviderReviewMarkRecord) -> bool:
+        """Mark one Meeting as having no provider event; idempotent by Meeting.
+
+        Returns whether a new mark was written (`False`: already marked, the
+        existing mark is kept unchanged).
+        """
+
+    @abstractmethod
+    def get_review_mark(
+        self, principal_id: str, meeting_id: str
+    ) -> MeetingProviderReviewMarkRecord | None:
+        """The mark of one Meeting, or `None`."""
+
+    @abstractmethod
+    def list_review_marks(self, principal_id: str) -> tuple[MeetingProviderReviewMarkRecord, ...]:
+        """Every mark of the Principal, ordered by Meeting id."""
+
+    # --- the reconciliation latch --------------------------------------------
+
+    @abstractmethod
+    def insert_reconciliation_pass(
+        self, principal_id: str, completed: MeetingProviderReconciliationPassRecord
+    ) -> None:
+        """Record the Principal's latch, once; a second insert is a unique violation."""
+
+    @abstractmethod
+    def get_reconciliation_pass(
+        self, principal_id: str
+    ) -> MeetingProviderReconciliationPassRecord | None:
+        """The Principal's latch, or `None` while the pass is pending."""
+
+    # --- key tombstones ------------------------------------------------------
+
+    @abstractmethod
+    def insert_key_tombstone(
+        self, principal_id: str, tombstone: MeetingProviderKeyTombstoneRecord
+    ) -> None:
+        """Record the provider key of a binding the unbind deleted."""
+
+    @abstractmethod
+    def list_key_tombstones(
+        self,
+        principal_id: str,
+        calendar_ref: str,
+        ical_uid: str,
+        occurrence_original_start_utc: datetime | None,
+    ) -> tuple[MeetingProviderKeyTombstoneRecord, ...]:
+        """Every tombstone of one provider key, ordered by `unbound_at`, then binding id.
+
+        `occurrence_original_start_utc is None` names the single-meeting key.
+        """

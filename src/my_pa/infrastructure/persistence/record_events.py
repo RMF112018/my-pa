@@ -193,6 +193,11 @@ class RecordEventBuffer(RecordEventStager):
     def pending_count(self) -> int:
         return len(self._drafts)
 
+    def truncate(self, count: int) -> None:
+        if isinstance(count, bool) or not 0 <= count <= len(self._drafts):
+            raise ValueError("a buffer is truncated to a count it has staged")
+        del self._drafts[count:]
+
     def reset(self) -> None:
         """Forget every staged draft (a new transaction begins)."""
         self._drafts.clear()

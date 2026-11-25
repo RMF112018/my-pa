@@ -526,18 +526,19 @@ def test_v11_targets() -> None:
     # chatllm-data-v12 (Reports Modernization): `reports.publish`, the 5 report
     # management names and the 5 `reports.transfer.*` names (`DATA_REQUIRED`)
     # add 11 everywhere; chatllm-data-v15 (WP2-W3) `meetings.provider.bind` adds
-    # 1 everywhere.
+    # 1 everywhere; chatllm-data-v16 (WP3b-S4) the review and the reconcile add 2
+    # everywhere.
     full = _desired(_planes(**_FULL))
-    assert len(full) == 176
-    assert len(_desired(_planes(constraints=True))) == 110
+    assert len(full) == 178
+    assert len(_desired(_planes(constraints=True))) == 112
     with_schedule = _desired(_planes(**_FULL, schedule=True))
-    assert len(with_schedule) == 182
+    assert len(with_schedule) == 184
     assert with_schedule - full == READS
     assert len(_desired(_planes(**_FULL, lineage=True, program_reporting=True, schedule=True))) == (
-        216
+        218
     )
     default_all = _planes(constraints=True, lineage=True, program_reporting=True, schedule=True)
-    assert len(_desired(default_all)) == 148
+    assert len(_desired(default_all)) == 150
     # The `schedule_scenarios` flag doubles the compositions, 512 -> 1,024, and
     # the files workspace's `files_workspace` flag again, 1,024 -> 2,048.
     assert len(_every_composition()) == 2048

@@ -13,7 +13,9 @@ shared import: the two source slices stay independent (contract section 0).
 
 Three closed vocabularies share this record:
 
-* `PublicationRejection` -- the publication as a whole is refused;
+* `PublicationRejection` -- the publication as a whole is refused (an
+  `invalid_coverage` rejection names its `CoverageDefect` in the diagnostic
+  detail, contract 1.1.0);
 * `ReasonCode` -- why one event record was quarantined (every reason quarantines:
   WP2 has no degraded-but-usable event);
 * `DiagnosticCode` -- informational findings that change no outcome.
@@ -30,6 +32,7 @@ from typing import Final
 
 __all__ = [
     "MAX_DIAGNOSTICS",
+    "CoverageDefect",
     "Diagnostic",
     "DiagnosticCode",
     "DiagnosticCollector",
@@ -52,6 +55,32 @@ class PublicationRejection(StrEnum):
     UNSUPPORTED_MAJOR_VERSION = "unsupported_major_version"
     MISSING_REQUIRED_KEY = "missing_required_key"
     INVALID_TOP_LEVEL_FIELD = "invalid_top_level_field"
+    #: Contract 1.1.0: a declared `coverage` that is malformed. A coverage claim
+    #: is all-or-none, so a malformed one refuses the publication rather than
+    #: being dropped (a dropped claim would read as "no claim" silently).
+    INVALID_COVERAGE = "invalid_coverage"
+
+
+class CoverageDefect(StrEnum):
+    """Why a declared `coverage` is malformed: the `defect` of an `invalid_coverage`.
+
+    The parser checks in this order and the first defect decides.
+    """
+
+    NOT_AN_OBJECT = "not_an_object"
+    #: One of `start_utc`, `end_utc`, `calendar_refs` is missing (all-or-none).
+    INCOMPLETE = "incomplete"
+    UNKNOWN_KEY = "unknown_key"
+    INVALID_TIMESTAMP = "invalid_timestamp"
+    #: A valid timestamp whose offset is not UTC (`Z` or `+00:00`).
+    NOT_UTC = "not_utc"
+    END_BEFORE_START = "end_before_start"
+    CALENDAR_REFS_NOT_A_LIST = "calendar_refs_not_a_list"
+    CALENDAR_REFS_EMPTY = "calendar_refs_empty"
+    CALENDAR_REFS_TOO_MANY = "calendar_refs_too_many"
+    #: Not a string, blank, or longer than a binding's `calendar_ref` bound.
+    CALENDAR_REF_UNREPRESENTABLE = "calendar_ref_unrepresentable"
+    DUPLICATE_CALENDAR_REF = "duplicate_calendar_ref"
 
 
 class ReasonCode(StrEnum):

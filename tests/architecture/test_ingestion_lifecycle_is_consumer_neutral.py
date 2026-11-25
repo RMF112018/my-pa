@@ -1,8 +1,9 @@
 """The ingestion lifecycle stays consumer-neutral and read-only on the store (WP3a).
 
 * `my_pa.application.ingestion` imports no consumer slice (Manager ruling M5):
-  not the communications domain or parser, not meeting sync, not the
-  consumers' application modules. A consumer reaches it only through the
+  not the communications domain or parser, not the meeting sync domain or
+  parser, not the consumers' application modules (the WP3b staging handler
+  and the S3 applier included). A consumer reaches it only through the
   injected `IngestConsumerHandler` port;
 * the lifecycle calls only `list_directory`, `stat` and `open_download` on a
   `FileWorkspaceStore` (ruling m5), and names no other store method at all.
@@ -29,7 +30,10 @@ CONSUMER_SLICES: Final = (
     "my_pa.infrastructure.communications",
     "my_pa.application.communications_ingest",
     "my_pa.domain.meeting_sync",
+    "my_pa.infrastructure.meeting_sync",
     "my_pa.application.meeting_provider_sync",
+    "my_pa.application.meeting_sync_ingest",
+    "my_pa.application.meeting_sync_apply",
     "my_pa.domain.pulse",
     "my_pa.application.pulse",
 )

@@ -1,8 +1,8 @@
 # `meeting_sync_v1` — ChatLLM meeting-sync publication contract
 
-**Status:** producer contract under [ADR-022](../decisions/ADR-022-communications-intelligence.md) (Accepted under operator delegation 2026-11-22, Manager ruling R-OP-1; effective on merge of WP2) and [spec section 12](communications-intelligence-contract.md). **WP2 implements the parser and the resolution service** on branch `feat/comms-meeting-identity` (not merged). Ingestion of these publications is **WP3** (the third consumer of the shared lifecycle, spec section 1.2); nothing reads them today. **The ChatLLM collector change that would produce them** is applied once by the operator from the [collector implementation notes](#8-collector-implementation-notes) (Manager ruling R-OP-8) and has not been made yet. Nothing is admitted, scheduled, granted or deployed.
+**Status:** producer contract under [ADR-022](../decisions/ADR-022-communications-intelligence.md) (Accepted under operator delegation 2026-11-22, Manager ruling R-OP-1) and [spec section 12](communications-intelligence-contract.md), **schema version 1.1.0**. WP2 (the parser and the resolution service) is merged to `main` (#373); the shared ingestion lifecycle (WP3a) is merged (#376). **WP3b**, on branch `feat/comms-meeting-sync` (not merged; migration `61fafdfd2986`), adds the 1.1.0 `coverage` (section 1.1), parser v2, the `meeting_sync_v1` lifecycle consumer, which **stages** each ingested publication (`meeting_sync_publications`, `meeting_sync_events`) and applies nothing to Meetings, the applier that applies staged publications only once the Principal's reconciliation latch exists, and the reconciliation pass (`meetings.provider.review`, `meetings.provider.reconcile`) that records that latch (section 6; WP3b rulings D1, D4). **The ChatLLM collector change that would produce them** is applied once by the operator from the [collector implementation notes](#8-collector-implementation-notes) (Manager ruling R-OP-8) and has not been made yet. Nothing is admitted, scheduled, granted or deployed; the operator procedure is the meeting-sync part of [`ops/runbooks/communications-ingestion.md`](../../ops/runbooks/communications-ingestion.md) (section 11 there).
 
-**Code:** the parser `my_pa.infrastructure.meeting_sync.parser` (`parse_publication`, `PARSER_VERSION` = `meeting_sync_v1_parser_v1`); the vocabularies in `my_pa.domain.meeting_sync.model` and `my_pa.domain.meeting_sync.diagnostics`; the resolution rules in `my_pa.domain.meeting_sync.resolution`. Synthetic fixtures are under `tests/fixtures/meeting_sync/`. Where this document and the code disagree, the code is the contract and this document is the defect.
+**Code:** the parser `my_pa.infrastructure.meeting_sync.parser` (`parse_publication`, `PARSER_VERSION` = `meeting_sync_v1_parser_v2`, which accepts 1.0.x and 1.1.x; every 1.0.x publication has the outcome parser v1 gave it); the staging consumer `my_pa.application.meeting_sync_ingest.MeetingSyncHandler`; the applier `my_pa.application.meeting_sync_apply.MeetingSyncApplier`; the reconciliation pass `my_pa.application.meeting_provider_reconcile`; the vocabularies in `my_pa.domain.meeting_sync.model` and `my_pa.domain.meeting_sync.diagnostics`; the resolution rules in `my_pa.domain.meeting_sync.resolution`. Synthetic fixtures are under `tests/fixtures/meeting_sync/`. Where this document and the code disagree, the code is the contract and this document is the defect.
 
 This document is for the producer (the ChatLLM collector) and for reviewers. It is the calendar counterpart of the `communications_evidence_v2` contract in [spec section 2](communications-intelligence-contract.md).
 
@@ -13,12 +13,24 @@ One publication is one UTF-8 JSON object, at most 16 MiB (`MAX_PUBLICATION_BYTES
 | Key | Required | Type | Rule |
 | --- | --- | --- | --- |
 | `schema` | yes | string | exactly `meeting_sync_v1` |
-| `schema_version` | yes | string | `MAJOR.MINOR.PATCH`; major `1` only; a newer minor is accepted with diagnostic `schema_minor_newer` |
+| `schema_version` | yes | string | `MAJOR.MINOR.PATCH`; major `1` only; `1.0.x` and `1.1.x` are known; a newer minor (`1.2` on) is accepted with diagnostic `schema_minor_newer` |
 | `events` | yes | array | the event records (section 2); may be empty |
 | `generated_at_utc` | yes | string | an aware ISO-8601 timestamp (section 3): the publication's ordering stamp (section 5) |
 | `cycle_run_id` | no | string | non-empty; producer run reference, informational |
+| `coverage` | no (1.1.0) | object | the publication's completeness claim (section 1.1); read from minor `1` on |
 
-Any other top-level key is counted (`unknown_top_level_keys`) and ignored, never fatal.
+Any other top-level key is counted (`unknown_top_level_keys`) and ignored, never fatal. In a `1.0.x` publication `coverage` is such an unknown key: it is ignored and counted, exactly as parser v1 treated it, and claims nothing.
+
+### 1.1 `coverage` (1.1.0)
+
+`coverage` is `{start_utc, end_utc, calendar_refs}`. It states that the publication is **complete** for each listed calendar over the inclusive window `[start_utc, end_utc]`: every event of that calendar whose **current** start lies in the window, cancelled ones included, is in `events` (a quarantined record still counts as present). It is the only basis on which my-pa may conclude that a bound event has gone (`not_seen`, Manager ruling D7): a publication without `coverage` claims nothing, and `not_seen` is never written from it. `not_seen` is a binding state only; it never changes the Meeting. Whether a bound event falls inside the window is judged by its bound Meeting's **current** start, so an event the provider moved out of the window, and therefore did not send, may be marked `not_seen`: state only, and restored the next time a publication carries it. Any quarantined record in the publication suppresses the whole `not_seen` pass (`not_seen_suppressed_quarantine`).
+
+| Key | Type | Rule |
+| --- | --- | --- |
+| `start_utc`, `end_utc` | timestamp | section 3, **written in UTC** (`Z` or `+00:00`); `start_utc` not after `end_utc` (a single instant is allowed) |
+| `calendar_refs` | array of strings | 1–100 distinct `calendar_ref` values (each 1–320 characters, not blank): the calendars the claim covers |
+
+The object is **all-or-none**: all three keys, no other key. A malformed `coverage` rejects the whole publication with `invalid_coverage` (section 4), never a partial claim and never a silently dropped one. A calendar the collector could not read completely must not be listed. Listing a calendar no event names is allowed (it then claims that calendar had no event in the window).
 
 ## 2. Event record
 
@@ -57,7 +69,9 @@ One record per calendar event: a single meeting, or one occurrence of a recurrin
 
 ## 4. Rejection and quarantine codes
 
-**Publication rejection** (the whole publication is refused with one code; the first failure decides). The checks run in this order: size (`file_too_large`); strict UTF-8 (`invalid_encoding`); JSON (`duplicate_json_key`, `malformed_json`, which carries line, column and offset only); an object (`not_an_object`); `schema` present (`missing_required_key`) and equal to `meeting_sync_v1` (`unknown_schema`); `schema_version` present (`missing_required_key`), well formed (`invalid_schema_version`) and major `1` (`unsupported_major_version`); `events` present (`missing_required_key`) and an array (`invalid_top_level_field`); `generated_at_utc` present (`missing_required_key`) and a valid timestamp (`invalid_top_level_field`); `cycle_run_id`, when present, a non-empty string (`invalid_top_level_field`).
+**Publication rejection** (the whole publication is refused with one code; the first failure decides). The checks run in this order: size (`file_too_large`); strict UTF-8 (`invalid_encoding`); JSON (`duplicate_json_key`, `malformed_json`, which carries line, column and offset only); an object (`not_an_object`); `schema` present (`missing_required_key`) and equal to `meeting_sync_v1` (`unknown_schema`); `schema_version` present (`missing_required_key`), well formed (`invalid_schema_version`) and major `1` (`unsupported_major_version`); `events` present (`missing_required_key`) and an array (`invalid_top_level_field`); `generated_at_utc` present (`missing_required_key`) and a valid timestamp (`invalid_top_level_field`); `cycle_run_id`, when present, a non-empty string (`invalid_top_level_field`); from minor `1`, `coverage`, when present, well formed (`invalid_coverage`).
+
+**Coverage defects.** An `invalid_coverage` rejection carries one closed `defect` in its diagnostic detail (`CoverageDefect`), checked in this order: `not_an_object` (including `null`), `incomplete` (a key missing), `unknown_key`, `invalid_timestamp`, `not_utc`, `end_before_start`, `calendar_refs_not_a_list`, `calendar_refs_empty`, `calendar_refs_too_many` (over 100), `calendar_ref_unrepresentable` (not a string, blank, or over 320 characters), `duplicate_calendar_ref`. No diagnostic carries a calendar reference.
 
 **Record quarantine** (one record is refused; the rest of the publication is accepted; every reason quarantines, there is no degraded-but-usable event):
 
@@ -67,7 +81,7 @@ One record per calendar event: a single meeting, or one occurrence of a recurrin
 | representability | `identifier_unrepresentable`, `title_unrepresentable`, `timezone_not_iana`, `url_unrepresentable`, `location_unrepresentable`, `attendees_unrepresentable`, `all_day_unsupported`, `series_key_incomplete`, `end_before_start` |
 | within one publication | `duplicate_occurrence_key` (two records with one key: both are quarantined) |
 
-**Diagnostics** (informational, change no outcome): `schema_minor_newer`, `unknown_top_level_keys`, `unknown_record_keys`, `content_field_ignored`. A publication keeps at most 200 diagnostics and counts the rest. No diagnostic carries a title, location, link, address, name, calendar reference, UID or provider event id.
+**Diagnostics** (informational, change no outcome): `schema_minor_newer` (a minor newer than `1.1`), `unknown_top_level_keys`, `unknown_record_keys`, `content_field_ignored`. A publication keeps at most 200 diagnostics and counts the rest. No diagnostic carries a title, location, link, address, name, calendar reference, UID or provider event id.
 
 **Resolution skips** (my-pa side, after parsing; the record is valid but nothing is written): `cancelled_unknown_skipped` (a cancelled event my-pa never bound), `binding_kind_conflict` (the UID is bound as the other kind), `stale_record_skipped` and `ordering_conflict_skipped` (section 5). Each is returned in that record's `MeetingSyncOutcome` (kind `skipped`, the code in `diagnostic`), not in the parser's diagnostics.
 
@@ -83,9 +97,20 @@ One record per calendar event: a single meeting, or one occurrence of a recurrin
 
 ## 6. What my-pa does with an event (summary)
 
+**Staging first (WP3b, Manager ruling D1).** The ingestion lifecycle hands each new, accepted publication to the `meeting_sync_v1` consumer, which stages it in the snapshot's transaction: one `meeting_sync_publications` row (stamp, record, accepted and quarantined counts, the coverage when declared) and one `meeting_sync_events` row per accepted record (its key and the provider-owned fields; no attendee, body or description). A quarantined record leaves no row: its evidence is the counts (ruling D14; run counts `records_total`, `records_staged`, `records_quarantined`, `records_quarantined_<reason>`, with `records_total = records_staged + records_quarantined`). Snapshots of one run are staged oldest `generated_at_utc` first. A declared coverage is also recorded as the snapshot's lifecycle coverage window, state `complete`, with no lane objects. The rules below are applied to staged publications later, by the applier (`MeetingSyncApplier.apply_pending`, WP3b-S3; the cycles-plane `comms_ingest` step after each poll, and the operator CLI's `run-once` and `backfill`, under `COMMS_INGEST_LOCK_KEY`), and only once the reconciliation latch exists (spec section 12.7, ruling D4); until then it counts `unapplied_awaiting_reconciliation` and writes nothing. A disabled source's staged publications are held: once the latch exists they are counted `publications_held_source_disabled`, stay staged and unapplied, and nothing of theirs is written; re-enabling the source resumes them in order at the next call (an operator's disable means no further Meeting writes from that source).
+
+**Apply order (ruling D8).** Per source, unapplied publications in `(generated_at_utc, file_sha256)` order, each in its own transaction: a stamp older than the newest *applied* publication of the source is `skipped_stale`, an equal stamp is `skipped_ordering_conflict`, and either writes only the publication's apply columns. Events of an applied publication in key order `(calendar_ref, ical_uid, occurrence_original_start_utc` nulls first`, record ordinal)`. Every binding writer (the sync apply, `not_seen`, `meetings.provider.bind`, the reconcile) first takes the Principal's binding-writer advisory lock. No audit row is written (ruling D9): the evidence is the Meeting history, the Record Events, the publication's `apply_outcome`/`apply_counts` and the run counts.
+
 Spec section 12.2 rules 1–7: a known key updates only the provider-owned fields of its Meeting (`start_at`, `end_at`, `timezone_name`, `status`, `title`, `location_text`, `virtual_meeting_url`); an unknown occurrence of a known series creates a Meeting in that series; an unknown series is created with its first occurrence, titled by the event; an unknown single event creates a standalone Meeting; a cancelled known event cancels its Meeting and never deletes it. An existing hand-made Meeting is never matched by title or time: it is bound only through `meetings.provider.bind`. Sync writes as actor `system`.
 
-**Unbind (known limitation).** A `meetings.provider.bind` unbind orphans the Meeting from its provider key: the next publication carrying that key creates a duplicate Meeting, and after a series move a rebind is refused (`provider_series_binding_conflict`), because series bindings are append-only; WP3 must ship a rebind or unbind-tombstone path before sync auto-enables (spec sections 12.6 and 12.7).
+**Unbind tombstone (ruling D5).** A `meetings.provider.bind` unbind records a tombstone for the unbound key in the same transaction; a later publication carrying that key while it has no binding is skipped (`unbound_key_suppressed`) and nothing is written, so no duplicate Meeting is created. An explicit bind of the key wins (the binding is read first); the tombstone stays and there is no release. After a series move a rebind is refused (`provider_series_binding_conflict`) unless the bind sets `adopt_provider_series` (ruling D6, WP3b-S4; below).
+
+**The reconciliation pass (WP3b-S4; spec section 12.7, rulings D2, D3, D4, D6, D12).** A review and a reconcile capability let the Principal reconcile existing Meetings with the staged events before anything is applied:
+
+- `meetings.provider.review` (read, purpose `meeting_read`, scopeless) answers the `pass` block (`state` `pending` or `complete`, `completed_at`, `unreviewed_count`); one keyset page (`page_size` 1–100, default 100; `after` = the previous `next_after`) of the **in-scope** Meetings that have neither a binding nor a `no_provider_event` mark, ordered by `(start_at, meeting_id)`, each with `meeting_id`, `version`, `title`, `start_at`, `end_at`, `timezone_name`, `meeting_series_id` and `status`; and `unbound_provider_events`: for each source with a staged publication, the events of its newest publication that is applied or still staged whose key no binding names, each with an opaque `provider_event_ref` (an `msevt_` staged-event id), the full key (`calendar_ref`, `ical_uid`, `occurrence_original_start_utc`, `series_ical_uid`), `title`, `start_utc`, `end_utc`, `timezone_name`, `status` and `suppressed` (true for a key with an unbind tombstone). The event list is **bounded and paged**: it is ordered deterministically by `start_utc`, then key (`calendar_ref`, `ical_uid`, a series master before its occurrences by `occurrence_original_start_utc`, then the staged id), at most **200** events are answered per page (`MAX_UNBOUND_PROVIDER_EVENTS`), and the answer carries `unbound_provider_events_total` (every unbound event across those publications, whatever the cursor), `unbound_provider_events_truncated` (true when more events remain after this page) and `unbound_provider_events_next` (when more remain, the opaque cursor to pass back as `events_after` for the next page; otherwise `null`). The event cursor is a keyset over that order, strictly after the event it names, and is independent of the Meetings' `after`; an event cursor that is not an `msevt_` id, or names no staged event of the Principal, is refused `invalid_request` `cursor`. The cursor's event stays a valid anchor after its key is bound, so binding never shifts a page; a bound key simply leaves the list (a `no_provider_event` mark concerns a Meeting and leaves the event list unchanged). In scope (ruling D3) means not cancelled and `start_at >= now − COLLECTOR_LOOKBACK` (30 days, section 8.1). The two lists are side by side: **nothing pairs, ranks or compares a Meeting with an event** (guarded by `tests/architecture/test_meeting_provider_review_no_pairing.py`). The staged event fields are eligible for the operator's own connected clients (ruling D12, under the operator delegation of R-OP-3).
+- `meetings.provider.reconcile` (write, purpose `meeting_authoring`, scopeless, idempotency key required) takes `items`, 0–50 (zero is allowed: an empty call completes a pass that has nothing left). An item is `{"action": "bind", meeting_id, expected_version, provider_event_ref | the full key, provider_event_id?, provider_event_id_format?, adopt_provider_series?}` (a reference and key fields together are refused; `provider_event_id` and its format belong to the full-key form, a reference takes them from the staged event) or `{"action": "no_provider_event", meeting_id}`. A malformed item refuses the whole call with `invalid_request` naming `items` and the field. The call takes the Principal's binding-writer lock first and runs each item under its own SAVEPOINT, so items are independent: a `bind` is exactly `meetings.provider.bind` (same CAS, rules, receipt and refusal tokens), reserved under that capability's key space with the derived key `reconcile-` + `sha256(batch key, index)`, its Record Event naming `source_capability` `meetings.provider.reconcile`; a mark inserts one review mark (idempotent by Meeting) and never versions the Meeting; a Meeting already marked answers `replayed` (checked first, so a replayed mark stays `replayed` even if the Meeting was bound since), and a new mark on a provider-bound Meeting is refused `meeting_already_provider_bound`. A refused item rolls back its rows and any Record Event it staged. Each item answers `{index, meeting_id, outcome, refusal, version, binding}` with `outcome` `bound`, `marked`, `replayed` or `refused` and, when refused, `refusal` `{code, detail}` (`code` `invalid_request`, `not_found` or `conflict`; `detail` one token: the `meetings.provider.bind` tokens of spec section 12.4, `stale_version`, `idempotency_conflict`, `meeting_id`, or `provider_event_ref` for an unknown reference). The answer also carries the `pass` block and `sync_enabled`. **Replay is rebuilt per item** (Manager ruling on the S4 handoff, decision 3): there is no stored batch answer. Under the same batch key each bind item answers its stored receipt through its derived key (`replayed`) and each already-marked Meeting answers `replayed`; an item that was refused wrote nothing, so the replay **evaluates it again against the current state**: it may now be `bound` or `marked`, or be refused again, possibly with another token. A changed bind item under the same key is refused `idempotency_conflict` on that item. The `pass` block and `sync_enabled` are read afresh.
+- **The latch (ruling D4).** In the reconcile call's own transaction, after its items, once no in-scope Meeting is unreviewed and no latch exists, the reconcile records it once (`meeting_provider_reconciliation_passes`: `completed_at`, the in-scope count, the call's correlation id); it is one-way. The applier applies staged publications at its next run. The review stays usable after the latch, and a Meeting created afterwards by hand is not covered by it (post-latch duplicate risk; [runbook section 11.5](../../ops/runbooks/communications-ingestion.md#115-after-the-latch)).
+- **`adopt_provider_series` (ruling D6, default false)**, on a `meetings.provider.bind` occurrence bind and on a reconcile bind item: when the provider series is already bound to a MeetingSeries and the Meeting is in another series or standalone, the Meeting is moved into that series; when the provider series is unbound and the Meeting is standalone, a MeetingSeries titled with the Meeting's title is created, the Meeting put in it and the series bound. The move is one Meeting version with the binding (Record Event `changed_fields` `meeting_series_id`, `provider_binding`; a created series has its own `created` event). Without the flag both cases keep their refusals (`provider_series_binding_conflict`, `provider_binding_requires_series`); a single-meeting bind or an unbind naming it is refused `adopt_provider_series`.
 
 ## 7. Synthetic example
 
@@ -94,9 +119,14 @@ Synthetic values only; `example.invalid` addresses, no real calendar, person or 
 ```json
 {
   "schema": "meeting_sync_v1",
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "generated_at_utc": "2030-01-06T06:00:00Z",
   "cycle_run_id": "synthetic-run-0001",
+  "coverage": {
+    "start_utc": "2029-12-07T06:00:00Z",
+    "end_utc": "2030-04-06T06:00:00Z",
+    "calendar_refs": ["cal-synthetic-primary"]
+  },
   "events": [
     {
       "calendar_ref": "cal-synthetic-primary",
@@ -135,7 +165,7 @@ Synthetic values only; `example.invalid` addresses, no real calendar, person or 
 }
 ```
 
-The second record is an occurrence moved one hour later: its key keeps the original start `2030-01-08T14:00:00Z`.
+The second record is an occurrence moved one hour later: its key keeps the original start `2030-01-08T14:00:00Z`. The coverage claims `cal-synthetic-primary` complete from `generated_at_utc` minus the 30-day lookback (section 8.1) to a 90-day horizon. Without the `coverage` object and with `schema_version` `1.0.0`, the example is a valid 1.0 publication.
 
 ## 8. Collector implementation notes
 
@@ -143,7 +173,7 @@ A ready-to-apply checklist for the external ChatLLM calendar collector (Manager 
 
 ### 8.1 Which events to send
 
-- [ ] Send every timed event of the calendar in the collector's window: single meetings and each **occurrence** of a recurring series (expanded instances, including moved and cancelled ones).
+- [ ] **The window.** Send every timed event of the calendar whose current start is at or after `generated_at_utc` minus the **collector lookback L = 30 days** (`my_pa.domain.meeting_sync.model.COLLECTOR_LOOKBACK`; Manager ruling D3), up to the collector's forward horizon: single meetings and each **occurrence** of a recurring series (expanded instances, including moved and cancelled ones). my-pa relies on L: a Meeting that starts before `now - L` can never meet a sync record, so the reconciliation pass does not review it. A collector that changes L must have this contract changed first.
 - [ ] **Exclude all-day events.** Do not send them at all. (If one is sent it must carry `all_day: true` and is quarantined as `all_day_unsupported`, ruling D4; omitting it is the clean path.)
 - [ ] Do not send a recurrence master by itself (ruling D7); send its occurrences.
 - [ ] Send a cancelled event or occurrence with `status` `cancelled`. Do not drop it: a cancelled known event cancels its Meeting; a cancelled unknown one is skipped harmlessly (`cancelled_unknown_skipped`).
@@ -168,7 +198,13 @@ A ready-to-apply checklist for the external ChatLLM calendar collector (Manager 
 | `provider_event_id_format` | no | `immutable_verified` only when the collector requests immutable ids and has verified it; `mutable` when the id is known to change; otherwise `unknown`. |
 | `attendees` | no | At most 100 entries `{email, display_name, is_organizer, response_status}`. See the address rules below. |
 
-Top level: `schema` = `meeting_sync_v1`, `schema_version` = `1.0.0`, `generated_at_utc` (section 8.3), `events`, and optionally `cycle_run_id` (the collector's run reference).
+Top level: `schema` = `meeting_sync_v1`, `schema_version` = `1.1.0`, `generated_at_utc` (section 8.3), `events`, `coverage` (below), and optionally `cycle_run_id` (the collector's run reference).
+
+**Coverage (1.1.0, section 1.1).**
+
+- [ ] Emit `coverage` on every publication whose read of its calendars completed: `start_utc` = the window start the collector used (no later than `generated_at_utc` minus 30 days), `end_utc` = its forward horizon, both UTC with `Z`; `calendar_refs` = every calendar read **completely** over that window (1–100, each once).
+- [ ] Leave a calendar out of `calendar_refs` if its read failed, was paged short, or was filtered; if no calendar was read completely, omit `coverage` entirely (and keep `schema_version` `1.1.0`). Never emit an empty or partial `coverage` object: it rejects the whole publication (`invalid_coverage`).
+- [ ] The window must contain every event sent for the listed calendars' claim, by current start (section 1.1); an event moved out of the window is simply not sent.
 
 **Addresses.** my-pa normalizes each attendee address with `casefold` on the local part and the domain. Before sending:
 
@@ -187,9 +223,9 @@ An event with more than 100 distinct attendees cannot be held and is quarantined
 
 **Why.** my-pa applies records for a known event only in publication order (resolution rule 7, section 5). Each binding remembers the stamp of the last record applied to it. A publication with an older stamp is skipped (`stale_record_skipped`) and one with an equal stamp but different bytes is skipped as ambiguous (`ordering_conflict_skipped`). Both skips are reported only in each record's `MeetingSyncOutcome` and fail nothing, so a stamp that goes backwards freezes every known Meeting until a newer stamp arrives.
 
-### 8.4 File naming and placement (**proposal**)
+### 8.4 File naming and placement
 
-No meeting-sync placement is defined yet; WP3 fixes it when it registers the source (spec section 1.2). This proposal mirrors the WP1 communications convention (spec section 1.1: the `mcp` file workspace, canonical folder `My PA/Daily Intelligence/communications/`, one `YYYYMMDD-comms.json` per business date):
+Fixed by Manager ruling D1 (WP3b), which registers the source (spec section 1.2). It mirrors the WP1 communications convention (spec section 1.1: the `mcp` file workspace, canonical folder `My PA/Daily Intelligence/communications/`, one `YYYYMMDD-comms.json` per business date):
 
 - **Folder:** `My PA/Daily Intelligence/meetings/` in the `mcp` file workspace, a sibling of the communications folder.
 - **Name:** `YYYYMMDD-meetings.json`, the UTC date of `generated_at_utc`, one file per date.
@@ -200,6 +236,7 @@ No meeting-sync placement is defined yet; WP3 fixes it when it registers the sou
 ### 8.5 Verify a publication before upload
 
 - [ ] Size at most 16 MiB; strict UTF-8; no duplicate keys, `NaN` or `Infinity`.
+- [ ] `coverage` present, UTC, `start_utc` not after `end_utc`, at least `generated_at_utc` minus 30 days back, listing only completely read calendars (section 8.2).
 - [ ] `generated_at_utc` is later than the last uploaded stamp (section 8.3).
 - [ ] No all-day event, no body or description key, no non-`https` join URL.
 - [ ] Run the repository parser over the file from a my-pa source checkout. It prints counts, closed-vocabulary codes and the stamp only, never event content:
@@ -218,11 +255,16 @@ No meeting-sync placement is defined yet; WP3 fixes it when it registers the sou
       print("records", publication.record_count, "accepted", len(publication.events),
             "quarantined", len(publication.quarantined))
   print("codes", dict(result.diagnostics.code_counts))
+  for entry in result.diagnostics.entries:
+      if entry.code.value == "invalid_coverage":
+          print("coverage defect", dict(entry.detail)["defect"].value)
+  if publication is not None:
+      print("coverage", publication.coverage is not None)
   sys.exit(0 if publication is not None and not publication.quarantined else 1)
   PY
   ```
 
-  Upload only on exit 0 (accepted, 0 quarantined). Also expect no `content_field_ignored` or `unknown_record_keys` code. On the synthetic fixture `tests/fixtures/meeting_sync/sync_publication.json`, which carries deliberate faults, it prints `accepted`, 5 records, 4 accepted, 1 quarantined, with the codes `all_day_unsupported`, `content_field_ignored` and `timezone_not_iana`, and exits 1.
+  Upload only on exit 0 (accepted, 0 quarantined). Also expect no `content_field_ignored` or `unknown_record_keys` code, and `coverage True` when any calendar was read completely. On the synthetic fixture `tests/fixtures/meeting_sync/sync_publication.json`, which carries deliberate faults, it prints `accepted`, 5 records, 4 accepted, 1 quarantined, with the codes `all_day_unsupported`, `content_field_ignored` and `timezone_not_iana`, and exits 1. On `tests/fixtures/meeting_sync/sync_publication_v1_1.json` (the same events as a 1.1.0 publication with a two-calendar coverage) it prints the same counts and codes, then `coverage True`, and exits 1.
 
 ### 8.6 Synthetic values only
 

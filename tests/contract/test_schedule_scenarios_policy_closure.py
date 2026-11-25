@@ -320,22 +320,25 @@ def test_chatllm_classifies_the_26_at_v13() -> None:
 
 
 def test_v13_targets() -> None:
-    """Section 15.2 (S6-3-D04): the planner targets, executed at v13."""
+    """Section 15.2 (S6-3-D04): the planner targets, executed at v13.
+
+    chatllm-data-v16 (WP3b-S4) adds its 2 `DATA_REQUIRED` names everywhere.
+    """
     full = _desired(_planes(**_FULL))
-    assert len(full) == 176
-    assert len(_desired(_planes(constraints=True))) == 110
+    assert len(full) == 178
+    assert len(_desired(_planes(constraints=True))) == 112
     # The scenario switch alone (without the Schedule switch) composes nothing.
     assert _desired(_planes(**_FULL, schedule_scenarios=True)) == full
     with_schedule = _desired(_planes(**_FULL, schedule=True))
-    assert len(with_schedule) == 182
+    assert len(with_schedule) == 184
     with_scenarios = _desired(_planes(**_FULL, schedule=True, schedule_scenarios=True))
-    assert len(with_scenarios) == 204
+    assert len(with_scenarios) == 206
     assert with_scenarios - with_schedule == _CLIENT_USABLE
     everything = {"lineage": True, "program_reporting": True, "schedule": True}
-    assert len(_desired(_planes(**_FULL, **everything))) == 216
-    assert len(_desired(_planes(**_FULL, **everything, schedule_scenarios=True))) == 238
-    assert len(_desired(_planes(constraints=True, **everything))) == 148
-    assert len(_desired(_planes(constraints=True, **everything, schedule_scenarios=True))) == 170
+    assert len(_desired(_planes(**_FULL, **everything))) == 218
+    assert len(_desired(_planes(**_FULL, **everything, schedule_scenarios=True))) == 240
+    assert len(_desired(_planes(constraints=True, **everything))) == 150
+    assert len(_desired(_planes(constraints=True, **everything, schedule_scenarios=True))) == 172
     # Files workspace WP5 (chatllm-data-v14): its own flag, 1,024 -> 2,048.
     assert len(_every_composition()) == 2048
 

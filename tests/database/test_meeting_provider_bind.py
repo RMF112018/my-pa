@@ -21,13 +21,17 @@ write request, Record Event and audit rows are what is checked:
 * the lock order (R1-2): an unbind locks the Meeting's binding row, and a bind
   the requested key's binding row, before the Meeting row -- the provider
   sync's order -- probed with `NOWAIT` from a third connection while the bind
-  waits on a lock another connection holds.
+  waits on a lock another connection holds;
+* two concurrent binds of one unbound key to two Meetings: one binds, the other
+  is refused `provider_key_bound_to_another_meeting`, never `internal_error`
+  (the binding-writer lock, ruling D8; R1 finding 1).
 
 Every identifier, title and key here is synthetic.
 """
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
@@ -36,7 +40,7 @@ from datetime import UTC, datetime
 from typing import Any, Final
 
 import pytest
-from sqlalchemy import Engine, Table, func, select
+from sqlalchemy import Engine, Table, func, select, text
 from sqlalchemy.exc import OperationalError
 
 from my_pa.application.commands import BindMeetingProvider, Command, CreateMeeting, UpdateMeeting
@@ -53,6 +57,7 @@ from my_pa.infrastructure.persistence.tables import (
 )
 from tests.contract.test_meeting_mcp import Partition, _insert_partition
 from tests.database.test_meeting_application import (
+    BLOCK_DEADLINE_SECONDS,
     JOIN_TIMEOUT_SECONDS,
     LOCK_NOT_AVAILABLE,
     _wait_until_blocked,
@@ -599,3 +604,64 @@ def test_a_bind_waits_on_the_key_binding_before_it_locks_the_meeting(scene: Scen
     assert lockable, "the bind locked the Meeting before the key's binding"
     assert response.error is not None
     assert "meeting_already_provider_bound" in response.error.safe_details
+
+
+# ---- concurrent binds (R1 finding 1; ruling D8) ------------------------------------
+
+
+def _wait_until_waiting(
+    engine: Engine, futures: list[Future[ResponseEnvelope]], count: int
+) -> None:
+    """Return once `count` other backends of this database wait on a lock."""
+    deadline = time.monotonic() + BLOCK_DEADLINE_SECONDS
+    with engine.connect() as observer:
+        while time.monotonic() < deadline:
+            assert not any(f.done() for f in futures), "a bind did not wait"
+            waiting = observer.execute(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE datname = current_database() AND wait_event_type = 'Lock' "
+                    "AND pid <> pg_backend_pid()"
+                )
+            ).scalar_one()
+            observer.rollback()
+            if waiting >= count:
+                return
+            time.sleep(0.05)
+    pytest.fail(f"fewer than {count} binds blocked")
+
+
+def test_two_concurrent_binds_of_one_unbound_key_refuse_the_second_closed(
+    scene: Scene,
+) -> None:
+    """Both binds start while each one's Meeting is locked elsewhere, then race.
+
+    With the Principal's binding-writer lock the second waits for the first to
+    commit, reads its binding and is refused `provider_key_bound_to_another_meeting`
+    -- never `internal_error` from the unique index.
+    """
+    first = _create(scene, "create-race-1", series=None)["meeting_id"]
+    second = _create(scene, "create-race-2", series=None)["meeting_id"]
+    with ThreadPoolExecutor(max_workers=2) as pool, scene.engine.connect() as holder:
+        locked = holder.execute(
+            select(meetings.c.meeting_id)
+            .where(meetings.c.meeting_id.in_((first, second)))
+            .with_for_update()
+        ).all()
+        assert len(locked) == 2
+        futures = [
+            pool.submit(scene.invoke, _single(first, "bind-race-1")),
+            pool.submit(scene.invoke, _single(second, "bind-race-2")),
+        ]
+        try:
+            _wait_until_waiting(scene.engine, futures, 2)
+        finally:
+            holder.rollback()
+        responses = [f.result(timeout=JOIN_TIMEOUT_SECONDS) for f in futures]
+    succeeded = [r for r in responses if r.error is None]
+    refused = [r.error for r in responses if r.error is not None]
+    assert len(succeeded) == 1, refused
+    (error,) = refused
+    assert error.code is ErrorCode.INVALID_REQUEST, error
+    assert error.safe_details == ("provider_key_bound_to_another_meeting",), error
+    assert scene.count(meeting_provider_bindings) == 1

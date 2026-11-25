@@ -578,6 +578,59 @@ class FakeCommunications(CommunicationsRepository):
             ),
         )
 
+    def _rederive_due(
+        self,
+        principal_id: str,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None,
+    ) -> list[CommunicationMessageRecord]:
+        def in_scope(message: CommunicationMessageRecord) -> bool:
+            if ingest_source_id is None:
+                return True
+            snapshot = self.w.snapshots.get((principal_id, message.projection.text_snapshot_id))
+            return snapshot is not None and snapshot.ingest_source_id == ingest_source_id
+
+        due = [
+            m
+            for m in self.w.mine(principal_id, self.w.messages)
+            if (
+                m.projection.search_text_version != search_text_version
+                or m.identifiers_version != identifiers_version
+                or m.source_unavailable
+            )
+            and in_scope(m)
+        ]
+        return sorted(due, key=lambda m: m.message_id)
+
+    def list_rederive_due(
+        self,
+        principal_id: str,
+        *,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None = None,
+        limit: int,
+    ) -> tuple[CommunicationMessageRecord, ...]:
+        due = self._rederive_due(
+            principal_id, search_text_version, identifiers_version, ingest_source_id
+        )
+        return tuple(due[:limit])
+
+    def count_rederive_due(
+        self,
+        principal_id: str,
+        *,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None = None,
+    ) -> int:
+        return len(
+            self._rederive_due(
+                principal_id, search_text_version, identifiers_version, ingest_source_id
+            )
+        )
+
 
 class IngestUnitOfWork(FakeUnitOfWork):
     """`FakeUnitOfWork` with the two WP3a planes modelled, and real rollback."""

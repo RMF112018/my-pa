@@ -30,10 +30,15 @@ from typing import Any, Final
 import pytest
 from apps.cli import communications_ingest as cli
 
+from my_pa.application import communications_ingest as ingest_module
 from my_pa.application.communications_ingest import CommunicationsCoverageReader
+from my_pa.application.communications_rederive import REDERIVE_COUNT_KEYS, CommunicationsRederiver
 from my_pa.application.ingestion import IngestionLifecycle, StabilityMemory
 from my_pa.application.meeting_sync_apply import MeetingSyncApplier
-from my_pa.bootstrap.communications_ingest import communications_handler
+from my_pa.bootstrap.communications_ingest import communications_handler, parse_for_ingestion
+from my_pa.domain.communications.identifiers import IDENTIFIER_VERSION_V1
+from my_pa.domain.communications.search_text import derive_search_text_v1
+from my_pa.infrastructure.communications.evidence_v2 import MAX_PUBLICATION_BYTES
 from tests.fixtures.communications_evidence import synthetic as s
 from tests.unit.communications_ingest_fakes import FakeStore, IngestWorld, unit_of_work_factory
 
@@ -168,6 +173,17 @@ class _Scene:
             "meeting_sync_applier",
             lambda *_a, **_k: MeetingSyncApplier(unit_of_work=unit),
         )
+        # WP4-S3: the rederive over the same world and store.
+        monkeypatch.setattr(
+            cli,
+            "communications_rederiver",
+            lambda *_a, **_k: CommunicationsRederiver(
+                unit_of_work=unit,
+                stores=self._store,
+                parse=parse_for_ingestion,
+                max_bytes=MAX_PUBLICATION_BYTES,
+            ),
+        )
 
     def _store(self, workspace_id: str) -> FakeStore:
         if workspace_id != "mcp":
@@ -237,6 +253,11 @@ def _content_strings() -> set[str]:
         [*EXPECT, "coverage", "--source", "isrc_x", "--from", "2026-11-01T00:00:00Z"],
         [*EXPECT, "admit", "--consumer", "nonsense", "--workspace", "mcp"],
         [*EXPECT, "purge"],
+        [*EXPECT, "rederive", "--limit", "0"],
+        [*EXPECT, "rederive", "--limit", "20001"],
+        [*EXPECT, "rederive", "--limit", "many"],
+        [*EXPECT, "measure-fts", "--limit", "0"],
+        [*EXPECT, "rederive", "--prune-version", "comms_identifiers_v1"],
     ],
     ids=[
         "no-expectations",
@@ -247,6 +268,11 @@ def _content_strings() -> set[str]:
         "from-without-to",
         "unknown-consumer",
         "unknown-command",
+        "rederive-limit-zero",
+        "rederive-limit-above-maximum",
+        "rederive-limit-not-integer",
+        "measure-limit-zero",
+        "no-prune-r4",
     ],
 )
 def test_usage_errors_exit_2(
@@ -635,7 +661,7 @@ def test_the_command_names_no_capability_and_builds_no_service() -> None:
     assert "AuditEvent" not in names
 
 
-def test_the_command_imports_only_the_aggregate_reads_from_persistence() -> None:
+def test_the_command_imports_only_the_counts_only_reads_from_persistence() -> None:
     named: set[str] = set()
     modules: set[str] = set()
     for node in ast.walk(_tree()):
@@ -645,7 +671,139 @@ def test_the_command_imports_only_the_aggregate_reads_from_persistence() -> None
                 named.update(alias.name for alias in node.names)
         elif isinstance(node, ast.Import):
             modules.update(alias.name for alias in node.names)
-    assert named == {"communications_aggregate", "ingest_aggregate"}
+    assert named == {
+        "communications_aggregate",
+        "communications_fts_measurement",
+        "ingest_aggregate",
+    }
     assert not any(module.startswith("my_pa.adapters") for module in modules)
     application = {module for module in modules if module.startswith("my_pa.application")}
     assert application == {"my_pa.application.ingestion"}
+
+
+# ---- rederive and measure-fts (WP4-S3) ----------------------------------------------
+
+
+def _v1_backfill(
+    scene: _Scene, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> str:
+    """Admit and backfill the fixtures with the v1 text and identifiers (a WP3a database)."""
+    source = scene.admit(capsys)
+    scene.put_fixtures()
+    with monkeypatch.context() as patch:
+        patch.setattr(ingest_module, "derive_search_text", derive_search_text_v1)
+        patch.setattr(ingest_module, "IDENTIFIER_VERSION", IDENTIFIER_VERSION_V1)
+        assert run(capsys, "backfill", "--source", source)[0] == cli.EXIT_OK
+    return source
+
+
+def test_rederive_under_the_poll_lock_prints_closed_counts_only(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    scene = _Scene(monkeypatch)
+    source = _v1_backfill(scene, capsys, monkeypatch)
+    calls = scene.engine.connection.lock_calls
+    calls.clear()
+    code, out = run(capsys, "rederive", "--source", source, "--limit", "2")
+    assert code == cli.EXIT_OK
+    assert calls == ["try", "unlock"]
+    assert set(out) == {
+        "command",
+        "ingest_source_id",
+        "dry_run",
+        "search_text_version",
+        "identifier_version",
+        "counts",
+    }
+    assert (out["command"], out["dry_run"], out["ingest_source_id"]) == ("rederive", False, source)
+    assert (out["search_text_version"], out["identifier_version"]) == (
+        "comms_search_text_v2",
+        "comms_identifiers_v2",
+    )
+    assert set(out["counts"]) == set(REDERIVE_COUNT_KEYS)
+    assert all(type(value) is int for value in out["counts"].values())
+    assert out["counts"]["messages_checked"] == 2
+    assert out["counts"]["messages_deferred"] > 0
+    # The rest, unscoped, then nothing left.
+    code, rest = run(capsys, "rederive")
+    assert (code, rest["ingest_source_id"], rest["counts"]["messages_deferred"]) == (
+        cli.EXIT_OK,
+        None,
+        0,
+    )
+    assert run(capsys, "rederive")[1]["counts"]["messages_checked"] == 0
+    raw = json.dumps([out, rest])
+    leaked = sorted(value for value in _content_strings() if value in raw)
+    assert leaked == []
+    assert not any(part in raw for part in DSN_PARTS)
+    assert "Daily Intelligence" not in raw
+
+
+def test_rederive_refuses_lock_held_and_a_dry_run_takes_no_lock(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    scene = _Scene(monkeypatch)
+    _v1_backfill(scene, capsys, monkeypatch)
+    calls = scene.engine.connection.lock_calls
+    calls.clear()
+    scene.engine.connection.lock_free = False
+    before = (scene.world.row_count(), list(scene.world.writes))
+    assert run(capsys, "rederive") == (
+        cli.EXIT_REFUSED,
+        {"command": "rederive", "refused": "lock_held"},
+    )
+    assert calls == ["try"]
+    code, dry = run(capsys, "rederive", "--dry-run")
+    assert (code, dry["dry_run"]) == (cli.EXIT_OK, True)
+    assert dry["counts"]["messages_due_text"] > 0
+    assert calls == ["try"]  # the dry run took no lock
+    assert (scene.world.row_count(), list(scene.world.writes)) == before
+
+
+def test_rederive_exits_3_when_a_group_failed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    scene = _Scene(monkeypatch)
+    _v1_backfill(scene, capsys, monkeypatch)
+    scene.world.fail_on.add("update_message_projection")
+    code, out = run(capsys, "rederive")
+    assert code == cli.EXIT_RUN_INCOMPLETE
+    assert out["counts"]["messages_failed"] >= 1
+
+
+@pytest.mark.parametrize("command", ["rederive", "measure-fts"])
+def test_an_unknown_source_refuses_source_not_found(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    _Scene(monkeypatch)
+    assert run(capsys, command, "--source", "isrc_doesnotexist0000") == (
+        cli.EXIT_REFUSED,
+        {"command": command, "refused": "source_not_found"},
+    )
+
+
+def test_measure_fts_prints_the_measurement_under_its_command(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The SQL is the database tier's; here, the wiring: version, scope, limit, shape."""
+    _Scene(monkeypatch)
+    seen: dict[str, object] = {}
+
+    def measured(_connection: object, principal_id: str, **kwargs: object) -> dict[str, object]:
+        seen.update(kwargs)
+        return {"messages_measured": 0, "classes": {}}
+
+    monkeypatch.setattr(cli, "communications_fts_measurement", measured)
+    code, out = run(capsys, "measure-fts", "--limit", "7")
+    assert code == cli.EXIT_OK
+    assert out == {
+        "command": "measure-fts",
+        "ingest_source_id": None,
+        "messages_measured": 0,
+        "classes": {},
+    }
+    assert seen == {
+        "identifiers_version": "comms_identifiers_v2",
+        "ingest_source_id": None,
+        "limit": 7,
+    }

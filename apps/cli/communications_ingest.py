@@ -13,6 +13,9 @@ python apps/cli/communications_ingest.py <assertions> backfill --source isrc_...
 python apps/cli/communications_ingest.py <assertions> coverage --source isrc_... \\
     [--from ISO8601 --to ISO8601]
 python apps/cli/communications_ingest.py <assertions> aggregate --source isrc_... [--source ...]
+python apps/cli/communications_ingest.py <assertions> rederive [--source isrc_...] \\
+    [--limit N] [--dry-run]
+python apps/cli/communications_ingest.py <assertions> measure-fts [--source isrc_...] [--limit N]
 ```
 
 `<assertions>` is `--expected-database NAME --expected-alembic-head REVISION`,
@@ -63,6 +66,26 @@ own transaction, so a stopped backfill leaves a consistent prefix and a rerun
 skips the SHA-256 values already ingested (`snapshots_already_known`).
 `--dry-run` lists, reads, parses and counts and writes nothing at all.
 
+**Rederive (WP4-S3, rulings D2, D3, R4, R9).** `rederive` brings stored
+messages to the current search-text and identifier versions
+(`application.communications_rederive`): at most `--limit` due messages
+(default 1,000, at most 20,000), the rest counted `messages_deferred` for the
+next run, optionally only those whose text pointer names a snapshot of
+`--source`. Each snapshot's file is re-read through the read-only workspace
+store and accepted only when its SHA-256 equals the snapshot's; a missing or
+changed file keeps the stored text and flags the message `source_unavailable`.
+It holds `COMMS_INGEST_LOCK_KEY` for the run (refusing `lock_held`); `--dry-run`
+counts the due set, reads no file, writes nothing and takes no lock. Its
+counts are the closed `REDERIVE_COUNT_KEYS`; any `messages_failed` makes the
+exit `3`. There is no prune (ruling R4): earlier versions' identifier rows
+stay, and reads filter by version.
+
+**The FTS measurement (WP4 ruling D4).** `measure-fts` is read-only:
+per-class counts (`identifier`, `name`) of probe terms over stored messages,
+`english` against `simple`, and whether the `english` misses no index covers
+are material (`communications_fts_measurement`). No term, address or id is
+printed.
+
 **Applying the meeting sync (WP3b-S3).** After `run-once` and `backfill` (not
 `--dry-run`), still under `COMMS_INGEST_LOCK_KEY`, the staged `meeting_sync_v1`
 publications are applied (`MeetingSyncApplier.apply_pending`): nothing applies
@@ -76,7 +99,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Final, Protocol
@@ -86,6 +109,10 @@ from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 
 from my_pa.application.ingestion import IngestRefusedError, IngestRunReport
 from my_pa.bootstrap.communications_ingest import (
+    DEFAULT_REDERIVE_LIMIT,
+    IDENTIFIER_VERSION,
+    MAX_REDERIVE_LIMIT,
+    communications_rederiver,
     coverage_reader,
     ingest_unit_of_work,
     ingestion_lifecycle,
@@ -101,7 +128,10 @@ from my_pa.contracts.ports import (
 )
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.jobs.cycle_scheduler import COMMS_INGEST_LOCK_KEY, single_flight
-from my_pa.infrastructure.persistence.communications import communications_aggregate
+from my_pa.infrastructure.persistence.communications import (
+    communications_aggregate,
+    communications_fts_measurement,
+)
 from my_pa.infrastructure.persistence.ingestion import ingest_aggregate
 
 __all__ = ["EXIT_OK", "EXIT_REFUSED", "EXIT_RUN_INCOMPLETE", "build_parser", "main"]
@@ -112,6 +142,9 @@ EXIT_RUN_INCOMPLETE: Final = 3
 
 #: The statement bound every engine here runs under (the engine-bounded guard).
 STATEMENT_TIMEOUT_MS: Final = 60_000
+#: `measure-fts` measures at most this many messages per invocation.
+DEFAULT_MEASURE_LIMIT: Final = 20_000
+MAX_MEASURE_LIMIT: Final = 100_000
 
 
 class _RefusalError(Exception):
@@ -328,6 +361,50 @@ def _aggregate(engine: Engine, principal_id: str, args: argparse.Namespace) -> i
     return EXIT_OK
 
 
+def _rederive(
+    engine: Engine, settings: Settings, principal_id: str, args: argparse.Namespace
+) -> int:
+    if args.source is not None:
+        _require_source(engine, principal_id, args.source)
+    rederiver = communications_rederiver(settings, engine)
+
+    def run() -> int:
+        report = rederiver.rederive(
+            principal_id, limit=args.limit, ingest_source_id=args.source, dry_run=args.dry_run
+        )
+        _emit(
+            {
+                "command": "rederive",
+                "ingest_source_id": args.source,
+                "dry_run": report.dry_run,
+                "search_text_version": report.search_text_version,
+                "identifier_version": report.identifier_version,
+                "counts": dict(report.counts),
+            }
+        )
+        return EXIT_RUN_INCOMPLETE if report.counts.get("messages_failed") else EXIT_OK
+
+    if args.dry_run:  # reads and writes nothing but the due set, so it takes no lock
+        return run()
+    with _poll_lock(engine):
+        return run()
+
+
+def _measure_fts(engine: Engine, principal_id: str, args: argparse.Namespace) -> int:
+    if args.source is not None:
+        _require_source(engine, principal_id, args.source)
+    with engine.connect() as connection:
+        measured = communications_fts_measurement(
+            connection,
+            principal_id,
+            identifiers_version=IDENTIFIER_VERSION,
+            ingest_source_id=args.source,
+            limit=args.limit,
+        )
+    _emit({"command": "measure-fts", "ingest_source_id": args.source, **measured})
+    return EXIT_OK
+
+
 def _dispatch(engine: Engine, settings: Settings, args: argparse.Namespace) -> int:
     principal_id = local_principal().principal_id
     match args.command:
@@ -335,6 +412,10 @@ def _dispatch(engine: Engine, settings: Settings, args: argparse.Namespace) -> i
             return _coverage(engine, principal_id, args)
         case "aggregate":
             return _aggregate(engine, principal_id, args)
+        case "rederive":
+            return _rederive(engine, settings, principal_id, args)
+        case "measure-fts":
+            return _measure_fts(engine, principal_id, args)
     lifecycle = ingestion_lifecycle(settings, engine)
     match args.command:
         case "admit":
@@ -432,6 +513,19 @@ def _run(args: argparse.Namespace) -> int:
         engine.dispose()
 
 
+def _bounded(maximum: int) -> Callable[[str], int]:
+    def parse(value: str) -> int:
+        try:
+            number = int(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError("an integer") from None
+        if not 1 <= number <= maximum:
+            raise argparse.ArgumentTypeError(f"between 1 and {maximum}")
+        return number
+
+    return parse
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="communications_ingest",
@@ -470,6 +564,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     aggregate = commands.add_parser("aggregate", help="corpus counts over one or more sources")
     aggregate.add_argument("--source", required=True, action="append")
+
+    rederive = commands.add_parser(
+        "rederive", help="re-derive stored messages to the current text and identifier versions"
+    )
+    rederive.add_argument("--source")
+    rederive.add_argument(
+        "--limit", type=_bounded(MAX_REDERIVE_LIMIT), default=DEFAULT_REDERIVE_LIMIT
+    )
+    rederive.add_argument("--dry-run", action="store_true")
+
+    measure = commands.add_parser(
+        "measure-fts", help="counts only: english against simple over stored messages"
+    )
+    measure.add_argument("--source")
+    measure.add_argument("--limit", type=_bounded(MAX_MEASURE_LIMIT), default=DEFAULT_MEASURE_LIMIT)
     return parser
 
 

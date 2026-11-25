@@ -32,7 +32,23 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
-from sqlalchemy import ColumnElement, Select, Table, func, insert, select, update
+from sqlalchemy import (
+    ColumnElement,
+    ScalarSelect,
+    Select,
+    Table,
+    and_,
+    case,
+    func,
+    insert,
+    literal,
+    literal_column,
+    not_,
+    or_,
+    select,
+    union_all,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Result, Row
 
@@ -64,7 +80,14 @@ from my_pa.infrastructure.persistence.tables import (
     ingest_snapshots,
 )
 
-__all__ = ["SqlCommunicationsRepository", "communications_aggregate"]
+__all__ = [
+    "FTS_COUNT_KEYS",
+    "FTS_MATERIAL_SHARE",
+    "FTS_PROBE_CLASSES",
+    "SqlCommunicationsRepository",
+    "communications_aggregate",
+    "communications_fts_measurement",
+]
 
 
 def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
@@ -620,6 +643,81 @@ class SqlCommunicationsRepository(CommunicationsRepository):
             for row in rows
         )
 
+    # --- the rederive's due set (WP4 ruling D2) -------------------------------
+
+    def list_rederive_due(
+        self,
+        principal_id: str,
+        *,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None = None,
+        limit: int,
+    ) -> tuple[CommunicationMessageRecord, ...]:
+        rows = self._connection.execute(
+            select(*_MESSAGE_COLUMNS)
+            .where(
+                *_rederive_due(
+                    principal_id, search_text_version, identifiers_version, ingest_source_id
+                )
+            )
+            .order_by(communication_messages.c.message_id)
+            .limit(limit)
+        )
+        return tuple(_to_message(row) for row in rows)
+
+    def count_rederive_due(
+        self,
+        principal_id: str,
+        *,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None = None,
+    ) -> int:
+        return int(
+            self._connection.execute(
+                select(func.count()).where(
+                    *_rederive_due(
+                        principal_id, search_text_version, identifiers_version, ingest_source_id
+                    )
+                )
+            ).scalar_one()
+        )
+
+
+def _source_snapshots(principal_id: str, ingest_source_ids: Sequence[str]) -> ScalarSelect[str]:
+    """The snapshot ids of the given sources, as a scalar subquery."""
+    return (
+        select(ingest_snapshots.c.snapshot_id)
+        .where(
+            _mine(ingest_snapshots, principal_id),
+            ingest_snapshots.c.ingest_source_id.in_(sorted(set(ingest_source_ids))),
+        )
+        .scalar_subquery()
+    )
+
+
+def _rederive_due(
+    principal_id: str,
+    search_text_version: str,
+    identifiers_version: str,
+    ingest_source_id: str | None,
+) -> tuple[ColumnElement[bool], ...]:
+    messages = communication_messages
+    criteria: tuple[ColumnElement[bool], ...] = (
+        _mine(messages, principal_id),
+        or_(
+            messages.c.search_text_version != search_text_version,
+            messages.c.identifiers_version.is_distinct_from(identifiers_version),
+            messages.c.source_unavailable.is_(True),
+        ),
+    )
+    if ingest_source_id is not None:
+        criteria += (
+            messages.c.text_snapshot_id.in_(_source_snapshots(principal_id, [ingest_source_id])),
+        )
+    return criteria
+
 
 def _counts(rows: Result[Any]) -> dict[str, int]:
     return {str(code): int(count) for code, count in rows}
@@ -751,4 +849,205 @@ def communications_aggregate(
             ).scalar_one()
         ),
         "identifiers": identifiers,
+    }
+
+
+# --- the english-against-simple measurement (WP4 ruling D4, report section 2.4) ---
+
+#: The classes of probe term `communications_fts_measurement` forms per message.
+FTS_PROBE_CLASSES: Final = ("identifier", "name")
+#: The counts of each class, always present.
+FTS_COUNT_KEYS: Final = (
+    "probes",
+    "present",
+    "english_hit_of_present",
+    "simple_hit_of_present",
+    "english_miss_simple_hit",
+    "english_miss_covered_by_identifier",
+    "english_miss_uncovered",
+    "stopword_empty",
+)
+#: `english_miss_uncovered` is material for a class above this share of its
+#: present probes (the D4 decision rule; the Manager reads the counts too).
+FTS_MATERIAL_SHARE: Final = 0.01
+_ENGLISH: Final[ColumnElement[Any]] = literal_column("'english'::regconfig")
+_SIMPLE: Final[ColumnElement[Any]] = literal_column("'simple'::regconfig")
+_BARE_KINDS: Final = ("gmp", "fpl")
+
+
+def _measured_ids(
+    connection: Connection,
+    scope: tuple[ColumnElement[bool], ...],
+    after: str,
+    limit: int | None,
+) -> list[str]:
+    messages = communication_messages
+    statement = (
+        select(messages.c.message_id)
+        .where(*scope, messages.c.message_id > after)
+        .order_by(messages.c.message_id)
+    )
+    if limit is not None:
+        statement = statement.limit(limit)
+    return [str(row) for row in connection.execute(statement).scalars()]
+
+
+def _probe_counts(
+    connection: Connection, principal_id: str, identifiers_version: str, ids: Sequence[str]
+) -> dict[str, dict[str, int]]:
+    """One batch's counts per probe class (`communications_fts_measurement`)."""
+    messages = communication_messages
+    identifiers = communication_identifiers
+    participants = communication_participants
+    surface = case(
+        (identifiers.c.kind.in_(_BARE_KINDS), func.upper(identifiers.c.kind)),
+        (identifiers.c.kind == "submittal", func.concat("Submittal ", identifiers.c.value)),
+        (identifiers.c.kind == "spec", identifiers.c.value),
+        else_=func.concat(func.upper(identifiers.c.kind), " ", identifiers.c.value),
+    )
+    identifier_probes = select(
+        identifiers.c.message_id.label("message_id"),
+        literal("identifier").label("cls"),
+        surface.label("term"),
+        literal(True).label("covered"),
+    ).where(
+        _mine(identifiers, principal_id),
+        identifiers.c.extractor_version == identifiers_version,
+        identifiers.c.message_id.in_(ids),
+    )
+    tokens = (
+        select(
+            participants.c.message_id.label("message_id"),
+            func.unnest(
+                func.regexp_split_to_array(
+                    func.lower(func.split_part(participants.c.address, "@", 1)), "[^a-z]+"
+                )
+            ).label("token"),
+        )
+        .where(_mine(participants, principal_id), participants.c.message_id.in_(ids))
+        .subquery("tokens")
+    )
+    name_probes = (
+        select(
+            tokens.c.message_id,
+            literal("name").label("cls"),
+            tokens.c.token.label("term"),
+            literal(False).label("covered"),
+        )
+        .where(func.length(tokens.c.token) >= 3)
+        .distinct()
+    )
+    probes = union_all(identifier_probes, name_probes).subquery("probes")
+    body = func.concat(func.coalesce(messages.c.subject, ""), " ", messages.c.search_text)
+    english_query = func.websearch_to_tsquery(_ENGLISH, probes.c.term)
+    present = func.strpos(func.lower(body), func.lower(probes.c.term)) > 0
+    english = messages.c.search_document.bool_op("@@")(english_query)
+    simple = func.to_tsvector(_SIMPLE, body).bool_op("@@")(
+        func.websearch_to_tsquery(_SIMPLE, probes.c.term)
+    )
+    english_miss = and_(present, not_(english))
+    filters: dict[str, ColumnElement[bool] | None] = {
+        "probes": None,
+        "present": present,
+        "english_hit_of_present": and_(present, english),
+        "simple_hit_of_present": and_(present, simple),
+        "english_miss_simple_hit": and_(english_miss, simple),
+        "english_miss_covered_by_identifier": and_(english_miss, probes.c.covered.is_(True)),
+        "english_miss_uncovered": and_(english_miss, probes.c.covered.is_(False)),
+        "stopword_empty": and_(present, func.numnode(english_query) == 0),
+    }
+    rows = connection.execute(
+        select(
+            probes.c.cls,
+            *(
+                (func.count() if where is None else func.count().filter(where)).label(name)
+                for name, where in filters.items()
+            ),
+        )
+        .select_from(
+            probes.join(
+                messages,
+                and_(
+                    _mine(messages, principal_id),
+                    messages.c.message_id == probes.c.message_id,
+                ),
+            )
+        )
+        .group_by(probes.c.cls)
+    )
+    return {
+        str(row.cls): {name: int(getattr(row, name)) for name in FTS_COUNT_KEYS} for row in rows
+    }
+
+
+def communications_fts_measurement(
+    connection: Connection,
+    principal_id: str,
+    *,
+    identifiers_version: str,
+    ingest_source_id: str | None = None,
+    limit: int,
+    batch_size: int = 500,
+) -> dict[str, object]:
+    """Counts only: `english` against `simple` over stored messages (report section 2.4).
+
+    For each stored message with text (scoped to one source's snapshots by its
+    text pointer when `ingest_source_id` is given), in `message_id` keyset
+    batches of `batch_size`, at most `limit` messages, it forms probe terms:
+
+    * `identifier` -- the surface form of each of its `identifiers_version`
+      rows (`RFI 174`, `Submittal 033000-01`, `GMP`); the identifier index
+      answers these, so an `english` miss is `english_miss_covered_by_identifier`;
+    * `name` -- the alphabetic components of three characters or more of its
+      participants' address local parts; no index answers these, so an
+      `english` miss is `english_miss_uncovered`.
+
+    A probe is `present` when its term occurs (case-folded `strpos`) in
+    `subject || ' ' || search_text`; it is an `english` hit when the stored
+    `search_document` matches `websearch_to_tsquery('english', term)`, a
+    `simple` hit when `to_tsvector('simple', ...)` matches the `simple` query,
+    and `stopword_empty` when the `english` query has no node. The answer is
+    per-class counts plus `material`, which is true when a class's
+    `english_miss_uncovered` exceeds `FTS_MATERIAL_SHARE` of its present
+    probes. No term, address, subject, identifier value or id is returned.
+    """
+    if type(limit) is not int or limit < 1 or type(batch_size) is not int or batch_size < 1:
+        raise ValueError("a measurement limit and batch size are positive integers")
+    messages = communication_messages
+    scope: tuple[ColumnElement[bool], ...] = (
+        _mine(messages, principal_id),
+        messages.c.search_text.is_not(None),
+    )
+    if ingest_source_id is not None:
+        scope += (
+            messages.c.text_snapshot_id.in_(_source_snapshots(principal_id, [ingest_source_id])),
+        )
+    totals = {name: dict.fromkeys(FTS_COUNT_KEYS, 0) for name in FTS_PROBE_CLASSES}
+    measured, after = 0, ""
+    while measured < limit:
+        ids = _measured_ids(connection, scope, after, min(batch_size, limit - measured))
+        if not ids:
+            break
+        measured, after = measured + len(ids), ids[-1]
+        for name, counts in _probe_counts(
+            connection, principal_id, identifiers_version, ids
+        ).items():
+            for key, value in counts.items():
+                totals[name][key] += value
+    deferred = int(
+        connection.execute(
+            select(func.count()).where(*scope, messages.c.message_id > after)
+        ).scalar_one()
+    )
+    material = any(
+        counts["english_miss_uncovered"] > FTS_MATERIAL_SHARE * counts["present"]
+        for counts in totals.values()
+    )
+    return {
+        "identifier_version": identifiers_version,
+        "messages_measured": measured,
+        "messages_deferred": deferred,
+        "classes": totals,
+        "material_share": FTS_MATERIAL_SHARE,
+        "english_miss_uncovered_material": material,
     }

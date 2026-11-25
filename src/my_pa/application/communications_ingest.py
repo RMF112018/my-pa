@@ -134,6 +134,7 @@ __all__ = [
     "CommunicationsEvidenceHandler",
     "CommunicationsTotalsError",
     "ParsedPublication",
+    "message_projection",
 ]
 
 #: Producer source keys stored by name as `key_kind`; any other key is `other`.
@@ -172,9 +173,13 @@ def lane_state(source: SourceCoverage) -> dict[str, object]:
     }
 
 
-def _projection(
+def message_projection(
     message: NormalizedMessage, search: SearchText, snapshot_id: str
 ) -> CommunicationProjection:
+    """The stored projection of `message`'s text, pointing at `(snapshot_id, ordinal)`.
+
+    Ingestion and the rederive (`communications_rederive`) build it the same way.
+    """
     text = search.text
     return CommunicationProjection(
         body_state=message.body.state.value,
@@ -293,7 +298,7 @@ class _Apply:
             message_time=item.message_time,
             message_time_basis=item.message_time_basis.value,
             has_attachments=primary.has_attachments,
-            projection=_projection(primary, search, self.snapshot.snapshot_id),
+            projection=message_projection(primary, search, self.snapshot.snapshot_id),
             first_snapshot_id=self.snapshot.snapshot_id,
             latest_snapshot_id=self.snapshot.snapshot_id,
         )
@@ -450,7 +455,9 @@ class _Apply:
         self.counts["participants_added"] += self.repo.insert_participants(self.principal_id, rows)
 
     def offer(self, touched: _Touched, primary: NormalizedMessage) -> None:
-        projection = _projection(primary, derive_search_text(primary), self.snapshot.snapshot_id)
+        projection = message_projection(
+            primary, derive_search_text(primary), self.snapshot.snapshot_id
+        )
         candidate = _Candidate(
             key=(projection.search_text is not None, *self.window_key, -primary.ordinal),
             projection=projection,

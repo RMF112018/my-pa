@@ -103,6 +103,9 @@ IMPORTERS = {
     "application/communications_ingest.py",
     # WP3a-I2: the composition root injects the WP1 parser into that consumer.
     "bootstrap/communications_ingest.py",
+    # WP4-S3: the rederive re-derives stored messages to the current search
+    # text and identifier versions (rulings D2, D3).
+    "application/communications_rederive.py",
 }
 
 

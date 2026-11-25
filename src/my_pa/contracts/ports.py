@@ -14858,6 +14858,35 @@ class CommunicationsRepository(ABC):
     def tally_snapshot(self, principal_id: str, snapshot_id: str) -> CommunicationSnapshotTally:
         """How many observation and quarantine rows one snapshot left."""
 
+    @abstractmethod
+    def list_rederive_due(
+        self,
+        principal_id: str,
+        *,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None = None,
+        limit: int,
+    ) -> tuple[CommunicationMessageRecord, ...]:
+        """The first `limit` messages a rederive must visit, by `message_id` (WP4 ruling D2).
+
+        Due: `search_text_version` differs from the given one, `identifiers_version`
+        is distinct from the given one, or `source_unavailable` is set. With
+        `ingest_source_id`, only messages whose text pointer names a snapshot of
+        that source.
+        """
+
+    @abstractmethod
+    def count_rederive_due(
+        self,
+        principal_id: str,
+        *,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None = None,
+    ) -> int:
+        """How many messages `list_rederive_due` would answer with no limit."""
+
 
 # --- Communications intelligence WP3b: meeting sync staging and reconciliation
 # (Manager rulings D1, D3, D4, D5, D10; the WP3b revision on `52a829ef718a`).

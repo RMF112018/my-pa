@@ -14734,14 +14734,18 @@ class CommunicationSearchQuery:
     `query` is `None` when no text criterion applies (no query, or one with no
     searchable terms). `english_terms` says the `english` query keeps a
     lexeme; `text_fallback` adds the on-the-fly `simple` match and rank (ruling
-    D4-final). `to_utc` is inclusive of its whole second. `after` is the last
-    emitted `(tier, rank, overlap, message_time, message_id)`.
+    D4-final). `excluded` is the query's negated terms alone (`-word`,
+    `-"..."`), which every candidate must satisfy, an identifier match
+    included (WP4-R2 G4); `None` when there are none. `to_utc` is inclusive of
+    its whole second. `after` is the last emitted
+    `(tier, rank, overlap, message_time, message_id)`.
     """
 
     query: str | None
     english_terms: bool
     text_fallback: bool
     phrases: tuple[str, ...]
+    excluded: str | None
     identifiers: tuple[tuple[str, str], ...]
     identifier_version: str
     participants: tuple[str, ...]

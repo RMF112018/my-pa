@@ -13877,9 +13877,10 @@ class SearchCommunications:
     """Search your communications: text, exact identifiers, participants, time, folder.
 
     `query` is full text over each message's derived search text and subject
-    (web-search syntax: `"quoted phrase"` is confirmed exactly, `-word` and
-    `-"phrase"` exclude); identifiers it names (for example `RFI 174`, `PCO 12`)
-    are also matched exactly. `identifiers` are exact technical identifiers,
+    (web-search syntax: `"quoted phrase"` is confirmed exactly within the subject
+    or the text; `-word` and `-"phrase"` exclude a message from every result,
+    identifier matches included); identifiers it names (for example `RFI 174`,
+    `PCO 12`) are also matched exactly. `identifiers` are exact technical identifiers,
     each naming exactly one (`RFI 17` never matches `RFI 174`). `participants`
     are addresses, matched `any` (default) or `all`. `from_utc`/`to_utc` bound
     the message time, inclusive. `folder_role` is the observed folder claim, not

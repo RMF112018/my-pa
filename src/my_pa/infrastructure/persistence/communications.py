@@ -926,13 +926,32 @@ def _text_criteria(
         simple = _tsquery("simple", query.query)
         matches.append(_simple_document().bool_op("@@")(simple))
         ranks.append(_integer_rank(_simple_document(), simple))
-    haystack = _fold(
-        func.coalesce(messages.c.subject, "") + "\n" + func.coalesce(messages.c.search_text, "")
+    # WP4-R2 G5: each field is confirmed alone, so a phrase never spans the
+    # end of the subject and the start of the text.
+    fields = (
+        _fold(func.coalesce(messages.c.subject, "")),
+        _fold(func.coalesce(messages.c.search_text, "")),
     )
-    confirmed = [func.strpos(haystack, _fold(literal(phrase))) > 0 for phrase in query.phrases]
+    confirmed = [
+        or_(*(func.strpos(field, _fold(literal(phrase))) > 0 for field in fields))
+        for phrase in query.phrases
+    ]
     text_hit = and_(or_(*matches), *confirmed)
     rank = ranks[0] if len(ranks) == 1 else func.greatest(*ranks)
     return text_hit, case((text_hit, rank), else_=literal(0, BigInteger))
+
+
+def _not_excluded(excluded: str) -> ColumnElement[bool]:
+    """The stored document satisfies the negated terms (`-word`, `-"..."`) alone.
+
+    A negated `english` stop word leaves no lexeme, and an empty tsquery
+    matches nothing: it excludes nothing here.
+    """
+    negation = _tsquery("english", excluded)
+    return or_(
+        func.numnode(negation) == 0,
+        communication_messages.c.search_document.bool_op("@@")(negation),
+    )
 
 
 def _after(columns: _Columns, after: tuple[int, int, int, datetime, str]) -> ColumnElement[bool]:
@@ -1019,6 +1038,9 @@ def _search_statement(principal_id: str, query: CommunicationSearchQuery) -> Sel
         criteria.append(id_hit > 0)
     elif text_hit is not None:
         criteria.append(text_hit)
+    # WP4-R2 G4: a negated term excludes in every tier, an identifier match too.
+    if query.excluded is not None:
+        criteria.append(_not_excluded(query.excluded))
 
     # Structured filters intersect.
     if query.from_utc is not None:

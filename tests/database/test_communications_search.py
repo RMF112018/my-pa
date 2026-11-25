@@ -181,6 +181,30 @@ def test_identifiers_in_the_query_are_merged_and_tiered(
     assert _ids(negated) == [world["slab_reply"]]
 
 
+def test_a_negated_term_excludes_an_identifier_match_too(
+    migrated_engine: Engine, world: dict[str, str]
+) -> None:
+    """WP4-R2 G4: `-word` excludes in every tier, not only among the text matches."""
+    asked = search(migrated_engine, query="RFI 5", collapse="none")
+    assert set(_ids(asked)) == {world["pricing"], world["answered"], world["withheld"]}
+    # "PCO 3 and RFI 5 pricing attached." is an RFI 5 identifier match; it is excluded.
+    word = search(migrated_engine, query="RFI 5 -attached", collapse="none")
+    assert word.identifiers == ("rfi:5",)
+    assert set(_ids(word)) == {world["answered"], world["withheld"]}
+    phrase = search(migrated_engine, query='RFI 5 -"pricing attached"', collapse="none")
+    assert set(_ids(phrase)) == {world["answered"], world["withheld"]}
+    # The exclusion reads the stored document: "Pricing" in a subject excludes too.
+    stemmed = search(migrated_engine, query="RFI 5 -pricing", collapse="none")
+    assert _ids(stemmed) == [world["withheld"]]
+    by_field = search(
+        migrated_engine, query="pricing -attached", identifiers=["RFI 5"], collapse="none"
+    )
+    assert set(_ids(by_field)) == {world["answered"], world["withheld"]}
+    # A negated `english` stop word has no lexeme there: it excludes nothing.
+    stop_word = search(migrated_engine, query="RFI 5 -the", collapse="none")
+    assert set(_ids(stop_word)) == set(_ids(asked))
+
+
 def test_the_total_order_breaks_equal_rank_and_time_by_id(
     migrated_engine: Engine, world: dict[str, str]
 ) -> None:
@@ -274,6 +298,18 @@ def test_a_quoted_phrase_is_confirmed_exactly(
     assert {world["orders"], world["ordering"]} <= set(_ids(stemmed))
     exact = search(migrated_engine, query='"change orders"', collapse="none")
     assert _ids(exact) == [world["orders"]]
+
+
+def test_a_quoted_phrase_never_spans_the_subject_and_the_text(
+    migrated_engine: Engine, world: dict[str, str]
+) -> None:
+    """WP4-R2 G5: "Slab pour schedule" then "The slab pour ..." is not "schedule the slab"."""
+    spanning = search(migrated_engine, query='"schedule the slab"', collapse="none")
+    assert _ids(spanning) == []
+    in_subject = search(migrated_engine, query='"pour schedule"', collapse="none")
+    assert set(_ids(in_subject)) == {world["slab"], world["slab_reply"]}
+    in_text = search(migrated_engine, query='"moves to friday"', collapse="none")
+    assert _ids(in_text) == [world["slab"]]
 
 
 def test_the_phrase_parse_matches_the_server(migrated_engine: Engine) -> None:
@@ -383,6 +419,38 @@ def test_a_stop_word_name_is_found_only_through_the_flagged_fallback(
     assert answer.results[0].snippet is not None
 
 
+def test_the_fallback_ranks_by_the_greater_of_the_two_ranks(
+    migrated_engine: Engine, world: dict[str, str]
+) -> None:
+    """WP4-R2 G2 (D4-final): the rank is the greater of the `english` and `simple` ranks.
+
+    `the or slab` keeps `slab` under `english` and `the | slab` under `simple`.
+    A message with "the" and no "slab" has no `english` rank at all; its rank
+    is its `simple` one.
+    """
+    query = "the or slab"
+    answer = search(migrated_engine, query=query, collapse="none", limit=50)
+    assert answer.text_fallback == "simple_stopwords"
+    with migrated_engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT message_id,"
+                " floor(ts_rank_cd(search_document,"
+                "   websearch_to_tsquery('english', :q)) * 1000000)::bigint,"
+                " floor(ts_rank_cd(to_tsvector('simple',"
+                "   coalesce(subject, '') || ' ' || coalesce(search_text, '')),"
+                "   websearch_to_tsquery('simple', :q)) * 1000000)::bigint"
+                " FROM knowledge.communication_messages WHERE message_id = ANY(:ids)"
+            ),
+            {"q": query, "ids": _ids(answer)},
+        ).all()
+    expected = {str(row[0]): (int(row[1]), int(row[2])) for row in rows}
+    ranks = {r.message_id: r.rank for r in answer.results}
+    assert ranks == {mid: max(pair) for mid, pair in expected.items()}
+    english, simple = expected[world["will"]]  # "Will sent the revised plans."
+    assert english == 0 < simple == ranks[world["will"]]
+
+
 def test_a_query_with_no_searchable_term_is_a_flagged_browse(
     migrated_engine: Engine, world: dict[str, str]
 ) -> None:
@@ -406,6 +474,36 @@ def test_versions_and_pending_identifier_version(
         P, SearchRequest(query="slab")
     )
     assert v1.versions.identifier_version_pending == 10
+
+
+def test_identifiers_are_searched_and_read_at_the_reader_version_only(
+    migrated_engine: Engine,
+) -> None:
+    """WP4-R2 G1: v1 rows stay beside v2 rows (R4); a reader sees its version's only.
+
+    `RFI 10:30` is a meeting time: v1 stored `rfi:10`, v2 extracts nothing. A
+    v2 reader neither finds the message by `RFI 10` nor lists the v1 row; a
+    v1 reader does both.
+    """
+    w = World(migrated_engine)
+    meeting = w.message(
+        1,
+        subject="Site walk",
+        text="Meet at RFI 10:30 on site.",
+        when=at(17, 9),
+        extra_identifiers=(("rfi", "10", IDENTIFIER_VERSION_V1),),
+    )
+    v2 = reads(migrated_engine)
+    v1 = reads(migrated_engine, identifier_version=IDENTIFIER_VERSION_V1)
+    found_v2 = v2.search(P, SearchRequest(identifiers=["RFI 10"]), grants=GRANTS)
+    assert (found_v2.identifiers, _ids(found_v2)) == (("rfi:10",), [])
+    found_v1 = v1.search(P, SearchRequest(identifiers=["RFI 10"]), grants=GRANTS)
+    assert _ids(found_v1) == [meeting]
+    assert found_v1.results[0].tier == 1
+    (read_v2,) = v2.read(P, ReadRequest(message_ids=[meeting])).messages
+    assert read_v2.identifiers == ()
+    (read_v1,) = v1.read(P, ReadRequest(message_ids=[meeting])).messages
+    assert read_v1.identifiers == ("rfi:10",)
 
 
 def test_search_coverage_of_the_queried_range(
@@ -525,3 +623,35 @@ def test_the_wired_reads_answer_through_the_service_in_its_own_unit_of_work(
     assert covered.result["coverage"]["state"] == "partial"  # type: ignore[attr-defined]
     off = invoke(service(False), P, "communications.search", {"query": "slab pour"})
     assert off.error.code.value == "unsupported"  # type: ignore[attr-defined]
+
+
+def test_a_restricted_profile_composition_serves_no_communications_read(
+    cloned_database_url: str, migrated_engine: Engine
+) -> None:
+    """WP4-R2 G3, on the Schedule T2-25 model: a restricted MCP database role
+    holds no privilege on the communications tables.
+
+    The gateway composes the read switch only without an injected
+    `data_engine`, so a profile service serves none of the 3 names even with
+    the switch on; the full-role control service serves all 3.
+    """
+    from my_pa.bootstrap.gateway import build_gateway_runtime
+    from my_pa.bootstrap.settings import Settings
+
+    names = {"communications.search", "communications.read", "communications.coverage"}
+    settings = Settings(database_url=cloned_database_url, communications_enabled=True)
+    control = build_gateway_runtime(settings)
+    profile = build_gateway_runtime(
+        settings,
+        data_engine=migrated_engine,
+        independent_audit_engine=control.audit_engine,
+        controls_engine=control.work_engine,
+        permit_reenrichment=False,
+        permit_managed_documents=False,
+    )
+    try:
+        assert {c.value for c in control.service.available_capabilities} >= names
+        assert not {c.value for c in profile.service.available_capabilities} & names
+    finally:
+        for engine in {control.work_engine, control.audit_engine}:
+            engine.dispose()

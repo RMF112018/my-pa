@@ -18,7 +18,10 @@ grant set (`None` for a local caller).
   `search_document`, plus, when the `english` query keeps fewer nodes than the
   `simple` one (a stop-word name), the on-the-fly `simple` match with the
   greater rank (ruling D4-final; the answer says `text_fallback:
-  "simple_stopwords"`); quoted phrases are confirmed by exact substring;
+  "simple_stopwords"`); quoted phrases are confirmed by exact substring
+  within the subject or within the text, never across the two; a negated
+  term or phrase (`-word`, `-"..."`) excludes a message in every tier, an
+  identifier match included (WP4-R2 G4, G5);
 * a query with no searchable term under either configuration drops the text
   criterion and says `query_state: "no_searchable_terms"`; no query and no
   identifiers is a browse by time (R8);
@@ -99,7 +102,11 @@ from my_pa.domain.communications.identifiers import (
     normalize_identifier_query,
 )
 from my_pa.domain.communications.model import FolderRole
-from my_pa.domain.communications.search_query import quoted_phrases, unnegated_text
+from my_pa.domain.communications.search_query import (
+    negated_text,
+    quoted_phrases,
+    unnegated_text,
+)
 
 __all__ = [
     "COLLAPSE_MODES",
@@ -730,6 +737,7 @@ class CommunicationsReads:
                     english_terms=english_terms,
                     text_fallback=fallback,
                     phrases=quoted_phrases(query) if query is not None else (),
+                    excluded=(negated_text(query) or None) if query is not None else None,
                     identifiers=tuple(
                         (identifier.kind.value, identifier.value)
                         for identifier in normalized.identifiers

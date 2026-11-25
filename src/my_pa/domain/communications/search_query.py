@@ -12,6 +12,9 @@ server; two things are read here from the same websearch syntax:
 * `unnegated_text` -- the query with every negated term (`-word`, `-"..."`)
   removed, the text whose identifiers are merged into the requested set (ruling
   R6): `-"RFI 12"` excludes, it does not ask.
+* `negated_text` -- only the negated terms and phrases, each still negated, in
+  the same websearch syntax. Every candidate, an identifier match included,
+  must satisfy it (WP4-R2 G4): `-word` excludes in every tier.
 
 A database-tier test pins the phrase parse against the server's.
 """
@@ -21,7 +24,7 @@ from __future__ import annotations
 import re
 from typing import Final
 
-__all__ = ["quoted_phrases", "unnegated_text"]
+__all__ = ["negated_text", "quoted_phrases", "unnegated_text"]
 
 #: One websearch segment: an optional `-`, then a quoted phrase (closed, or
 #: open to the end) or a bare word.
@@ -66,3 +69,17 @@ def unnegated_text(query: str) -> str:
             continue
         kept.append(phrase if phrase is not None else word or "")
     return " ".join(part for part in kept if part)
+
+
+def negated_text(query: str) -> str:
+    """Only `query`'s negated segments, each kept negated (`-word`, `-"..."`), joined by a space."""
+    kept: list[str] = []
+    for negated, phrase, word in _segments(query):
+        if not negated:
+            continue
+        if phrase is not None:
+            if phrase.strip():
+                kept.append(f'-"{phrase}"')
+        elif word:
+            kept.append(f"-{word}")
+    return " ".join(kept)

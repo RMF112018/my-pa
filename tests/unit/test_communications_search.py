@@ -52,7 +52,11 @@ from my_pa.domain.communications.cursor import (
     search_position,
     thread_position,
 )
-from my_pa.domain.communications.search_query import quoted_phrases, unnegated_text
+from my_pa.domain.communications.search_query import (
+    negated_text,
+    quoted_phrases,
+    unnegated_text,
+)
 from tests.fixtures.communications_evidence import synthetic as s
 from tests.unit.communications_ingest_fakes import IngestWorld, unit_of_work_factory
 from tests.unit.test_communications_ingest import P, Scene, at, pub
@@ -205,6 +209,28 @@ def test_a_conversation_filter_turns_collapse_off(world: IngestWorld) -> None:
 def test_the_quoted_phrase_parse(query: str, phrases: tuple[str, ...], unnegated: str) -> None:
     assert quoted_phrases(query) == phrases
     assert unnegated_text(query) == unnegated
+
+
+@pytest.mark.parametrize(
+    ("query", "negated"),
+    [
+        ("RFI 5 -pricing", "-pricing"),
+        ('a -"b c" -d "e"', '-"b c" -d'),
+        ('-"open phrase', '-"open phrase"'),
+        ('pre-cast a-"b c" -""', ""),
+        ("nothing negated", ""),
+    ],
+)
+def test_the_negated_terms_are_kept_negated(query: str, negated: str) -> None:
+    """WP4-R2 G4: the exclusion every candidate must satisfy, in websearch syntax."""
+    assert negated_text(query) == negated
+
+
+def test_the_negated_terms_reach_the_statement(world: IngestWorld) -> None:
+    service(world).search(P, SearchRequest(query='RFI 5 -pricing -"change order"'))
+    service(world).search(P, SearchRequest(query="RFI 5"))
+    service(world).search(P, SearchRequest())
+    assert [q.excluded for q in world.search_calls] == ['-pricing -"change order"', None, None]
 
 
 # ---- the stop-word fallback trigger (D4-final) and query states --------------------------

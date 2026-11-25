@@ -16,7 +16,10 @@
 * **The measure planner** (`plan_measure`): a catalogue measure over a
   version's lines, wrapping `measures.py` with the derivation's blockers, a
   derivation-wide reconciliation mismatch (ruling D9) and a cross-report check
-  mismatch on the columns it concerns. No zero is ever substituted.
+  mismatch on the columns it concerns. No zero is ever substituted. A record
+  or row count is never withheld for a reconciliation mismatch (ruling A2: a
+  mismatch concerns reconciled amounts, not counts); it carries the
+  `reconciliation_mismatch` qualifier instead.
 """
 
 from __future__ import annotations
@@ -267,6 +270,8 @@ class MeasureAnswer:
     total: MeasureValue | None
     by_status: Mapping[StatusClass, MeasureValue]
     by_key: Mapping[tuple[str, ...], MeasureValue]
+    #: Attached to the measure, never a refusal (a count under a mismatch, ruling A2).
+    qualifiers: frozenset[ReportQualifier] = frozenset()
 
     @property
     def status_basis(self) -> StatusBasis | None:
@@ -303,7 +308,10 @@ def _count(value: int) -> Decimal:
 
 
 def _counts(
-    spec: MeasureSpec, lines: Sequence[PlannedLine], reasons: frozenset[NotReportableReason]
+    spec: MeasureSpec,
+    lines: Sequence[PlannedLine],
+    reasons: frozenset[NotReportableReason],
+    qualifiers: frozenset[ReportQualifier],
 ) -> MeasureAnswer:
     def value(found: Iterable[PlannedLine]) -> MeasureValue:
         if reasons:
@@ -321,8 +329,10 @@ def _counts(
             )
             for status in statuses
         }
-        return MeasureAnswer(spec, value(lines), MappingProxyType(by_status), MappingProxyType({}))
-    return MeasureAnswer(spec, value(lines), _EMPTY, MappingProxyType({}))
+        return MeasureAnswer(
+            spec, value(lines), MappingProxyType(by_status), MappingProxyType({}), qualifiers
+        )
+    return MeasureAnswer(spec, value(lines), _EMPTY, MappingProxyType({}), qualifiers)
 
 
 def _keyed_total(values: Mapping[tuple[str, ...], MeasureValue]) -> MeasureValue:
@@ -341,9 +351,13 @@ def plan_measure(
     reconciliation = reconciliation_outcomes(inputs.reconciliation)
     chosen = [line for line in lines if not spec.line_kinds or line.line_kind in spec.line_kinds]
     if spec.basis in (MeasureBasis.RECORD_COUNT, MeasureBasis.ROW_COUNT):
-        if ReconciliationOutcome.MISMATCH in reconciliation:
-            reasons = reasons | {NotReportableReason.RECONCILIATION_MISMATCH}
-        return _counts(spec, chosen, reasons)
+        # Ruling A2: qualified, never blocked, by a reconciliation mismatch.
+        qualifiers = (
+            frozenset({ReportQualifier.RECONCILIATION_MISMATCH})
+            if ReconciliationOutcome.MISMATCH in reconciliation
+            else frozenset()
+        )
+        return _counts(spec, chosen, reasons, qualifiers)
     if spec.field_key is None:
         raise ValueError("a column measure names its column")
     column = MeasureColumn(

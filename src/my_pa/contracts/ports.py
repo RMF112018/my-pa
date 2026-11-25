@@ -15969,10 +15969,27 @@ class ProjectReportReadsRepository(ABC):
     def cross_checks_of(
         self, principal_id: str, derivation_ids: Sequence[str]
     ) -> tuple[ProjectReportCrossCheckRecord, ...]:
-        """The cross-checks naming a current derivation named on either side."""
+        """The cross-checks naming a derivation named on either side, both sides current.
+
+        Ruling A4: a check whose other side is superseded is stale and is not
+        answered, so no mismatch is raised from it.
+        """
 
     @abstractmethod
     def rfi_candidates(
         self, principal_id: str, derivation_ids: Sequence[str], suffixes: Sequence[int]
     ) -> tuple[ProjectReportRfiCandidate, ...]:
         """The RFI lines whose numeric suffix equals one given exactly, by derivation, row."""
+
+    @abstractmethod
+    def find_records(
+        self,
+        principal_id: str,
+        project_id: str,
+        record_family: report_model.RecordFamily,
+        identity_key: str,
+    ) -> tuple[ProjectReportRecordEntry, ...]:
+        """The record identities of one key in one Project and family (WP4P-S3).
+
+        One per identity version, ordered by identity version, then `record_id`.
+        """

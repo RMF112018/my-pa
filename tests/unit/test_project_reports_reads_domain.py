@@ -354,18 +354,48 @@ def test_an_unloaded_original_budget_is_unpopulated_not_zero() -> None:
     assert answer.total.reasons == {NotReportableReason.SOURCE_COLUMN_UNPOPULATED}
 
 
-def test_a_reconciliation_mismatch_blocks_every_measure_of_the_derivation() -> None:
-    """Ruling D9: derivation-wide; the value is withheld, never zero."""
+def test_a_reconciliation_mismatch_blocks_every_money_measure_of_the_derivation() -> None:
+    """Ruling D9: derivation-wide for amounts; the value is withheld, never zero."""
     mismatch = {"column_groups": {"match": 3, "mismatch": 1}, "grand": {"match": 1}}
     assert reconciliation_outcomes(mismatch)
     assert not reconciliation_outcomes({"column_groups": {"match": 3}, "grand": {"mismatch": 0}})
     assert not reconciliation_outcomes(None)
     inputs = MeasureInputs(DerivationState.CLASSIFIED, reconciliation=mismatch)
-    for name in ("by_code.adjustment.amount", "open_outstanding.record_count"):
-        lines = [PlannedLine(LineKind.RFI_ROW, None, "rfi:GMP-1", read_cell("$1.00", money=True))]
-        total = plan_measure(MEASURES[name], lines, inputs).total
-        assert total is not None and total.value is None
-        assert NotReportableReason.RECONCILIATION_MISMATCH in total.reasons
+    lines = [PlannedLine(LineKind.RFI_ROW, None, "rfi:GMP-1", read_cell("$1.00", money=True))]
+    answer = plan_measure(MEASURES["by_code.adjustment.amount"], lines, inputs)
+    assert answer.total is not None and answer.total.value is None
+    assert NotReportableReason.RECONCILIATION_MISMATCH in answer.total.reasons
+    assert answer.qualifiers == frozenset()
+
+
+def test_a_reconciliation_mismatch_qualifies_counts_and_never_blocks_them() -> None:
+    """Ruling A2: a mismatch concerns reconciled amounts, not counts."""
+    mismatch = {"column_groups": {"match": 3}, "grand": {"mismatch": 1}}
+    inputs = MeasureInputs(DerivationState.CLASSIFIED, reconciliation=mismatch)
+    rfis = [
+        PlannedLine(LineKind.RFI_ROW, None, "rfi:GMP-1"),
+        PlannedLine(LineKind.RFI_ROW, None, "rfi:GMP-1"),
+        PlannedLine(LineKind.RFI_ROW, None, "rfi:GMP-2"),
+    ]
+    for name, expected in (
+        ("open_outstanding.record_count", Decimal(2)),
+        ("open_outstanding.row_count", Decimal(3)),
+    ):
+        answer = plan_measure(MEASURES[name], rfis, inputs)
+        assert answer.total is not None
+        assert (answer.total.value, answer.total.reasons) == (expected, frozenset())
+        assert answer.qualifiers == {ReportQualifier.RECONCILIATION_MISMATCH}
+    issues = [PlannedLine(LineKind.ISSUE, StatusClass.OPEN, "coordination_issue:1")]
+    by_status = plan_measure(MEASURES["by_status.record_count"], issues, inputs)
+    assert by_status.by_status[StatusClass.OPEN].value == Decimal(1)
+    assert by_status.qualifiers == {ReportQualifier.RECONCILIATION_MISMATCH}
+    clean = plan_measure(MEASURES["open_outstanding.record_count"], rfis, CLASSIFIED)
+    assert clean.qualifiers == frozenset()
+    # A derivation blocker still withholds a count.
+    quarantined = plan_measure(
+        MEASURES["open_outstanding.record_count"], rfis, MeasureInputs(DerivationState.QUARANTINED)
+    ).total
+    assert quarantined is not None and quarantined.value is None
 
 
 def test_a_cross_check_mismatch_concerns_only_its_two_columns() -> None:

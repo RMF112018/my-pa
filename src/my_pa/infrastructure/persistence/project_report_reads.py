@@ -57,6 +57,7 @@ from my_pa.contracts.ports import (
     ProjectReportLineValueRecord,
     ProjectReportReadLine,
     ProjectReportReadsRepository,
+    ProjectReportRecordEntry,
     ProjectReportRfiCandidate,
     ProjectReportStatedTotalRecord,
     ProjectReportVersionRecord,
@@ -86,6 +87,7 @@ from my_pa.infrastructure.persistence.principal_scope import (
 )
 from my_pa.infrastructure.persistence.project_reports import (
     _to_cross_check,
+    _to_record,
     _to_total,
     _to_value,
 )
@@ -537,24 +539,29 @@ class SqlProjectReportReadsRepository(ProjectReportReadsRepository):
         if not derivation_ids:
             return ()
         checks = project_report_cross_checks
+        # Ruling A4: a check counts only while both of its sides are current; one
+        # whose other side was superseded (a re-derivation) is stale and ignored.
         view = project_report_current_derivations
+
+        def current(side: ColumnElement[str]) -> ColumnElement[bool]:
+            return exists(
+                select(literal(1)).where(
+                    matching_partition_criterion(checks, view), view.c.derivation_id == side
+                )
+            )
+
         named = list(derivation_ids)
         rows = self._connection.execute(
             select(*(column for column in checks.c if column.name != "principal_id"))
-            .distinct()
-            .select_from(
-                checks.join(
-                    view,
-                    and_(
-                        matching_partition_criterion(checks, view),
-                        or_(
-                            view.c.derivation_id == checks.c.left_derivation_id,
-                            view.c.derivation_id == checks.c.right_derivation_id,
-                        ),
-                    ),
-                )
+            .where(
+                _mine(checks, principal_id),
+                or_(
+                    checks.c.left_derivation_id.in_(named),
+                    checks.c.right_derivation_id.in_(named),
+                ),
+                current(checks.c.left_derivation_id),
+                current(checks.c.right_derivation_id),
             )
-            .where(_mine(checks, principal_id), view.c.derivation_id.in_(named))
             .order_by(
                 checks.c.check_kind, checks.c.left_derivation_id, checks.c.right_derivation_id
             )
@@ -594,6 +601,26 @@ class SqlProjectReportReadsRepository(ProjectReportReadsRepository):
             )
             for row in rows
         )
+
+    def find_records(
+        self,
+        principal_id: str,
+        project_id: str,
+        record_family: RecordFamily,
+        identity_key: str,
+    ) -> tuple[ProjectReportRecordEntry, ...]:
+        records = project_report_records
+        rows = self._connection.execute(
+            select(*(column for column in records.c if column.name != "principal_id"))
+            .where(
+                _mine(records, principal_id),
+                records.c.project_id == project_id,
+                records.c.record_family == record_family.value,
+                records.c.identity_key == identity_key,
+            )
+            .order_by(records.c.identity_version, records.c.record_id)
+        )
+        return tuple(_to_record(row) for row in rows)
 
 
 def _in_series_order(

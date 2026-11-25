@@ -11210,12 +11210,16 @@ class _ProjectReportReads(ProjectReportReadsRepository):
     def cross_checks_of(
         self, principal_id: str, derivation_ids: Sequence[str]
     ) -> tuple[ProjectReportCrossCheckRecord, ...]:
-        named = set(derivation_ids) & set(self._current(principal_id))
+        current = set(self._current(principal_id))
+        named = set(derivation_ids)
         rows = [
             check
             for (owner, *_), check in self._w.cross_checks.items()
             if owner == principal_id
             and (check.left_derivation_id in named or check.right_derivation_id in named)
+            # Ruling A4: both sides current, else the check is stale.
+            and check.left_derivation_id in current
+            and check.right_derivation_id in current
         ]
         return tuple(
             sorted(rows, key=lambda c: (c.check_kind, c.left_derivation_id, c.right_derivation_id))
@@ -11242,6 +11246,23 @@ class _ProjectReportReads(ProjectReportReadsRepository):
             and line.identifier_numeric_suffix in wanted
         ]
         return tuple(sorted(found, key=lambda c: (c.derivation_id, c.row_ordinal)))
+
+    def find_records(
+        self,
+        principal_id: str,
+        project_id: str,
+        record_family: ProjectReportRecordFamily,
+        identity_key: str,
+    ) -> tuple[ProjectReportRecordEntry, ...]:
+        found = [
+            record
+            for (owner, _), record in self._w.records.items()
+            if owner == principal_id
+            and record.project_id == project_id
+            and record.record_family is record_family
+            and record.identity_key == identity_key
+        ]
+        return tuple(sorted(found, key=lambda r: (r.identity_version, r.record_id)))
 
 
 class _UnmodelledPlane:

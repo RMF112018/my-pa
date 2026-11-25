@@ -295,6 +295,10 @@ class ReportQualifier(StrEnum):
     """Attached to an answer, never a refusal."""
 
     FILTER_SEMANTICS_UNKNOWN = "filter_semantics_unknown"
+    #: On a record or row count of a derivation whose stated totals mismatched
+    #: (WP4P ruling A2): a mismatch concerns reconciled amounts, not counts, so
+    #: the count is answered and qualified, never withheld.
+    RECONCILIATION_MISMATCH = "reconciliation_mismatch"
 
 
 class VersionPresence(StrEnum):

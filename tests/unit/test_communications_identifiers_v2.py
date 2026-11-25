@@ -4,8 +4,11 @@ The labelled synthetic set `tests/fixtures/communications_identifiers/labelled_v
 is hand-labelled: each case's `expected` is the exact normalized output. v2 must
 reproduce every case exactly, so its per-kind precision and recall are 1.0; the
 v1 figures over the same set are recorded (`record_property`), never gated. v1's
-output is a subset of v2's on every case except the one precision defect v2
-corrects (`Submittal 03 30 00-01`, which v1 read as `submittal:03`).
+output is a subset of v2's on every case except the precision defects v2
+corrects: `Submittal 03 30 00-01`, which v1 read as `submittal:03`, and a
+number that runs on into `:digit` or a letter (`RFI 10:30`, `CO 5b`; WP4-R1 F6).
+The `behaviour` table pins documented outputs that are neither positives nor
+true negatives; every negative expects nothing.
 
 Unmarked: FAST. Every text is synthetic.
 """
@@ -38,7 +41,12 @@ LABELLED: Final = (
     / "communications_identifiers"
     / "labelled_v2.json"
 )
-CASES: Final[list[dict[str, Any]]] = json.loads(LABELLED.read_text(encoding="utf-8"))["cases"]
+_SET: Final[dict[str, Any]] = json.loads(LABELLED.read_text(encoding="utf-8"))
+CASES: Final[list[dict[str, Any]]] = _SET["cases"]
+#: Documented outputs that are neither a positive nor a true negative (a
+#: cross-kind reading, a number continued past a boundary, an accepted
+#: residual such as `CO: 25 ppm`): pinned exactly, never scored (WP4-R1 F6).
+BEHAVIOUR: Final[list[dict[str, Any]]] = _SET["behaviour"]
 KINDS: Final = tuple(kind.value for kind in IdentifierKind)
 #: The one v1 output class v2 drops on purpose: a spaced submittal number
 #: (`Submittal 03 30 00-01`) read as its first group (`submittal:03`).
@@ -80,10 +88,20 @@ def test_the_labelled_set_is_the_size_and_shape_the_ruling_asks() -> None:
         assert all(_kind(value) in KINDS for value in case["expected"]), case["id"]
         if case["group"] == "positive":
             assert any(_kind(v) == case["kind"] for v in case["expected"]), case["id"]
+        if case["group"] == "negative":  # a true negative yields nothing (WP4-R1 F6)
+            assert case["expected"] == [], case["id"]
+    assert BEHAVIOUR
+    assert not {case["id"] for case in CASES} & {case["id"] for case in BEHAVIOUR}
+    assert all(case["group"] == "behaviour" and case["expected"] for case in BEHAVIOUR)
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: str(case["id"]))
 def test_v2_reproduces_every_labelled_case_exactly(case: dict[str, Any]) -> None:
+    assert sorted(_normalized(case["text"], IDENTIFIER_VERSION_V2)) == case["expected"]
+
+
+@pytest.mark.parametrize("case", BEHAVIOUR, ids=lambda case: str(case["id"]))
+def test_v2_reproduces_every_behaviour_case_exactly(case: dict[str, Any]) -> None:
     assert sorted(_normalized(case["text"], IDENTIFIER_VERSION_V2)) == case["expected"]
 
 
@@ -105,7 +123,24 @@ def test_v2_precision_and_recall_are_one_per_kind_and_v1_is_recorded(
     assert v1["pco"].get("tp", 0) == v1["cor"].get("tp", 0) == 0
 
 
-def test_every_v1_output_is_a_v2_output_except_the_corrected_defect() -> None:
+def _v1_number_end_defects(text: str) -> set[str]:
+    """v1 outputs whose number runs on into `:digit` or a letter (WP4-R1 F6)."""
+    found = {
+        f"{kind}:{int(m.group('number'))}"
+        for kind in ("rfi", "cb", "co")
+        for m in re.finditer(rf"(?i:{kind})\S*\s*(?P<number>[0-9]+)(?=:[0-9]|[^\W\d_])", text)
+    }
+    found.update(
+        f"submittal:{m.group('number')}"
+        for m in re.finditer(
+            r"(?i:submittal)\S*\s*(?P<number>[0-9]+(?:[.\-][0-9]+)*)(?=:[0-9]|[^\W\d_])", text
+        )
+    )
+    return found
+
+
+def test_every_v1_output_is_a_v2_output_except_the_corrected_defects() -> None:
+    """v2 drops only `submittal:03` and the F6 number ends (`RFI 10:30`, `CO 5b`)."""
     exceptions = []
     for case in CASES:
         lost = _normalized(case["text"], IDENTIFIER_VERSION_V1) - _normalized(
@@ -117,8 +152,9 @@ def test_every_v1_output_is_a_v2_output_except_the_corrected_defect() -> None:
     for case_id, lost in exceptions:
         text = next(case["text"] for case in CASES if case["id"] == case_id)
         defects = {f"submittal:{m.group('first')}" for m in V1_DEFECT.finditer(text)}
+        defects |= _v1_number_end_defects(text)
         assert defects, case_id
-        assert lost <= defects, case_id
+        assert lost <= defects, (case_id, lost)
 
 
 @pytest.mark.parametrize(

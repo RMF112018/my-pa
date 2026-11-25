@@ -230,7 +230,11 @@ class FormClass(StrEnum):
 #: The v2 separators: v1's plus `:` (`RFI: 174`, `CO: 5`), with its own class.
 _SEP_OPTIONAL_V2 = r"(?P<sep>\s*(?:#|No\.?)\s*|\s*[-:]\s*|\s*)"
 _SEP_REQUIRED_V2 = r"(?P<sep>\s*(?:#|No\.?)\s*|\s*[-:]\s*|\s+)"
-_INTEGER_V2 = r"(?P<number>[0-9]{1,6})" + _NUMBER_END
+#: v2's number end (WP4-R1 F6): v1's, plus a number followed by `:` and a digit
+#: (`RFI 10:30`, a time) or directly by a letter (`PCO 12a`, `RFI 174A`, a
+#: revision or a unit) does not end there, so neither yields an identifier.
+_NUMBER_END_V2 = _NUMBER_END + r"(?!:[0-9])(?![^\W\d_])"
+_INTEGER_V2 = r"(?P<number>[0-9]{1,6})" + _NUMBER_END_V2
 
 #: `(pattern, kind, acronym class, colon class)`. The acronyms keep v1's case
 #: rules; `PCO` and `COR` take an optional separator like `RFI`, `CB` and `CO`
@@ -289,14 +293,18 @@ _CHANGE_ORDER_WORDS: Final = re.compile(
 _SUBMITTAL_V2: Final = re.compile(
     _LEFT
     + r"submittal(?P<plural>s)?"
-    + r"(?P<sep>\s*(?:#|No\.?|Number)\s*|\s*[-:]\s*|\s+)"
+    + r"(?P<sep>\s*(?:#|No\.?|Number)\s*:?\s*|\s*[-:]\s*|\s+)"
     + r"(?:(?P<a>[0-4][0-9]) (?P<b>[0-9]{2}) (?P<c>[0-9]{2})(?P<tail>(?:[.\-][0-9]{1,8}){0,3})"
     + r"|(?P<number>[0-9]{1,8}(?:[.\-][0-9]{1,8}){0,3}))"
-    + _NUMBER_END,
+    + _NUMBER_END_V2,
     re.I,
 )
 #: R5b (a): `FP&L` and `F.P.L.` are `fpl`; the expanded name awaits a ruling.
-_ACRONYM_V2: Final = re.compile(_LEFT + r"(?P<name>GMP|FPL|FP&L|F\.P\.L\.?)(?:'?s)?(?![A-Za-z0-9])")
+#: The dotted form is exactly `F.P.L.`, trailing dot required and no plural,
+#: token-bounded (WP4-R1 F6): `F.P.L`, `F.P.L.P` and `F.P.L.s` are nothing.
+_ACRONYM_V2: Final = re.compile(
+    _LEFT + r"(?:(?P<name>GMP|FPL|FP&L)(?:'?s)?|(?P<dotted>F\.P\.L\.))(?![A-Za-z0-9])"
+)
 
 
 def _spoken(text: str) -> list[tuple[TechnicalIdentifier, FormClass]]:
@@ -342,7 +350,7 @@ def _spoken(text: str) -> list[tuple[TechnicalIdentifier, FormClass]]:
                 form = FormClass.SUBMITTAL_NUMBER
         found.append((TechnicalIdentifier(IdentifierKind.SUBMITTAL, value), form))
     for m in _ACRONYM_V2.finditer(text):
-        name = m.group("name")
+        name = m.group("name") or m.group("dotted")
         if name == "GMP":
             found.append((TechnicalIdentifier(IdentifierKind.GMP, "gmp"), FormClass.GMP_ACRONYM))
             continue

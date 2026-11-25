@@ -76,7 +76,10 @@ from tests.schema.knowledge_schema_ahead_contract import (
 from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES
 from tests.schema.vocabulary_admissions import SINCE as ADMISSIONS_SINCE
-from tests.schema.vocabulary_admissions import capabilities_admitted_after
+from tests.schema.vocabulary_admissions import (
+    admitted_ahead_of_the_domain,
+    capabilities_admitted_after,
+)
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
@@ -996,7 +999,8 @@ CHECKED_VOCABULARY: Final[tuple[tuple[str, str, frozenset[str]], ...]] = (
         | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
         | lineage_admitted_ahead("capability")
         # Files workspace WP4: admitted by its revision, declared by WP5.
-        | FILES_CAPABILITIES,
+        | FILES_CAPABILITIES
+        | admitted_ahead_of_the_domain("capability"),
     ),
     (
         "audit_events",
@@ -1004,7 +1008,8 @@ CHECKED_VOCABULARY: Final[tuple[tuple[str, str, frozenset[str]], ...]] = (
         frozenset(p.value for p in Purpose)
         | PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN
         | lineage_admitted_ahead("purpose")
-        | FILES_PURPOSES,
+        | FILES_PURPOSES
+        | admitted_ahead_of_the_domain("purpose"),
     ),
     ("audit_events", "audit_outcome_is_known", frozenset(o.value for o in AuditOutcome)),
     ("audit_events", "denial_reason_is_known", frozenset(d.value for d in DenialReason)),
@@ -1182,6 +1187,10 @@ def test_the_schema_ahead_gap_matches_the_knowledge_wp_head() -> None:
     # here whether or not the domain declares them yet (WP5).
     frozen_capabilities -= FILES_CAPABILITIES
     frozen_purposes -= FILES_PURPOSES
+    # P6 XER import S7-2 admits its S7-4 names ahead of the domain on the same
+    # terms (`tests/schema/vocabulary_admissions.py`).
+    frozen_capabilities -= admitted_ahead_of_the_domain("capability")
+    frozen_purposes -= admitted_ahead_of_the_domain("purpose")
     assert frozen_capabilities - HEAD_CAPABILITIES_DECLARED_BY_DOMAIN == row[
         "capability"
     ] | lineage_admitted_ahead("capability")
@@ -1399,6 +1408,7 @@ def test_downgrading_this_revision_restores_the_previous_vocabulary(
             | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
             | lineage_admitted_ahead("capability")
             | FILES_CAPABILITIES
+            | admitted_ahead_of_the_domain("capability")
         )
 
         command.downgrade(_config(), ENROLLMENT_OBJECTS_REVISION)
@@ -1448,6 +1458,7 @@ def test_stopping_at_the_capture_revision_emits_the_twelve_it_merged_with(
             | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
             | lineage_admitted_ahead("capability")
             | FILES_CAPABILITIES
+            | admitted_ahead_of_the_domain("capability")
         )
         assert _admitted(engine, "capability_is_known") == admitted_at_head
         assert _tables(engine) >= PROPOSAL_TABLES
@@ -1705,6 +1716,33 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "project_report_line_values_refuse_truncate",
             "project_report_stated_totals_refuse_truncate",
             "project_report_cross_checks_refuse_truncate",
+            # P6 XER import S7-2 (`d8383150cf72`): append-only, TRUNCATE, per-run
+            # insert, activity link and capture chain guards.
+            "schedule_p6_snapshots_are_append_only",
+            "schedule_p6_capture_events_are_append_only",
+            "schedule_p6_projects_are_append_only",
+            "schedule_p6_wbs_are_append_only",
+            "schedule_p6_relationships_are_append_only",
+            "schedule_p6_calendars_are_append_only",
+            "schedule_p6_field_values_are_append_only",
+            "schedule_p6_observed_fields_are_append_only",
+            "schedule_p6_snapshots_refuse_truncate",
+            "schedule_p6_capture_events_refuse_truncate",
+            "schedule_p6_projects_refuse_truncate",
+            "schedule_p6_wbs_refuse_truncate",
+            "schedule_p6_activities_refuse_truncate",
+            "schedule_p6_relationships_refuse_truncate",
+            "schedule_p6_calendars_refuse_truncate",
+            "schedule_p6_field_values_refuse_truncate",
+            "schedule_p6_observed_fields_refuse_truncate",
+            "schedule_p6_projects_are_stored_while_their_run_runs",
+            "schedule_p6_wbs_are_stored_while_their_run_runs",
+            "schedule_p6_relationships_are_stored_while_their_run_runs",
+            "schedule_p6_calendars_are_stored_while_their_run_runs",
+            "schedule_p6_field_values_are_stored_while_their_run_runs",
+            "schedule_p6_observed_fields_are_stored_while_their_run_runs",
+            "a_p6_activity_changes_only_by_linking",
+            "a_p6_capture_event_extends_its_chain",
             "meeting_series_history_rows_are_append_only",
             "meeting_write_requests_complete_once",
             # WP-RE-01. The Record Event revision installs the feed's append-only

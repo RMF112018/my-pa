@@ -1,4 +1,4 @@
-"""The one home of the capability families admitted after the files workspace revision.
+"""The one home of the capability and purpose families admitted after the files workspace revision.
 
 Why this exists (SCOPE "pins and counts", row B4, phase P3). A migration test
 at an older revision asserts that revision's spelled audit vocabulary equals
@@ -45,8 +45,44 @@ CAPABILITY_ADMISSIONS: Final[Mapping[str, tuple[str, frozenset[str]]]] = Mapping
             "61fafdfd2986",
             frozenset({"meetings.provider.reconcile", "meetings.provider.review"}),
         ),
+        # P6 XER import S7-2: the schedule P6 revision admits the seven S7-4
+        # names of contract section 10.1, ahead of the domain (see below).
+        "schedule_p6": (
+            "d8383150cf72",
+            frozenset(
+                {
+                    "schedule_publications.import_p6",
+                    "schedule_p6_fields.available",
+                    "schedule_p6_fields.set_captured",
+                    "schedule_p6_activities.list",
+                    "schedule_p6_relationships.list",
+                    "schedule_p6_calendars.list",
+                    "schedule_p6_field_values.list",
+                }
+            ),
+        ),
     }
 )
+
+#: Family -> (the revision that admits it, its purpose names), for the purpose
+#: families admitted after `SINCE` (which is also the latest purpose revision
+#: before them). Same rules as `CAPABILITY_ADMISSIONS`.
+PURPOSE_ADMISSIONS: Final[Mapping[str, tuple[str, frozenset[str]]]] = MappingProxyType(
+    {
+        # P6 XER import S7-2: the new purpose names of contract section 10.1.
+        "schedule_p6": (
+            "d8383150cf72",
+            frozenset({"schedule_p6_import", "schedule_p6_configuration"}),
+        ),
+    }
+)
+
+#: The families whose names the schema admits ahead of the domain: the audit
+#: vocabulary holds them while `Capability` and `Purpose` do not declare them
+#: yet. A test comparing the newest frozen audit vocabulary with the domain
+#: adds `admitted_ahead_of_the_domain(...)` instead of spelling the names.
+#: `schedule_p6` leaves this set in the S7-4 change that declares its names.
+AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset({"schedule_p6"})
 
 
 def capabilities_admitted_after(revision: str) -> frozenset[str]:
@@ -58,4 +94,24 @@ def capabilities_admitted_after(revision: str) -> frozenset[str]:
             for admitting, names in CAPABILITY_ADMISSIONS.values()
             if pins.ALEMBIC_CHAIN.index(admitting) > position
         )
+    )
+
+
+def purposes_admitted_after(revision: str) -> frozenset[str]:
+    """Every recorded purpose name a revision later than `revision` admits."""
+    position = pins.ALEMBIC_CHAIN.index(revision)
+    return frozenset().union(
+        *(
+            names
+            for admitting, names in PURPOSE_ADMISSIONS.values()
+            if pins.ALEMBIC_CHAIN.index(admitting) > position
+        )
+    )
+
+
+def admitted_ahead_of_the_domain(kind: str) -> frozenset[str]:
+    """The `capability` or `purpose` names the schema admits and the domain does not yet."""
+    table = {"capability": CAPABILITY_ADMISSIONS, "purpose": PURPOSE_ADMISSIONS}[kind]
+    return frozenset().union(
+        *(names for family, (_revision, names) in table.items() if family in AHEAD_OF_THE_DOMAIN)
     )

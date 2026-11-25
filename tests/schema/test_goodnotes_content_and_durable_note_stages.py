@@ -18,6 +18,7 @@ from tests.pins import ALEMBIC_REVISION_COUNT
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
 from tests.schema.knowledge_schema_ahead_contract import admitted_ahead
 from tests.schema.lineage_schema_ahead_contract import lineage_admitted_ahead
+from tests.schema.vocabulary_admissions import admitted_ahead_of_the_domain
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -236,12 +237,9 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
     # exactly the Knowledge schema-ahead gap row (R6 section 12.1).
     # Files workspace WP4: the revision admits the `files.*` names ahead of the
     # domain, which declares them in WP5 (a union, so it holds either side).
-    assert (
-        admitted
-        <= declared
-        | (admitted_ahead("capability") | lineage_admitted_ahead("capability"))
-        | FILES_CAPABILITIES
-    )
+    assert admitted <= declared | (
+        admitted_ahead("capability") | lineage_admitted_ahead("capability")
+    ) | FILES_CAPABILITIES | admitted_ahead_of_the_domain("capability")
     # This module's own revision, kept separate from the head's. `admitted` is
     # the *latest* admitting revision's vocabulary; subtracting this revision's
     # predecessor from it would compare two different revisions' sets and call
@@ -269,6 +267,7 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
         declared
         | (admitted_ahead("capability") | lineage_admitted_ahead("capability"))
         | FILES_CAPABILITIES
+        | admitted_ahead_of_the_domain("capability")
     )
     assert admitted == ahead, (
         f"the last admitting revision {admitting.name} freezes a capability vocabulary "
@@ -287,6 +286,7 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
         {member.value for member in Purpose}
         | (admitted_ahead("purpose") | lineage_admitted_ahead("purpose"))
         | FILES_PURPOSES
+        | admitted_ahead_of_the_domain("purpose")
     )
     assert purposes == purposes_ahead, (
         f"the last purpose-freezing revision {purposes_at.name} freezes a purpose "

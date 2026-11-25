@@ -658,6 +658,20 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "project_report_cross_checks",
         }
     ),
+    # P6 XER import S7-2: the snapshot, capture chain and per-run P6 tables.
+    "d8383150cf72": frozenset(
+        {
+            "schedule_p6_snapshots",
+            "schedule_p6_capture_events",
+            "schedule_p6_projects",
+            "schedule_p6_wbs",
+            "schedule_p6_activities",
+            "schedule_p6_relationships",
+            "schedule_p6_calendars",
+            "schedule_p6_field_values",
+            "schedule_p6_observed_fields",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

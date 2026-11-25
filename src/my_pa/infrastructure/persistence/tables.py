@@ -518,6 +518,15 @@ from my_pa.domain.schedule import (
 )
 from my_pa.domain.schedule.baselines import BaselineAction, BaselineType
 from my_pa.domain.schedule.model import ScheduleAdmissionRefusal
+from my_pa.domain.schedule.p6.catalogue import (
+    CatalogueField,
+    EntityKind,
+    Tier,
+    ValueType,
+    table_fields,
+)
+from my_pa.domain.schedule.p6.model import FATAL_CODES as P6_FATAL_CODES
+from my_pa.domain.schedule.p6.model import P6IssueCode
 from my_pa.domain.schedule.plane import (
     MATCH_INTEGRITY_REFUSAL,
     PLANE_WRITE_CAPABILITIES,
@@ -22019,6 +22028,41 @@ lineage_backfill_items = Table(
 _SCHEDULE_SHA256: Final = "^[0-9a-f]{64}$"
 _SCHEDULE_LINKABLE_ROW_TYPES: Final = "'activity', 'milestone'"
 
+#: P6 XER import S7-2 (schedule XER import contract section 8.2): the source
+#: formats a publication names. `pdf` is every S5 publication's; the two P6
+#: formats rest on a snapshot instead of an enrolled source version.
+P6_SOURCE_FORMATS: Final = frozenset({"p6_xer", "p6_xml"})
+SCHEDULE_SOURCE_FORMATS: Final = P6_SOURCE_FORMATS | {"pdf"}
+#: The S5a Full-Schedule (PDF) profile: the one whose runs name a PDF engine.
+PDF_PROFILE_ID: Final = "p6_full_v1"
+#: The issue codes a schedule issue or failed run may carry: the 23 S5a codes,
+#: then the 24 P6 codes (section 5.5), each block sorted.
+_SCHEDULE_ISSUE_CODES: Final = (
+    f"{_literals(ScheduleIssueCode)}, {_literals(frozenset(code.value for code in P6IssueCode))}"
+)
+_PDF_WARNING_CODES: Final = _literals(
+    frozenset(
+        code.value
+        for code, severity in ISSUE_SEVERITY.items()
+        if severity is ScheduleIssueSeverity.WARNING
+    )
+)
+#: Section 5.5 severities: always fatal (stored `error`), fatal only on an R
+#: field (either), never fatal (stored `warning`, the info code included).
+_P6_FATAL: Final = frozenset(code.value for code in P6_FATAL_CODES)
+_P6_EITHER: Final = frozenset(
+    {P6IssueCode.UNKNOWN_ENUM_VALUE.value, P6IssueCode.VALUE_INVALID.value}
+)
+_P6_NEVER_FATAL: Final = frozenset(code.value for code in P6IssueCode) - _P6_FATAL - _P6_EITHER
+#: Files workspace contract section 2: the workspace alias, a lower-case token
+#: (declared here because `schedule_publications` names one since S7-2).
+_FILE_WORKSPACE_ALIAS: Final = "^[a-z][a-z0-9_]{0,63}$"
+#: Section 7.7: the upper-case table a field key names (a captured value's
+#: table). Section 5.2: a name the parser reports (an issue's or observed
+#: field's table, or a field), named only when it matches.
+_P6_TABLE_NAME: Final = "^[A-Z][A-Z0-9_]{0,31}$"
+_P6_FIELD_NAME: Final = "^[A-Za-z][A-Za-z0-9_]{0,63}$"
+
 
 def _schedule_sha(column: str, name: str) -> CheckConstraint:
     return CheckConstraint(f"{column} ~ '{_SCHEDULE_SHA256}'", name=name)
@@ -22101,9 +22145,12 @@ schedule_publications = Table(
     Column("principal_id", Text, nullable=False),
     Column("project_id", Text, nullable=False),
     Column("series_id", Text, nullable=False),
-    Column("enrollment_id", Text, nullable=False),
-    Column("source_object_id", Text, nullable=False),
-    Column("source_version_id", Text, nullable=False),
+    # P6 XER import S7-2: nullable under
+    # `a_schedule_publication_source_matches_its_format` (a `pdf` publication
+    # names all three, a `p6_*` one none).
+    Column("enrollment_id", Text),
+    Column("source_object_id", Text),
+    Column("source_version_id", Text),
     Column("idempotency_key", Text, nullable=False),
     Column("request_digest", Text, nullable=False),
     Column("publication_role", Text, nullable=False),
@@ -22127,6 +22174,22 @@ schedule_publications = Table(
     Column("processing_started_at", DateTime(timezone=True)),
     Column("completed_at", DateTime(timezone=True)),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # P6 XER import S7-2 (schedule XER import contract section 8.2): the source
+    # format, the admitted snapshot, the workspace provenance (the path is never
+    # served), the capture selection in force at admission and the identity
+    # override of section 11.1. Immutable from admission (F3).
+    Column("source_format", Text, nullable=False, server_default=text("'pdf'")),
+    Column("p6_snapshot_id", Text),
+    Column("p6_workspace_id", Text),
+    Column("p6_workspace_path", Text),
+    Column("p6_workspace_version", Text),
+    Column("p6_capture_event_id", Text),
+    Column(
+        "accept_project_identity_change",
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+    ),
     PrimaryKeyConstraint("publication_id", name="schedule_publications_pkey"),
     _is_identifier("publication_id", IdKind.SCHEDULE_PUBLICATION),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
@@ -22194,6 +22257,63 @@ schedule_publications = Table(
         "NULL AND row_count IS NULL AND activity_count IS NULL AND ambiguous_row_count IS NULL "
         "AND published_schedule_title IS NULL AND data_date IS NULL AND run_date IS NULL))",
         name="a_schedule_publication_records_its_progress",
+    ),
+    _is_identifier("p6_snapshot_id", IdKind.SCHEDULE_P6_SNAPSHOT),
+    _is_identifier("p6_capture_event_id", IdKind.SCHEDULE_P6_CAPTURE_EVENT),
+    _one_of("source_format", SCHEDULE_SOURCE_FORMATS, name="a_schedule_source_format_is_known"),
+    CheckConstraint(
+        "(source_format = 'pdf' AND enrollment_id IS NOT NULL AND source_object_id IS NOT "
+        "NULL AND source_version_id IS NOT NULL AND p6_snapshot_id IS NULL AND "
+        "p6_workspace_id IS NULL AND p6_workspace_path IS NULL AND p6_workspace_version IS "
+        "NULL AND p6_capture_event_id IS NULL AND NOT accept_project_identity_change) OR "
+        f"(source_format IN ({_literals(P6_SOURCE_FORMATS)}) AND enrollment_id IS NULL AND "
+        "source_object_id IS NULL AND source_version_id IS NULL AND p6_snapshot_id IS NOT "
+        "NULL AND p6_workspace_id IS NOT NULL AND p6_workspace_path IS NOT NULL AND "
+        "p6_workspace_version IS NOT NULL)",
+        name="a_schedule_publication_source_matches_its_format",
+    ),
+    CheckConstraint(
+        f"source_format = 'pdf' OR publication_role = '{SchedulePublicationRole.UPDATE.value}'",
+        name="a_p6_schedule_publication_is_an_update",
+    ),
+    CheckConstraint(
+        f"p6_workspace_id IS NULL OR p6_workspace_id ~ '{_FILE_WORKSPACE_ALIAS}'",
+        name="a_schedule_workspace_is_an_alias",
+    ),
+    CheckConstraint(
+        "p6_workspace_path IS NULL OR (octet_length(p6_workspace_path) BETWEEN 1 AND "
+        f"{MAX_FILE_PATH_BYTES} AND left(p6_workspace_path, 1) <> '/' AND "
+        "right(p6_workspace_path, 1) <> '/')",
+        name="a_schedule_workspace_path_is_bounded",
+    ),
+    CheckConstraint(
+        f"p6_workspace_version IS NULL OR p6_workspace_version ~ '{FILE_VERSION_TOKEN_PATTERN}'",
+        name="a_schedule_workspace_version_is_a_token",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "series_id",
+        "p6_snapshot_id",
+        name="a_schedule_snapshot_is_published_once_per_series",
+    ),
+    ForeignKeyConstraint(
+        ["p6_snapshot_id", "principal_id"],
+        [
+            f"{SCHEMA}.schedule_p6_snapshots.snapshot_id",
+            f"{SCHEMA}.schedule_p6_snapshots.principal_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_schedule_publication_names_a_snapshot_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["p6_capture_event_id", "principal_id", "series_id"],
+        [
+            f"{SCHEMA}.schedule_p6_capture_events.event_id",
+            f"{SCHEMA}.schedule_p6_capture_events.principal_id",
+            f"{SCHEMA}.schedule_p6_capture_events.series_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_schedule_publication_names_a_capture_event_of_its_series",
     ),
     UniqueConstraint(
         "principal_id", "idempotency_key", name="a_schedule_publication_key_is_used_once"
@@ -22432,8 +22552,10 @@ schedule_parser_runs = Table(
     Column("parser_version", Text, nullable=False),
     Column("profile_id", Text, nullable=False),
     Column("profile_version", Integer, nullable=False),
-    Column("pypdfium2_version", Text, nullable=False),
-    Column("pdfium_version", Text, nullable=False),
+    # P6 XER import S7-2: nullable under
+    # `a_schedule_parser_engine_matches_its_profile` (`p6_full_v1` needs both).
+    Column("pypdfium2_version", Text),
+    Column("pdfium_version", Text),
     Column("document_sha256", Text, nullable=False),
     Column(
         "status",
@@ -22464,10 +22586,16 @@ schedule_parser_runs = Table(
     ),
     CheckConstraint(
         " AND ".join(
-            f"char_length({name}) BETWEEN 1 AND {MAX_PARSER_IDENTITY_CHARACTERS}"
+            f"({name} IS NULL OR char_length({name}) BETWEEN 1 AND "
+            f"{MAX_PARSER_IDENTITY_CHARACTERS})"
             for name in ("pypdfium2_version", "pdfium_version")
         ),
         name="a_schedule_parser_engine_is_bounded",
+    ),
+    CheckConstraint(
+        f"profile_id <> '{PDF_PROFILE_ID}' OR (pypdfium2_version IS NOT NULL AND "
+        "pdfium_version IS NOT NULL)",
+        name="a_schedule_parser_engine_matches_its_profile",
     ),
     _schedule_sha("document_sha256", "a_schedule_parsed_document_is_sha256"),
     _one_of("status", ScheduleParserRunStatus, name="a_schedule_parser_run_status_is_known"),
@@ -22478,7 +22606,7 @@ schedule_parser_runs = Table(
     ),
     _schedule_sha("parse_result_sha256", "a_schedule_parse_result_is_sha256"),
     CheckConstraint(
-        f"failure_code IS NULL OR failure_code IN ({_literals(ScheduleIssueCode)})",
+        f"failure_code IS NULL OR failure_code IN ({_SCHEDULE_ISSUE_CODES})",
         name="a_schedule_parser_failure_code_is_known",
     ),
     CheckConstraint(
@@ -22760,6 +22888,9 @@ schedule_import_issues = Table(
     Column("row_ordinal", Integer),
     Column("field", Text),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # P6 XER import S7-2: a P6 issue's table and 1-based physical line.
+    Column("source_table", Text),
+    Column("record_line", Integer),
     PrimaryKeyConstraint("issue_id", name="schedule_import_issues_pkey"),
     _is_identifier("issue_id", IdKind.SCHEDULE_IMPORT_ISSUE),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
@@ -22768,26 +22899,35 @@ schedule_import_issues = Table(
     _is_identifier("publication_id", IdKind.SCHEDULE_PUBLICATION),
     _is_identifier("parser_run_id", IdKind.SCHEDULE_PARSER_RUN),
     _one_of("severity", ScheduleIssueSeverity, name="a_schedule_issue_severity_is_known"),
-    _one_of("code", ScheduleIssueCode, name="a_schedule_issue_code_is_known"),
+    CheckConstraint(f"code IN ({_SCHEDULE_ISSUE_CODES})", name="a_schedule_issue_code_is_known"),
     CheckConstraint(
         "(page_number IS NULL OR page_number >= 1) AND (row_ordinal IS NULL OR row_ordinal >= 1)",
         name="a_schedule_issue_position_is_positive",
     ),
     CheckConstraint(
-        f"field IS NULL OR field IN ({_literals(ScheduleFieldCode)})",
+        f"field IS NULL OR (left(code, 3) <> 'p6_' AND field IN ({_literals(ScheduleFieldCode)})) "
+        f"OR (left(code, 3) = 'p6_' AND field ~ '{_P6_FIELD_NAME}')",
         name="a_schedule_issue_field_is_known",
     ),
     CheckConstraint(
-        f"(severity = '{ScheduleIssueSeverity.WARNING.value}') = (code IN ("
-        + _literals(
-            frozenset(
-                code.value
-                for code, severity in ISSUE_SEVERITY.items()
-                if severity is ScheduleIssueSeverity.WARNING
-            )
-        )
-        + "))",
+        f"(left(code, 3) <> 'p6_' AND (severity = '{ScheduleIssueSeverity.WARNING.value}') = "
+        f"(code IN ({_PDF_WARNING_CODES}))) OR (code IN ({_literals(_P6_FATAL)}) AND severity = "
+        f"'{ScheduleIssueSeverity.ERROR.value}') OR code IN ({_literals(_P6_EITHER)}) OR "
+        f"(code IN ({_literals(_P6_NEVER_FATAL)}) AND severity = "
+        f"'{ScheduleIssueSeverity.WARNING.value}')",
         name="a_schedule_issue_severity_matches_its_code",
+    ),
+    CheckConstraint(
+        f"source_table IS NULL OR source_table ~ '{_P6_FIELD_NAME}'",
+        name="a_schedule_issue_source_table_is_a_name",
+    ),
+    CheckConstraint(
+        "record_line IS NULL OR record_line >= 1", name="a_schedule_issue_record_line_is_positive"
+    ),
+    CheckConstraint(
+        "(left(code, 3) = 'p6_' AND page_number IS NULL AND row_ordinal IS NULL) OR "
+        "(left(code, 3) <> 'p6_' AND source_table IS NULL AND record_line IS NULL)",
+        name="a_schedule_issue_is_positioned_by_its_format",
     ),
     CheckConstraint(
         "row_ordinal IS NULL OR parser_run_id IS NOT NULL",
@@ -23815,6 +23955,553 @@ schedule_scenario_write_refusals = Table(
 )
 
 
+# --- P6 XER import S7-2: snapshot, typed P6 tables, field store, capture chain --
+#
+# Schedule XER import contract sections 6, 7.3, 7.4 and 8.2; created by revision
+# `d8383150cf72` from frozen text. The typed columns of the five entity tables
+# are the catalogue's (`p6-field-catalogue-v1`, S7-1) R and T fields with a
+# typed column, in catalogue order; `hours` and `num` are `numeric(21,6)`. The
+# append-only, TRUNCATE, per-run insert, activity link and capture chain guards
+# are triggers that exist only in the database. Every per-run table leads its
+# key and indexes with `parser_run_id`; every foreign key is `ON DELETE
+# RESTRICT`.
+
+_P6_SQL_TYPES: Final[dict[ValueType, Any]] = {
+    ValueType.ID: BigInteger,
+    ValueType.INT: BigInteger,
+    ValueType.HOURS: Numeric(21, 6),
+    ValueType.NUM: Numeric(21, 6),
+    ValueType.FLAG: Boolean,
+    ValueType.TS: DateTime(),
+    ValueType.TEXT: Text,
+    ValueType.NAME: Text,
+    ValueType.ENUM: Text,
+}
+#: Section 5.3: a stored enumeration token (`ENUM_TOKEN`).
+_P6_TOKEN: Final = "^[A-Za-z0-9_]{1,64}$"  # noqa: S105 - a pattern
+#: Section 7.7 field-key grammar, POSIX.
+_P6_FIELD_KEY: Final = (
+    "^(xer:[A-Z][A-Z0-9_]{0,31}\\.[A-Za-z][A-Za-z0-9_]{0,63}|udf:[A-Z]{1,16}:.{1,120}"
+    "|code:.{1,120})$"
+)
+_P6_CATALOGUE_VERSION: Final = "^p6-field-catalogue-v[1-9][0-9]{0,3}$"
+#: Section 5.3: an `ERMHDR` export version.
+_P6_EXPORT_VERSION: Final = "^[0-9]{1,2}\\.[0-9]{1,2}(\\.[0-9]{1,4}){0,2}$"
+#: Section 3.2: the two decodings a P6 export may have.
+_P6_ENCODINGS: Final = frozenset({"cp1252", "utf-8"})
+#: Section 6.3 derived `kind`.
+_P6_ACTIVITY_KINDS: Final = frozenset({"finish_milestone", "start_milestone", "task"})
+_P6_MAX_SNAPSHOT_BYTES: Final = 16_777_216
+_P6_MAX_CAPTURED_FIELDS: Final = 300
+_P6_MAX_CAPTURE_EVENTS: Final = 1000
+_P6_MAX_TEXT_CHARACTERS: Final = 4000
+_P6_MAX_ACTIVITY_ID_CHARACTERS: Final = 40
+_P6_MAX_NAME_CHARACTERS: Final = 2000
+_P6_MAX_WBS_DEPTH: Final = 64
+_P6_MAX_CODE_PATH: Final = 8
+_P6_MAX_CALENDAR_EXCEPTIONS: Final = 20_000
+
+
+def p6_typed_fields(*xer_tables: str) -> tuple[CatalogueField, ...]:
+    """The catalogue fields stored in typed columns of `xer_tables`, in catalogue order."""
+    return tuple(
+        field
+        for table in xer_tables
+        for field in table_fields(table)
+        if field.is_typed and field.typed_column is not None
+    )
+
+
+def _p6_typed_columns(*xer_tables: str) -> tuple[Column[Any], ...]:
+    return tuple(
+        Column(
+            field.typed_column,
+            _P6_SQL_TYPES[field.value_type],
+            nullable=not (field.required and not field.empty_allowed),
+        )
+        for field in p6_typed_fields(*xer_tables)
+    )
+
+
+def _p6_run_key() -> tuple[Column[Any], ...]:
+    return (
+        Column("parser_run_id", Text, nullable=False),
+        Column("principal_id", Text, nullable=False),
+        Column("publication_id", Text, nullable=False),
+    )
+
+
+def _p6_run_tail() -> tuple[Column[Any], ...]:
+    return (
+        Column("record_line", Integer, nullable=False),
+        Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+
+
+def _p6_run_constraints(short: str, *xer_tables: str) -> tuple[Any, ...]:
+    """Identifier, line, text-bound and token CHECKs and the run foreign key."""
+    fields = p6_typed_fields(*xer_tables)
+    found: list[Any] = [
+        _is_identifier("parser_run_id", IdKind.SCHEDULE_PARSER_RUN),
+        _is_identifier("principal_id", IdKind.PRINCIPAL),
+        _is_identifier("publication_id", IdKind.SCHEDULE_PUBLICATION),
+        CheckConstraint("record_line >= 1", name=f"a_p6_{short}_record_line_is_positive"),
+    ]
+    texts = [
+        f"({field.typed_column} IS NULL OR char_length({field.typed_column}) BETWEEN 1 AND "
+        f"{field.max_characters})"
+        for field in fields
+        if field.value_type in {ValueType.TEXT, ValueType.NAME}
+    ]
+    if texts:
+        found.append(CheckConstraint(" AND ".join(texts), name=f"a_p6_{short}_text_is_bounded"))
+    tokens = [
+        f"({field.typed_column} IS NULL OR {field.typed_column} ~ '{_P6_TOKEN}')"
+        for field in fields
+        if field.value_type is ValueType.ENUM
+    ]
+    if tokens:
+        found.append(
+            CheckConstraint(" AND ".join(tokens), name=f"a_p6_{short}_enumeration_is_a_token")
+        )
+    found.append(
+        _plane_fk(
+            ["parser_run_id", "publication_id", "principal_id"],
+            "schedule_parser_runs",
+            ["parser_run_id", "publication_id", "principal_id"],
+            name=f"a_p6_{short}_belongs_to_its_run",
+        )
+    )
+    return tuple(found)
+
+
+#: Section 9.1: the admitted bytes of one P6 export, once per Principal and
+#: SHA-256 (content-addressed), retained (section 7.6). Append-only; the
+#: server checks the digest and the size against the bytes.
+schedule_p6_snapshots = Table(
+    "schedule_p6_snapshots",
+    METADATA,
+    Column("snapshot_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("format", Text, nullable=False),
+    Column("size_bytes", BigInteger, nullable=False),
+    Column("sha256", Text, nullable=False),
+    Column("content", LargeBinary, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("snapshot_id", name="schedule_p6_snapshots_pkey"),
+    _is_identifier("snapshot_id", IdKind.SCHEDULE_P6_SNAPSHOT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("format", P6_SOURCE_FORMATS, name="a_p6_snapshot_format_is_known"),
+    CheckConstraint(
+        f"size_bytes BETWEEN 1 AND {_P6_MAX_SNAPSHOT_BYTES} AND octet_length(content) = size_bytes",
+        name="a_p6_snapshot_is_its_size",
+    ),
+    CheckConstraint(
+        f"sha256 ~ '{_SCHEDULE_SHA256}' AND sha256 = encode(sha256(content), 'hex')",
+        name="a_p6_snapshot_is_its_digest",
+    ),
+    UniqueConstraint("principal_id", "sha256", name="a_p6_snapshot_is_stored_once_per_principal"),
+    UniqueConstraint(
+        "snapshot_id", "principal_id", name="a_p6_snapshot_is_identified_within_its_principal"
+    ),
+)
+
+#: Section 7.2: one capture selection of one Series. The chain's sequences are
+#: contiguous from 1 and its keys sorted (by code point), distinct and of the
+#: section 7.7 grammar (`a_p6_capture_event_extends_its_chain`); the current
+#: set is the last event's. Append-only.
+schedule_p6_capture_events = Table(
+    "schedule_p6_capture_events",
+    METADATA,
+    Column("event_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("series_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("field_keys", ARRAY(Text), nullable=False),
+    Column("include_personal", Boolean, nullable=False, server_default=text("false")),
+    Column("catalogue_version", Text, nullable=False),
+    *_provenance_columns(),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("event_id", name="schedule_p6_capture_events_pkey"),
+    _is_identifier("event_id", IdKind.SCHEDULE_P6_CAPTURE_EVENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("series_id", IdKind.SCHEDULE_SERIES),
+    CheckConstraint(
+        f"sequence BETWEEN 1 AND {_P6_MAX_CAPTURE_EVENTS}", name="a_p6_capture_sequence_is_bounded"
+    ),
+    CheckConstraint(
+        f"cardinality(field_keys) <= {_P6_MAX_CAPTURED_FIELDS} AND "
+        "array_position(field_keys, NULL) IS NULL",
+        name="a_p6_capture_keys_are_bounded",
+    ),
+    CheckConstraint(
+        f"catalogue_version ~ '{_P6_CATALOGUE_VERSION}'",
+        name="a_p6_capture_catalogue_is_versioned",
+    ),
+    *_provenance_checks("p6_capture_event"),
+    UniqueConstraint(
+        "series_id", "sequence", name="a_p6_capture_sequence_is_unique_within_its_series"
+    ),
+    UniqueConstraint(
+        "event_id",
+        "principal_id",
+        "series_id",
+        name="a_p6_capture_event_is_identified_within_its_series",
+    ),
+    _plane_fk(
+        _SERIES_COMPOSITE,
+        "schedule_series",
+        _SERIES_COMPOSITE,
+        name="a_p6_capture_event_belongs_to_its_series",
+    ),
+)
+
+#: Sections 6.7 and 6.8: the PROJECT and SCHEDOPTIONS row of one run, with the
+#: `ERMHDR` version and date, the decoding and the catalogue version.
+schedule_p6_projects = Table(
+    "schedule_p6_projects",
+    METADATA,
+    *_p6_run_key(),
+    *_p6_typed_columns("PROJECT", "SCHEDOPTIONS"),
+    Column("project_name", Text, nullable=False),
+    Column("export_version", Text, nullable=False),
+    Column("export_date", Date),
+    Column("encoding", Text, nullable=False),
+    Column("catalogue_version", Text, nullable=False),
+    *_p6_run_tail(),
+    PrimaryKeyConstraint("parser_run_id", name="schedule_p6_projects_pkey"),
+    *_p6_run_constraints("project", "PROJECT", "SCHEDOPTIONS"),
+    CheckConstraint(
+        f"char_length(project_name) BETWEEN 1 AND {_P6_MAX_NAME_CHARACTERS} AND "
+        f"export_version ~ '{_P6_EXPORT_VERSION}' AND encoding IN ({_literals(_P6_ENCODINGS)}) "
+        f"AND catalogue_version ~ '{_P6_CATALOGUE_VERSION}'",
+        name="a_p6_project_header_is_known",
+    ),
+)
+
+#: Section 6.5: one PROJWBS row of one run, with its depth below the project
+#: node and its label path.
+schedule_p6_wbs = Table(
+    "schedule_p6_wbs",
+    METADATA,
+    *_p6_run_key(),
+    *_p6_typed_columns("PROJWBS"),
+    Column("depth", Integer, nullable=False),
+    Column("wbs_path", ARRAY(Text), nullable=False),
+    *_p6_run_tail(),
+    PrimaryKeyConstraint("parser_run_id", "p6_wbs_id", name="schedule_p6_wbs_pkey"),
+    *_p6_run_constraints("wbs", "PROJWBS"),
+    CheckConstraint(
+        f"depth BETWEEN 0 AND {_P6_MAX_WBS_DEPTH} AND cardinality(wbs_path) = depth",
+        name="a_p6_wbs_depth_is_its_path",
+    ),
+)
+
+#: Section 6.3: one TASK row of one run, its derived dates, path and kind, and
+#: its Stable Activity (`sact_`) linked at insert or once after the run is
+#: parsed (`a_p6_activity_changes_only_by_linking`).
+schedule_p6_activities = Table(
+    "schedule_p6_activities",
+    METADATA,
+    *_p6_run_key(),
+    Column("project_id", Text, nullable=False),
+    Column("series_id", Text, nullable=False),
+    Column("schedule_activity_id", Text),
+    *_p6_typed_columns("TASK"),
+    Column("start_at", DateTime(), nullable=False),
+    Column("finish_at", DateTime(), nullable=False),
+    Column("wbs_path", ARRAY(Text), nullable=False),
+    Column("kind", Text, nullable=False),
+    *_p6_run_tail(),
+    PrimaryKeyConstraint("parser_run_id", "p6_task_id", name="schedule_p6_activities_pkey"),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("series_id", IdKind.SCHEDULE_SERIES),
+    _is_identifier("schedule_activity_id", IdKind.SCHEDULE_ACTIVITY),
+    *_p6_run_constraints("activity", "TASK"),
+    CheckConstraint(
+        "start_at = COALESCE(actual_start, early_start) AND finish_at = "
+        "COALESCE(actual_finish, early_finish)",
+        name="a_p6_activity_dates_are_derived",
+    ),
+    CheckConstraint(
+        f"kind IN ({_literals(_P6_ACTIVITY_KINDS)}) AND (kind = 'start_milestone') = "
+        "(task_type = 'TT_Mile') AND (kind = 'finish_milestone') = (task_type = 'TT_FinMile')",
+        name="a_p6_activity_kind_is_its_type",
+    ),
+    CheckConstraint(
+        f"cardinality(wbs_path) <= {_P6_MAX_WBS_DEPTH}", name="a_p6_activity_wbs_path_is_bounded"
+    ),
+    UniqueConstraint(
+        "parser_run_id", "activity_id", name="a_p6_activity_id_is_unique_within_its_run"
+    ),
+    _plane_fk(
+        _PUBLICATION_U3,
+        "schedule_publications",
+        _PUBLICATION_U3,
+        name="a_p6_activity_belongs_to_its_publication",
+    ),
+    _plane_fk(
+        ["parser_run_id", "p6_wbs_id"],
+        "schedule_p6_wbs",
+        ["parser_run_id", "p6_wbs_id"],
+        name="a_p6_activity_names_a_wbs_of_its_run",
+    ),
+    _plane_fk(
+        ["schedule_activity_id", "principal_id", "series_id", "activity_id"],
+        "schedule_activities",
+        ["schedule_activity_id", "principal_id", "series_id", "published_activity_id"],
+        name="a_p6_activity_links_its_exact_activity",
+    ),
+    Index(
+        "schedule_p6_activities_by_stable_activity",
+        "principal_id",
+        "series_id",
+        "schedule_activity_id",
+        postgresql_where=text("schedule_activity_id IS NOT NULL"),
+    ),
+)
+
+#: Section 6.4: one TASKPRED row of one run with its ends' Activity IDs (null
+#: where the end is in another project) and whether it is external.
+schedule_p6_relationships = Table(
+    "schedule_p6_relationships",
+    METADATA,
+    *_p6_run_key(),
+    *_p6_typed_columns("TASKPRED"),
+    Column("pred_activity_id", Text),
+    Column("succ_activity_id", Text),
+    Column("is_external", Boolean, nullable=False),
+    *_p6_run_tail(),
+    PrimaryKeyConstraint(
+        "parser_run_id", "p6_relationship_id", name="schedule_p6_relationships_pkey"
+    ),
+    *_p6_run_constraints("relationship", "TASKPRED"),
+    CheckConstraint(
+        " AND ".join(
+            f"({end} IS NULL OR char_length({end}) BETWEEN 1 AND {_P6_MAX_ACTIVITY_ID_CHARACTERS})"
+            for end in ("pred_activity_id", "succ_activity_id")
+        ),
+        name="a_p6_relationship_ends_are_bounded",
+    ),
+    CheckConstraint(
+        "is_external OR (pred_activity_id IS NOT NULL AND succ_activity_id IS NOT NULL)",
+        name="a_p6_relationship_names_both_ends_unless_external",
+    ),
+)
+
+#: Section 6.6: one CALENDAR row of one run with its parsed week (7 lists,
+#: Monday first, of `[start, end]` minutes; empty when unparseable), its sorted
+#: exceptions and the digest over both (null exactly when unparseable).
+schedule_p6_calendars = Table(
+    "schedule_p6_calendars",
+    METADATA,
+    *_p6_run_key(),
+    *_p6_typed_columns("CALENDAR"),
+    Column("week", JSONB, nullable=False),
+    Column("exceptions", JSONB, nullable=False),
+    Column("exception_count", Integer, nullable=False),
+    Column("data_sha256", Text),
+    *_p6_run_tail(),
+    PrimaryKeyConstraint("parser_run_id", "p6_calendar_id", name="schedule_p6_calendars_pkey"),
+    *_p6_run_constraints("calendar", "CALENDAR"),
+    CheckConstraint(
+        "jsonb_typeof(week) = 'array' AND jsonb_array_length(week) IN (0, 7) AND "
+        "jsonb_typeof(exceptions) = 'array' AND jsonb_array_length(exceptions) = "
+        f"exception_count AND exception_count BETWEEN 0 AND {_P6_MAX_CALENDAR_EXCEPTIONS}",
+        name="a_p6_calendar_data_is_shaped",
+    ),
+    CheckConstraint(
+        f"(data_sha256 IS NULL OR data_sha256 ~ '{_SCHEDULE_SHA256}') AND (data_sha256 IS "
+        "NULL) = (jsonb_array_length(week) = 0)",
+        name="a_p6_calendar_digest_is_its_data",
+    ),
+)
+
+#: Section 7.3: one captured optional value with exactly one typed value. An
+#: activity's value names its Activity ID and, linked at insert, its Stable
+#: Activity. Append-only.
+schedule_p6_field_values = Table(
+    "schedule_p6_field_values",
+    METADATA,
+    *_p6_run_key(),
+    Column("project_id", Text, nullable=False),
+    Column("series_id", Text, nullable=False),
+    Column("entity_kind", Text, nullable=False),
+    Column("entity_p6_id", BigInteger, nullable=False),
+    Column("field_key", Text, nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column("activity_id", Text),
+    Column("schedule_activity_id", Text),
+    Column("value_text", Text),
+    Column("value_number", Numeric(28, 6)),
+    Column("value_ts", DateTime()),
+    Column("value_flag", Boolean),
+    Column("code_path", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("description", Text),
+    Column("source_table", Text, nullable=False),
+    *_p6_run_tail(),
+    PrimaryKeyConstraint(
+        "parser_run_id",
+        "entity_kind",
+        "entity_p6_id",
+        "field_key",
+        "ordinal",
+        name="schedule_p6_field_values_pkey",
+    ),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("series_id", IdKind.SCHEDULE_SERIES),
+    _is_identifier("schedule_activity_id", IdKind.SCHEDULE_ACTIVITY),
+    *_p6_run_constraints("field_value"),
+    CheckConstraint(
+        f"entity_kind IN ({_literals(EntityKind)}) AND ordinal >= 0",
+        name="a_p6_field_value_entity_is_known",
+    ),
+    CheckConstraint(
+        f"field_key ~ '{_P6_FIELD_KEY}'", name="a_p6_field_value_key_follows_its_grammar"
+    ),
+    CheckConstraint(
+        "num_nonnulls(value_text, value_number, value_ts, value_flag) = 1",
+        name="a_p6_field_value_has_one_value",
+    ),
+    CheckConstraint(
+        f"(value_text IS NULL OR char_length(value_text) <= {_P6_MAX_TEXT_CHARACTERS}) AND "
+        f"(description IS NULL OR char_length(description) <= {_P6_MAX_TEXT_CHARACTERS}) AND "
+        "(activity_id IS NULL OR char_length(activity_id) BETWEEN 1 AND "
+        f"{_P6_MAX_ACTIVITY_ID_CHARACTERS})",
+        name="a_p6_field_value_text_is_bounded",
+    ),
+    CheckConstraint(
+        f"cardinality(code_path) <= {_P6_MAX_CODE_PATH}",
+        name="a_p6_field_value_code_path_is_bounded",
+    ),
+    CheckConstraint(
+        f"source_table ~ '{_P6_TABLE_NAME}'", name="a_p6_field_value_source_table_is_a_name"
+    ),
+    CheckConstraint(
+        f"(activity_id IS NULL OR entity_kind = '{EntityKind.ACTIVITY.value}') AND "
+        "(schedule_activity_id IS NULL OR activity_id IS NOT NULL)",
+        name="a_p6_field_value_activity_is_an_activity",
+    ),
+    _plane_fk(
+        _PUBLICATION_U3,
+        "schedule_publications",
+        _PUBLICATION_U3,
+        name="a_p6_field_value_belongs_to_its_publication",
+    ),
+    _plane_fk(
+        ["schedule_activity_id", "principal_id", "series_id", "activity_id"],
+        "schedule_activities",
+        ["schedule_activity_id", "principal_id", "series_id", "published_activity_id"],
+        name="a_p6_field_value_links_its_exact_activity",
+    ),
+    Index(
+        "schedule_p6_field_values_by_number",
+        "parser_run_id",
+        "field_key",
+        "value_number",
+        postgresql_where=text("value_number IS NOT NULL"),
+    ),
+    Index(
+        "schedule_p6_field_values_by_timestamp",
+        "parser_run_id",
+        "field_key",
+        "value_ts",
+        postgresql_where=text("value_ts IS NOT NULL"),
+    ),
+    Index(
+        "schedule_p6_field_values_by_stable_activity",
+        "principal_id",
+        "series_id",
+        "schedule_activity_id",
+        "field_key",
+        postgresql_where=text("schedule_activity_id IS NOT NULL"),
+    ),
+)
+#: The text filter index holds a value's first 256 characters: a whole
+#: 4,000-character value can exceed a B-tree entry (2,704 bytes), so a text
+#: filter rechecks the rest.
+Index(
+    "schedule_p6_field_values_by_text",
+    schedule_p6_field_values.c.parser_run_id,
+    schedule_p6_field_values.c.field_key,
+    func.left(schedule_p6_field_values.c.value_text, 256),
+    postgresql_where=text("value_text IS NOT NULL"),
+)
+
+_P6_SHAPES: Final = ("integer", "decimal", "date", "flag", "token", "text")
+
+#: Section 7.4: per run, per observed (table, field) -- stats only, never a
+#: value. Keyed by position because a name outside the section 5.2 pattern is
+#: never stored; a named pair is unique within its run.
+schedule_p6_observed_fields = Table(
+    "schedule_p6_observed_fields",
+    METADATA,
+    *_p6_run_key(),
+    Column("table_position", Integer, nullable=False),
+    Column("field_position", Integer, nullable=False),
+    Column("source_table", Text),
+    Column("field_name", Text),
+    Column("field_key", Text),
+    Column("catalogued", Boolean, nullable=False),
+    Column("tier", Text),
+    Column("present", Boolean, nullable=False),
+    Column("record_count", BigInteger, nullable=False),
+    Column("nonempty_count", BigInteger, nullable=False),
+    Column("min_length", Integer),
+    Column("max_length", Integer),
+    *(Column(f"shape_{shape}", BigInteger, nullable=False) for shape in _P6_SHAPES),
+    Column("unknown_enum_count", BigInteger, nullable=False),
+    Column("over_length_count", BigInteger, nullable=False),
+    Column("captured", Boolean, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint(
+        "parser_run_id",
+        "table_position",
+        "field_position",
+        name="schedule_p6_observed_fields_pkey",
+    ),
+    _is_identifier("parser_run_id", IdKind.SCHEDULE_PARSER_RUN),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("publication_id", IdKind.SCHEDULE_PUBLICATION),
+    CheckConstraint(
+        "table_position >= 0 AND field_position >= 0 AND (source_table IS NULL OR "
+        f"source_table ~ '{_P6_FIELD_NAME}') AND (field_name IS NULL OR field_name ~ "
+        f"'{_P6_FIELD_NAME}') AND (field_key IS NULL OR field_key ~ '{_P6_FIELD_KEY}') AND "
+        f"(tier IS NULL OR tier IN ({_literals(Tier)}))",
+        name="a_p6_observed_field_is_named",
+    ),
+    CheckConstraint(
+        "record_count >= 0 AND nonempty_count BETWEEN 0 AND record_count AND "
+        + " AND ".join(f"shape_{shape} >= 0" for shape in _P6_SHAPES)
+        + " AND "
+        + " + ".join(f"shape_{shape}" for shape in _P6_SHAPES)
+        + " = nonempty_count AND unknown_enum_count BETWEEN 0 AND nonempty_count AND "
+        "over_length_count BETWEEN 0 AND nonempty_count",
+        name="a_p6_observed_field_counts_are_consistent",
+    ),
+    CheckConstraint(
+        "(min_length IS NULL) = (nonempty_count = 0) AND (max_length IS NULL) = "
+        "(nonempty_count = 0) AND (min_length IS NULL OR (min_length >= 1 AND min_length <= "
+        "max_length))",
+        name="a_p6_observed_field_lengths_are_ordered",
+    ),
+    UniqueConstraint(
+        "parser_run_id",
+        "source_table",
+        "field_name",
+        name="a_p6_observed_field_is_named_once_per_run",
+    ),
+    _plane_fk(
+        ["parser_run_id", "publication_id", "principal_id"],
+        "schedule_parser_runs",
+        ["parser_run_id", "publication_id", "principal_id"],
+        name="a_p6_observed_field_belongs_to_its_run",
+    ),
+)
+
+
 # ---- files workspace (ADR-019; files-workspace contract; revision 640aaacc78e8) ----
 #
 # The four plane tables, each partitioned by `owner_principal_id` (the report
@@ -23830,8 +24517,6 @@ _FILE_PATH_SHAPE: Final = (
     "octet_length({column}) BETWEEN 1 AND " + str(MAX_FILE_PATH_BYTES) + " AND "
     "left({column}, 1) <> '/' AND right({column}, 1) <> '/'"
 )
-#: Contract section 2: the workspace alias, a lower-case token.
-_FILE_WORKSPACE_ALIAS: Final = "^[a-z][a-z0-9_]{0,63}$"
 #: The 10 write capabilities a receipt can record (contract section 1.1, rows
 #: 8-17). Literal until WP5 appends them to `Capability`.
 FILE_RECEIPT_CAPABILITIES: Final = frozenset(

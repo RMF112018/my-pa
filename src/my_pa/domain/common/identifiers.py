@@ -657,6 +657,15 @@ class IdKind(StrEnum):
     PROJECT_REPORT_BINDING_REVISION = "prbnd"
     PROJECT_REPORT_RECORD = "prrec"
     PROJECT_REPORT_DERIVATION = "prdrv"
+    #: P6 XER import S7-2 (schedule XER import contract section 8.1): one
+    #: admitted P6 export's bytes (`knowledge.schedule_p6_snapshots`) and one
+    #: per-Series capture-selection event (`knowledge.schedule_p6_capture_events`).
+    #: Checked against every prior member (a grep of each prefix over `src`,
+    #: `tests`, `web/src` and `migrations`, and the prefix-freeness assertion in
+    #: `tests/unit/test_identifiers.py`): none collides, none is a prefix of a
+    #: prior member and no prior member is a prefix of one.
+    SCHEDULE_P6_SNAPSHOT = "sp6n"
+    SCHEDULE_P6_CAPTURE_EVENT = "sp6e"
 
 
 class InvalidIdentifierError(ValueError):

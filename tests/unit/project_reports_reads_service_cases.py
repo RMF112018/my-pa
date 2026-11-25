@@ -157,7 +157,7 @@ def _refusal(call: Callable[[], object]) -> tuple[type[ApplicationError], tuple[
     return type(raised.value), raised.value.safe_details
 
 
-def _rfi_query(scene: ReadsScene, **fields: Any) -> QueryRequest:
+def _rfi_query(scene: ReadsScene, **fields: object) -> QueryRequest:
     return QueryRequest(project_id=RFI_PROJECT[1], record_family="rfis", **fields)
 
 

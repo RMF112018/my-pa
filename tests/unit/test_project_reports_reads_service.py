@@ -64,7 +64,7 @@ def test_a_service_case_on_the_fake(case: Callable[[ReadsScene], None]) -> None:
     case(built)
 
 
-def _query(**fields: Any) -> QueryRequest:
+def _query(**fields: object) -> QueryRequest:
     base: dict[str, Any] = {"project_id": PROJECT, "record_family": "rfis"}
     base.update(fields)
     return QueryRequest(**base)

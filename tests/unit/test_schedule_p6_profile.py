@@ -16,13 +16,16 @@ import os
 import subprocess
 import sys
 from contextlib import redirect_stdout
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 from typing import Final
 
 import pytest
 
-from my_pa.domain.schedule.p6 import export_profile
+from my_pa.domain.schedule.p6 import export_profile, parse_xer
+from my_pa.domain.schedule.p6.model import MAX_LISTED_ISSUES, P6Issue, P6IssueCode, P6Severity
+from my_pa.domain.schedule.p6.profile import Verdict, verdict
 from tests.fixtures import schedule_p6_xer as fixtures
 
 ROOT: Final = Path(__file__).resolve().parents[2]
@@ -157,3 +160,47 @@ def test_script_runs_from_the_repository_root(tmp_path: Path) -> None:
     assert completed.returncode == 0, completed.stderr
     report = json.loads(completed.stdout)
     assert (report["verdict"], report["export_version_tested"]) == ("pass_with_findings", False)
+
+
+def test_findings_beyond_the_listed_issues_still_count() -> None:
+    result = parse_xer(fixtures.build("no_optional_tables").data)
+    assert verdict(result) is Verdict.PASS
+    filler = P6Issue(P6IssueCode.VALUE_INVALID, P6Severity.WARNING, table="TASK", line=3)
+    hidden = replace(
+        result,
+        issues=(filler,) * MAX_LISTED_ISSUES,
+        issue_counts=(
+            (P6IssueCode.UNKNOWN_ENUM_VALUE.value, 1),
+            (P6IssueCode.VALUE_INVALID.value, MAX_LISTED_ISSUES),
+        ),
+    )
+    assert verdict(hidden) is Verdict.PASS_WITH_FINDINGS
+
+
+def test_script_never_prints_the_text_of_an_unexpected_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    module = _script()
+
+    def failing(data: bytes) -> dict[str, object]:
+        raise ValueError("Zq77777Mk")
+
+    monkeypatch.setattr(module, "export_profile", failing)
+    path = tmp_path / "export.xer"
+    path.write_bytes(fixtures.build("no_optional_tables").data)
+    assert module.main([str(path)]) == 1
+    captured = capsys.readouterr()
+    assert "Zq77777Mk" not in captured.out + captured.err
+    assert "ValueError" in captured.err
+
+
+def test_an_unknown_token_in_an_uncaptured_optional_enum_is_a_finding() -> None:
+    model = fixtures.base_model("standard")
+    model.table("TASK").fields.append("priority_type")
+    for row in model.table("TASK").rows:
+        row["priority_type"] = "PT_Normal"
+    data = fixtures.encode(fixtures.layout(model).lines)
+    assert export_profile(data)["verdict"] == "pass"
+    model.table("TASK").rows[0]["priority_type"] = "PT_Synthetic"
+    report = export_profile(fixtures.encode(fixtures.layout(model).lines))
+    assert report["verdict"] == "pass_with_findings"

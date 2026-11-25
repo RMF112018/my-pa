@@ -24,7 +24,6 @@ from my_pa.domain.schedule.p6.model import (
     P6Limits,
     P6Outcome,
     P6ParseResult,
-    P6Severity,
 )
 from my_pa.domain.schedule.p6.parser import parse_xer
 
@@ -38,6 +37,7 @@ _FINDINGS: Final = frozenset(
         P6IssueCode.UNKNOWN_FIELD,
         P6IssueCode.UNKNOWN_FIELD_UNNAMED,
         P6IssueCode.EXPORT_VERSION_UNTESTED,
+        P6IssueCode.UNKNOWN_ENUM_VALUE,
     }
 )
 _TYPED_TIERS: Final = frozenset({Tier.REQUIRED.value, Tier.TOLERATED.value})
@@ -59,11 +59,15 @@ def verdict(result: P6ParseResult) -> Verdict:
         return Verdict.FAIL
     if any(field.over_length and field.tier in _TYPED_TIERS for field in result.observed_fields):
         return Verdict.FAIL
-    for issue in result.issues:
-        if issue.code in _FINDINGS:
-            return Verdict.PASS_WITH_FINDINGS
-        if issue.code is P6IssueCode.UNKNOWN_ENUM_VALUE and issue.severity is not P6Severity.FATAL:
-            return Verdict.PASS_WITH_FINDINGS
+    # The counts, not the listed issues: the list stops at MAX_LISTED_ISSUES. Without a
+    # fatal issue every `p6_unknown_enum_value` is a T/O finding.
+    counted = {code for code, count in result.issue_counts if count}
+    if counted & {code.value for code in _FINDINGS}:
+        return Verdict.PASS_WITH_FINDINGS
+    # An optional enumerated field that is not captured raises no issue, but its unknown
+    # tokens are still a section 12 finding.
+    if any(field.unknown_enum for field in result.observed_fields):
+        return Verdict.PASS_WITH_FINDINGS
     return Verdict.PASS
 
 

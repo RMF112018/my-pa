@@ -26,6 +26,7 @@ from my_pa.domain.schedule.p6.catalogue import catalogue_field
 from my_pa.domain.schedule.p6.frame import frame_object, render_decimal
 from my_pa.domain.schedule.p6.model import Bound, P6IssueCode, P6Outcome, P6ParseResult
 from my_pa.domain.schedule.p6.profile import verdict
+from my_pa.domain.schedule.p6.reader import RawTable
 from my_pa.domain.schedule.p6.values import ReadingStatus, read_value
 from tests.fixtures import schedule_p6_xer as fixtures
 
@@ -325,3 +326,82 @@ def test_external_relationship_has_no_predecessor_activity() -> None:
     assert len(external) == 1
     assert external[0].get("pred_activity_id") is None
     assert external[0].get("succ_activity_id") == "SYN-1010"
+
+
+# --- hostile input in the generic (V) id columns (section 13) ---------------------------------
+
+
+@pytest.mark.parametrize(
+    ("table", "field", "digit"),
+    [
+        ("UDFTYPE", "udf_type_id", chr(0xB2)),  # superscript 2: `isdigit`, refused by `int`
+        ("UDFVALUE", "fk_id", chr(0xB3)),
+        ("TASKACTV", "task_id", chr(0xB9)),
+        # Arabic-Indic 7101, an existing code id: `int` would silently convert it.
+        ("TASKACTV", "actv_code_id", "".join(chr(0x0660 + int(d)) for d in "7101")),
+    ],
+)
+def test_non_ascii_digits_in_an_id_column_are_invalid_never_an_error(
+    table: str, field: str, digit: str
+) -> None:
+    model = fixtures.base_model("full")
+    model.table(table).rows[0][field] = digit
+    lay = fixtures.layout(model)
+    encoding = "cp1252" if len(digit) == 1 else "utf-8"
+    result = parse_xer(fixtures.encode(lay.lines, encoding=encoding))
+    assert result.outcome is P6Outcome.COMPLETE
+    line = lay.row_line[(table, 0)]
+    assert any(
+        issue.code is P6IssueCode.VALUE_INVALID and issue.line == line for issue in result.issues
+    )
+    assert all(value.record_line != line for value in result.field_values)
+
+
+def test_udf_code_labels_are_indexed_once_not_scanned_per_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    count = 400
+    model = fixtures.base_model("standard")
+    model.tables.insert(
+        0,
+        fixtures.Table(
+            "UDFTYPE",
+            ["udf_type_id", "table_name", "udf_type_label", "logical_data_type"],
+            [
+                {
+                    "udf_type_id": "9",
+                    "table_name": "TASK",
+                    "udf_type_label": "Synthetic Choice",
+                    "logical_data_type": "FT_STATICTYPE",
+                }
+            ],
+        ),
+    )
+    model.insert_after(
+        "UDFTYPE",
+        fixtures.Table(
+            "UDFCODE",
+            ["udf_code_id", "short_name"],
+            [{"udf_code_id": str(100_000 + index), "short_name": "S"} for index in range(count)],
+        ),
+    )
+    model.tables.append(
+        fixtures.Table(
+            "UDFVALUE",
+            ["udf_type_id", "fk_id", "udf_code_id"],
+            [{"udf_type_id": "9", "fk_id": "3002", "udf_code_id": "1"}] * count,
+        )
+    )
+    data = fixtures.encode(fixtures.layout(model).lines)
+    calls = 0
+    original = RawTable.index
+
+    def counting(self: RawTable, field: str) -> int | None:
+        nonlocal calls
+        calls += 1
+        return original(self, field)
+
+    monkeypatch.setattr(RawTable, "index", counting)
+    result = parse_xer(data)
+    assert result.outcome is P6Outcome.COMPLETE
+    assert calls < 20 * count  # a per-value scan of UDFCODE makes count * count calls

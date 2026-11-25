@@ -89,6 +89,10 @@ _MAX_UNKNOWN_TOKENS: Final = 20
 _LABEL_CHARACTERS: Final = 120
 _CODE_PATH_LABELS: Final = 8
 _CALENDAR_DATA_DOMAIN: Final = b"p6-calendar-data-v1\n"
+#: An object id in a generic (V) column: ASCII digits only. `str.isdigit` is not
+#: used: it admits superscript and other Unicode digits that `int` either refuses
+#: (an uncaught error) or silently converts.
+_OBJECT_ID: Final = re.compile(r"[0-9]{1,18}")
 
 #: Entity tables and the field that keys their rows.
 _ENTITY_KEY: Final[Mapping[str, str]] = {
@@ -636,6 +640,11 @@ class _CapReachedError(Exception):
     pass
 
 
+def _object_id(text: str) -> int | None:
+    """`text` as an object id if it is 1 to 18 ASCII digits, else None."""
+    return int(text) if _OBJECT_ID.fullmatch(text) else None
+
+
 class _Capture:
     """Captured optional values in file order: catalogued O fields, selected uncatalogued
     fields, UDF values and activity-code values (sections 6.9, 7.2, 7.3, 7.7)."""
@@ -656,6 +665,7 @@ class _Capture:
         }
         self.udf_types = self._udf_types()
         self.code_types, self.codes = self._codes()
+        self.udf_codes: dict[str, str | None] | None = None
         self.selection = self._selection()
 
     # -- definitions -----------------------------------------------------------------------
@@ -674,11 +684,11 @@ class _Capture:
         if table is None:
             return found
         for line, values in table.rows:
-            type_id = self._cell(table, values, "udf_type_id")
+            type_id = _object_id(self._cell(table, values, "udf_type_id"))
             owner = self._cell(table, values, "table_name")
             label = read_text(self._cell(table, values, "udf_type_label"), _LABEL_CHARACTERS)
             data_type = self._cell(table, values, "logical_data_type")
-            if not type_id.isdigit() or len(type_id) > 18:
+            if type_id is None:
                 self.issues.warn(
                     P6IssueCode.VALUE_INVALID, table="UDFTYPE", line=line, field="udf_type_id"
                 )
@@ -701,7 +711,7 @@ class _Capture:
                     field="logical_data_type",
                 )
                 continue
-            found[int(type_id)] = (owner, label.value, data_type)
+            found[type_id] = (owner, label.value, data_type)
         return found
 
     def _codes(self) -> tuple[dict[int, str], dict[int, tuple[int, str, str | None, int | None]]]:
@@ -710,11 +720,11 @@ class _Capture:
         type_table = self._table("ACTVTYPE")
         if type_table is not None:
             for line, values in type_table.rows:
-                type_id = self._cell(type_table, values, "actv_code_type_id")
+                type_id = _object_id(self._cell(type_table, values, "actv_code_type_id"))
                 label = read_text(
                     self._cell(type_table, values, "actv_code_type"), _LABEL_CHARACTERS
                 )
-                if not type_id.isdigit() or len(type_id) > 18:
+                if type_id is None:
                     self.issues.warn(
                         P6IssueCode.VALUE_INVALID,
                         table="ACTVTYPE",
@@ -730,12 +740,12 @@ class _Capture:
                         field="actv_code_type",
                     )
                     continue
-                types[int(type_id)] = label.value
+                types[type_id] = label.value
         code_table = self._table("ACTVCODE")
         if code_table is not None:
             for line, values in code_table.rows:
-                code_id = self._cell(code_table, values, "actv_code_id")
-                type_id = self._cell(code_table, values, "actv_code_type_id")
+                code_id = _object_id(self._cell(code_table, values, "actv_code_id"))
+                code_type_id = _object_id(self._cell(code_table, values, "actv_code_type_id"))
                 short = read_text(
                     self._cell(code_table, values, "short_name"),
                     self.limits.captured_text_characters,
@@ -744,26 +754,20 @@ class _Capture:
                     self._cell(code_table, values, "actv_code_name"),
                     self.limits.captured_text_characters,
                 )
-                parent = self._cell(code_table, values, "parent_actv_code_id")
+                parent_cell = self._cell(code_table, values, "parent_actv_code_id")
+                parent = _object_id(parent_cell)
                 if (
-                    not code_id.isdigit()
-                    or len(code_id) > 18
-                    or not type_id.isdigit()
-                    or len(type_id) > 18
+                    code_id is None
+                    or code_type_id is None
                     or short.status is not ReadingStatus.OK
                     or not isinstance(short.value, str)
                     or name.status is ReadingStatus.INVALID
-                    or (parent and (not parent.isdigit() or len(parent) > 18))
+                    or (parent_cell and parent is None)
                 ):
                     self.issues.warn(P6IssueCode.VALUE_INVALID, table="ACTVCODE", line=line)
                     continue
                 description = name.value if isinstance(name.value, str) else None
-                codes[int(code_id)] = (
-                    int(type_id),
-                    short.value,
-                    description,
-                    int(parent) if parent else None,
-                )
+                codes[code_id] = (code_type_id, short.value, description, parent)
         return types, codes
 
     def _selection(self) -> frozenset[str]:
@@ -886,12 +890,8 @@ class _Capture:
 
     def _udf_values(self, table: RawTable) -> None:
         for line, values in table.rows:
-            type_id = self._cell(table, values, "udf_type_id")
-            definition = (
-                self.udf_types.get(int(type_id))
-                if type_id.isdigit() and len(type_id) <= 18
-                else None
-            )
+            type_id = _object_id(self._cell(table, values, "udf_type_id"))
+            definition = None if type_id is None else self.udf_types.get(type_id)
             if definition is None:
                 self.issues.warn(
                     P6IssueCode.VALUE_INVALID, table="UDFVALUE", line=line, field="udf_type_id"
@@ -901,12 +901,10 @@ class _Capture:
             key = f"udf:{owner}:{label}"
             if key not in self.selection:
                 continue
-            fk = self._cell(table, values, "fk_id")
+            entity_id = _object_id(self._cell(table, values, "fk_id"))
             kind = UDF_OWNERS[owner]
-            if (
-                not fk.isdigit()
-                or len(fk) > 18
-                or (owner in self.entity_ids and int(fk) not in self.entity_ids[owner])
+            if entity_id is None or (
+                owner in self.entity_ids and entity_id not in self.entity_ids[owner]
             ):
                 self.issues.warn(
                     P6IssueCode.VALUE_INVALID, table="UDFVALUE", line=line, field="fk_id"
@@ -931,7 +929,6 @@ class _Capture:
                     P6IssueCode.VALUE_INVALID, table="UDFVALUE", line=line, field=source_field
                 )
                 continue
-            entity_id = int(fk)
             activity_row = self.tasks.get(entity_id) if owner == "TASK" else None
             activity = activity_row.values["task_code"] if activity_row is not None else None
             self._add(
@@ -951,38 +948,50 @@ class _Capture:
             )
 
     def _udf_code_label(self, raw: str) -> str | None:
+        if self.udf_codes is None:
+            self.udf_codes = self._index_udf_codes()
+        return self.udf_codes.get(raw) if _OBJECT_ID.fullmatch(raw) else None
+
+    def _index_udf_codes(self) -> dict[str, str | None]:
+        """`udf_code_id` -> label, built once: a per-value scan is quadratic on hostile input.
+
+        The first row of a repeated id wins, as the scan it replaces did.
+        """
         table = self._table("UDFCODE")
-        if table is None or not raw.isdigit():
-            return None
+        labels: dict[str, str | None] = {}
+        if table is None:
+            return labels
+        id_index, name_index = table.index("udf_code_id"), table.index("short_name")
+        if id_index is None:
+            return labels
         for _, values in table.rows:
-            if self._cell(table, values, "udf_code_id") == raw:
-                label = read_text(
-                    self._cell(table, values, "short_name"), self.limits.captured_text_characters
-                )
-                return label.value if isinstance(label.value, str) else None
-        return None
+            if values[id_index] in labels:
+                continue
+            label = read_text(
+                "" if name_index is None else values[name_index],
+                self.limits.captured_text_characters,
+            )
+            labels[values[id_index]] = label.value if isinstance(label.value, str) else None
+        return labels
 
     def _code_values(self, table: RawTable) -> None:
         for line, values in table.rows:
-            task = self._cell(table, values, "task_id")
-            type_id = self._cell(table, values, "actv_code_type_id")
-            code_id = self._cell(table, values, "actv_code_id")
-            if (
-                not (task.isdigit() and type_id.isdigit() and code_id.isdigit())
-                or max(len(task), len(type_id), len(code_id)) > 18
-            ):
+            task = _object_id(self._cell(table, values, "task_id"))
+            type_id = _object_id(self._cell(table, values, "actv_code_type_id"))
+            code_id = _object_id(self._cell(table, values, "actv_code_id"))
+            if task is None or type_id is None or code_id is None:
                 self.issues.warn(P6IssueCode.VALUE_INVALID, table="TASKACTV", line=line)
                 continue
-            label = self.code_types.get(int(type_id))
-            code = self.codes.get(int(code_id))
-            row = self.tasks.get(int(task))
-            if label is None or code is None or row is None or code[0] != int(type_id):
+            label = self.code_types.get(type_id)
+            code = self.codes.get(code_id)
+            row = self.tasks.get(task)
+            if label is None or code is None or row is None or code[0] != type_id:
                 self.issues.warn(P6IssueCode.VALUE_INVALID, table="TASKACTV", line=line)
                 continue
             key = f"code:{label}"
             if key not in self.selection:
                 continue
-            path = self._code_path(int(code_id))
+            path = self._code_path(code_id)
             if path is None:
                 self.issues.warn(
                     P6IssueCode.VALUE_INVALID,
@@ -995,10 +1004,10 @@ class _Capture:
             self._add(
                 P6FieldValue(
                     entity_kind=EntityKind.ACTIVITY,
-                    entity_p6_id=int(task),
+                    entity_p6_id=task,
                     activity_id=activity if isinstance(activity, str) else None,
                     field_key=key,
-                    ordinal=self._ordinal(EntityKind.ACTIVITY, int(task), key),
+                    ordinal=self._ordinal(EntityKind.ACTIVITY, task, key),
                     value_type="text",
                     value=code[1],
                     code_path=path,

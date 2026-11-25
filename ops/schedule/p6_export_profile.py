@@ -9,7 +9,8 @@ cap plus one byte is read, and nothing is written anywhere (no database, no
 network, no file). The report is one canonical JSON object on stdout built by
 `my_pa.domain.schedule.p6.profile` from the same parser and catalogue the
 worker uses; it holds counts, lengths, shapes, names and issue codes only,
-never a value from the file. Exit code 1 when the verdict is `fail`, 0 for
+never a value from the file. Exit code 1 when the verdict is `fail` (or on
+an unexpected error, reported by its type only, never its text), 0 for
 `pass` or `pass_with_findings`, 2 on a usage error (including a path that is
 not a readable regular file). Contract:
 `docs/architecture/schedule-xer-import-contract.md` section 12.
@@ -55,7 +56,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     except OSError:
         print("p6_export_profile=refused not a readable regular file", file=sys.stderr)
         return 2
-    report = export_profile(data)
+    try:
+        report = export_profile(data)
+    except Exception as error:
+        # The message of an unexpected error may quote the file; only its type is shown.
+        print(f"p6_export_profile=error {type(error).__name__}", file=sys.stderr)
+        return 1
     print(json.dumps(report, sort_keys=True, indent=2, ensure_ascii=True))
     return 1 if report["verdict"] == "fail" else 0
 

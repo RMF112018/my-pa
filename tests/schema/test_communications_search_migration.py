@@ -110,7 +110,7 @@ def _literals(expression: object) -> list[str]:
 # ---- the graph and the freeze ------------------------------------------------------
 
 
-def test_the_revision_is_directly_on_the_project_report_revision() -> None:
+def test_the_revision_is_directly_on_the_p6_storage_revision() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 

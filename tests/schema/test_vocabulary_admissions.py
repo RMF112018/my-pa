@@ -99,6 +99,7 @@ def test_the_newest_purpose_revision_admits_since_plus_the_rows() -> None:
         before = pins.ALEMBIC_CHAIN[pins.ALEMBIC_CHAIN.index(revision) - 1]
         assert names <= purposes_admitted_after(before)
         assert not names & purposes_admitted_after(revision)
+    assert purposes_admitted_after(pins.ALEMBIC_HEAD) == frozenset()
 
 
 def test_the_ahead_families_are_exactly_the_rows_the_domain_does_not_declare() -> None:

@@ -20,6 +20,10 @@ newest revision's spelled capability set minus the `SINCE` revision's is
 exactly the union of the rows, and each row's names are spelled in its own
 revision. A new vocabulary revision therefore adds one row here, in the same
 change. This is a helper module, not a test module: pytest does not collect it.
+
+`PURPOSE_ADMISSIONS` is the purpose analogue (communications WP4 ruling R17):
+an older revision's purpose test subtracts `purposes_admitted_after(<its own
+revision>)` the same way, under the same scope and frozen-literal rules.
 """
 
 from __future__ import annotations

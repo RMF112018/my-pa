@@ -1039,15 +1039,49 @@ class RemoteFilesAPI:
         if not isinstance(route, str) or not isinstance(token, str):
             raise PublicationError("my_pa_missing_transfer_ticket")
         try:
-            from scripts.my_pa_files import UPLOADS_PREFIX, Target, upload
+            from scripts.my_pa_files import UPLOADS_PREFIX, Target, upload_handle
         except ImportError:
-            from my_pa_files import UPLOADS_PREFIX, Target, upload  # type: ignore[no-redef]
+            from my_pa_files import UPLOADS_PREFIX, Target, upload_handle  # type: ignore[no-redef]
+        flags = os.O_RDONLY
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
         try:
-            result = await asyncio.to_thread(
-                upload, local, Target(self.origin, route, UPLOADS_PREFIX, 60.0), token
-            )
-        except Exception:
+            descriptor = os.open(local, flags)
+        except OSError:
             raise PublicationError("my_pa_binary_transfer_failed") from None
+        try:
+            observed = hashlib.sha256()
+            observed_size = 0
+            while block := os.read(descriptor, CHUNK_SIZE):
+                observed.update(block)
+                observed_size += len(block)
+            if observed_size != size or observed.hexdigest() != sha256:
+                raise PublicationError("my_pa_binary_transfer_failed")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+
+            def transfer() -> dict[str, Any]:
+                # Duplicate the descriptor admitted above before any other open.
+                # The parent keeps that descriptor until this call returns, including
+                # when the awaiting task is cancelled, so the copy cannot observe a
+                # recycled descriptor number.
+                with os.fdopen(os.dup(descriptor), "rb") as handle:
+                    return upload_handle(
+                        handle, Target(self.origin, route, UPLOADS_PREFIX, 60.0), token
+                    )
+
+            worker = asyncio.create_task(asyncio.to_thread(transfer))
+            try:
+                result = await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                # Join the worker before the descriptor close in `finally`. A worker
+                # failure must not replace the cancellation the caller is handling.
+                with suppress(Exception):
+                    await worker
+                raise
+            except Exception:
+                raise PublicationError("my_pa_binary_transfer_failed") from None
+        finally:
+            os.close(descriptor)
         if not isinstance(result, dict):
             raise PublicationError("my_pa_binary_transfer_invalid_result")
         return result

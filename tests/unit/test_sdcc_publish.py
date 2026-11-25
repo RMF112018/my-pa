@@ -6,11 +6,16 @@ No network, provider accounts, credentials, production file mounts, or source wr
 import asyncio
 import hashlib
 import json
+import os
 import shutil
 import subprocess
+import tempfile
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from types import SimpleNamespace
+from typing import BinaryIO
 
 import pytest
 from scripts import sdcc_publish as publisher
@@ -1080,3 +1085,113 @@ def test_f01_oversized_manifest_and_artifacts_both_use_sealed_transfer(
     assert len(store.sealed_targets) == count + 1
     assert result["manifest_path"] in store.sealed_targets
     assert payload(store, result["receipt_path"])["disposition"] == "READY_FOR_HANDOFF"
+
+
+def _descriptor_path(descriptor: int) -> Path:
+    for candidate in (Path(f"/proc/self/fd/{descriptor}"), Path(f"/dev/fd/{descriptor}")):
+        if candidate.exists():
+            return candidate
+    pytest.skip("this platform has no process descriptor path")
+
+
+def _close_quietly(descriptor: int) -> None:
+    with suppress(OSError):
+        os.close(descriptor)
+
+
+@contextmanager
+def _anonymous_fd(payload: bytes) -> Iterator[int]:
+    """Yield a read-only fd at byte 0 and keep its inode alive until exit."""
+    if hasattr(os, "memfd_create"):
+        descriptor = os.memfd_create("sdcr-f01")
+        try:
+            os.write(descriptor, payload)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            yield descriptor
+        finally:
+            _close_quietly(descriptor)
+        return
+    with tempfile.TemporaryFile() as temporary:
+        temporary.write(payload)
+        temporary.flush()
+        os.lseek(temporary.fileno(), 0, os.SEEK_SET)
+        descriptor = os.dup(temporary.fileno())
+        try:
+            yield descriptor
+        finally:
+            _close_quietly(descriptor)
+
+
+def test_cancelled_transfer_ignores_recycled_descriptor_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """IR-385-F01: cancellation must not let the worker read a reused fd number."""
+    admitted = b"ADMITTED-BYTES!!"
+    unadmitted = b"UNADMITTED-BYTES"
+    assert len(admitted) == len(unadmitted)
+    transmitted: list[bytes] = []
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    def capture(handle: BinaryIO, target: object, token: str, **kwargs: object) -> dict[str, bool]:
+        del target, token, kwargs
+        transmitted.append(handle.read())
+        return {"stored": True}
+
+    monkeypatch.setattr("scripts.my_pa_files.upload_handle", capture)
+    real_to_thread = asyncio.to_thread
+
+    async def hold(func: object, /, *args: object, **kwargs: object) -> object:
+        entered.set()
+        await release.wait()
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(publisher.asyncio, "to_thread", hold)
+
+    class BeginStub:
+        async def call_tool(self, name: str, args: dict) -> SimpleNamespace:
+            assert name == "my_pa.write"
+            return SimpleNamespace(
+                is_error=False,
+                structured_content={
+                    "result": {
+                        "route": "/files/v1/uploads/synthetic",
+                        "upload_token": "synthetic-ticket",
+                    }
+                },
+                content=[],
+            )
+
+    api = RemoteFilesAPI(BeginStub(), "https://synthetic.example/mcp")
+
+    async def scenario(path_number: int, unadmitted_fd: int) -> None:
+        task = asyncio.create_task(
+            api.upload(
+                _descriptor_path(path_number),
+                "SDCR/synthetic/artifact.bin",
+                sha(admitted),
+                len(admitted),
+            )
+        )
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            os.close(path_number)
+            recycled = os.dup(unadmitted_fd)
+            if recycled != path_number:
+                os.dup2(recycled, path_number)
+                os.close(recycled)
+            task.cancel()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+    with _anonymous_fd(admitted) as admitted_fd, _anonymous_fd(unadmitted) as unadmitted_fd:
+        asyncio.run(scenario(admitted_fd, unadmitted_fd))
+    assert transmitted == [admitted]
+    assert unadmitted not in b"".join(transmitted)

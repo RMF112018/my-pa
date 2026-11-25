@@ -102,7 +102,9 @@ injection mechanism. Grant setup and remote deployment are outside Issue #365.
   Linux memfd; seals it against write, shrink and growth, then independently
   verifies its inventory SHA-256, size and narrow secret scan. The byte-route
   client reopens only the process-owned sealed descriptor path, not the mutable
-  output pathname. This invariant also covers ticketed oversized generated
+  output pathname. Cancellation joins that byte-route worker before the admitted
+  descriptor is closed, so a cancelled transfer cannot transmit bytes from a
+  recycled descriptor number. This invariant also covers ticketed oversized generated
   manifests; no pathname-based binary upload fallback remains. Source inode/device and content are revalidated after upload;
   source mutation can cause NOT_READY, never unqualified byte egress.
 - This fail-closed pre-egress barrier requires Linux memfd sealing and procfs.

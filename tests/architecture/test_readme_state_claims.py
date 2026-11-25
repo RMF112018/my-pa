@@ -234,10 +234,12 @@ CURRENT_STATE_DOCS: Final = {
 }
 
 #: A spelled count of revisions or capabilities, in any of the shapes these
-#: documents wrote it: "one hundred and thirty-two Alembic revisions",
-#: "**one hundred and thirty-two** revisions", "at revision one hundred and
-#: thirty-two", "two hundred and ninety-nine capabilities". Any number, right or
-#: wrong: the figure lives in the generated page, so restating it is the defect.
+#: documents wrote it: "<N> Alembic revisions", "**<N>** revisions", "at
+#: revision <N>", "<N> capabilities", "<N> public capabilities", with <N> a
+#: spelled number of a hundred or more. Any number, right or wrong: the figure
+#: lives in the generated page, so restating it is the defect. (The shapes are
+#: written with a placeholder here, and planted below through `pins.spell`, so
+#: this module states no spelled capability count for the sibling sweep to read.)
 _SPELLED_NUMBER: Final = (
     r"(?:(?:one|two|three|four|five|six|seven|eight|nine) (?:thousand|hundred)"
     r"(?: and)?[ -]?)+[a-z-]*"
@@ -289,15 +291,16 @@ def test_current_state_docs_link_to_the_generated_state_and_do_not_restate_it() 
 
 
 def test_the_restated_figure_reader_reads_every_shape_it_replaced() -> None:
+    revisions, capabilities = pins.spell(132), pins.spell(298)
     planted = (
-        "One hundred and thirty-two Alembic revisions cover the schema.\n"
-        "Alembic owns one hundred and thirty-two revisions at head `52a829ef718a`.\n"
-        "current head `52a829ef718a` at revision one hundred and thirty-two.\n"
-        "the candidate has **two hundred and ninety-nine**\ncapabilities.\n"
-        "routes the two hundred and ninety-nine public capabilities over HTTP.\n"
+        f"{revisions.capitalize()} Alembic revisions cover the schema.\n"
+        f"Alembic owns {revisions} revisions at head `0123456789ab`.\n"
+        f"current head `0123456789ab` at revision {revisions}.\n"
+        f"the candidate has **{capabilities}**\ncapabilities.\n"
+        f"routes the {capabilities} public capabilities over HTTP.\n"
     )
     assert len(RESTATED_FIGURE.findall(planted)) == 5
-    assert RESTATED_FIGURE.search("settled at revision one hundred and thirty-two.")
+    assert RESTATED_FIGURE.search(f"settled at revision {revisions}.")
     assert not RESTATED_FIGURE.search(
         "one hundred and twenty-five: one hundred and seventy-four handler-implemented"
     )

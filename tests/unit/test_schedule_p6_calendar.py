@@ -37,10 +37,12 @@ def _day(number: int, *intervals: str) -> str:
     return f"\x7f\x7f(0||{number}()({body}))"
 
 
-def _blob(days: str = "", exceptions: str = "", *, week: bool = True) -> str:
+def _blob(
+    days: str = "", exceptions: str = "", *, week: bool = True, root: str = "CalendarData"
+) -> str:
     week_part = f"\x7f\x7f(0||DaysOfWeek()({days}))" if week else ""
     exception_part = f"\x7f\x7f(0||Exceptions()({exceptions}))" if exceptions else ""
-    return f"(0||CalendarData()({week_part}\x7f\x7f(0||VIEW(ShowTotal|Y)()){exception_part}))"
+    return f"(0||{root}()({week_part}\x7f\x7f(0||VIEW(ShowTotal|Y)()){exception_part}))"
 
 
 def test_week_day_one_is_sunday_and_the_week_is_stored_monday_first() -> None:
@@ -75,6 +77,34 @@ def test_exception_without_interval_is_a_holiday_and_with_intervals_is_work() ->
 
 def test_a_blob_without_days_of_week_has_no_week() -> None:
     assert _parse(_blob(week=False, exceptions="\x7f\x7f(0||0(d|47484)())")).week is None
+
+
+_ROOT_DAYS = (
+    _day(1)
+    + "".join(_day(number, "s|08:00|f|12:00", "s|13:00|f|17:00") for number in range(2, 7))
+    + _day(7)
+)
+_ROOT_EXCEPTIONS = (
+    "\x7f\x7f(0||0(d|47484)())\x7f\x7f(0||1(d|47495)(\x7f\x7f(0||0(s|08:00|f|12:00)())))"
+)
+
+
+def test_an_unnamed_root_is_read_as_calendar_data() -> None:
+    named = _parse(_blob(_ROOT_DAYS, _ROOT_EXCEPTIONS))
+    unnamed_text = _blob(_ROOT_DAYS, _ROOT_EXCEPTIONS, root="")
+    assert unnamed_text.startswith("(0||()(")
+    unnamed = _parse(unnamed_text)
+    assert unnamed == named
+    assert unnamed.week is not None
+    assert unnamed.week[0] == ((480, 720), (780, 1020))
+    assert len(unnamed.exceptions) == 2
+    assert render_calendar_data(unnamed).startswith("(0||CalendarData()(")
+
+
+@pytest.mark.parametrize("root", ["Other", "calendardata", " ", "CalendarData2"])
+def test_a_root_with_any_other_name_is_malformed(root: str) -> None:
+    with pytest.raises(CalendarDataError, match=r"^calendar root malformed$"):
+        _parse(_blob(_ROOT_DAYS, _ROOT_EXCEPTIONS, root=root))
 
 
 @pytest.mark.parametrize(

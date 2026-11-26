@@ -6,12 +6,14 @@ D8, D9, D11, D13, D14, A-3). Its MCP wiring (the capability, the policy, the
 S4; this module answers the Meeting core, the provider binding state and the
 communications section, and never reads a project-report table.
 
-**Set-based.** A batch of 1 to `MAX_CONTEXT_MEETINGS` Meetings costs the same
-statements whatever its size: the seven of `read_context_inputs`, the two
-version reads, the coverage reads (one plus one per communications source),
-the self addresses, the C9 bridge, the one candidate statement for every
-Meeting, and the lanes of the returned messages. The last two are skipped when
-nothing is asked or nothing is returned.
+**Set-based.** A batch costs 14 statements plus one per communications source,
+constant in the number of Meetings (1 to `MAX_CONTEXT_MEETINGS`): the seven of
+`read_context_inputs`, the two version reads, the coverage reads (one plus one
+per source), the self addresses, the C9 bridge, the one candidate statement
+for every Meeting, and the lanes of the returned messages. The last two are
+skipped when nothing is asked or nothing is returned. A constant count is not
+a constant cost: the candidate statement's work grows with the Meetings and
+their windows (WP5-R1 F-1, F-9).
 
 **The inputs of a Meeting.**
 

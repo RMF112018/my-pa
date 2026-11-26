@@ -992,6 +992,10 @@ def _count_world(scene: Scene) -> list[str]:
     ]
 
 
+#: The scene's communications sources: `scene.mail` alone.
+_SOURCES: Final = 1
+
+
 def test_one_meeting_costs_the_same_statements_as_ten(scene: Scene) -> None:
     ids = _count_world(scene)
     with _statements(scene.engine) as one:
@@ -1003,9 +1007,9 @@ def test_one_meeting_costs_the_same_statements_as_ten(scene: Scene) -> None:
         assert all(m.participant_overlap == 1 for m in messages)
     with _statements(scene.engine) as ten:
         assert len(scene.read(ids).meetings) == 10
-    # 7 inputs + 2 versions + 1 + 1 coverage (one source) + self + bridge
-    # + the candidate statement + the lanes.
-    assert len(one) == len(ten) == 15
+    # WP5-R1 F-9: 14 + 1 per source -- 7 inputs + 2 versions + 1 + 1 per source
+    # (coverage) + self + bridge + the candidate statement + the lanes.
+    assert len(one) == len(ten) == 14 + _SOURCES
 
 
 _TABLE: Final = re.compile(r"(?:FROM|JOIN) knowledge\.(\w+)(?: AS (\w+))?")
@@ -1020,7 +1024,7 @@ def test_every_statement_reaches_the_partition_for_every_table_it_names(scene: S
     ids = _count_world(scene)
     with _statements(scene.engine) as seen:
         scene.read(ids[:2])
-    assert len(seen) == 15
+    assert len(seen) == 14 + _SOURCES
     (candidate,) = [s for s, _ in seen if "number_hits" in s]
     aliases = [
         alias for table, alias in _TABLE.findall(candidate) if table == "communication_messages"

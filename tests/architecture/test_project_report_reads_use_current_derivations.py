@@ -142,7 +142,7 @@ class _Link:
         """The view's `derivation_id` equated with a child's derivation column."""
         return any(
             VIEW in view
-            and view_columns == {"derivation_id"}
+            and view_columns == frozenset({"derivation_id"})
             and child & CHILDREN
             and VIEW not in child
             and child_columns
@@ -983,7 +983,8 @@ def _unjoined_child_reads(source: str) -> list[str]:
         for name, values in bindings.items():
             if name == VIEW or module.aliases.get(name) == VIEW:
                 found += [
-                    (value.lineno, f"rebinds the view in {_scope_name(scope)}") for value in values
+                    (getattr(value, "lineno", 0), f"rebinds the view in {_scope_name(scope)}")
+                    for value in values
                 ]
     for node in ast.walk(module.tree):
         if isinstance(node, _Def):

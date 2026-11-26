@@ -124,8 +124,13 @@ def _export(position: int, data: bytes) -> tuple[dict[str, Any], P6ParseResult]:
     return report, result
 
 
-def _pairs(results: Sequence[P6ParseResult]) -> list[dict[str, Any]]:
-    """Each consecutive pair, `earlier -> later`; a run of one project shares a history."""
+def _pairs(results: Sequence[P6ParseResult], *, assume_same: bool = False) -> list[dict[str, Any]]:
+    """Each consecutive pair, `earlier -> later`; a run of one project shares a history.
+
+    P6 update files are often exported as separate project copies, so the identity rule of
+    contract 11.1 (same short name or GUID) calls them different projects; `assume_same`
+    pairs them anyway (the client would send `accept_project_identity_change`).
+    """
     pairs: list[dict[str, Any]] = []
     seen: set[str] = set()
     for index in range(1, len(results)):
@@ -136,7 +141,7 @@ def _pairs(results: Sequence[P6ParseResult]) -> list[dict[str, Any]]:
             pairs.append({**pair, "delta": None, "status": "parse_failed"})
             seen = set()
             continue
-        if not same_project(earlier, later):
+        if not assume_same and not same_project(earlier, later):
             pairs.append({**pair, "delta": None, "status": "different_project"})
             seen = set()
             continue
@@ -150,6 +155,11 @@ def _pairs(results: Sequence[P6ParseResult]) -> list[dict[str, Any]]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="p6_evaluate")
     parser.add_argument("paths", nargs="+", help="the XER exports, oldest first (read-only)")
+    parser.add_argument(
+        "--assume-same-project",
+        action="store_true",
+        help="compare consecutive exports even when the 11.1 identity rule says another project",
+    )
     try:
         arguments = parser.parse_args(argv)
     except SystemExit as exit_:
@@ -166,7 +176,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             report, result = _export(position, data)
             exports.append(report)
             results.append(result)
-        document = {"exports": exports, "pairs": _pairs(results), "schema": EVALUATION_SCHEMA}
+        document = {
+            "exports": exports,
+            "pairs": _pairs(results, assume_same=arguments.assume_same_project),
+            "schema": EVALUATION_SCHEMA,
+        }
         text = json.dumps(document, sort_keys=True, indent=2, ensure_ascii=True)
     except Exception as error:
         # The message of an unexpected error may quote a file; only its type is shown.

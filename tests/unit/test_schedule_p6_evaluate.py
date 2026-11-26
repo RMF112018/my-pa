@@ -37,10 +37,10 @@ def _script() -> ModuleType:
     return module
 
 
-def _run(paths: list[Path], module: ModuleType | None = None) -> tuple[int, str, str]:
+def _run(paths: list[Path], module: ModuleType | None = None, *flags: str) -> tuple[int, str, str]:
     stdout, stderr = io.StringIO(), io.StringIO()
     with redirect_stdout(stdout), redirect_stderr(stderr):
-        code = (module or _script()).main([str(path) for path in paths])
+        code = (module or _script()).main([*flags, *(str(path) for path in paths)])
     return code, stdout.getvalue(), stderr.getvalue()
 
 
@@ -168,6 +168,17 @@ def test_exports_of_different_projects_are_not_compared(tmp_path: Path) -> None:
     assert code == 0
     (pair,) = json.loads(printed)["pairs"]
     assert pair == {"delta": None, "from": 1, "status": "different_project", "to": 2}
+
+
+def test_assume_same_project_compares_a_renamed_copy(tmp_path: Path) -> None:
+    other = cases.CASES["exact"]()
+    other.table("PROJECT").rows[0].update(proj_short_name="SYN-OTHER", guid=fx.guid("SynOther"))
+    paths = _files(tmp_path, cases.build("exact"), other)
+    code, printed, _ = _run(paths, None, "--assume-same-project")
+    assert code == 0
+    (pair,) = json.loads(printed)["pairs"]
+    assert pair["status"] == "compared"
+    assert pair["delta"] is not None
 
 
 def test_a_fatal_export_exits_1_and_its_pair_is_not_compared(tmp_path: Path) -> None:

@@ -369,3 +369,68 @@ def test_a_snapshot_may_omit_both_calendars_and_default() -> None:
     assert built.calendars is None
     assert built.default_calendar is None
     assert built.minutes_per_source_unit == _SAMPLES[_CREATE]["minutes_per_source_unit"]
+
+
+_P6_SNAPSHOT: Final = {
+    "minutes_per_source_unit": ...,
+    "calendars": ...,
+    "default_calendar": ...,
+    "data_date_time": ...,
+}
+
+
+def test_a_p6_snapshot_carries_its_options_instead_of_the_pdf_fields() -> None:
+    """P6 XER S7-4b (import contract section 11.5): the `p6` options object."""
+    built = _build(_CREATE, _with(_CREATE, **_P6_SNAPSHOT, p6={}))
+    assert built.p6 == {}
+    assert built.minutes_per_source_unit is None
+    options = {
+        "calendars": [{"publication_id": "spub_cmdscen0009", "calendar_id": 501}],
+        "default_calendar": "p6-501",
+        "calendar_map": {"p6-500": "my-pa-us-40h-v1"},
+        "include_fields": ["xer:TASK.est_wt"],
+    }
+    assert _build(_CREATE, _with(_CREATE, **_P6_SNAPSHOT, p6=options)).p6 == options
+
+
+@pytest.mark.parametrize(
+    ("changes", "detail"),
+    [
+        ({"p6": []}, SafeDetail.SOURCE_FORMAT),
+        ({"p6": {"lag_calendar": "successor"}}, SafeDetail.SOURCE_FORMAT),
+        ({"p6": {"calendars": []}}, SafeDetail.CALENDAR),
+        ({"p6": {"calendars": [{"publication_id": "spub_cmdscen0009"}]}}, SafeDetail.CALENDAR),
+        (
+            {"p6": {"calendars": [{"publication_id": "sbl_cmdscen0009", "calendar_id": 1}]}},
+            SafeDetail.CALENDAR,
+        ),
+        (
+            {"p6": {"calendars": [{"publication_id": "spub_cmdscen0009", "calendar_id": -1}]}},
+            SafeDetail.CALENDAR,
+        ),
+        ({"p6": {"default_calendar": "x" * 33}}, SafeDetail.CALENDAR),
+        ({"p6": {"calendar_map": {"p6-1": 5}}}, SafeDetail.CALENDAR),
+        ({"p6": {"include_fields": []}}, SafeDetail.FIELD_KEY),
+        ({"p6": {"include_fields": ["k"] * 2}}, SafeDetail.FIELD_KEY),
+        ({"p6": {"include_fields": [f"k{i}" for i in range(51)]}}, SafeDetail.FIELD_KEY),
+        ({"p6": {}, "minutes_per_source_unit": 60}, SafeDetail.MINUTES_PER_SOURCE_UNIT),
+        ({"p6": {}, "calendars": [{}]}, SafeDetail.CALENDAR),
+        ({"p6": {}, "default_calendar": "std"}, SafeDetail.CALENDAR),
+        ({"p6": {}, "data_date_time": "08:00"}, SafeDetail.DATA_DATE_TIME),
+    ],
+)
+def test_p6_options_refuse_each_field_with_its_own_detail(
+    changes: dict[str, Any], detail: SafeDetail
+) -> None:
+    payload = _with(_CREATE, **{**_P6_SNAPSHOT, **changes})
+    assert _refused(_CREATE, payload).safe_details == (detail,)
+
+
+def test_a_fork_takes_no_p6_options() -> None:
+    fork = {
+        **_P6_SNAPSHOT,
+        "from_publication_id": ...,
+        "from_version_id": "sscv_cmdscen0001",
+        "p6": {},
+    }
+    assert _refused(_CREATE, _with(_CREATE, **fork)).safe_details == (SafeDetail.SOURCE_FORMAT,)

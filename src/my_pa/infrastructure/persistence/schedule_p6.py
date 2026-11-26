@@ -29,15 +29,19 @@ from sqlalchemy import (
     ColumnElement,
     Engine,
     Table,
+    Text,
     and_,
+    any_,
     func,
     insert,
+    literal,
     or_,
     select,
     text,
     tuple_,
     update,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, RowMapping
 
@@ -1691,6 +1695,91 @@ class SqlScheduleP6Repository(SqlScheduleRepository, ScheduleP6Repository):
             .order_by(pubs.c.data_date, pubs.c.admitted_at, pubs.c.publication_id)
         ).mappings()
         return tuple(self._p6_ref(principal_id, row) for row in found)
+
+    # ---- S7-4b: the delta's reads (section 11.4) -----------------------------------------
+
+    def p6_activity_field_values(
+        self, principal_id: str, parser_run_id: str, field_keys: Sequence[str] | None
+    ) -> tuple[dict[str, object], ...]:
+        """One run's activity values of `field_keys` (`None`: every key), by Activity ID."""
+        if field_keys is not None and not field_keys:
+            return ()
+        values = schedule_p6_field_values
+        statement = select(*_VALUE_COLUMNS).where(
+            _mine(values, principal_id),
+            values.c.parser_run_id == parser_run_id,
+            values.c.entity_kind == EntityKind.ACTIVITY.value,
+        )
+        if field_keys is not None:
+            # One array parameter: the key filter is in the statement, so a value
+            # of a key not named is never read (F1: the delta's memory bound).
+            statement = statement.where(
+                values.c.field_key == any_(literal(sorted(set(field_keys)), ARRAY(Text)))
+            )
+        found = self._connection.execute(
+            statement.order_by(
+                values.c.activity_id.collate("C"),
+                values.c.field_key.collate("C"),
+                values.c.ordinal,
+            )
+        ).mappings()
+        return tuple(dict(row) for row in found)
+
+    def p6_activity_field_keys(self, principal_id: str, parser_run_id: str) -> frozenset[str]:
+        """One run's distinct captured activity field keys (no value is read)."""
+        values = schedule_p6_field_values
+        found = self._connection.execute(
+            select(values.c.field_key)
+            .distinct()
+            .where(
+                _mine(values, principal_id),
+                values.c.parser_run_id == parser_run_id,
+                values.c.entity_kind == EntityKind.ACTIVITY.value,
+            )
+        ).scalars()
+        return frozenset(str(key) for key in found)
+
+    def p6_prior_observations(
+        self,
+        principal_id: str,
+        series_id: str,
+        *,
+        before: tuple[date, datetime, str],
+        schedule_activity_ids: frozenset[str],
+    ) -> frozenset[str]:
+        """Section 11.3: the Stable Activities a complete P6 publication before A carried.
+
+        The S5 rule over the P6 rows: a publication of the Series ordered before
+        A by `(data_date, admitted_at, publication_id)` whose accepted run links
+        the Stable Activity.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if not schedule_activity_ids:
+            return frozenset()
+        pubs, acts = schedule_publications, schedule_p6_activities
+        found = self._connection.execute(
+            select(acts.c.schedule_activity_id)
+            .distinct()
+            .select_from(
+                pubs.join(
+                    acts,
+                    and_(
+                        matching_partition_criterion(acts, pubs),
+                        acts.c.parser_run_id == pubs.c.accepted_parser_run_id,
+                    ),
+                )
+            )
+            .where(
+                _mine(pubs, principal_id),
+                _mine(acts, principal_id),
+                pubs.c.series_id == series_id,
+                pubs.c.status == _COMPLETE,
+                tuple_(pubs.c.data_date, pubs.c.admitted_at, pubs.c.publication_id)
+                < tuple_(*(literal(value) for value in before)),
+                acts.c.schedule_activity_id.in_(sorted(schedule_activity_ids)),
+            )
+        ).scalars()
+        return frozenset(str(found_id) for found_id in found)
 
 
 #: Section 7.3: the value column each captured value type fills.

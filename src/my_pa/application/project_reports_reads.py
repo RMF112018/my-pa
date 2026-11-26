@@ -203,8 +203,12 @@ __all__ = [
     "RfiNumberMatch",
     "availability_payload",
     "catalog_payload",
+    "check_listing_request",
+    "check_record_history_request",
     "compare_payload",
     "coverage_payload",
+    "normalize_compare",
+    "normalize_query",
     "project_summary_payload",
     "query_payload",
     "record_history_payload",
@@ -766,6 +770,13 @@ def normalize_query(request: QueryRequest) -> _Query:
     )
 
 
+def check_listing_request(
+    project_ids: object, record_family: object
+) -> tuple[tuple[str, ...] | None, RecordFamily | None]:
+    """The `catalog` and `coverage` request: at most 50 distinct Projects, a family or none."""
+    return _project_ids(project_ids), _family(record_family, required=False)
+
+
 def check_record_history_request(
     request: RecordHistoryRequest,
 ) -> tuple[tuple[str, ...], tuple[str, RecordFamily, str] | None]:
@@ -1092,8 +1103,7 @@ class ProjectReportReads:
     # --- catalog ---------------------------------------------------------------------------
 
     def catalog(self, principal_id: str, request: CatalogRequest) -> CatalogAnswer:
-        project_ids = _project_ids(request.project_ids)
-        family = _family(request.record_family, required=False)
+        project_ids, family = check_listing_request(request.project_ids, request.record_family)
         with self._unit_of_work() as unit:
             bindings, chosen = self._projects(unit, principal_id, project_ids)
             versions = (
@@ -1660,8 +1670,7 @@ class ProjectReportReads:
     # --- coverage --------------------------------------------------------------------------
 
     def coverage(self, principal_id: str, request: CoverageRequest) -> CoverageAnswer:
-        project_ids = _project_ids(request.project_ids)
-        family = _family(request.record_family, required=False)
+        project_ids, family = check_listing_request(request.project_ids, request.record_family)
         with self._unit_of_work() as unit:
             bindings, chosen = self._projects(unit, principal_id, project_ids)
             now = self._clock()

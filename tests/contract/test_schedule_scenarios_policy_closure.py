@@ -341,7 +341,8 @@ def test_v13_targets() -> None:
     assert len(_desired(_planes(constraints=True, **everything, schedule_scenarios=True))) == 172
     # Files workspace WP5 (chatllm-data-v14): its own flag, 1,024 -> 2,048.
     # Communications WP4-S5 (chatllm-data-v17): its own flag, 2,048 -> 4,096.
-    assert len(_every_composition()) == 4096
+    # Project-report reads WP4P-S4 (chatllm-data-v18): its own flag, 4,096 -> 8,192.
+    assert len(_every_composition()) == 8192
 
 
 def test_planner_desires_the_22_only_with_both_switches() -> None:

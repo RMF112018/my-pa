@@ -92,6 +92,11 @@ from tests.files_workspace_samples import (
     files_commands,
     files_payloads,
 )
+from tests.project_reports_reads_samples import (
+    PROJECT_REPORTS_READ_CAPABILITIES,
+    project_reports_commands,
+    project_reports_payloads,
+)
 from tests.schedule_scenario_samples import (
     SCHEDULE_SCENARIO_CAPABILITIES,
     scenario_commands,
@@ -573,6 +578,8 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         *FILES_WORKSPACE_CAPABILITIES,
         # Communications intelligence WP4-S5: the 3 reads (scopeless, read switch off).
         *COMMUNICATIONS_READ_CAPABILITIES,
+        # Project-report reads WP4P-S4: the 5 reads (scopeless, read switch off).
+        *PROJECT_REPORTS_READ_CAPABILITIES,
         # Reports Modernization WP06 T14: the 4 transfer uploads need a report
         # content store and the transfer staging; this harness composes neither.
         Capability.REPORTS_TRANSFER_BEGIN,
@@ -2050,6 +2057,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         # Files workspace WP5: synthetic plane samples.
         **files_payloads("http"),
         **communications_payloads("http"),
+        **project_reports_payloads("http"),
     }
 
 
@@ -3431,6 +3439,7 @@ def commands_for(
         # Files workspace WP5: synthetic plane samples.
         **files_commands("http"),
         **communications_commands("http"),
+        **project_reports_commands("http"),
     }
 
 

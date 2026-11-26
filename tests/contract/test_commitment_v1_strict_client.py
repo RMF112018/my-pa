@@ -175,17 +175,19 @@ def test_v1_tool_schemas_are_unchanged_by_s4() -> None:
     # Scenarios S6-3 its 3 plane purposes after those, and the files workspace
     # WP5 its 2 after S6-3's, and communications intelligence WP4-S5
     # `communications_read` after those.
-    assert len(published) == 71
-    basis = published[:-12]
+    assert len(published) == 72
+    basis = published[:-13]
     assert hashlib.sha256(json.dumps(basis, separators=(",", ":")).encode("utf-8")).hexdigest() == (
         BASIS_PURPOSE_ENUM_SHA256
     )
-    assert published[-3:] == [
+    assert published[-4:] == [
         "file_workspace_read",
         "file_workspace_authoring",
         "communications_read",
+        # Project-report reads WP4P-S4 appends `project_reports_read` after it.
+        "project_reports_read",
     ]
-    assert published[-12:-3] == [
+    assert published[-13:-4] == [
         "program_reporting_read",
         "schedule_import",
         "schedule_read",

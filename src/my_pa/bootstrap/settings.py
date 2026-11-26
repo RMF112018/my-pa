@@ -694,6 +694,13 @@ class Settings(StrictModel):
     #: The project-reports step's interval in seconds, env
     #: `MY_PA_PROJECT_REPORTS_INGEST_POLL_SECONDS` (900 by default, 60..86,400).
     project_reports_ingest_poll_seconds: int = Field(default=900, ge=60, le=86_400)
+    #: Project-report read switch (WP4P-W1 design section 2.9), env
+    #: `MY_PA_PROJECT_REPORTS_ENABLED`. Default off. On, the five
+    #: `project_reports.*` reads are served; off, they are withheld and answer
+    #: the standard disabled refusal. Independent of the ingest switch: reads
+    #: may run over a frozen store, and ingest may run with reads off. It
+    #: changes no row by being set.
+    project_reports_enabled: bool = False
     #: KLP-WP-04 (R6 section 3.4, KLP-AC-019). The exact OAuth client ids bound
     #: as Knowledge discovery clients. Compared exactly, never by prefix; empty --
     #: the default -- binds no client, so `knowledge.assertions.submit` and

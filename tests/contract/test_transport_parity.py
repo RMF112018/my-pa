@@ -92,6 +92,10 @@ from tests.conftest import (
     staged_task,
 )
 from tests.files_workspace_samples import FILES_WORKSPACE_CAPABILITIES, files_payloads
+from tests.project_reports_reads_samples import (
+    PROJECT_REPORTS_READ_CAPABILITIES,
+    project_reports_payloads,
+)
 from tests.schedule_scenario_samples import SCHEDULE_SCENARIO_CAPABILITIES, scenario_payloads
 from tests.transports import CLI_OPTIONS, CLI_SCOPE_OPTIONS, TRANSPORTS, Answer
 
@@ -2336,6 +2340,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         # Files workspace WP5: synthetic plane samples.
         **files_payloads("parity"),
         **communications_payloads("parity"),
+        **project_reports_payloads("parity"),
     }
 
 
@@ -2887,6 +2892,8 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         *FILES_WORKSPACE_CAPABILITIES,
         # Communications intelligence WP4-S5: the 3 reads (scopeless, read switch off).
         *COMMUNICATIONS_READ_CAPABILITIES,
+        # Project-report reads WP4P-S4: the 5 reads (scopeless, read switch off).
+        *PROJECT_REPORTS_READ_CAPABILITIES,
     }
 )
 

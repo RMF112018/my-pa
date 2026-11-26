@@ -124,9 +124,9 @@ on the profile, or grant names individually, inside the remote MCP container:
 
 ```sh
 python apps/cli/remote_mcp.py profile-diff --oauth-client-id "$CLIENT" --scope my-pa.read \
-    --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v17
+    --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v18
 python apps/cli/remote_mcp.py profile-apply --oauth-client-id "$CLIENT" --scope my-pa.read \
-    --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v17 --apply
+    --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v18 --apply
 python apps/cli/remote_mcp.py grant --oauth-client-id "$CLIENT" --scope my-pa.read \
     --capability files.upload.begin --purpose file_workspace_authoring --write \
     --resource "$OAUTH_AUDIENCE"

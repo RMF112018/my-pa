@@ -56,6 +56,7 @@ separate transport decision; clients split change sets across versions.
 from __future__ import annotations
 
 import dataclasses
+import re
 from base64 import b64decode
 from binascii import Error as BinasciiError
 from collections.abc import Callable, Mapping
@@ -105,6 +106,7 @@ from my_pa.application.commands import (
     Command,
     CommitIntelligenceArtifact,
     CommunicationsCoverage,
+    CompareProjectReports,
     CompareScheduleBaseline,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
@@ -245,12 +247,16 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     PreviewFile,
+    ProjectReportRecordHistory,
+    ProjectReportsCatalog,
+    ProjectReportsCoverage,
     ProposeRelationshipMemory,
     ProposeScheduleBaseline,
     PublishConstraint,
     PublishGeneralReport,
     PullGoodNotesWork,
     PutCanvasWorkspace,
+    QueryProjectReports,
     ReadCapture,
     ReadCommitment,
     ReadCommitmentV2,
@@ -499,6 +505,8 @@ PAYLOAD_KEY: Final = "payload"
 #: `test_the_request_ceiling_admits_the_largest_request_the_contract_allows`,
 #: which builds identifiers at the real maximum and measures the result.
 _IDENTIFIER_JSON_BYTES: Final = 75
+#: An exact ISO calendar day (the project-report reads' `date_from` / `date_to`).
+_ISO_DAY: Final = re.compile(r"\A[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 
 #: Everything a request carries that is not `sources.enroll`'s object list. An
 #: enrollment may name 32 media types and neither the domain nor the contract
@@ -2917,6 +2925,34 @@ def _communications_shapes(payload: Mapping[str, Any]) -> dict[str, Any]:
     return converted
 
 
+def _project_reports_shapes(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The project-report reads (WP4P-S4): ISO dates become `date`, arrays tuples.
+
+    A date that is not an exact `YYYY-MM-DD` string is passed on as given and
+    refused by the command. Nothing else converts; the commands check every
+    shape and bound.
+    """
+    converted = dict(payload)
+    for name in ("date_from", "date_to"):
+        supplied = converted.get(name)
+        if isinstance(supplied, str) and _ISO_DAY.fullmatch(supplied):
+            with suppress(ValueError):
+                converted[name] = date.fromisoformat(supplied)
+    for name in (
+        "project_ids",
+        "status_classes",
+        "statuses",
+        "identifiers",
+        "group_keys",
+        "measures",
+        "record_ids",
+    ):
+        supplied = converted.get(name)
+        if isinstance(supplied, list):
+            converted[name] = tuple(supplied)
+    return converted
+
+
 def _update_issue(payload: Mapping[str, Any]) -> Command:
     """`issues.update`: `clear_fields` becomes a tuple; nothing else converts.
 
@@ -3182,6 +3218,21 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         ),
         Capability.COMMUNICATIONS_COVERAGE: lambda payload: CommunicationsCoverage(
             **_communications_shapes(payload)
+        ),
+        Capability.PROJECT_REPORTS_CATALOG: lambda payload: ProjectReportsCatalog(
+            **_project_reports_shapes(payload)
+        ),
+        Capability.PROJECT_REPORTS_QUERY: lambda payload: QueryProjectReports(
+            **_project_reports_shapes(payload)
+        ),
+        Capability.PROJECT_REPORTS_RECORD_HISTORY: lambda payload: ProjectReportRecordHistory(
+            **_project_reports_shapes(payload)
+        ),
+        Capability.PROJECT_REPORTS_COMPARE: lambda payload: CompareProjectReports(
+            **_project_reports_shapes(payload)
+        ),
+        Capability.PROJECT_REPORTS_COVERAGE: lambda payload: ProjectReportsCoverage(
+            **_project_reports_shapes(payload)
         ),
         Capability.RECORD_EVENTS_LIST: _list_record_events,
         Capability.RECORD_EVENTS_PROVENANCE: lambda payload: GetRecordEventProvenance(**payload),

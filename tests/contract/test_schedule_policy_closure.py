@@ -541,8 +541,9 @@ def test_v11_targets() -> None:
     assert len(_desired(default_all)) == 150
     # The `schedule_scenarios` flag doubles the compositions, 512 -> 1,024, and
     # the files workspace's `files_workspace` flag again, 1,024 -> 2,048, and
-    # communications WP4-S5's `communications` flag again, 2,048 -> 4,096.
-    assert len(_every_composition()) == 4096
+    # communications WP4-S5's `communications` flag again, 2,048 -> 4,096, and
+    # project-report reads WP4P-S4's `project_reports` flag, 4,096 -> 8,192.
+    assert len(_every_composition()) == 8192
 
 
 def test_planner_desires_schedule_reads_only_with_the_switch() -> None:

@@ -371,6 +371,11 @@ def test_capability_names_match_the_published_contract() -> None:
         "communications.search",
         "communications.read",
         "communications.coverage",
+        "project_reports.catalog",
+        "project_reports.query",
+        "project_reports.record_history",
+        "project_reports.compare",
+        "project_reports.coverage",
     }
 
 

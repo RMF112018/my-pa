@@ -1216,6 +1216,25 @@ class Capability(StrEnum):
     #: WP4-S5 (sections 9, 16): the coverage of a range over the Principal's own
     #: communications sources. Same purpose, scope and switch as the search.
     COMMUNICATIONS_COVERAGE = "communications.coverage"
+    #: Project-report reads WP4P-S4 (WP4P-W1 design section 2.1, Manager ruling
+    #: D1): the Principal's report series per Project -- each with its versions,
+    #: its latest version block and the measures and filters it offers. A read
+    #: under `Purpose.PROJECT_REPORTS_READ` only; scopeless; not operator-only;
+    #: withheld unless `MY_PA_PROJECT_REPORTS_ENABLED`.
+    PROJECT_REPORTS_CATALOG = "project_reports.catalog"
+    #: WP4P-S4: the detail lines of one Project's family (latest version of each
+    #: series by default), filtered, with Decimal measures. Same purpose, scope
+    #: and switch as the catalog.
+    PROJECT_REPORTS_QUERY = "project_reports.query"
+    #: WP4P-S4 (ruling D1): one record's observations across every version that
+    #: observed it. Same purpose, scope and switch as the catalog.
+    PROJECT_REPORTS_RECORD_HISTORY = "project_reports.record_history"
+    #: WP4P-S4: two versions of one series compared (added, not observed,
+    #: changed, measure deltas). Same purpose, scope and switch as the catalog.
+    PROJECT_REPORTS_COMPARE = "project_reports.compare"
+    #: WP4P-S4: per-source coverage of the Principal's report series. Same
+    #: purpose, scope and switch as the catalog.
+    PROJECT_REPORTS_COVERAGE = "project_reports.coverage"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1954,6 +1973,13 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.COMMUNICATIONS_SEARCH: frozenset({Purpose.COMMUNICATIONS_READ}),
         Capability.COMMUNICATIONS_READ: frozenset({Purpose.COMMUNICATIONS_READ}),
         Capability.COMMUNICATIONS_COVERAGE: frozenset({Purpose.COMMUNICATIONS_READ}),
+        # Project-report reads WP4P-S4 (design section 2.1): the five reads, each
+        # to exactly the one purpose of their own.
+        Capability.PROJECT_REPORTS_CATALOG: frozenset({Purpose.PROJECT_REPORTS_READ}),
+        Capability.PROJECT_REPORTS_QUERY: frozenset({Purpose.PROJECT_REPORTS_READ}),
+        Capability.PROJECT_REPORTS_RECORD_HISTORY: frozenset({Purpose.PROJECT_REPORTS_READ}),
+        Capability.PROJECT_REPORTS_COMPARE: frozenset({Purpose.PROJECT_REPORTS_READ}),
+        Capability.PROJECT_REPORTS_COVERAGE: frozenset({Purpose.PROJECT_REPORTS_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

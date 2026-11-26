@@ -21,22 +21,22 @@ plans link here instead of restating them.
 
 | Figure | Current |
 |---|---|
-| Alembic head | `fa18ef3d9bc0` |
-| Alembic revisions | 136 |
+| Alembic head | `3b3373d8268e` |
+| Alembic revisions | 137 |
 
 ## Vocabulary
 
 | Figure | Current |
 |---|---|
-| Capabilities | 304 |
-| Purposes | 71 |
+| Capabilities | 309 |
+| Purposes | 72 |
 | IdKinds | 197 |
 | SafeDetails | 466 |
-| ChatLLM data profile version | `chatllm-data-v17` |
-| ChatLLM policy entries | 304 |
+| ChatLLM data profile version | `chatllm-data-v18` |
+| ChatLLM policy entries | 309 |
 | ChatLLM `CHATLLM_COMPATIBILITY_ONLY` entries | 2 |
 | ChatLLM `CHATLLM_CONTROL_PLANE_EXCLUDED` entries | 33 |
-| ChatLLM `CHATLLM_DATA_CONDITIONAL` entries | 179 |
+| ChatLLM `CHATLLM_DATA_CONDITIONAL` entries | 184 |
 | ChatLLM `CHATLLM_DATA_REQUIRED` entries | 88 |
 | ChatLLM `CHATLLM_OPERATOR_DECISION_REQUIRED` entries | 2 |
 | ChatLLM `CHATLLM_RETIRED` entries | 0 |
@@ -45,9 +45,9 @@ plans link here instead of restating them.
 
 | Figure | Current |
 |---|---|
-| Published tools with an accepted payload digest | 304 |
+| Published tools with an accepted payload digest | 309 |
 | v1 view models with an accepted field digest | 40 |
-| Acceptance ledger entries | 6 |
+| Acceptance ledger entries | 7 |
 
 ## Test tiers and corpora
 

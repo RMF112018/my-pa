@@ -52,9 +52,21 @@
       "reason": "WP4-R2 G6: the communications cursor schema publishes maxLength 2048 (contract section 16)",
       "section": "tools",
       "to": "c77a238a49c8a937551c853821d4c0eebe7d88a152defb9ad295fd6f2f0c9f0e"
+    },
+    {
+      "date": "2026-11-25",
+      "kind": "added",
+      "names": [
+        "project_reports.catalog",
+        "project_reports.compare",
+        "project_reports.coverage",
+        "project_reports.query",
+        "project_reports.record_history"
+      ],
+      "section": "tools"
     }
   ],
-  "seal": "c5029461532e440a0212a88c1f4c59a3b54094222fe331078e1aba2f1bccf890",
+  "seal": "65c7443af4f9cc11f0b35fcdb309024f971e2a814381112bf197b4df19e8ac87",
   "tools": {
     "canvas.workspace.get": "65876ad8f7197a4e8465b3a9019dd234b782f605dfda37d10c1026b660941fb3",
     "canvas.workspace.put": "985bbd6cd28bbaffe0520daa1883b0503a592f4369171a366ca14de8b43a5a8b",
@@ -261,6 +273,11 @@
     "programs.overview": "28a20ac098b923d152829f14e24f75d94014fe225cd04f84e9df80500b09f850",
     "project_controls.configure": "3a3c2ca1101aec02551e33f9a77685599984d32b134b0fa417d9fd157d590751",
     "project_controls.status": "bf7f9192978f1785b0939d890a89c3b562db9125d34cb44f988d990e2bbc509c",
+    "project_reports.catalog": "2d678389c451245076ddb69b6e1eaf59f717c4b0c060c6107272a9fda24f2564",
+    "project_reports.compare": "81192f6b7ef68f47200a882ed8aa9375da13c4cc94d55ceaa6021331d798afe8",
+    "project_reports.coverage": "4b8a0e8044d6136b6639d5512513bd1099e94a52d6b473c0ddbaec79d950091c",
+    "project_reports.query": "8beaa5bcf34786805697ba08ef7fbdd2c6dc7df628969b22759012ebb24c0dd5",
+    "project_reports.record_history": "61c3fb86e914853172d6a59454f5615505614e65297a27c991dcbc3a8e04bd40",
     "record_events.list": "1efe7e2fb210ad5cec490222b0c221377e2df62ca4bcaf0f05b9c791a896ced1",
     "record_events.provenance": "3f30d92e5aedac32468ebb2271dda8fd5742d4afbcdf20ef4b26a95997f9ff7c",
     "records.associations.assert": "539f2144d0157da5d87e912812de345d0af90774f6043c495cf21dc95eb7b149",

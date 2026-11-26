@@ -216,6 +216,8 @@ def test_non_lineage_tool_annotations_are_unchanged() -> None:
         }
         # Communications intelligence WP4-S5: the three reads are new.
         - {name for name in _tools() if name.startswith("communications.")}
+        # Project-report reads WP4P-S4: the five reads are new.
+        - {name for name in _tools() if name.startswith("project_reports.")}
     )
     assert len(others) == 192
     for name in sorted(others):

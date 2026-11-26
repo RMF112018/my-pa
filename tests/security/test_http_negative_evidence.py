@@ -84,6 +84,10 @@ from tests.contract.test_transport_parity import (
     staged_project_entity,
 )
 from tests.files_workspace_samples import FILES_WORKSPACE_CAPABILITIES, files_payloads
+from tests.project_reports_reads_samples import (
+    PROJECT_REPORTS_READ_CAPABILITIES,
+    project_reports_payloads,
+)
 from tests.schedule_scenario_samples import SCHEDULE_SCENARIO_CAPABILITIES, scenario_payloads
 from tests.wire import Reply, Wire, serve
 
@@ -357,6 +361,8 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         *FILES_WORKSPACE_CAPABILITIES,
         # Communications intelligence WP4-S5: the 3 reads (scopeless, read switch off).
         *COMMUNICATIONS_READ_CAPABILITIES,
+        # Project-report reads WP4P-S4: the 5 reads (scopeless, read switch off).
+        *PROJECT_REPORTS_READ_CAPABILITIES,
     }
 )
 
@@ -1773,6 +1779,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         # Files workspace WP5: synthetic plane samples.
         **files_payloads("wire"),
         **communications_payloads("wire"),
+        **project_reports_payloads("wire"),
     }
 
 
@@ -2535,6 +2542,8 @@ SCOPED_CAPABILITIES = [
         *FILES_WORKSPACE_CAPABILITIES,
         # Communications intelligence WP4-S5: the 3 reads (scopeless, read switch off).
         *COMMUNICATIONS_READ_CAPABILITIES,
+        # Project-report reads WP4P-S4: the 5 reads (scopeless, read switch off).
+        *PROJECT_REPORTS_READ_CAPABILITIES,
     }
 ]
 

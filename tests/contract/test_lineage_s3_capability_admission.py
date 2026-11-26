@@ -322,12 +322,14 @@ def test_existing_v1_shapes_are_unchanged_by_s3() -> None:
     # WP05b `report_hold` and `report_retention` after that.
     # Files workspace WP5 appends its 2 purposes after S6-3's (contract 1.2).
     # Communications intelligence WP4-S5 appends `communications_read` after them.
-    assert published[-3:] == [
+    assert published[-4:] == [
         "file_workspace_read",
         "file_workspace_authoring",
         "communications_read",
+        # Project-report reads WP4P-S4 appends `project_reports_read` after it.
+        "project_reports_read",
     ]
-    assert published[-16:-3] == [
+    assert published[-17:-4] == [
         *basis_tail,
         "lineage_backfill",
         "program_reporting_read",

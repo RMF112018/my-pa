@@ -497,6 +497,15 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.COMMUNICATIONS_SEARCH,
         Capability.COMMUNICATIONS_READ,
         Capability.COMMUNICATIONS_COVERAGE,
+        # Project-report reads WP4P-S4 (design section 2.1): the five reads name
+        # the caller's own project-report rows (a Project, a series, a version or
+        # a record of the caller's own partition), never a configured source or
+        # an enrollment.
+        Capability.PROJECT_REPORTS_CATALOG,
+        Capability.PROJECT_REPORTS_QUERY,
+        Capability.PROJECT_REPORTS_RECORD_HISTORY,
+        Capability.PROJECT_REPORTS_COMPARE,
+        Capability.PROJECT_REPORTS_COVERAGE,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

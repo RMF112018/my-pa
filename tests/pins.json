@@ -136,12 +136,13 @@
       "61fafdfd2986",
       "0d4e247d03cb",
       "d8383150cf72",
-      "fa18ef3d9bc0"
+      "fa18ef3d9bc0",
+      "3b3373d8268e"
     ],
     "heads": [
-      "fa18ef3d9bc0"
+      "3b3373d8268e"
     ],
-    "revision_files": 136
+    "revision_files": 137
   },
   "census": {
     "architecture": 10306,
@@ -157,20 +158,20 @@
     "classes": {
       "CHATLLM_COMPATIBILITY_ONLY": 2,
       "CHATLLM_CONTROL_PLANE_EXCLUDED": 33,
-      "CHATLLM_DATA_CONDITIONAL": 179,
+      "CHATLLM_DATA_CONDITIONAL": 184,
       "CHATLLM_DATA_REQUIRED": 88,
       "CHATLLM_OPERATOR_DECISION_REQUIRED": 2,
       "CHATLLM_RETIRED": 0
     },
-    "policy_sha256": "9c0493d284d072c03f8a8ef7307664da8a3838182a78d30668f53b4ce7628b29",
-    "version": "chatllm-data-v17"
+    "policy_sha256": "d1d78779ad83b1897b5adffa9c8335c797934f8475e71746aaa70727d803ba03",
+    "version": "chatllm-data-v18"
   },
   "counts": {
-    "alembic_revisions": 136,
-    "capability": 304,
-    "chatllm_policy_entries": 304,
+    "alembic_revisions": 137,
+    "capability": 309,
+    "chatllm_policy_entries": 309,
     "id_kind": 197,
-    "purpose": 71,
+    "purpose": 72,
     "safe_detail": 466
   },
   "vocabulary": {
@@ -380,6 +381,11 @@
       "programs.overview",
       "project_controls.configure",
       "project_controls.status",
+      "project_reports.catalog",
+      "project_reports.compare",
+      "project_reports.coverage",
+      "project_reports.query",
+      "project_reports.record_history",
       "record_events.list",
       "record_events.provenance",
       "records.associations.assert",
@@ -728,6 +734,7 @@
       "meeting_note_history_read",
       "meeting_read",
       "program_reporting_read",
+      "project_reports_read",
       "record_event_provenance_read",
       "record_event_read",
       "record_lineage_authoring",

@@ -109,6 +109,10 @@ class ChatLLMCompositionPlanes:
     #: `MY_PA_COMMUNICATIONS_ENABLED`. Default off, as the switch is; needs no
     #: other plane.
     communications: bool = False
+    #: Project-report reads WP4P-S4 (chatllm-data-v18):
+    #: `MY_PA_PROJECT_REPORTS_ENABLED`. Default off, as the switch is; needs no
+    #: other plane.
+    project_reports: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,6 +248,10 @@ def _prerequisite_holds(
         # The service's own condition: the read switch (communications contract
         # section 16; `ApplicationService.available_capabilities`).
         return planes.communications
+    if prerequisite is ChatLLMCompositionPrerequisite.PROJECT_REPORTS:
+        # The service's own condition: the read switch (WP4P-W1 design section
+        # 2.9; `ApplicationService.available_capabilities`).
+        return planes.project_reports
     raise RuntimeError(f"unknown ChatLLM composition prerequisite: {prerequisite!r}")
 
 

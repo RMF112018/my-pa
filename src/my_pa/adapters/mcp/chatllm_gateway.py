@@ -90,6 +90,8 @@ _FEATURE_BY_FAMILY: Final[Mapping[str, str]] = {
     "files": "files",
     # Communications intelligence WP4-S5 (contract section 16): the 3 reads.
     "communications": "communications",
+    # Project-report reads WP4P-S4 (design section 2.9): the 5 reads.
+    "project_reports": "project_reports",
 }
 
 _WRAPPER_SCHEMA: Final[dict[str, Any]] = {

@@ -6,10 +6,11 @@
   migration `d8383150cf72` and its table declarations) is merged (#387); slice S7-3 (the
   admission service and the worker's P6 path, no migration, no capability) is merged (#389);
   slice S7-4a (the 7 P6 capabilities, switch, policy, ChatLLM `chatllm-data-v19`, field registry,
-  reads and the format-aware S5 reads, no migration) is implemented on
-  `feat/schedule-xer-surface`, not merged; S7-4b (delta and P6 scenario snapshot) is not yet
-  implemented; nothing else is implemented, and nothing is migrated
-  on any shared database, granted, switched on or deployed. Every other slice (S7-4b to S7-6),
+  reads and the format-aware S5 reads, no migration) is merged (#391); slice S7-4b (the delta
+  `cpm-workbench-p6-delta-v1` and the P6 scenario snapshot, no migration, no new capability) is
+  implemented on `feat/schedule-xer-handoff`, not merged; nothing else is implemented, and
+  nothing is migrated on any shared database, granted, switched on or deployed. Every other
+  slice (S7-5, S7-6),
   gate G-1 and every other operator gate in the contract stays open. The operator answered the contract's open
   questions on 2026-11-23 (recorded below and in contract section 17); only S7-6 stays
   undecided.
@@ -223,12 +224,16 @@ sniff, replay, Series resolution, PDF-Series refusal, content idempotency, the s
 Principal), the switch `MY_PA_SCHEDULE_P6_ENABLED`, and the `schedule` worker's P6 path H1-H8 in
 the existing contained child (the parent never imports the parser; the frame is decoded by the
 catalogue, re-rendered and bound to the bytes).
-S7-4a implemented on `feat/schedule-xer-surface` (not merged; no migration): the 7 P6 capabilities
+S7-4a merged (#391; no migration): the 7 P6 capabilities
 of contract section 10.1 behind `MY_PA_SCHEDULE_P6_ENABLED` (on every closed surface; the 2
 writes idempotent and client-bound remotely), ChatLLM `chatllm-data-v19`, the field registry and
 the compare-and-swap capture chain, the P6 reads with the section 7.7 filter grammar, the S5
-reads format-aware for P6 publications, and the snapshot quota and import budgets. S7-4b (the
-delta and the P6 scenario snapshot) is not yet implemented.
-Gate G-1 (the script on the operator's sample) is not run. S7-4b and S7-5 (and the optional
+reads format-aware for P6 publications, and the snapshot quota and import budgets. S7-4b
+implemented on `feat/schedule-xer-handoff` (not merged; no migration, no new capability): the
+P6 delta `cpm-workbench-p6-delta-v1` (`schedule_changes.list` and `schedule_baselines.compare`
+choose the algorithm by the Series' format) and the P6 scenario snapshot of contract section
+11.5 (`schedule_scenarios.create` with its `p6` options); the S6 engine, content schemas and
+stored version columns are unchanged.
+Gate G-1 (the script on the operator's sample) is not run. S7-5 (and the optional
 S7-6) are not implemented; the contract defines their acceptance tests, the prove-red plan and
 the operator gates.

@@ -337,10 +337,11 @@ def test_the_s5_reads_serve_a_complete_p6_publication(w: World) -> None:
     assert second["activities"][0]["published_activity_id"] != row["published_activity_id"]
     history = w.ok(ReadScheduleActivityHistory(schedule_activity_id=row["schedule_activity_id"]))
     assert [item["publication_id"] for item in history["observations"]] == [publication]
-    # D5 is S7-4b: the P6 delta is refused, never computed with the PDF algorithm.
+    # D5 (S7-4b): the P6 delta has the S5 ordering rule; a publication is never
+    # compared with itself (the delta itself is `test_schedule_p6_handoff.py`).
     assert w.refused(
         ListScheduleChanges(from_publication_id=publication, to_publication_id=publication)
-    ) == ("unsupported", ["source_format"])
+    ) == ("invalid_request", ["to_publication_id"])
     for answer in (admitted, read, listed, series_list, activities, history):
         flat = _flat(answer)
         # Never served (10.4): the workspace path, the ERMHDR user fields, and a

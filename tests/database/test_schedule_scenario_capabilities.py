@@ -1542,6 +1542,9 @@ def test_a_snapshot_without_calendars_takes_the_standard_calendar(
     """E7 (application): no calendars and no default -> `my-pa-us-40h-v1`, a v1 content."""
     publication = _publish(rt, w, monkeypatch)
     created = plane.ok(_create(publication, calendars=None, default_calendar=None))
+    # S7-4b (import contract 11.5, as built (5)): the create answer says so.
+    assert created["default_calendar_standard"] is True
+    assert plane.ok(_create(publication))["default_calendar_standard"] is False
     version = plane.ok(ReadScheduleScenarioVersion(version_id=created["version_id"]))
     assert [calendar["key"] for calendar in version["calendars"]] == ["my-pa-us-40h-v1"]
     assert version["settings"]["default_calendar"] == "my-pa-us-40h-v1"

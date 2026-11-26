@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Final, get_args
 
 import pytest
@@ -459,6 +459,37 @@ def test_a_foreign_project_is_not_found_as_an_unknown_one(reads_world: ReadsScen
         assert answer.error.code is ErrorCode.NOT_FOUND
     assert answers[0].error is not None and answers[1].error is not None
     assert answers[0].error.safe_details == answers[1].error.safe_details
+
+
+def test_iso_date_strings_normalize_to_dates_and_a_dated_query_answers(
+    reads_world: ReadsScene,
+) -> None:
+    """Ruling R3-04: the wire sends `YYYY-MM-DD` text; normalization makes it a `date`.
+
+    Every other case builds `date(...)` directly, so a normalizer that stopped
+    converting (mutant M13) refused every client date filter as `date_from`.
+    """
+    dated = {
+        "project_id": RFI_PROJECT[1],
+        "record_family": "rfis",
+        "date_field": "rfi.date_initiated",
+        "date_from": "2026-11-01",
+        "date_to": "2026-11-05",
+    }
+    me = _principal(reads_world)
+    _metadata, command = normalize(QUERY.value, document(QUERY, me.principal_id, dated))
+    assert isinstance(command, QueryProjectReports)
+    assert (command.date_from, command.date_to) == (date(2026, 11, 1), date(2026, 11, 5))
+    assert type(command.date_from) is date and type(command.date_to) is date
+    service = _service(reads_world, enabled=True)
+    answer = _invoke(service, me, QUERY, dated, grants=GRANTS)
+    assert answer.error is None and answer.result is not None
+    numbers = sorted(row["fields"]["rfi.number"] for row in answer.result["rows"])
+    assert numbers == ["CD 50%-174", "GMP-174", "GMP-175", "GMP-176"]
+    undated = {k: v for k, v in dated.items() if not k.startswith("date_")}
+    everything = _invoke(service, me, QUERY, undated, grants=GRANTS)
+    assert everything.result is not None
+    assert len(everything.result["rows"]) > len(numbers)
 
 
 # ---- helpers ------------------------------------------------------------------------------

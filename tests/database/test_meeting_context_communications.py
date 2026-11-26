@@ -934,13 +934,25 @@ _TABLE: Final = re.compile(r"(?:FROM|JOIN) knowledge\.(\w+)(?: AS (\w+))?")
 
 
 def test_every_statement_reaches_the_partition_for_every_table_it_names(scene: Scene) -> None:
+    """Each `FROM`/`JOIN` occurrence of a table reaches the partition through its own name.
+
+    WP5-R1 F-5: the candidate statement aliases every occurrence of the messages
+    table, so one occurrence's predicate cannot stand in for another's (M3).
+    """
     ids = _count_world(scene)
     with _statements(scene.engine) as seen:
         scene.read(ids[:2])
     assert len(seen) == 15
+    (candidate,) = [s for s, _ in seen if "number_hits" in s]
+    aliases = [
+        alias for table, alias in _TABLE.findall(candidate) if table == "communication_messages"
+    ]
+    assert len(aliases) == len(set(aliases)) == 6 and all(aliases), aliases
     for statement, parameters in seen:
         named = _TABLE.findall(statement)
         assert named, statement
+        occurrences = [alias or table for table, alias in named]
+        assert len(occurrences) == len(set(occurrences)), statement
         for table, alias in named:
             reference = alias or f"knowledge.{table}"
             assert re.search(rf"(?<![\w.]){re.escape(reference)}\.principal_id\b", statement), (

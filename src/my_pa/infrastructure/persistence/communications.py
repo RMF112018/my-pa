@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from sqlalchemy import (
     BigInteger,
@@ -1291,6 +1291,10 @@ def _context_order(columns: _Columns) -> tuple[ColumnElement[Any], ...]:
     )
 
 
+def _messages_alias(name: str) -> Table:
+    return cast(Table, communication_messages.alias(name))
+
+
 def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -> Select[Any]:
     """One statement for every Meeting of the batch (module docstring; WP5 design #16).
 
@@ -1309,9 +1313,20 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
     a `strpos` superset pre-filter. The answer is row-for-row that of the
     per-pair form it replaced (`tests/database/test_meeting_context_equivalence.py`).
     """
-    messages = communication_messages
     participants = communication_participants
     identifiers = communication_identifiers
+    # WP5-R1 F-5: each occurrence of the messages table is its own alias, so each
+    # is seen (and checked) to reach the partition through its own predicate.
+    participant_messages, identifier_messages, title_messages = (
+        _messages_alias("participant_messages"),
+        _messages_alias("identifier_messages"),
+        _messages_alias("title_messages"),
+    )
+    number_messages, candidate_messages, page_messages = (
+        _messages_alias("number_messages"),
+        _messages_alias("candidate_messages"),
+        _messages_alias("page_messages"),
+    )
     meetings = query.meetings
     second = timedelta(seconds=1)
 
@@ -1352,7 +1367,7 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
         .render_derived()
     ).subquery("wanted")
 
-    def windowed() -> ColumnElement[bool]:
+    def windowed(messages: Table) -> ColumnElement[bool]:
         return and_(
             messages.c.message_time >= inputs.c.w_start,
             messages.c.message_time < inputs.c.w_until,
@@ -1381,15 +1396,15 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
                 ),
             )
             .join(
-                messages,
+                participant_messages,
                 and_(
-                    matching_partition_criterion(messages, participants),
-                    messages.c.message_id == participants.c.message_id,
+                    matching_partition_criterion(participant_messages, participants),
+                    participant_messages.c.message_id == participants.c.message_id,
                 ),
             )
             .join(inputs, inputs.c.ord == addresses.c.ord)
         )
-        .where(_mine(messages, principal_id), windowed())
+        .where(_mine(participant_messages, principal_id), windowed(participant_messages))
     )
     # Identifiers: `(kind, value)` under the read version (the value index).
     by_identifier = (
@@ -1413,32 +1428,36 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
                 ),
             )
             .join(
-                messages,
+                identifier_messages,
                 and_(
-                    matching_partition_criterion(messages, identifiers),
-                    messages.c.message_id == identifiers.c.message_id,
+                    matching_partition_criterion(identifier_messages, identifiers),
+                    identifier_messages.c.message_id == identifiers.c.message_id,
                 ),
             )
             .join(inputs, inputs.c.ord == wanted.c.ord)
         )
-        .where(_mine(messages, principal_id), windowed())
+        .where(_mine(identifier_messages, principal_id), windowed(identifier_messages))
     )
     # Title terms: `english`, the stored document (its GIN index), per Meeting window.
     title_query = func.to_tsquery(_config("english"), inputs.c.title_q, type_=TSQUERY)
     by_title = (
         select(
             inputs.c.ord,
-            messages.c.message_id,
+            title_messages.c.message_id,
             no_text.label("key"),
             no_text.label("ident"),
             literal(True, Boolean).label("title_hit"),
             no.label("number_hit"),
-            _integer_rank(messages.c.search_document, title_query).label("rank"),
+            _integer_rank(title_messages.c.search_document, title_query).label("rank"),
         )
-        .select_from(inputs.join(messages, and_(_mine(messages, principal_id), windowed())))
+        .select_from(
+            inputs.join(
+                title_messages, and_(_mine(title_messages, principal_id), windowed(title_messages))
+            )
+        )
         .where(
             inputs.c.title_q.is_not(None),
-            messages.c.search_document.bool_op("@@")(title_query),
+            title_messages.c.search_document.bool_op("@@")(title_query),
         )
     )
     # The Project number (one exact `simple` term, ruling D6), set-based (WP5-R1 F-1):
@@ -1474,18 +1493,20 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
     )
     numbers = select(spans, needle.label("needle")).cte("numbers").prefix_with("MATERIALIZED")
     simple_text = (
-        func.coalesce(messages.c.subject, "") + " " + func.coalesce(messages.c.search_text, "")
+        func.coalesce(number_messages.c.subject, "")
+        + " "
+        + func.coalesce(number_messages.c.search_text, "")
     )
     number_query = func.plainto_tsquery(_config("simple"), numbers.c.number, type_=TSQUERY)
     number_hits = (
-        select(numbers.c.number, messages.c.message_id, messages.c.message_time)
+        select(numbers.c.number, number_messages.c.message_id, number_messages.c.message_time)
         .select_from(
             numbers.join(
-                messages,
+                number_messages,
                 and_(
-                    _mine(messages, principal_id),
-                    messages.c.message_time >= numbers.c.w_start,
-                    messages.c.message_time < numbers.c.w_until,
+                    _mine(number_messages, principal_id),
+                    number_messages.c.message_time >= numbers.c.w_start,
+                    number_messages.c.message_time < numbers.c.w_until,
                 ),
             )
         )
@@ -1554,13 +1575,13 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
         (grouped.c.overlap > 0, 3),
         else_=4,
     )
-    group = func.coalesce(messages.c.conversation_id, messages.c.message_id)
+    group = func.coalesce(candidate_messages.c.conversation_id, candidate_messages.c.message_id)
     candidates = (
         select(
             grouped.c.ord,
-            messages.c.message_id,
-            messages.c.conversation_id,
-            messages.c.message_time,
+            candidate_messages.c.message_id,
+            candidate_messages.c.conversation_id,
+            candidate_messages.c.message_time,
             tier.label("tier"),
             grouped.c.overlap,
             grouped.c.rank,
@@ -1573,10 +1594,10 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
         )
         .select_from(
             grouped.join(
-                messages,
+                candidate_messages,
                 and_(
-                    _mine(messages, principal_id),
-                    messages.c.message_id == grouped.c.message_id,
+                    _mine(candidate_messages, principal_id),
+                    candidate_messages.c.message_id == grouped.c.message_id,
                 ),
             )
         )
@@ -1599,28 +1620,31 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
     ).subquery("numbered")
     page = select(numbered).where(numbered.c.position <= query.limit).subquery("page")
     snippet = case(
-        (messages.c.body_state.in_(_NO_TEXT_BODY_STATES), literal(None, Text)),
-        else_=func.left(messages.c.search_text, SNIPPET_CHARACTERS),
+        (page_messages.c.body_state.in_(_NO_TEXT_BODY_STATES), literal(None, Text)),
+        else_=func.left(page_messages.c.search_text, SNIPPET_CHARACTERS),
     )
     return (
         select(
             page,
-            messages.c.subject,
-            messages.c.sender_address,
-            messages.c.has_attachments,
-            messages.c.body_state,
-            messages.c.search_text_version,
-            messages.c.search_text_flags,
-            messages.c.identity_conflict,
-            messages.c.participants_reconciled,
-            messages.c.participants_disagreed,
-            messages.c.source_unavailable,
+            page_messages.c.subject,
+            page_messages.c.sender_address,
+            page_messages.c.has_attachments,
+            page_messages.c.body_state,
+            page_messages.c.search_text_version,
+            page_messages.c.search_text_flags,
+            page_messages.c.identity_conflict,
+            page_messages.c.participants_reconciled,
+            page_messages.c.participants_disagreed,
+            page_messages.c.source_unavailable,
             snippet.label("snippet"),
         )
         .select_from(
             page.join(
-                messages,
-                and_(_mine(messages, principal_id), messages.c.message_id == page.c.message_id),
+                page_messages,
+                and_(
+                    _mine(page_messages, principal_id),
+                    page_messages.c.message_id == page.c.message_id,
+                ),
             )
         )
         .order_by(page.c.ord, page.c.position)

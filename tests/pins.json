@@ -146,14 +146,14 @@
     "revision_files": 138
   },
   "census": {
-    "architecture": 10467,
-    "database": 7527,
+    "architecture": 10481,
+    "database": 7554,
     "evaluation": 2,
-    "fast_collected": 56829,
+    "fast_collected": 56858,
     "fast_skipped": 138,
-    "mypy_files": 809,
-    "src_modules": 607,
-    "test_modules": 1101
+    "mypy_files": 810,
+    "src_modules": 608,
+    "test_modules": 1104
   },
   "chatllm": {
     "classes": {
@@ -173,7 +173,7 @@
     "chatllm_policy_entries": 316,
     "id_kind": 197,
     "purpose": 74,
-    "safe_detail": 475
+    "safe_detail": 478
   },
   "vocabulary": {
     "capability": [
@@ -1018,6 +1018,7 @@
       "link_id",
       "linked_external_identifier_id",
       "location_text",
+      "lookback_days",
       "max_bytes",
       "max_capture_characters",
       "max_characters",
@@ -1031,6 +1032,7 @@
       "media_types",
       "meeting_already_provider_bound",
       "meeting_id",
+      "meeting_ids",
       "meeting_not_provider_bound",
       "meeting_series_change_refused_provider_bound",
       "meeting_series_id",
@@ -1087,6 +1089,7 @@
       "path",
       "payload",
       "pending_change_id",
+      "per_meeting_limit",
       "period",
       "person_entity_id",
       "pinned",

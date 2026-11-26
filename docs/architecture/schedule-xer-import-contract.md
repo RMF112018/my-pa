@@ -5,7 +5,7 @@ S7-2 (revision `d8383150cf72`) is merged (#387), S7-3 (the admission service `im
 and the `schedule` worker's P6 path, no migration, no capability) is merged (#389); its bounds-maximal synthetic measurement (25,000
 activities, 100,000 relationships, 25,000 WBS rows, 8,526,632 bytes) ran the handler in 50.7 s
 (the contained parse 6.1 s) against the 240 s budget on a local PostgreSQL 15 scratch cluster.
-S7-4a (the 7 P6 capabilities, the switch composition, policy, ChatLLM `chatllm-data-v19`, the field registry and selection chain, the P6 reads, the format-aware S5 reads and the section 7.7 quota and import budgets; no migration) is merged (#391); S7-4b (the delta `cpm-workbench-p6-delta-v1` and the P6 scenario snapshot, acceptance D5 and D6; no migration, no new capability) is implemented on `feat/schedule-xer-handoff`, not merged (its corrections are the "As built in S7-4b" block after section 11.5).
+S7-4a (the 7 P6 capabilities, the switch composition, policy, ChatLLM `chatllm-data-v19`, the field registry and selection chain, the P6 reads, the format-aware S5 reads and the section 7.7 quota and import budgets; no migration) is merged (#391); S7-4b (the delta `cpm-workbench-p6-delta-v1` and the P6 scenario snapshot, acceptance D5 and D6; no migration, no new capability) is merged (#392; its corrections are the "As built in S7-4b" block after section 11.5). S7-5 (the runbook section, the engine-vs-P6 oracle and the read-only evaluation script; no migration, no capability) is implemented on `feat/schedule-xer-evaluation`, not merged (its decisions are the "As built in S7-5" block in section 14).
 Nothing else in it is implemented, and nothing is migrated on a shared database, granted,
 switched on or deployed. The decision record is
 [`ADR-023`](../decisions/ADR-023-p6-xer-xml-schedule-import.md), which loosens
@@ -1564,6 +1564,34 @@ of every nominated export; per export: verdict, issue counts by code, activity/r
 counts equal to the file's, delta counts between consecutive versions, and the engine-vs-P6
 oracle (early dates and total float of an unmodified version 1: share of activities equal, the
 distribution of differences in minutes, and `unmodelled_settings`).
+
+**As built in S7-5 (decisions, no migration, no capability, no new MCP tool; no spec error
+found):** (1) The oracle is the pure `src/my_pa/domain/schedule/p6/oracle.py`
+(`p6-engine-oracle-v1`), the only `p6` module that imports beyond the package (the pure
+scenario package and `p6_compare`; no other `p6` module imports it, so the parser front end
+and the worker parent never load the engine). It builds version 1 from the parse with
+`snapshot_from_p6` and every 11.5 default, runs `run_cpm` and joins by Activity ID. (2) It
+compares early start, early finish, late start, late finish, total float (`total_float_hr_cnt`
+x 60, half-even, counted `p6_quantized`) and, beyond this section, the remaining early start
+(`restart_date`) against the engine's remaining start, so a P6 convention for progressed work
+shows instead of hiding; every count is split by activity state. A missing P6 value, a value
+off the engine's axis and a missing engine value (a complete activity has no float) are
+counted apart, never as mismatches. Histogram edges: 0, ±1..60, ±61..480, ±481..2400, beyond.
+(3) The critical comparison runs over the activities both sides give a float (total float at
+most the 11.5 threshold on each side). (4) `unmodelled_settings` of the oracle is the
+snapshot's 2 (11.5 "As built in S7-4b" item 5) plus `total_float_type` (`sched_float_type` not
+`FT_FF`, the finish float the engine computes [A]), `open_ends_critical`,
+`float_from_project_finish`, `critical_path_longest_path` (`critical_path_type` not
+`CT_TotFloat` [A]), `multiple_float_paths` (the optional
+`xer:SCHEDOPTIONS.enable_multiple_longest_path_calc`, read by the oracle's own parse, which
+captures only that key), `external_relationships` (any dropped) and `progress_actual_dates`
+(neither progress flag: 11.5's retained-logic default). The capability's create answer keeps
+its 2. (5) The script `ops/schedule/p6_evaluate.py` (`p6-evaluation-v1`) parses each file with
+the default capture for the profile, the counts and the delta, and once more for the oracle;
+a consecutive pair is compared when the 2 exports share the project short name or GUID
+(11.1), `earlier → later`, with the earlier exports of the run as the `reintroduced` history.
+It prints counts, shares, minute distributions, codes and option names only (a planted-marker
+test, as A7). Procedure: `ops/runbooks/cpm-workbench.md` section 10.
 
 ### S7-6 — re-capture (optional)
 

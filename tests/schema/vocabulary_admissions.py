@@ -84,6 +84,9 @@ CAPABILITY_ADMISSIONS: Final[Mapping[str, tuple[str, frozenset[str]]]] = Mapping
                 }
             ),
         ),
+        # Communications intelligence WP5-S1 (ADR-022): the Meeting context read
+        # revision admits the name ahead of the domain, which declares it in WP5-S5.
+        "meetings_context_read": ("859e93b47a21", frozenset({"meetings.context.read"})),
     }
 )
 
@@ -109,7 +112,8 @@ PURPOSE_ADMISSIONS: Final[Mapping[str, tuple[str, frozenset[str]]]] = MappingPro
 #: yet. A test comparing the newest frozen audit vocabulary with the domain
 #: adds `admitted_ahead_of_the_domain(...)` instead of spelling the names.
 #: `schedule_p6` left this set in S7-4a, the change that declares its names.
-AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset()
+#: `meetings_context_read` leaves it in WP5-S5, the change that declares its name.
+AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset({"meetings_context_read"})
 
 
 def capabilities_admitted_after(revision: str) -> frozenset[str]:

@@ -21,8 +21,8 @@ plans link here instead of restating them.
 
 | Figure | Current |
 |---|---|
-| Alembic head | `3b3373d8268e` |
-| Alembic revisions | 137 |
+| Alembic head | `859e93b47a21` |
+| Alembic revisions | 138 |
 
 ## Vocabulary
 

@@ -296,12 +296,26 @@ _WORD: Final = re.compile(r"[^\W_]+")
 
 
 def title_terms(title: str) -> tuple[str, ...]:
-    """The subject words of a Meeting title, at most `MAX_TITLE_TERMS` (rule v1)."""
+    """The subject words of a Meeting title, at most `MAX_TITLE_TERMS` (rule v1).
+
+    Each term is the word as the title writes it (its first occurrence), and
+    the server normalizes it (WP5-R1 F-6): the `english` configuration of the
+    query lowers and stems each term exactly as it lowered and stemmed the
+    stored text (`_title_tsquery_text`). Python normalizes nothing it sends:
+    `casefold` would turn `Straße` into `strasse` and `ﬁnance` into
+    `finance`, and `lower` writes a final capital sigma as the final small
+    sigma (U+03C2) where the server writes the medial one (U+03C3) -- words
+    the stored document does not hold. The generic and stop-word filters and
+    the distinctness compare `str.lower()` forms; those lists are ASCII.
+    """
     terms: list[str] = []
-    for word in _WORD.findall(title.casefold()):
-        if word.isdigit() or word in GENERIC_MEETING_TERMS or word in ENGLISH_STOP_WORDS:
+    seen: set[str] = set()
+    for word in _WORD.findall(title):
+        key = word.lower()
+        if word.isdigit() or key in GENERIC_MEETING_TERMS or key in ENGLISH_STOP_WORDS:
             continue
-        if word not in terms:
+        if key not in seen:
+            seen.add(key)
             terms.append(word)
             if len(terms) == MAX_TITLE_TERMS:
                 break

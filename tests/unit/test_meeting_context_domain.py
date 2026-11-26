@@ -109,18 +109,28 @@ def test_a_lookback_out_of_bounds_is_refused(days: int) -> None:
 
 def test_title_terms_drop_generic_words_stop_words_and_numbers() -> None:
     assert title_terms("Weekly OAC coordination meeting #12 for the RFI 174 review") == (
-        "oac",
+        "OAC",
         "coordination",
-        "rfi",
+        "RFI",
     )
 
 
-def test_title_terms_are_casefolded_distinct_and_in_first_occurrence_order() -> None:
+def test_title_terms_are_distinct_by_lower_case_as_first_written() -> None:
     assert title_terms("Curtain Wall / curtain WALL mockup - Façade") == (
-        "curtain",
-        "wall",
+        "Curtain",
+        "Wall",
         "mockup",
-        "façade",
+        "Façade",
+    )
+
+
+def test_title_terms_are_sent_as_written_never_casefolded() -> None:
+    """WP5-R1 F-6: the server normalizes the terms; `ß`, `Σ` and `ﬁ` stay as written."""
+    assert title_terms("Hauptstraße ΟΔΟΣ ﬁnance Ärger ärger") == (
+        "Hauptstraße",
+        "ΟΔΟΣ",
+        "ﬁnance",
+        "Ärger",
     )
 
 
@@ -144,7 +154,7 @@ def test_a_generic_title_has_no_terms() -> None:
 
 
 def test_mixed_letters_and_digits_are_terms() -> None:
-    assert title_terms("Level 3 L3B pour") == ("level", "l3b", "pour")
+    assert title_terms("Level 3 L3B pour") == ("Level", "L3B", "pour")
 
 
 def test_the_generic_list_is_the_closed_design_list() -> None:

@@ -238,7 +238,7 @@ def test_one_query_for_the_batch_with_self_excluded_and_the_bridge_added() -> No
     first = query.meetings[0]
     assert set(first.addresses) == {(A, A), (SHARP_KEY, SHARP_KEY), (SHARP_STORED, SHARP_KEY)}
     assert first.identifiers == (("rfi", "7"),)
-    assert first.title_terms == ("coordination",)
+    assert first.title_terms == ("Coordination",)
     assert (query.limit, query.identifier_version) == (15, "comms_identifiers_v2")
     contexts = answer.meetings  # type: ignore[attr-defined]
     assert [c.meeting.meeting_id for c in contexts] == [asking, nothing, third]

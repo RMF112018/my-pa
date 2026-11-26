@@ -665,6 +665,36 @@ def test_no_meeting_of_a_batch_reaches_another_meetings_matches(scene: Scene) ->
     }
 
 
+#: (title, message text): lower-case non-ASCII words, matched on every cluster.
+_TITLE_CASES: Final = (
+    ("Hauptstraße lobby", "The hauptstraße entrance."),
+    ("ﬁnance review", "The ﬁnance figures."),
+    ("Façade mockup", "The façade panel."),
+    ("Straße", "A Straße detour."),
+)
+#: Upper-case non-ASCII text: lowered by the server only under a Unicode locale.
+_UNICODE_LOCALE_TITLE_CASES: Final = (
+    ("ΟΔΟΣ", "ΟΔΟΣ NOTICE."),
+    ("Ärger", "ÄRGER ENTRY."),
+)
+
+
+def test_non_ascii_title_terms_match_as_the_stored_text_is_normalized(scene: Scene) -> None:
+    """WP5-R1 F-6: title terms are lowered, never casefolded, so `Straße` matches.
+
+    The upper-case cases run on the en_US.UTF-8 cluster: under the C locale
+    the server lowers ASCII only, in the stored document and the query alike.
+    """
+    with scene.engine.connect() as connection:
+        ctype = connection.exec_driver_sql("SHOW lc_ctype").scalar_one()
+    cases = _TITLE_CASES + (() if ctype in ("C", "POSIX") else _UNICODE_LOCALE_TITLE_CASES)
+    for n, (title, body) in enumerate(cases, start=1):
+        message = scene.mail.message(n, subject="Note", text=body, when=at(17, n))
+        context = scene.one(scene.meeting(f"title-{n}", title=title))
+        assert _ids(context) == [message], title
+        assert [r.value for r in context.communications.messages[0].matched_by] == ["title_terms"]
+
+
 # ---- order, collapse, limit ------------------------------------------------------------
 
 

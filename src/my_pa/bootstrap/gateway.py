@@ -226,6 +226,7 @@ from my_pa.contracts.ports import (
     ScenarioCpmRunner,
     ScenarioRecordBuilders,
     ScenarioUnitOfWork,
+    ScheduleP6UnitOfWork,
     ScheduleUnitOfWork,
     UnitOfWork,
 )
@@ -244,6 +245,8 @@ from my_pa.domain.identity.webauthn_relying_party import (
     WebAuthnRelyingParty,
 )
 from my_pa.domain.policy.decision import POLICY_VERSION
+from my_pa.domain.schedule.p6_import import P6AdmissionLimits
+from my_pa.domain.schedule.p6_reads import MAX_P6_IMPORTS_PER_DAY, MAX_P6_IMPORTS_PER_HOUR
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.file_workspace.handle_fetch import HandleFetchPolicy, SafeHandleFetcher
@@ -280,6 +283,7 @@ from my_pa.infrastructure.persistence.schedule_cpm_lease import (
     compute_and_store_cpm_run,
     dispose_lease_engines,
 )
+from my_pa.infrastructure.persistence.schedule_p6 import SqlAlchemyScheduleP6UnitOfWork
 from my_pa.infrastructure.persistence.schedule_scenarios import (
     SqlAlchemyScenarioUnitOfWork,
     new_scenario_output,
@@ -1573,6 +1577,18 @@ def build_gateway_runtime(
         schedule_factory if settings.schedule_enabled and data_engine is None else None
     )
 
+    # P6 XER import S7-4a (schedule XER import contract section 10.2): the P6
+    # unit of work beside it, on the same condition (the S5 reads serve P6
+    # publications through it whatever the P6 switch says), never in a
+    # restricted composition -- no MCP database role holds a privilege on the
+    # P6 tables.
+    def schedule_p6_factory() -> ScheduleP6UnitOfWork:
+        return SqlAlchemyScheduleP6UnitOfWork(work_engine)
+
+    schedule_p6_unit_of_work: Callable[[], ScheduleP6UnitOfWork] | None = (
+        schedule_p6_factory if schedule_unit_of_work is not None else None
+    )
+
     # Schedule Scenarios S6-3 (schedule-scenarios contract section 15.8): the plane
     # unit of work and the CPM runner (the work engine bound to the leased
     # compute), composed only while the plane is effective -- both switches on
@@ -1714,6 +1730,16 @@ def build_gateway_runtime(
             # Schedule factory composed above (`None` when off or restricted).
             schedule_enabled=settings.schedule_enabled,
             schedule_unit_of_work=schedule_unit_of_work,
+            # P6 XER import S7-4a (contract section 10.2): the P6 switch -- never in
+            # a restricted composition -- the P6 unit of work composed above, and
+            # the section 7.7 limits (the quota is the operator's setting).
+            schedule_p6_enabled=settings.schedule_p6_enabled and data_engine is None,
+            schedule_p6_unit_of_work=schedule_p6_unit_of_work,
+            schedule_p6_limits=P6AdmissionLimits(
+                snapshot_quota_bytes=settings.schedule_p6_snapshot_quota_bytes,
+                imports_per_hour=MAX_P6_IMPORTS_PER_HOUR,
+                imports_per_day=MAX_P6_IMPORTS_PER_DAY,
+            ),
             # Schedule Scenarios S6-3 (contract section 15.8): the plane switch and
             # the 3 plane ports composed above (`None` unless effective).
             schedule_scenarios_enabled=settings.schedule_scenarios_enabled,

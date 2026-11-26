@@ -654,6 +654,16 @@ class Settings(StrictModel):
     #: parsing. Turning it on or off changes no row. Enabling it anywhere but a
     #: test is an operator gate (contract section 15).
     schedule_p6_enabled: bool = False
+    #: P6 XER import S7-4a (schedule XER import contract section 7.7), env
+    #: `MY_PA_SCHEDULE_P6_SNAPSHOT_QUOTA_BYTES`: the retained snapshot bytes one
+    #: Principal may hold. An import whose new snapshot would pass it answers
+    #: `rate_limited(storage_quota)` and writes nothing; bytes already held (the
+    #: per-Principal SHA-256 deduplication) never count twice. The default is
+    #: the 8 GiB placeholder kept by operator decision 2026-11-23;
+    #: operator-adjustable, 1 byte to 1 TiB.
+    schedule_p6_snapshot_quota_bytes: int = Field(
+        default=8 * 1024 * 1024 * 1024, ge=1, le=1024 * 1024 * 1024 * 1024
+    )
     #: Daily cycle scheduler switch (ADR-010 amendment of 2026-11-20), env
     #: `MY_PA_CYCLE_SCHEDULER_ENABLED`. Default off. Off, `apps/worker.py`
     #: refuses the `cycles` plane (exit 2, before an engine is built). It

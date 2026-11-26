@@ -79,7 +79,7 @@ refuses, MCP and the CLI refuse, with the same code, the same message, the same
 The public vocabulary declares the capabilities counted in
 [`docs/generated/repository-state.md`](../../docs/generated/repository-state.md).
 `tests/contract/test_transport_parity.py` distinguishes that vocabulary from
-the three hundred and four command-backed names and holds positive request
+the three hundred and eleven command-backed names and holds positive request
 and response parity over the latter set. Its
 separate unwired contract is vacuous now that no declared name is left without one,
 without an MCP tool or command schema, while the generic HTTP/CLI name path
@@ -223,14 +223,14 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build declares **304** capability
-names; 304 have application commands/handlers and no declared name is left without one.
+same as the tools this build implements. The build declares **311** capability
+names; 311 have application commands/handlers and no declared name is left without one.
 The measured application composition with GoodNotes pull enabled has
-**127 application-available capabilities**: 304 implemented handlers less the six
+**127 application-available capabilities**: 311 implemented handlers less the six
 `documents.`, fifty-five `entities.`, nine `relationship_memory.`, and the seven
 `knowledge.assertions.`, one `knowledge.discovery.checkpoint` and one
 `record_events.provenance` handlers and the thirty-four record lineage S1, S2, S3 and S3.1 handlers (`issues.`, `records.`, `meetings.notes.`)
-(`MY_PA_LINEAGE_ENABLED`) and the seven record lineage S4 Program-reporting handlers (`MY_PA_PROGRAM_REPORTING_ENABLED`) and the seven CPM Workbench Schedule handlers (`MY_PA_SCHEDULE_ENABLED`) and the twenty-six Schedule Scenarios S6-3 plane handlers (`MY_PA_SCHEDULE_SCENARIOS_ENABLED` with the Schedule switch) and the four `reports.transfer.` uploads (`begin`, `append`, `finalize`, `abort`) behind `MY_PA_REPORT_CONTENT_ROOT` (the report content store and its transfer staging) and the seventeen files workspace `files.` handlers behind `MY_PA_FILES_WORKSPACE_ROOT` and the three `communications.` reads behind `MY_PA_COMMUNICATIONS_ENABLED`, whose composition gates remain off. A local stdio MCP session has no authenticated
+(`MY_PA_LINEAGE_ENABLED`) and the seven record lineage S4 Program-reporting handlers (`MY_PA_PROGRAM_REPORTING_ENABLED`) and the seven CPM Workbench Schedule handlers (`MY_PA_SCHEDULE_ENABLED`) and the twenty-six Schedule Scenarios S6-3 plane handlers (`MY_PA_SCHEDULE_SCENARIOS_ENABLED` with the Schedule switch) and the four `reports.transfer.` uploads (`begin`, `append`, `finalize`, `abort`) behind `MY_PA_REPORT_CONTENT_ROOT` (the report content store and its transfer staging) and the seventeen files workspace `files.` handlers behind `MY_PA_FILES_WORKSPACE_ROOT` and the three `communications.` reads behind `MY_PA_COMMUNICATIONS_ENABLED` and the seven P6 XER import handlers behind `MY_PA_SCHEDULE_P6_ENABLED` (with the Schedule switch), whose composition gates remain off. A local stdio MCP session has no authenticated
 client identity, so it additionally withholds the three client-bound GoodNotes
 pull operations and publishes **124 tools**. An authenticated MCP client against
 that same 127-capability application composition sees all 127. These figures are
@@ -252,7 +252,7 @@ the plane switch alone still withholds its write half — and the nine
 `relationship_memory.` names, which need the plane variable *and*
 `MY_PA_RELATIONSHIP_MEMORY_ENABLED`; and the seven `knowledge.assertions.` names and `knowledge.discovery.checkpoint`, which need
 `MY_PA_KNOWLEDGE_ASSERTIONS_ENABLED` and the plane variable; a fully composed authenticated child publishes
-all 304 implemented tools, every declared name now having a handler. An operator who expects `documents.create`
+all 311 implemented tools, every declared name now having a handler. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
 remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
@@ -264,7 +264,7 @@ Measured against a real child process — `.venv/bin/python apps/gateway.py mcp`
 (unconfigured local stdio: 124, with the three authenticated-client capabilities
 absent) and
 `::test_a_child_with_a_managed_root_publishes_every_locally_available_capability`
-(fully feature-composed local stdio: 299, excluding those three and the two
+(fully feature-composed local stdio: 306, excluding those three and the two
 KLP-WP-04 Knowledge discovery capabilities, which are served only to an
 authenticated remote client).
 
@@ -556,7 +556,7 @@ composition and in every MCP publication that composition produces.
   family, and each Meeting capability appears in it only for an authenticated
   client whose grants, purpose, capability version and write gates admit it.
 - **Desired ChatLLM profile.** The repository's ChatLLM data profile is
-  `chatllm-data-v17` (communications intelligence WP4-S5: v16 plus the 3 `communications.*` reads, `DATA_CONDITIONAL` on `MY_PA_COMMUNICATIONS_ENABLED`, their grants to the operator profile only, purpose `communications_read`; v17 with that switch off desires exactly the v16 set; v16, WP3b-S4: v15 plus `meetings.provider.review` and `meetings.provider.reconcile`, both `DATA_REQUIRED` on the core plane, the profile to activate at the consolidated goal deploy instead of v15 (Manager ruling D13), their grants to the operator profile only (R-OP-2); v15, WP2-W3: v14 plus `meetings.provider.bind`, `DATA_REQUIRED` on the core plane; v14, files workspace WP5: the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set). Since `chatllm-data-v3` it has classified the six
+  `chatllm-data-v19` (P6 XER import S7-4a: v17 plus the 7 P6 names, `schedule_publications.import_p6` and `schedule_p6_fields.set_captured` as write grants and the 5 `schedule_p6_*` reads, all `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_P6_ENABLED` over `MY_PA_SCHEDULE_ENABLED`; v19 with that switch off desires exactly the v17 set; `chatllm-data-v18` is held for communications WP4P S4; v17, communications intelligence WP4-S5: v16 plus the 3 `communications.*` reads, `DATA_CONDITIONAL` on `MY_PA_COMMUNICATIONS_ENABLED`, their grants to the operator profile only, purpose `communications_read`; v17 with that switch off desires exactly the v16 set; v16, WP3b-S4: v15 plus `meetings.provider.review` and `meetings.provider.reconcile`, both `DATA_REQUIRED` on the core plane, the profile to activate at the consolidated goal deploy instead of v15 (Manager ruling D13), their grants to the operator profile only (R-OP-2); v15, WP2-W3: v14 plus `meetings.provider.bind`, `DATA_REQUIRED` on the core plane; v14, files workspace WP5: the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set). Since `chatllm-data-v3` it has classified the six
   `meetings.` names as `DATA_REQUIRED`: reads under `meeting_read`, writes under
   `meeting_authoring`; `chatllm-data-v4` adds `record_events.list` under
   `record_event_read`; `chatllm-data-v5` adds `capture.archive` and
@@ -836,10 +836,10 @@ python -m alembic heads
 python apps/cli/health.py
 python apps/cli/remote_mcp.py profile-diff \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v17
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v19
 python apps/cli/remote_mcp.py profile-plan \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v17
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v19
 ```
 
 `apps/cli/health.py` answers `not_at_head` for a database below `c8e4a1b70d35`,

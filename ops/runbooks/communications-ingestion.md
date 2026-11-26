@@ -275,7 +275,7 @@ Everything here is part of the R-OP-7 consolidated activation and is unexecuted.
      `coverage` is omitted. Never an empty or partial object: it rejects the whole publication
      (`invalid_coverage`). Without `coverage` my-pa never marks a binding `not_seen`.
 3. **The client (R-OP-2, D13).** The reconciliation pass runs through the operator's connected
-   client: activate ChatLLM profile `chatllm-data-v17` (instead of v15; it contains v16) and grant
+   client: activate ChatLLM profile `chatllm-data-v19` (instead of v15; it contains v16 and v17) and grant
    `meetings.provider.review` and `meetings.provider.reconcile`, with
    `meetings.provider.bind`, to the **operator profile only**, as part of the consolidated
    activation's grants.
@@ -508,7 +508,7 @@ is the operator's:
    names `available`. A restricted MCP database role composition never serves them (its roles
    hold no privilege on the communications tables).
 4. **The grants and the profile.** The client is the operator's connected client. Activate the
-   ChatLLM profile `chatllm-data-v17` (it contains v16) and grant, to the **operator profile
+   ChatLLM profile `chatllm-data-v19` (it contains v16 and v17) and grant, to the **operator profile
    only**, each with purpose `communications_read`:
 
    | Capability | Purpose |

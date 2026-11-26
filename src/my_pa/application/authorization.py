@@ -162,6 +162,7 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
+    ImportScheduleP6Publication,
     ImportSchedulePublication,
     ListCaptures,
     ListCommitments,
@@ -199,6 +200,11 @@ from my_pa.application.commands import (
     ListScheduleBaselines,
     ListScheduleChanges,
     ListScheduleCpmRunActivities,
+    ListScheduleP6Activities,
+    ListScheduleP6AvailableFields,
+    ListScheduleP6Calendars,
+    ListScheduleP6FieldValues,
+    ListScheduleP6Relationships,
     ListSchedulePublications,
     ListScheduleScenarioActivities,
     ListScheduleScenarioChanges,
@@ -328,6 +334,7 @@ from my_pa.application.commands import (
     SearchTasks,
     SetGoverningScheduleBaseline,
     SetReportRetention,
+    SetScheduleP6CapturedFields,
     SplitEntity,
     StartGsqsB0,
     StatFile,
@@ -804,6 +811,16 @@ def _requested_scope(
             | SearchCommunications()
             | ReadCommunications()
             | CommunicationsCoverage()
+            # P6 XER import S7-4a (contract section 10.1): the 7 P6 names name a
+            # files-workspace alias and path or the caller's own Series,
+            # publication and Stable Activity rows, never a configured source.
+            | ImportScheduleP6Publication()
+            | ListScheduleP6AvailableFields()
+            | SetScheduleP6CapturedFields()
+            | ListScheduleP6Activities()
+            | ListScheduleP6Relationships()
+            | ListScheduleP6Calendars()
+            | ListScheduleP6FieldValues()
             # `record_events.list` (WP-RE-06) names only the acting Principal's
             # own change feed, never a configured source (G1-RD-011).
             | ListRecordEvents()

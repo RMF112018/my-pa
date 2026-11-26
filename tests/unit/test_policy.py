@@ -578,6 +578,15 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.COMMUNICATIONS_SEARCH, Purpose.COMMUNICATIONS_READ),
         (Capability.COMMUNICATIONS_READ, Purpose.COMMUNICATIONS_READ),
         (Capability.COMMUNICATIONS_COVERAGE, Purpose.COMMUNICATIONS_READ),
+        # P6 XER import S7-4a (contract section 10.1): the 2 writes under their own
+        # purposes, the 5 reads under the Schedule read purpose.
+        (Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6, Purpose.SCHEDULE_P6_IMPORT),
+        (Capability.SCHEDULE_P6_FIELDS_AVAILABLE, Purpose.SCHEDULE_READ),
+        (Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED, Purpose.SCHEDULE_P6_CONFIGURATION),
+        (Capability.SCHEDULE_P6_ACTIVITIES_LIST, Purpose.SCHEDULE_READ),
+        (Capability.SCHEDULE_P6_RELATIONSHIPS_LIST, Purpose.SCHEDULE_READ),
+        (Capability.SCHEDULE_P6_CALENDARS_LIST, Purpose.SCHEDULE_READ),
+        (Capability.SCHEDULE_P6_FIELD_VALUES_LIST, Purpose.SCHEDULE_READ),
     }
 )
 

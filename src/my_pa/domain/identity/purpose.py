@@ -517,3 +517,14 @@ class Purpose(StrEnum):
     # none reads the Principal's ingested communications. One purpose of its own,
     # implied by no other, for exactly the 3 `communications.*` reads.
     COMMUNICATIONS_READ = "communications_read"
+    # P6 XER import S7-4a (ADR-023, schedule XER import contract section 10.1), on
+    # `D-91`: would reuse widen the grant? `schedule_import` would: it admits an
+    # enrolled PDF through the attested local operator only, while a P6 import
+    # reads a client-named files-workspace file and is client-usable; and no
+    # existing purpose names a Series' capture selection, which decides what
+    # every later import of the Series stores. 2 write purposes of their own,
+    # each implied by no other: `schedule_p6_import` for exactly
+    # `schedule_publications.import_p6`, `schedule_p6_configuration` for exactly
+    # `schedule_p6_fields.set_captured`. The 5 P6 reads reuse `schedule_read`.
+    SCHEDULE_P6_IMPORT = "schedule_p6_import"
+    SCHEDULE_P6_CONFIGURATION = "schedule_p6_configuration"

@@ -367,6 +367,8 @@ def _read_source(
     """
     object_id = publication.source_object_id
     pinned = publication.source_version_id
+    if object_id is None or pinned is None:  # pragma: no cover - a PDF row names both (S7-2)
+        raise ScheduleIntegrityError("pdf_publication_unbound")
     with attempt.engine.connect().execution_options(isolation_level=_READ_PHASE_ISOLATION) as reads:
         try:
             provider = _provider_for(reads, source_id)

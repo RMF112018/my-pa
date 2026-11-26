@@ -27,6 +27,8 @@ from types import MappingProxyType
 from typing import Final
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.schedule.p6.model import PROFILE_ID as _P6_XER_PROFILE_ID
+from my_pa.domain.schedule.p6.model import P6IssueCode
 
 __all__ = [
     "DURATION_EXPONENT",
@@ -47,6 +49,8 @@ __all__ = [
     "ROW_CELL_FIELDS",
     "SCHEDULE_IDEMPOTENCY_KEY_PATTERN",
     "SCHEDULE_MEDIA_TYPE",
+    "SCHEDULE_PDF_FORMAT",
+    "SCHEDULE_SOURCE_FORMATS",
     "TERMINAL_OUTCOMES",
     "InvalidScheduleSeriesNameError",
     "ParsedScheduleRow",
@@ -225,6 +229,11 @@ MAX_DURATION_EXCLUSIVE: Final = Decimal(1_000_000_000)
 
 _CODE_ORDER: Final = {code: index for index, code in enumerate(ScheduleIssueCode)}
 _SHA256_HEX: Final = re.compile(r"[0-9a-f]{64}")
+#: S7-4a (schedule XER import contract section 8.2): the `source_format` values.
+SCHEDULE_PDF_FORMAT: Final = "pdf"
+SCHEDULE_SOURCE_FORMATS: Final = frozenset({SCHEDULE_PDF_FORMAT, "p6_xer", "p6_xml"})
+#: The parser profiles that name no PDF engine (contract section 9.3 H5).
+P6_PROFILE_IDS: Final = frozenset({_P6_XER_PROFILE_ID})
 
 
 def _is_int(value: object) -> bool:
@@ -959,9 +968,12 @@ class SchedulePublication:
     principal_id: str
     project_id: str
     series_id: str
-    enrollment_id: str
-    source_object_id: str
-    source_version_id: str
+    #: P6 XER import S7-4a (contract sections 8.2, 14 D8): a `p6_*` publication
+    #: has no enrollment, source object or version (the S7-2 CHECK); a `pdf`
+    #: one has all three.
+    enrollment_id: str | None
+    source_object_id: str | None
+    source_version_id: str | None
     idempotency_key: str
     request_digest: str
     publication_role: SchedulePublicationRole
@@ -984,15 +996,23 @@ class SchedulePublication:
     processing_started_at: datetime | None
     completed_at: datetime | None
     updated_at: datetime
+    #: S7-4a: the `source_format` column (`pdf`, `p6_xer`, `p6_xml`).
+    source_format: str = SCHEDULE_PDF_FORMAT
 
     def __post_init__(self) -> None:
         _identifier(self.publication_id, IdKind.SCHEDULE_PUBLICATION)
         _identifier(self.principal_id, IdKind.PRINCIPAL)
         _identifier(self.project_id, IdKind.PROJECT)
         _identifier(self.series_id, IdKind.SCHEDULE_SERIES)
-        _identifier(self.enrollment_id, IdKind.ENROLLMENT)
-        _identifier(self.source_object_id, IdKind.SOURCE_OBJECT)
-        _identifier(self.source_version_id, IdKind.VERSION)
+        if self.source_format not in SCHEDULE_SOURCE_FORMATS:
+            raise ValueError("a publication carries a closed source format")
+        bound = (self.enrollment_id, self.source_object_id, self.source_version_id)
+        if self.source_format == SCHEDULE_PDF_FORMAT:
+            _identifier(self.enrollment_id, IdKind.ENROLLMENT)
+            _identifier(self.source_object_id, IdKind.SOURCE_OBJECT)
+            _identifier(self.source_version_id, IdKind.VERSION)
+        elif any(value is not None for value in bound):
+            raise ValueError("a P6 publication names no enrollment, object or version")
         _optional_identifier(self.supersedes_publication_id, IdKind.SCHEDULE_PUBLICATION)
         _optional_identifier(self.accepted_parser_run_id, IdKind.SCHEDULE_PARSER_RUN)
         if not _is_idempotency_key(self.idempotency_key):
@@ -1093,18 +1113,24 @@ class ScheduleParserIdentity:
     parser_version: str
     profile_id: str
     profile_version: int
-    pypdfium2_version: str
-    pdfium_version: str
+    #: S7-4a: a P6 run (`p6_xer_v1`) names no PDF engine (the S7-2 CHECK); a
+    #: PDF run names both.
+    pypdfium2_version: str | None
+    pdfium_version: str | None
 
     def __post_init__(self) -> None:
+        engine = (self.pypdfium2_version, self.pdfium_version)
+        if engine == (None, None):
+            if self.profile_id not in P6_PROFILE_IDS:
+                raise ValueError("only a P6 parser run names no PDF engine")
+            engine = ("-", "-")
         if not all(
             _bounded_text(value, MAX_PARSER_IDENTITY_CHARACTERS)
             for value in (
                 self.parser_name,
                 self.parser_version,
                 self.profile_id,
-                self.pypdfium2_version,
-                self.pdfium_version,
+                *engine,
             )
         ):
             raise ValueError("parser identity fields are 1 to 64 characters")
@@ -1141,8 +1167,8 @@ class ScheduleParserRun:
     parser_version: str
     profile_id: str
     profile_version: int
-    pypdfium2_version: str
-    pdfium_version: str
+    pypdfium2_version: str | None
+    pdfium_version: str | None
     document_sha256: str
     status: ScheduleParserRunStatus
     page_count: int | None
@@ -1150,7 +1176,8 @@ class ScheduleParserRun:
     issue_count: int | None
     warning_count: int | None
     parse_result_sha256: str | None
-    failure_code: ScheduleIssueCode | None
+    #: S7-4a: a failed P6 run's failure code is a `p6_*` code of contract 5.5.
+    failure_code: ScheduleIssueCode | P6IssueCode | None
     started_at: datetime
     completed_at: datetime | None
 
@@ -1168,7 +1195,9 @@ class ScheduleParserRun:
             raise ValueError("a document digest is 64 lowercase hex characters")
         if self.parse_result_sha256 is not None and not _is_sha256(self.parse_result_sha256):
             raise ValueError("a parse result digest is 64 lowercase hex characters")
-        if self.failure_code is not None and not isinstance(self.failure_code, ScheduleIssueCode):
+        if self.failure_code is not None and not isinstance(
+            self.failure_code, (ScheduleIssueCode, P6IssueCode)
+        ):
             raise ValueError("a failure code is a closed issue code")
         counts = [getattr(self, name) for name in _RUN_COUNTS]
         if any(value is not None and not _non_negative_int(value) for value in counts):
@@ -1439,7 +1468,8 @@ class ScheduleLatestUpdate:
     publication_id: str
     data_date: date
     status: SchedulePublicationStatus
-    source: ScheduleSourceBinding
+    #: S7-4a: `None` for a P6 publication (no enrollment).
+    source: ScheduleSourceBinding | None
 
     def __post_init__(self) -> None:
         _identifier(self.publication_id, IdKind.SCHEDULE_PUBLICATION)
@@ -1489,7 +1519,8 @@ class SchedulePublicationSummary:
     publication: SchedulePublication
     effective_status: SchedulePublicationStatus
     operation_id: str
-    source: ScheduleSourceBinding
+    #: S7-4a: `None` for a P6 publication (no enrollment).
+    source: ScheduleSourceBinding | None
     accepted_parser: ScheduleParserIdentity | None
 
     def __post_init__(self) -> None:
@@ -1506,8 +1537,10 @@ class SchedulePublicationDetail:
     effective_status: SchedulePublicationStatus
     job: ScheduleJobView
     runs: tuple[ScheduleParserRun, ...]
-    issue_counts: Mapping[ScheduleIssueCode, int]
-    source: ScheduleSourceBinding
+    #: S7-4a: a P6 publication counts its `p6_*` codes (contract 5.5).
+    issue_counts: Mapping[ScheduleIssueCode | P6IssueCode, int]
+    #: S7-4a: `None` for a P6 publication (no enrollment).
+    source: ScheduleSourceBinding | None
 
     def __post_init__(self) -> None:
         if any(not _positive_int(count) for count in self.issue_counts.values()):
@@ -1571,7 +1604,8 @@ class ScheduleActivityObservation:
     remaining_duration: ScheduleDurationCell
     start: ScheduleDateCell
     finish: ScheduleDateCell
-    source: ScheduleSourceBinding
+    #: S7-4a: `None` for a P6 publication (no enrollment).
+    source: ScheduleSourceBinding | None
 
     def __post_init__(self) -> None:
         _identifier(self.publication_id, IdKind.SCHEDULE_PUBLICATION)

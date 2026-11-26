@@ -4,9 +4,12 @@
   engine amendment, no migration) is merged (#384); slice S7-1 (the pure XER parser, catalogue,
   canonical frame and conformance script, no migration) is merged (#386); slice S7-2 (the one
   migration `d8383150cf72` and its table declarations) is merged (#387); slice S7-3 (the
-  admission service and the worker's P6 path, no migration, no capability) is implemented on
-  `feat/schedule-xer-worker`, not merged; nothing else is implemented, and nothing is migrated
-  on any shared database, granted, switched on or deployed. Every other slice (S7-4 to S7-6),
+  admission service and the worker's P6 path, no migration, no capability) is merged (#389);
+  slice S7-4a (the 7 capabilities, switch, policy, ChatLLM `chatllm-data-v19`, field registry,
+  reads and the format-aware S5 reads, no migration) is implemented on
+  `feat/schedule-xer-surface`, not merged; S7-4b (delta and P6 scenario snapshot) is not yet
+  implemented; nothing else is implemented, and nothing is migrated
+  on any shared database, granted, switched on or deployed. Every other slice (S7-4b to S7-6),
   gate G-1 and every other operator gate in the contract stays open. The operator answered the contract's open
   questions on 2026-11-23 (recorded below and in contract section 17); only S7-6 stays
   undecided.
@@ -213,13 +216,19 @@ capture-event tables, the seven per-run P6 tables, the additive `schedule_public
 `schedule_parser_runs` and `schedule_import_issues` columns and CHECKs, the guards, F3/F6/F9
 restated for P6 rows with every PDF path unchanged, and the S7-4 audit names admitted ahead of
 the domain), its `tables.py` declarations and the identifier kinds `sp6n` and `sp6e`.
-S7-3 implemented on `feat/schedule-xer-worker` (not merged; no migration, no capability, no MCP
+S7-3 merged (#389; no migration, no capability, no MCP
 tool): the admission service `ScheduleP6Application.import_p6` (switch, strict inputs, the
 files-workspace contained read with version, size, SHA-256 and fingerprint re-check, the byte
 sniff, replay, Series resolution, PDF-Series refusal, content idempotency, the snapshot once per
 Principal), the switch `MY_PA_SCHEDULE_P6_ENABLED`, and the `schedule` worker's P6 path H1-H8 in
 the existing contained child (the parent never imports the parser; the frame is decoded by the
 catalogue, re-rendered and bound to the bytes).
-Gate G-1 (the script on the operator's sample) is not run. S7-4 and S7-5 (and the optional
+S7-4a implemented on `feat/schedule-xer-surface` (not merged; no migration): the 7 capabilities
+of contract section 10.1 behind `MY_PA_SCHEDULE_P6_ENABLED` (on every closed surface; the 2
+writes idempotent and client-bound remotely), ChatLLM `chatllm-data-v19`, the field registry and
+the compare-and-swap capture chain, the P6 reads with the section 7.7 filter grammar, the S5
+reads format-aware for P6 publications, and the snapshot quota and import budgets. S7-4b (the
+delta and the P6 scenario snapshot) is not yet implemented.
+Gate G-1 (the script on the operator's sample) is not run. S7-4b and S7-5 (and the optional
 S7-6) are not implemented; the contract defines their acceptance tests, the prove-red plan and
 the operator gates.

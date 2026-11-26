@@ -80,7 +80,9 @@ class Fixture:
         created = APP.create_meeting(self.unit, P, request, f"ctx-{self._n}", NOW)
         return created.meeting.meeting_id
 
-    def participant(self, n: int, address: str, *, sent: bool = False) -> None:
+    def participant(
+        self, n: int, address: str, *, sent: bool = False, verification: str = "verified"
+    ) -> None:
         """One synthetic message whose `from` is `address` (in the sent lane when `sent`)."""
         message_id, item_id, observation_id = (
             f"cmsg_ctxfast{n:06d}",
@@ -139,7 +141,7 @@ class Fixture:
                 classification="accepted",
                 reasons=(),
                 folder_role="sent" if sent else "inbox",
-                lane_verification="verified",
+                lane_verification=verification,
                 selected_field="sent",
                 selected_utc=START,
                 received_utc=None,
@@ -242,6 +244,25 @@ def test_one_query_for_the_batch_with_self_excluded_and_the_bridge_added() -> No
     assert [c.meeting.meeting_id for c in contexts] == [asking, nothing, third]
     assert contexts[1].communications.state.value == "no_inputs"
     assert [a.is_self for a in contexts[0].attendees].count(True) == 1
+
+
+def test_an_unverified_lane_is_self_only_without_a_verified_one() -> None:
+    """Ruling B-3 (`self_from_sent_lane_v2`) over the FAST fake."""
+    f = Fixture()
+    f.participant(1, A, sent=True, verification="unverified_lane_claim")
+    meeting = f.meeting(emails=(A, B))
+    answer = f.read([meeting])
+    (context,) = answer.meetings  # type: ignore[attr-defined]
+    assert answer.self_addresses.state.value == "derived_unverified"  # type: ignore[attr-defined]
+    assert {a.email: a.is_self for a in context.attendees} == {A: True, B: False}
+    assert context.communications.missing[-1].value == "self_unverified"
+    f.participant(2, SELF, sent=True)
+    answer = f.read([meeting])
+    (context,) = answer.meetings  # type: ignore[attr-defined]
+    assert answer.self_addresses.state.value == "derived"  # type: ignore[attr-defined]
+    assert {a.email: a.is_self for a in context.attendees} == {A: False, B: False}
+    assert "self_unverified" not in [c.value for c in context.communications.missing]
+    assert set(f.mail.context_calls[-1].meetings[0].addresses) == {(A, A), (B, B)}
 
 
 def test_nothing_to_ask_issues_no_candidate_statement() -> None:

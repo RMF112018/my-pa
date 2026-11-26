@@ -8,8 +8,10 @@ sections 3.4 and 3.8-3.11; rulings D3-D6, D8, D11, D13, A-3):
 
 * the union: participant OR identifier OR project number OR title terms,
   one row per message with every reason in `matched_by`, the tiers 1-4;
-* the owner's derived address is never a participant criterion, and without
-  a sent lane every Meeting says `self_unknown`;
+* the owner's derived address is never a participant criterion; only
+  verified sent lanes derive it, an unverified one only when there is no
+  verified one (`derived_unverified`, `self_unverified`), and without a sent
+  lane every Meeting says `self_unknown` (ruling B-3, `self_from_sent_lane_v2`);
 * the C9 bridge: a stored `lower` spelling matches its attendee's casefold key
   (run on the C and the en_US.UTF-8 clusters alike);
 * bare `gmp` is never an input; the Project number is one exact term;
@@ -268,6 +270,71 @@ def test_without_a_sent_lane_the_owner_is_unknown_and_nothing_is_excluded(
         )
     finally:
         runtime.close()
+
+
+def _bare_scene(disposable_database: str, tag: str) -> Scene:
+    runtime = Runtime(disposable_database)
+    with runtime.work_engine.begin() as connection:
+        mine = _insert_partition(connection)
+        theirs = _insert_partition(connection)
+    mail = World(runtime.work_engine, principal_id=mine.principal.principal_id, tag=tag)
+    return Scene(runtime=runtime, mine=mine, theirs=theirs, mail=mail)
+
+
+def test_an_unverified_sender_is_not_self_when_a_verified_lane_exists(scene: Scene) -> None:
+    """Ruling B-3: an unverified sent lane can carry a non-owner sender; it is not excluded."""
+    claimed = scene.mail.message(
+        1,
+        subject="Lunch",
+        text="Plain.",
+        when=at(17, 10),
+        participants=(("from", A), ("to", C)),
+        lanes=(("sent", "unverified_lane_claim"),),
+    )
+    answer = scene.read([scene.meeting("verified-tier", emails=(A, SELF))])
+    (context,) = answer.meetings
+    assert {a.email: a.is_self for a in context.attendees} == {A: False, SELF: True}
+    assert _ids(context) == [claimed]
+    assert (answer.self_addresses.state.value, answer.self_addresses.count) == ("derived", 1)
+    missing = [code.value for code in context.communications.missing]
+    assert "self_unverified" not in missing and "self_unknown" not in missing
+
+
+def test_only_unverified_sent_lanes_derive_the_owner_unverified(disposable_database: str) -> None:
+    scene = _bare_scene(disposable_database, "v")
+    try:
+        for n, sender in enumerate((SELF, A), start=1):
+            scene.mail.message(
+                n,
+                subject="Sent",
+                text="Plain.",
+                when=at(17, 10 + n),
+                participants=(("from", sender), ("to", C)),
+                lanes=(("inbox", "verified"), ("sent", "unverified_lane_claim")),
+            )
+        other = scene.mail.message(
+            3, subject="Other", text="Plain.", when=at(17, 13), participants=(("from", B),)
+        )
+        answer = scene.read([scene.meeting("fallback", emails=(SELF, B)), scene.meeting("bare")])
+        assert (answer.self_addresses.state.value, answer.self_addresses.count) == (
+            "derived_unverified",
+            2,
+        )
+        assert context_payload(answer)["self_addresses"] == {
+            "state": "derived_unverified",
+            "rule": "self_from_sent_lane_v2",
+            "count": 2,
+            "used": 2,
+        }
+        first, second = answer.meetings
+        assert {a.email: a.is_self for a in first.attendees} == {SELF: True, B: False}
+        assert _ids(first) == [other]
+        for context in (first, second):
+            missing = [code.value for code in context.communications.missing]
+            assert "self_unverified" in missing and "self_unknown" not in missing
+            assert missing[-1] == "self_unverified"
+    finally:
+        scene.runtime.close()
 
 
 # ---- the C9 bridge (ruling D11) ------------------------------------------------------
@@ -591,8 +658,9 @@ def _count_world(scene: Scene) -> list[str]:
             when=at(10 + n % 10, 10),
             conversation=f"conv-{n % 4}",
             participants=(("from", A if n % 2 else B), ("to", C)),
-            lanes=(("inbox", "verified"), ("sent", "unverified_lane_claim")),
+            lanes=(("inbox", "verified"),),
         )
+    # The owner is SELF (the fixture's verified sent lane); A and B are not.
     return [
         scene.meeting(
             f"count-{n}",
@@ -609,7 +677,11 @@ def test_one_meeting_costs_the_same_statements_as_ten(scene: Scene) -> None:
     ids = _count_world(scene)
     with _statements(scene.engine) as one:
         answer = scene.read(ids[:1])
-        assert answer.meetings[0].communications.messages
+        messages = answer.meetings[0].communications.messages
+        assert messages
+        # The participant criterion is exercised, not only the text and identifiers.
+        assert answer.meetings[0].communications.inputs.attendee_keys == 2
+        assert all(m.participant_overlap == 1 for m in messages)
     with _statements(scene.engine) as ten:
         assert len(scene.read(ids).meetings) == 10
     # 7 inputs + 2 versions + 1 + 1 coverage (one source) + self + bridge
@@ -668,7 +740,7 @@ def test_the_payload_states_rules_and_never_an_input_address(scene: Scene) -> No
     )
     assert payload["self_addresses"] == {
         "state": "derived",
-        "rule": "self_from_sent_lane_v1",
+        "rule": "self_from_sent_lane_v2",
         "count": 1,
         "used": 1,
     }

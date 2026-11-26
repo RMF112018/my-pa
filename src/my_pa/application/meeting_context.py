@@ -16,11 +16,14 @@ nothing is asked or nothing is returned.
 **The inputs of a Meeting.**
 
 * participants: the active attendees' stored EMAIL keys, minus the mailbox
-  owner's own (ruling D3, `self_from_sent_lane_v1`: the distinct `from`
-  addresses of messages with a `sent` observation, at most
-  `MAX_SELF_ADDRESSES`); each key matched under its own spelling and under
-  every stored non-ASCII spelling whose casefold it is (ruling D11, the bridge,
-  at most `MAX_BRIDGE_ADDRESSES` addresses per batch);
+  owner's own (rulings D3 and B-3, `self_from_sent_lane_v2`: the distinct
+  `from` addresses of messages with a verified `sent` observation, or, only
+  when there is none, with an `unverified_lane_claim` one -- then
+  `self_addresses.state` is `derived_unverified` and every Meeting says
+  `self_unverified`; at most `MAX_SELF_ADDRESSES`); each key matched under
+  its own spelling and under every stored non-ASCII spelling whose casefold it
+  is (ruling D11, the bridge, at most `MAX_BRIDGE_ADDRESSES` addresses per
+  batch);
 * identifiers: the title, prep, notes and description, each scanned to 20,000
   characters, `gmp`/`fpl` excluded, at most 20 (rulings D4, D14);
 * the Project number as one exact `simple` term (ruling D6);
@@ -121,8 +124,9 @@ __all__ = [
 
 MEETINGS_CONTEXT_READ: Final = "meetings.context.read"
 
-#: Ruling D3: the owner's addresses are evidence-derived, at most this many.
-SELF_ADDRESS_RULE: Final = "self_from_sent_lane_v1"
+#: Rulings D3 and B-3: the owner's addresses are evidence-derived, verified
+#: sent lanes first, at most this many.
+SELF_ADDRESS_RULE: Final = "self_from_sent_lane_v2"
 MAX_SELF_ADDRESSES: Final = 20
 #: Ruling D11: the bridge reads at most this many non-ASCII stored addresses per batch.
 MAX_BRIDGE_ADDRESSES: Final = 1000
@@ -149,6 +153,7 @@ class MissingInput(StrEnum):
     PROJECT_WITHOUT_NUMBER = "project_without_number"
     PROVIDER_UNBOUND = "provider_unbound"
     SELF_UNKNOWN = "self_unknown"
+    SELF_UNVERIFIED = "self_unverified"
 
 
 class MatchReason(StrEnum):
@@ -173,7 +178,10 @@ class ProviderBindingState(StrEnum):
 
 
 class SelfAddressState(StrEnum):
+    """Ruling B-3: from verified sent lanes, from unverified ones only, or none."""
+
     DERIVED = "derived"
+    DERIVED_UNVERIFIED = "derived_unverified"
     UNKNOWN = "unknown"
 
 
@@ -298,7 +306,7 @@ class ContextVersions:
 @dataclass(frozen=True, slots=True)
 class SelfAddresses:
     state: SelfAddressState
-    #: Distinct owner addresses found; `used` of them (at most 20) are excluded.
+    #: Distinct owner addresses of the tier used; `used` of them (at most 20) are excluded.
     count: int
     used: int
 
@@ -341,7 +349,7 @@ def _plan(
     lookback_days: int,
     now: datetime,
     self_keys: frozenset[str],
-    self_known: bool,
+    self_state: SelfAddressState,
     identifier_version: str,
 ) -> _Plan:
     attendees = tuple(
@@ -387,8 +395,10 @@ def _plan(
         missing.append(MissingInput.PROJECT_WITHOUT_NUMBER)
     if meeting.provider_binding is None:
         missing.append(MissingInput.PROVIDER_UNBOUND)
-    if not self_known:
+    if self_state is SelfAddressState.UNKNOWN:
         missing.append(MissingInput.SELF_UNKNOWN)
+    elif self_state is SelfAddressState.DERIVED_UNVERIFIED:
+        missing.append(MissingInput.SELF_UNVERIFIED)
     return _Plan(
         meeting=meeting,
         window=lookback_window(meeting.start_at, lookback_days, now),
@@ -509,13 +519,19 @@ class MeetingContextReads:
             )
             owner = communications.context_self_addresses(principal_id, limit=MAX_SELF_ADDRESSES)
             self_keys = frozenset(address_match_key(a) for a in owner.addresses)
+            if not owner.addresses:
+                self_state = SelfAddressState.UNKNOWN
+            elif owner.verified:
+                self_state = SelfAddressState.DERIVED
+            else:
+                self_state = SelfAddressState.DERIVED_UNVERIFIED
             plans = [
                 _plan(
                     meeting,
                     lookback_days=lookback_days,
                     now=now,
                     self_keys=self_keys,
-                    self_known=bool(owner.addresses),
+                    self_state=self_state,
                     identifier_version=self._identifier_version,
                 )
                 for meeting in found
@@ -593,7 +609,7 @@ class MeetingContextReads:
             per_meeting_limit=limit,
             versions=versions,
             self_addresses=SelfAddresses(
-                state=SelfAddressState.DERIVED if owner.addresses else SelfAddressState.UNKNOWN,
+                state=self_state,
                 count=owner.total,
                 used=len(owner.addresses),
             ),

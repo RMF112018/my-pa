@@ -732,20 +732,23 @@ class FakeCommunications(CommunicationsRepository):
     def context_self_addresses(
         self, principal_id: str, *, limit: int
     ) -> CommunicationSelfAddresses:
-        sent = {
-            item.message_id
-            for item in self.w.mine(principal_id, self.w.items)
-            for observation in self.w.mine(principal_id, self.w.observations)
-            if observation.item_id == item.item_id and observation.folder_role == "sent"
-        }
-        owners = sorted(
-            {
-                p.address
-                for p in self.w.mine(principal_id, self.w.participants)
-                if p.field == "from" and p.message_id in sent
-            }
+        # `self_from_sent_lane_v2`: message -> whether any of its `sent` lanes is verified.
+        sent: dict[str, bool] = {}
+        for item in self.w.mine(principal_id, self.w.items):
+            for observation in self.w.mine(principal_id, self.w.observations):
+                if observation.item_id == item.item_id and observation.folder_role == "sent":
+                    sent[item.message_id] = sent.get(item.message_id, False) or (
+                        observation.lane_verification == "verified"
+                    )
+        verified: dict[str, bool] = {}
+        for p in self.w.mine(principal_id, self.w.participants):
+            if p.field == "from" and p.message_id in sent:
+                verified[p.address] = verified.get(p.address, False) or sent[p.message_id]
+        any_verified = any(verified.values())
+        owners = sorted(a for a, v in verified.items() if v == any_verified)
+        return CommunicationSelfAddresses(
+            addresses=tuple(owners[:limit]), total=len(owners), verified=any_verified
         )
-        return CommunicationSelfAddresses(addresses=tuple(owners[:limit]), total=len(owners))
 
     def non_ascii_participant_addresses(self, principal_id: str, *, limit: int) -> tuple[str, ...]:
         found = {

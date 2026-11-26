@@ -15048,15 +15048,21 @@ class CommunicationSearchRow:
 
 @dataclass(frozen=True, slots=True)
 class CommunicationSelfAddresses:
-    """The mailbox owner's addresses under `self_from_sent_lane_v1` (WP5 ruling D3).
+    """The mailbox owner's addresses under `self_from_sent_lane_v2` (WP5 rulings D3, B-3).
 
-    `addresses` are the first `limit` by address of the distinct `from`
-    participant addresses of messages with a `sent` observation, in their
-    stored form; `total` is how many distinct ones there are before the cap.
+    Two tiers, chosen in the one statement. When any message's `sent`
+    observation is `verified`, the tier is the distinct `from` participant
+    addresses of messages with a verified `sent` observation, and `verified` is
+    true. Only when there is none, the tier falls back to the `from` addresses
+    of messages with any (`unverified_lane_claim`) `sent` observation, and
+    `verified` is false. `addresses` are the first `limit` of the tier by
+    address, in their stored form; `total` is the tier's size before the cap.
+    No address at all is `addresses == ()`, `total == 0`, `verified` false.
     """
 
     addresses: tuple[str, ...]
     total: int
+    verified: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -15371,7 +15377,7 @@ class CommunicationsRepository(ABC):
     def context_self_addresses(
         self, principal_id: str, *, limit: int
     ) -> CommunicationSelfAddresses:
-        """The owner's addresses under `self_from_sent_lane_v1`, at most `limit` (one statement)."""
+        """The owner's addresses under `self_from_sent_lane_v2`, at most `limit` (one statement)."""
 
     @abstractmethod
     def non_ascii_participant_addresses(self, principal_id: str, *, limit: int) -> tuple[str, ...]:

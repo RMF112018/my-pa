@@ -130,15 +130,59 @@ def test_the_communications_context_reads_answer_alike(
             assert fake.non_ascii_participant_addresses(principal, limit=limit) == (
                 sql.non_ascii_participant_addresses(principal, limit=limit)
             )
-        assert sql.context_self_addresses(principal, limit=20).addresses == (
-            "owner.a@example.test",
-            "owner.b@example.test",
+        # Ruling B-3: a verified sent lane exists, so only its sender is the owner.
+        owner = sql.context_self_addresses(principal, limit=20)
+        assert (owner.addresses, owner.total, owner.verified) == (
+            ("owner.b@example.test",),
+            1,
+            True,
         )
         for kind in ("rfi", "co", "gmp"):
             assert dict(
                 fake.list_message_identifiers(principal, ids, kind=kind, version=IDENTIFIER_VERSION)
             ) == dict(
                 sql.list_message_identifiers(principal, ids, kind=kind, version=IDENTIFIER_VERSION)
+            )
+
+
+@pytest.mark.parametrize(
+    ("lanes", "expected"),
+    [
+        pytest.param(
+            (("sent", "unverified_lane_claim"),),
+            (("owner.a@example.test", "owner.b@example.test", "owner.c@example.test"), 3, False),
+            id="unverified-only",
+        ),
+        pytest.param((("inbox", "verified"),), ((), 0, False), id="none"),
+    ],
+)
+def test_the_self_address_tiers_answer_alike(
+    migrated_engine: Engine,
+    principal: str,
+    lanes: tuple[tuple[str, str], ...],
+    expected: tuple[tuple[str, ...], int, bool],
+) -> None:
+    """`self_from_sent_lane_v2` with no verified sent lane: the fallback tier, or none."""
+    mail = MailWorld(migrated_engine, principal_id=principal, tag="t")
+    ids = [
+        mail.message(
+            n,
+            subject="Plain",
+            text="x",
+            when=at(17, 10 + n),
+            participants=(("from", f"owner.{letter}@example.test"), ("to", "to@example.test")),
+            lanes=lanes,
+        )
+        for n, letter in enumerate("cab", start=1)
+    ]
+    fake = FakeCommunications(_copy_into_fake(migrated_engine, principal, ids))
+    with _unit(migrated_engine) as unit:
+        sql = unit.communications
+        owner = sql.context_self_addresses(principal, limit=20)
+        assert (owner.addresses, owner.total, owner.verified) == expected
+        for limit in (1, 2, 20):
+            assert fake.context_self_addresses(principal, limit=limit) == (
+                sql.context_self_addresses(principal, limit=limit)
             )
 
 

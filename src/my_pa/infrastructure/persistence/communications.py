@@ -847,42 +847,55 @@ class SqlCommunicationsRepository(CommunicationsRepository):
     def context_self_addresses(
         self, principal_id: str, *, limit: int
     ) -> CommunicationSelfAddresses:
-        """`self_from_sent_lane_v1`: one statement, the total counted before the cap."""
+        """`self_from_sent_lane_v2` (ruling B-3): one statement, both tiers, the total per tier.
+
+        Each `from` address of a message with a `sent` observation, with
+        whether any such observation is `verified`. The verified tier is used
+        when it is not empty, else the unverified one; the tier's total is
+        counted before the cap.
+        """
         participants = communication_participants
         observations, items = communication_observations, communication_mailbox_items
-        sent = (
-            select(literal(1))
-            .select_from(observations)
-            .join(
-                items,
-                matching_partition_criterion(items, observations)
-                & (items.c.item_id == observations.c.item_id),
+        lanes = (
+            select(
+                participants.c.address,
+                func.bool_or(observations.c.lane_verification == "verified").label("verified"),
             )
-            .where(
-                _mine(observations, principal_id),
-                matching_partition_criterion(items, participants),
-                items.c.message_id == participants.c.message_id,
-                observations.c.folder_role == "sent",
+            .select_from(
+                participants.join(
+                    items,
+                    matching_partition_criterion(items, participants)
+                    & (items.c.message_id == participants.c.message_id),
+                ).join(
+                    observations,
+                    matching_partition_criterion(observations, items)
+                    & (observations.c.item_id == items.c.item_id),
+                )
             )
-        )
-        owners = (
-            select(participants.c.address)
-            .distinct()
             .where(
                 _mine(participants, principal_id),
+                _mine(observations, principal_id),
                 participants.c.field == "from",
-                exists(sent),
+                observations.c.folder_role == "sent",
             )
-            .subquery("owners")
+            .group_by(participants.c.address)
+            .subquery("owner_lanes")
         )
+        tiers = select(
+            lanes.c.address,
+            lanes.c.verified,
+            func.bool_or(lanes.c.verified).over().label("any_verified"),
+        ).subquery("owner_tiers")
         rows = self._connection.execute(
-            select(owners.c.address, func.count().over().label("total"))
-            .order_by(owners.c.address.collate("C"))
+            select(tiers.c.address, tiers.c.any_verified, func.count().over().label("total"))
+            .where(tiers.c.verified == tiers.c.any_verified)
+            .order_by(tiers.c.address.collate("C"))
             .limit(limit)
         ).all()
         return CommunicationSelfAddresses(
             addresses=tuple(row.address for row in rows),
             total=int(rows[0].total) if rows else 0,
+            verified=bool(rows[0].any_verified) if rows else False,
         )
 
     def non_ascii_participant_addresses(self, principal_id: str, *, limit: int) -> tuple[str, ...]:

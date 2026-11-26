@@ -699,14 +699,19 @@ def test_existing_non_lineage_v1_shapes_are_unchanged_by_s31() -> None:
     assert len(published) == len(Purpose)
     # Communications intelligence WP4-S5 appends `communications_read` after them.
     # P6 XER import S7-4a appends `schedule_p6_import` and
-    # `schedule_p6_configuration` after them.
-    assert published[-2:] == ["schedule_p6_import", "schedule_p6_configuration"]
-    assert published[-5:-2] == [
+    # `schedule_p6_configuration` after them, and project-report reads WP4P-S4
+    # `project_reports_read` after those.
+    assert published[-3:] == [
+        "schedule_p6_import",
+        "schedule_p6_configuration",
+        "project_reports_read",
+    ]
+    assert published[-6:-3] == [
         "file_workspace_read",
         "file_workspace_authoring",
         "communications_read",
     ]
-    assert published[-15:-5] == [
+    assert published[-16:-6] == [
         "lineage_backfill",
         "program_reporting_read",
         "schedule_import",

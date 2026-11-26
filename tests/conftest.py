@@ -37,6 +37,7 @@ import hashlib
 import os
 import re
 import stat
+import string
 import sys
 import threading
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
@@ -108,6 +109,7 @@ from my_pa.contracts.ports import (
     GoodNotesProposalConflictError,
     GoodNotesSemanticRepository,
     IngestionRepository,
+    IngestSnapshotStatus,
     IssueHandoffRepository,
     IssueRepository,
     IssueTimelineRepository,
@@ -153,14 +155,19 @@ from my_pa.contracts.ports import (
     ProjectReportCrossCheckRecord,
     ProjectReportDerivationRecord,
     ProjectReportFilterDeclarationRecord,
+    ProjectReportLineQuery,
     ProjectReportLineRecord,
+    ProjectReportReadLine,
+    ProjectReportReadsRepository,
     ProjectReportRecordEntry,
+    ProjectReportRfiCandidate,
     ProjectReportRowRecord,
     ProjectReportRowRoleRecord,
     ProjectReportSnapshotRecord,
     ProjectReportsRepository,
     ProjectReportStatedTotalRecord,
     ProjectReportsWriteRefusedError,
+    ProjectReportVersionRecord,
     ProjectRepository,
     ProposalAdmissionConflictError,
     PulseRepository,
@@ -367,6 +374,10 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
+from my_pa.domain.project_reports.identity import (
+    normalize_rfi_prefix as report_normalize_rfi_prefix,
+)
+from my_pa.domain.project_reports.labels import filename_labels as report_filename_labels
 from my_pa.domain.project_reports.model import BindingState as ProjectReportBindingState
 from my_pa.domain.project_reports.model import DerivationState as ProjectReportDerivationState
 from my_pa.domain.project_reports.model import (
@@ -379,11 +390,17 @@ from my_pa.domain.project_reports.model import (
 from my_pa.domain.project_reports.model import (
     ReconciliationOutcome as ProjectReportReconciliationOutcome,
 )
+from my_pa.domain.project_reports.model import RecordFamily as ProjectReportRecordFamily
 from my_pa.domain.project_reports.model import RowRole as ProjectReportRowRole
 from my_pa.domain.project_reports.model import TotalScope as ProjectReportTotalScope
 from my_pa.domain.project_reports.model import ValueKind as ProjectReportValueKind
+from my_pa.domain.project_reports.reads import series_id as report_series_id
 from my_pa.domain.project_reports.reconciliation import (
     CROSS_CHECK_KIND as PROJECT_REPORT_CROSS_CHECK_KIND,
+)
+from my_pa.domain.project_reports.versions import VersionRef as ReportVersionRef
+from my_pa.domain.project_reports.versions import (
+    version_order_key as report_version_order_key,
 )
 from my_pa.domain.record_events import (
     CaptureVersionFacts,
@@ -10949,6 +10966,323 @@ class _ProjectReports(ProjectReportsRepository):
         )
 
 
+_ASCII_LOWER: Final = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+
+
+def _ascii_lower(text: str) -> str:
+    """`lower()` as a C-locale cluster folds it: the ASCII letters only.
+
+    This emulates a C-locale cluster. A UTF-8 cluster also folds non-ASCII
+    letters; only ASCII folding is contractual (ruling F1-4).
+    """
+    return text.translate(_ASCII_LOWER)
+
+
+class _ProjectReportReads(ProjectReportReadsRepository):
+    """The WP4P project-report reads over the `World` (`ProjectReportsWorld`).
+
+    Parity with `SqlProjectReportReadsRepository` (held by
+    `tests/database/test_project_report_reads_fake_parity.py`): derivations only
+    through "current" (nothing supersedes them); a line answered only with its
+    own `detail` row role; the labels from each snapshot's earliest-first-seen
+    path; the current active revision's declaration per slug; versions in
+    series order, then the D10 order; every filter, the keyset and every order
+    as the statements apply them. The lifecycle rows (snapshot status, first
+    seen, paths) come from the unit's `ingestion`, which only an ingestion
+    world (`IngestUnitOfWork`) models; the plain `FakeUnitOfWork` refuses it
+    as soon as a derivation needs it.
+    """
+
+    def __init__(self, world: World, ingestion: Callable[[], IngestionRepository]) -> None:
+        self._w = world.project_reports
+        self._ingestion = ingestion
+
+    def _current(self, principal_id: str) -> dict[str, ProjectReportDerivationRecord]:
+        mine = [d for (owner, _), d in self._w.derivations.items() if owner == principal_id]
+        superseded = {d.supersedes_derivation_id for d in mine}
+        return {d.derivation_id: d for d in mine if d.derivation_id not in superseded}
+
+    def list_report_versions(
+        self,
+        principal_id: str,
+        *,
+        project_ids: Sequence[str] | None = None,
+        record_family: ProjectReportRecordFamily | None = None,
+    ) -> tuple[ProjectReportVersionRecord, ...]:
+        ingestion = self._ingestion()
+        found: list[ProjectReportVersionRecord] = []
+        for derivation in self._current(principal_id).values():
+            if project_ids is not None and derivation.project_id not in project_ids:
+                continue
+            if record_family is not None and derivation.record_family is not record_family:
+                continue
+            lifecycle = ingestion.get_snapshot(principal_id, derivation.snapshot_id)
+            head = self._w.snapshots.get((principal_id, derivation.snapshot_id))
+            revision = self._w.revisions.get((principal_id, derivation.binding_revision_id))
+            if (
+                lifecycle is None
+                or lifecycle.status is not IngestSnapshotStatus.INGESTED
+                or head is None
+                or revision is None
+            ):
+                continue
+            paths = ingestion.list_paths_of_snapshot(principal_id, derivation.snapshot_id)
+            labels = report_filename_labels(paths[0].relative_path if paths else "")
+            found.append(
+                ProjectReportVersionRecord(
+                    series_id=report_series_id(
+                        principal_id,
+                        derivation.ingest_source_id,
+                        labels.slug_label,
+                        head.header_signature,
+                    ),
+                    snapshot_id=derivation.snapshot_id,
+                    derivation_id=derivation.derivation_id,
+                    ingest_source_id=derivation.ingest_source_id,
+                    project_id=derivation.project_id,
+                    binding_revision_id=derivation.binding_revision_id,
+                    state=derivation.state,
+                    quarantine_reason=derivation.quarantine_reason,
+                    record_family=derivation.record_family,
+                    family_view=derivation.family_view,
+                    adapter_version=derivation.adapter_version,
+                    identity_version=derivation.identity_version,
+                    status_map_version=derivation.status_map_version,
+                    completeness_class=derivation.completeness_class,
+                    reconciliation=None
+                    if derivation.reconciliation is None
+                    else dict(derivation.reconciliation),
+                    header_signature=head.header_signature,
+                    first_seen_at=lifecycle.first_seen_at,
+                    date_label=labels.date_label,
+                    slug_label=labels.slug_label,
+                    currency=revision.currency,
+                    declared_project_number=revision.declared_project_number,
+                    filter_declared_at=None
+                    if labels.slug_label is None
+                    else self._declared(
+                        principal_id, derivation.ingest_source_id, labels.slug_label
+                    ),
+                )
+            )
+        series: dict[str, list[ProjectReportVersionRecord]] = {}
+        for version in found:
+            series.setdefault(version.series_id, []).append(version)
+        ordered = sorted(
+            series.items(), key=lambda item: (min(v.first_seen_at for v in item[1]), item[0])
+        )
+        return tuple(
+            version
+            for _key, members in ordered
+            for version in sorted(
+                members,
+                key=lambda v: report_version_order_key(
+                    ReportVersionRef(v.snapshot_id, v.date_label, v.first_seen_at)
+                ),
+            )
+        )
+
+    def _declared(self, principal_id: str, source_id: str, slug: str) -> datetime | None:
+        binding = self._w.bindings.get((principal_id, source_id))
+        if binding is None or binding.state is not ProjectReportBindingState.ACTIVE:
+            return None
+        declaration = self._w.declarations.get((principal_id, binding.binding_revision_id, slug))
+        return None if declaration is None else declaration.declared_at
+
+    def _read_lines(
+        self, principal_id: str, derivation_ids: Collection[str]
+    ) -> list[ProjectReportReadLine]:
+        current = self._current(principal_id)
+        answered: list[ProjectReportReadLine] = []
+        for derivation_id in derivation_ids:
+            derivation = current.get(derivation_id)
+            if derivation is None:
+                continue
+            roles = {
+                role.row_ordinal: role
+                for role in self._w.row_roles.get((principal_id, derivation_id), ())
+                if role.row_role is ProjectReportRowRole.DETAIL
+            }
+            for line in self._w.lines.get((principal_id, derivation_id), ()):
+                role = roles.get(line.row_ordinal)
+                if role is None:
+                    continue
+                record = (
+                    None
+                    if line.record_id is None
+                    else self._w.records.get((principal_id, line.record_id))
+                )
+                answered.append(
+                    ProjectReportReadLine(
+                        derivation_id=derivation_id,
+                        snapshot_id=derivation.snapshot_id,
+                        row_ordinal=line.row_ordinal,
+                        record_family=line.record_family,
+                        family_view=line.family_view,
+                        line_kind=line.line_kind,
+                        identity_state=line.identity_state,
+                        observation_state=line.observation_state,
+                        record_id=line.record_id,
+                        identity_key=None if record is None else record.identity_key,
+                        degraded_reasons=line.degraded_reasons,
+                        status_raw=line.status_raw,
+                        status_class=line.status_class,
+                        identifier_prefix=line.identifier_prefix,
+                        identifier_numeric_suffix=line.identifier_numeric_suffix,
+                        group_path=role.group_path,
+                        values=tuple(sorted(line.values, key=lambda v: v.field_key)),
+                    )
+                )
+        return answered
+
+    @staticmethod
+    def _value(line: ProjectReportReadLine, field_key: str) -> object:
+        return next((v.value for v in line.values if v.field_key == field_key), None)
+
+    def _admits(self, line: ProjectReportReadLine, query: ProjectReportLineQuery) -> bool:
+        if query.status_classes and line.status_class not in query.status_classes:
+            return False
+        if query.statuses and line.status_raw not in query.statuses:
+            return False
+        if query.date_field is not None and (
+            query.date_from is not None or query.date_to is not None
+        ):
+            day = self._value(line, query.date_field)
+            if not isinstance(day, date):
+                return False
+            if query.date_from is not None and day < query.date_from:
+                return False
+            if query.date_to is not None and day > query.date_to:
+                return False
+        if query.rfi_terms and not any(
+            line.identifier_numeric_suffix == term.suffix
+            and (
+                term.prefix is None
+                or line.identifier_prefix == report_normalize_rfi_prefix(term.prefix)
+            )
+            for term in query.rfi_terms
+        ):
+            return False
+        if query.identifiers and not any(
+            self._value(line, term.field_key) == term.value for term in query.identifiers
+        ):
+            return False
+        if query.group_keys and not any(step[1] in query.group_keys for step in line.group_path):
+            return False
+        if query.text is not None:
+            # Ruling R1-08: PostgreSQL's `lower()` on both sides, as a C-locale
+            # cluster folds it (this emulates a C-locale cluster): the ASCII
+            # letters only, so a non-ASCII letter matches as written. Only
+            # ASCII folding is contractual (ruling F1-4).
+            needle = _ascii_lower(query.text)
+            return any(
+                v.field_key in query.text_fields
+                and isinstance(v.value, str)
+                and needle in _ascii_lower(v.value)
+                for v in line.values
+            )
+        return True
+
+    def query_lines(
+        self, principal_id: str, query: ProjectReportLineQuery
+    ) -> tuple[ProjectReportReadLine, ...]:
+        if not query.derivation_ids or query.limit < 1:
+            return ()
+        order = {d: index for index, d in reversed(list(enumerate(query.derivation_ids)))}
+        lines = [
+            line
+            for line in self._read_lines(principal_id, set(query.derivation_ids))
+            if (query.after is None or (order[line.derivation_id], line.row_ordinal) > query.after)
+            and self._admits(line, query)
+        ]
+        lines.sort(key=lambda line: (order[line.derivation_id], line.row_ordinal))
+        return tuple(lines[: query.limit])
+
+    def lines_of_records(
+        self, principal_id: str, record_ids: Sequence[str]
+    ) -> tuple[ProjectReportReadLine, ...]:
+        wanted = set(record_ids)
+        lines = [
+            line
+            for line in self._read_lines(principal_id, set(self._current(principal_id)))
+            if line.record_id in wanted
+        ]
+        return tuple(
+            sorted(
+                lines, key=lambda line: (line.record_id or "", line.snapshot_id, line.row_ordinal)
+            )
+        )
+
+    def stated_totals_of(
+        self, principal_id: str, derivation_ids: Sequence[str]
+    ) -> tuple[ProjectReportStatedTotalRecord, ...]:
+        current = self._current(principal_id)
+        totals = [
+            total
+            for derivation_id in set(derivation_ids)
+            if derivation_id in current
+            for total in self._w.stated_totals.get((principal_id, derivation_id), ())
+        ]
+        return tuple(sorted(totals, key=lambda t: (t.derivation_id, t.row_ordinal, t.column_index)))
+
+    def cross_checks_of(
+        self, principal_id: str, derivation_ids: Sequence[str]
+    ) -> tuple[ProjectReportCrossCheckRecord, ...]:
+        current = set(self._current(principal_id))
+        named = set(derivation_ids)
+        rows = [
+            check
+            for (owner, *_), check in self._w.cross_checks.items()
+            if owner == principal_id
+            and (check.left_derivation_id in named or check.right_derivation_id in named)
+            # Ruling A4: both sides current, else the check is stale.
+            and check.left_derivation_id in current
+            and check.right_derivation_id in current
+        ]
+        return tuple(
+            sorted(rows, key=lambda c: (c.check_kind, c.left_derivation_id, c.right_derivation_id))
+        )
+
+    def rfi_candidates(
+        self, principal_id: str, derivation_ids: Sequence[str], suffixes: Sequence[int]
+    ) -> tuple[ProjectReportRfiCandidate, ...]:
+        current = self._current(principal_id)
+        wanted = set(suffixes)
+        found = [
+            ProjectReportRfiCandidate(
+                derivation_id=line.derivation_id,
+                row_ordinal=line.row_ordinal,
+                prefix=line.identifier_prefix,
+                suffix=line.identifier_numeric_suffix,
+                record_id=line.record_id,
+            )
+            for derivation_id in set(derivation_ids)
+            if derivation_id in current
+            for line in self._w.lines.get((principal_id, derivation_id), ())
+            if line.record_family is ProjectReportRecordFamily.RFIS
+            and line.identifier_numeric_suffix is not None
+            and line.identifier_numeric_suffix in wanted
+        ]
+        return tuple(sorted(found, key=lambda c: (c.derivation_id, c.row_ordinal)))
+
+    def find_records(
+        self,
+        principal_id: str,
+        project_id: str,
+        record_family: ProjectReportRecordFamily,
+        identity_key: str,
+    ) -> tuple[ProjectReportRecordEntry, ...]:
+        found = [
+            record
+            for (owner, _), record in self._w.records.items()
+            if owner == principal_id
+            and record.project_id == project_id
+            and record.record_family is record_family
+            and record.identity_key == identity_key
+        ]
+        return tuple(sorted(found, key=lambda r: (r.identity_version, r.record_id)))
+
+
 class _UnmodelledPlane:
     """A repository a FAST `World` does not model; any use is a test defect."""
 
@@ -12605,6 +12939,11 @@ class FakeUnitOfWork(UnitOfWork):
     def project_reports(self) -> ProjectReportsRepository:
         """The WP3P project-report rows over this `World`."""
         return _ProjectReports(self._world)
+
+    @property
+    def project_report_reads(self) -> ProjectReportReadsRepository:
+        """The WP4P project-report reads over this `World`, with this unit's ingestion plane."""
+        return _ProjectReportReads(self._world, lambda: self.ingestion)
 
     @property
     def issues(self) -> IssueRepository:

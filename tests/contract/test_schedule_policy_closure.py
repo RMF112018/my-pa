@@ -546,8 +546,9 @@ def test_v11_targets() -> None:
     # The `schedule_scenarios` flag doubles the compositions, 512 -> 1,024, and
     # the files workspace's `files_workspace` flag again, 1,024 -> 2,048, and
     # communications WP4-S5's `communications` flag again, 2,048 -> 4,096.
-    # P6 XER import S7-4a: the 13th plane flag (`schedule_p6`) doubles the space.
-    assert len(_every_composition()) == 8192
+    # P6 XER import S7-4a: the 13th plane flag (`schedule_p6`), 4,096 -> 8,192,
+    # and project-report reads WP4P-S4's `project_reports` flag, 8,192 -> 16,384.
+    assert len(_every_composition()) == 16384
 
 
 def test_planner_desires_schedule_reads_only_with_the_switch() -> None:

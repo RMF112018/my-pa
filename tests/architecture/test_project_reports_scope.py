@@ -4,7 +4,9 @@
   and does no IO: no file, network, subprocess, environment or logging module,
   no `open`/`print`/dynamic code, and no clock read;
 * no `float` (name or literal) appears in any project-reports module, in any
-  layer (PULSE-AC-05: money is `Decimal` only);
+  layer, nor in any `project_report*` module of the domain, the application,
+  `infrastructure/persistence` and `infrastructure/project_reports` (PULSE-AC-05:
+  money is `Decimal` only; WP4P ruling A5 widened the reach);
 * the domain names no export provider and no provider header string, and no
   project-reports module in any layer except the reader
   `infrastructure/project_reports/pulse_csv.py` holds a header string;
@@ -46,6 +48,7 @@ COMMUNICATIONS_NAMES: Final = (
     "my_pa.domain.communications",
     "my_pa.infrastructure.communications",
     "my_pa.application.communications_ingest",
+    "my_pa.application.communications_search",
     "my_pa.bootstrap.communications_ingest",
 )
 
@@ -92,6 +95,26 @@ def _slice_modules() -> list[Path]:
         root = PACKAGE / layer
         found += sorted(root.glob("project_reports*.py"))
         for package in sorted(root.glob("project_reports*/")):
+            found += sorted(package.rglob("*.py"))
+    return sorted(set(found))
+
+
+#: The no-float rule's reach (WP4P ruling A5): every `project_report*` module
+#: (singular or plural) in these directories, packages included.
+FLOAT_SCOPE: Final = (
+    PACKAGE / "domain",
+    PACKAGE / "application",
+    PACKAGE / "infrastructure" / "persistence",
+    PACKAGE / "infrastructure" / "project_reports",
+)
+
+
+def _float_scope_modules() -> list[Path]:
+    """Every project-report module the no-float rule reads, beside the slice modules."""
+    found: list[Path] = list(_slice_modules())
+    for root in FLOAT_SCOPE:
+        found += sorted(root.glob("project_report*.py"))
+        for package in sorted(root.glob("project_report*/")):
             found += sorted(package.rglob("*.py"))
     return sorted(set(found))
 
@@ -156,6 +179,9 @@ def test_the_domain_slice_exists() -> None:
         "bindings.py",
         "labels.py",
         "versions.py",
+        "catalogue.py",
+        "cursor.py",
+        "reads.py",
     }
     assert set(_domain_modules()) <= set(_slice_modules())
 
@@ -165,9 +191,24 @@ def test_the_domain_is_stdlib_only_and_does_no_io(path: Path) -> None:
     assert _io(_read(path)) == []
 
 
-@pytest.mark.parametrize("path", _slice_modules(), ids=lambda p: str(p.relative_to(PACKAGE)))
+@pytest.mark.parametrize("path", _float_scope_modules(), ids=lambda p: str(p.relative_to(PACKAGE)))
 def test_no_float_in_any_project_reports_module(path: Path) -> None:
     assert _floats(_read(path)) == []
+
+
+def test_the_no_float_rule_reaches_every_project_report_module() -> None:
+    """Ruling A5's planted control: the singular-prefix modules are in scope too."""
+    scope = set(_float_scope_modules())
+    for planted in (
+        PACKAGE / "infrastructure" / "persistence" / "project_report_reads.py",
+        PACKAGE / "infrastructure" / "persistence" / "project_reports.py",
+        PACKAGE / "application" / "project_reports_reads.py",
+        PACKAGE / "application" / "project_reports_coverage.py",
+        PACKAGE / "infrastructure" / "project_reports" / "pulse_csv.py",
+        DOMAIN / "reads.py",
+    ):
+        assert planted.exists(), planted
+        assert planted in scope, planted.relative_to(PACKAGE)
 
 
 @pytest.mark.parametrize("path", _domain_modules(), ids=lambda p: p.name)
@@ -216,6 +257,7 @@ def test_project_reports_and_communications_do_not_import_each_other() -> None:
         *sorted((PACKAGE / "domain" / "communications").rglob("*.py")),
         *sorted((PACKAGE / "infrastructure" / "communications").rglob("*.py")),
         PACKAGE / "application" / "communications_ingest.py",
+        PACKAGE / "application" / "communications_search.py",
         PACKAGE / "bootstrap" / "communications_ingest.py",
     ]
     assert len(communications) > 4

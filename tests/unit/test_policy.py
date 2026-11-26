@@ -587,6 +587,12 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.SCHEDULE_P6_RELATIONSHIPS_LIST, Purpose.SCHEDULE_READ),
         (Capability.SCHEDULE_P6_CALENDARS_LIST, Purpose.SCHEDULE_READ),
         (Capability.SCHEDULE_P6_FIELD_VALUES_LIST, Purpose.SCHEDULE_READ),
+        # Project-report reads WP4P-S4: each read under its one purpose.
+        (Capability.PROJECT_REPORTS_CATALOG, Purpose.PROJECT_REPORTS_READ),
+        (Capability.PROJECT_REPORTS_QUERY, Purpose.PROJECT_REPORTS_READ),
+        (Capability.PROJECT_REPORTS_RECORD_HISTORY, Purpose.PROJECT_REPORTS_READ),
+        (Capability.PROJECT_REPORTS_COMPARE, Purpose.PROJECT_REPORTS_READ),
+        (Capability.PROJECT_REPORTS_COVERAGE, Purpose.PROJECT_REPORTS_READ),
     }
 )
 

@@ -107,15 +107,25 @@ def _populated(details: Sequence[MeasureRow], column: MeasureColumn) -> bool:
     return bool(values)
 
 
+def _failed(details: Sequence[MeasureRow]) -> bool:
+    return any(row.cell.failed for row in details)
+
+
 def _evaluate(
     details: Sequence[MeasureRow],
     *,
     populated: bool,
+    failed: bool,
     reasons: set[NotReportableReason],
 ) -> MeasureValue:
-    """`populated` is decided over the whole measured column, never one slice of it."""
+    """`populated` and `failed` are decided over the whole measured column, never a slice.
+
+    A failed cell anywhere in the column blocks every figure of it, a filtered
+    slice included (ruling B2-1 as amended by R1-07: fail closed, as the
+    population and the `unknown` status are).
+    """
     cells = [row.cell for row in details]
-    if any(cell.failed for cell in cells):
+    if failed:
         reasons.add(NotReportableReason.TYPE_ERROR_PRESENT)
     if not populated:
         reasons.add(NotReportableReason.SOURCE_COLUMN_UNPOPULATED)
@@ -140,12 +150,21 @@ def detail_sum(
     view: FamilyView,
     reconciliation: Iterable[ReconciliationOutcome] = (),
     blockers: Iterable[NotReportableReason] = (),
+    judged_over: Sequence[MeasureRow] | None = None,
 ) -> MeasureValue:
-    """The exact sum of the column over the view's detail rows, or why there is none."""
+    """The exact sum of the column over the view's detail rows, or why there is none.
+
+    `judged_over` is the whole column the population and a failed cell are
+    judged over when `rows` is a slice of it (a filtered read); `rows` itself
+    by default.
+    """
     _require_measure(column)
     details = _details(rows, view)
+    whole = details if judged_over is None else _details(judged_over, view)
     reasons = _base_reasons(reconciliation, blockers)
-    return _evaluate(details, populated=_populated(details, column), reasons=reasons)
+    return _evaluate(
+        details, populated=_populated(whole, column), failed=_failed(whole), reasons=reasons
+    )
 
 
 def status_measures(
@@ -155,23 +174,29 @@ def status_measures(
     view: FamilyView,
     reconciliation: Iterable[ReconciliationOutcome] = (),
     blockers: Iterable[NotReportableReason] = (),
+    judged_over: Sequence[MeasureRow] | None = None,
 ) -> Mapping[StatusClass, MeasureValue]:
     """One measure per status class; an `unknown` status blocks every class.
 
     A class with no line in a populated column is an exact zero (an empty sum
-    over a verified report), not a substituted one.
+    over a verified report), not a substituted one. The population, a failed
+    cell and the `unknown` block are judged over the whole column, never one
+    class: over `judged_over` when `rows` is a slice of it, over `rows` by
+    default.
     """
     _require_measure(column)
     details = _details(rows, view)
+    whole = details if judged_over is None else _details(judged_over, view)
     base = _base_reasons(reconciliation, blockers)
-    if any(row.status in (None, StatusClass.UNKNOWN) for row in details):
+    if any(row.status in (None, StatusClass.UNKNOWN) for row in whole):
         base.add(NotReportableReason.STATUS_UNKNOWN_PRESENT)
-    populated = _populated(details, column)
+    populated, failed = _populated(whole, column), _failed(whole)
     return MappingProxyType(
         {
             status: _evaluate(
                 [row for row in details if row.status is status],
                 populated=populated,
+                failed=failed,
                 reasons=set(base),
             )
             for status in StatusClass
@@ -186,17 +211,26 @@ def keyed_detail_sums(
     view: FamilyView,
     reconciliation: Iterable[ReconciliationOutcome] = (),
     blockers: Iterable[NotReportableReason] = (),
+    judged_over: Sequence[MeasureRow] | None = None,
 ) -> Mapping[tuple[str, ...], MeasureValue]:
-    """Detail sums per row key, e.g. `(commitment, budget code)`."""
+    """Detail sums per row key, e.g. `(commitment, budget code)`.
+
+    The population and a failed cell are judged over the whole column, never
+    one key, as in `detail_sum`.
+    """
     _require_measure(column)
     details = _details(rows, view)
+    whole = details if judged_over is None else _details(judged_over, view)
     base = _base_reasons(reconciliation, blockers)
-    populated = _populated(details, column)
+    populated, failed = _populated(whole, column), _failed(whole)
     keys = sorted({row.key for row in details})
     return MappingProxyType(
         {
             key: _evaluate(
-                [row for row in details if row.key == key], populated=populated, reasons=set(base)
+                [row for row in details if row.key == key],
+                populated=populated,
+                failed=failed,
+                reasons=set(base),
             )
             for key in keys
         }

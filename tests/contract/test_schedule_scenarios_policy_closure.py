@@ -341,8 +341,9 @@ def test_v13_targets() -> None:
     assert len(_desired(_planes(constraints=True, **everything, schedule_scenarios=True))) == 172
     # Files workspace WP5 (chatllm-data-v14): its own flag, 1,024 -> 2,048.
     # Communications WP4-S5 (chatllm-data-v17): its own flag, 2,048 -> 4,096.
-    # P6 XER import S7-4a: the 13th plane flag (`schedule_p6`) doubles the space.
-    assert len(_every_composition()) == 8192
+    # P6 XER import S7-4a: the 13th plane flag (`schedule_p6`), 4,096 -> 8,192.
+    # Project-report reads WP4P-S4 (chatllm-data-v20): its own flag, 8,192 -> 16,384.
+    assert len(_every_composition()) == 16384
 
 
 def test_planner_desires_the_22_only_with_both_switches() -> None:

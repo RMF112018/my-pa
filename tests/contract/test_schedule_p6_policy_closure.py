@@ -242,7 +242,8 @@ def test_no_command_field_is_a_workspace_path_answer() -> None:
 
 
 def test_chatllm_classifies_the_7_at_v19() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v19"
+    # Introduced at v19; v20 (project-report reads WP4P-S4) contains it unchanged.
+    assert int(CHATLLM_DATA_PROFILE_VERSION.removeprefix("chatllm-data-v")) >= 19
     for capability in INVENTORY:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL

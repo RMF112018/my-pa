@@ -379,6 +379,11 @@ def test_capability_names_match_the_published_contract() -> None:
         "schedule_p6_relationships.list",
         "schedule_p6_calendars.list",
         "schedule_p6_field_values.list",
+        "project_reports.catalog",
+        "project_reports.query",
+        "project_reports.record_history",
+        "project_reports.compare",
+        "project_reports.coverage",
     }
 
 

@@ -84,6 +84,7 @@ from my_pa.application.commands import (
     Command,
     CommitIntelligenceArtifact,
     CommunicationsCoverage,
+    CompareProjectReports,
     CompareScheduleBaseline,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
@@ -229,12 +230,16 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     PreviewFile,
+    ProjectReportRecordHistory,
+    ProjectReportsCatalog,
+    ProjectReportsCoverage,
     ProposeRelationshipMemory,
     ProposeScheduleBaseline,
     PublishConstraint,
     PublishGeneralReport,
     PullGoodNotesWork,
     PutCanvasWorkspace,
+    QueryProjectReports,
     ReadCapture,
     ReadCommitment,
     ReadCommitmentV2,
@@ -821,6 +826,13 @@ def _requested_scope(
             | ListScheduleP6Relationships()
             | ListScheduleP6Calendars()
             | ListScheduleP6FieldValues()
+            # WP4P-S4: the project-report reads name the caller's own Projects,
+            # series, versions and records, never a configured source.
+            | ProjectReportsCatalog()
+            | QueryProjectReports()
+            | ProjectReportRecordHistory()
+            | CompareProjectReports()
+            | ProjectReportsCoverage()
             # `record_events.list` (WP-RE-06) names only the acting Principal's
             # own change feed, never a configured source (G1-RD-011).
             | ListRecordEvents()

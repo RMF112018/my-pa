@@ -234,6 +234,8 @@ _FULL_PLANE_SETTINGS = SimpleNamespace(
     communications_enabled=False,
     # P6 XER import S7-4a (chatllm-data-v19): the P6 switch off, its default.
     schedule_p6_enabled=False,
+    # Project-report reads WP4P-S4 (chatllm-data-v20): the read switch off, its default.
+    project_reports_enabled=False,
     # KLP-WP-04: no client is Knowledge-bound, so the ChatLLM profile tooling runs.
     knowledge_discovery_oauth_client_id_set=frozenset,
     knowledge_operator_review_oauth_client_id_set=frozenset,
@@ -810,8 +812,10 @@ _NONEXISTENT_NEXT_VERSION: Final = _PROFILE_VERSION_PREFIX + str(
         "chatllm-data-v15",
         "chatllm-data-v16",
         "chatllm-data-v17",
-        # Held for communications WP4P S4; never this build's version.
+        # Never issued: project-report reads WP4P-S4 landed as v20, on top of v19.
         "chatllm-data-v18",
+        # P6 XER import S7-4a; superseded by v20.
+        "chatllm-data-v19",
         _NONEXISTENT_NEXT_VERSION,
     ],
 )
@@ -949,8 +953,9 @@ def test_v17_profile_plan_adds_the_3_communications_grants_only_with_the_switch(
         assert code == 0
         code, off = _run(repository, "profile-diff", _FULL_PLANE_SETTINGS, capsys)
         assert code == 0 and off["healthy"] is True
-        # v17 introduced the 3 reads; P6 XER import S7-4a moved the profile to v19.
-        assert off["profile_version"] == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v19"
+        # v17 introduced the 3 reads; P6 XER import S7-4a moved the profile to v19
+        # and project-report reads WP4P-S4 to v20.
+        assert off["profile_version"] == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v20"
         code, plan = _run(repository, "profile-plan", switched, capsys)
         assert code == 1
         actions = plan["actions"]
@@ -989,7 +994,8 @@ def test_v19_profile_plan_adds_the_7_p6_grants_only_with_both_switches(
         assert code == 0
         code, off = _run(repository, "profile-diff", schedule, capsys)
         assert code == 0 and off["healthy"] is True
-        assert off["profile_version"] == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v19"
+        # v19 introduced the 7; project-report reads WP4P-S4 moved the profile to v20.
+        assert off["profile_version"] == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v20"
         code, alone = _run(repository, "profile-diff", p6_alone, capsys)
         assert alone["healthy"] is True
         code, plan = _run(repository, "profile-plan", both, capsys)
@@ -1008,4 +1014,42 @@ def test_v19_profile_plan_adds_the_7_p6_grants_only_with_both_switches(
             "schedule_p6_relationships.list": ("schedule_read", False),
             "schedule_p6_calendars.list": ("schedule_read", False),
             "schedule_p6_field_values.list": ("schedule_read", False),
+        }
+
+
+def test_v20_profile_plan_adds_the_5_project_report_grants_only_with_the_switch(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Project-report reads WP4P-S4: v20 with the switch off desires exactly v19.
+
+    A client converged with `MY_PA_PROJECT_REPORTS_ENABLED` off stays healthy;
+    with it on, the plan adds exactly the 5 `project_reports.*` reads under
+    `project_reports_read`, none a write, none operator-only. Synthetic
+    in-memory store only; nothing is granted outside it.
+    """
+    from my_pa.domain.identity.chatllm_capability_policy import PROJECT_REPORTS_DATA_NAMES
+    from my_pa.domain.identity.operation import is_operator_only
+
+    switched = SimpleNamespace(**{**vars(_FULL_PLANE_SETTINGS), "project_reports_enabled": True})
+    with _repository() as (_, repository):
+        _grant_v2_catalog(repository)
+        code, _ = _run(repository, "profile-apply", _FULL_PLANE_SETTINGS, capsys)
+        assert code == 0
+        code, off = _run(repository, "profile-diff", _FULL_PLANE_SETTINGS, capsys)
+        assert code == 0 and off["healthy"] is True
+        assert off["profile_version"] == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v20"
+        code, plan = _run(repository, "profile-plan", switched, capsys)
+        assert code == 1
+        actions = plan["actions"]
+        assert isinstance(actions, list)
+        assert all(action["kind"] == "add" for action in actions)
+        assert all(not is_operator_only(capability) for capability in PROJECT_REPORTS_DATA_NAMES)
+        assert {
+            action["capability"]: (action["purpose"], action["write"]) for action in actions
+        } == {
+            "project_reports.catalog": ("project_reports_read", False),
+            "project_reports.query": ("project_reports_read", False),
+            "project_reports.record_history": ("project_reports_read", False),
+            "project_reports.compare": ("project_reports_read", False),
+            "project_reports.coverage": ("project_reports_read", False),
         }

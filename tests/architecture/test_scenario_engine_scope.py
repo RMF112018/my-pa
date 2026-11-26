@@ -127,6 +127,8 @@ def test_the_s61_module_set_is_the_contract_set() -> None:
         "scenario/cpm.py",
         "scenario/model.py",
         "scenario/outputs.py",
+        # S7-4b (import contract section 11.5): the P6 snapshot mapping, under the same guard.
+        "scenario/p6_snapshot.py",
         "scenario/snapshot.py",
         # S7-0 (import contract section 11.6): the standard calendar, under the same guard.
         "scenario/standard_calendar.py",

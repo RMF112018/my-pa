@@ -34,6 +34,7 @@ from my_pa.domain.schedule import (
     SchedulePublicationRole,
 )
 from my_pa.domain.schedule.compare import ScheduleChangeKind
+from my_pa.domain.schedule.p6_compare import P6ChangeKind
 
 IMPORT: Final = "schedule_publications.import"
 
@@ -403,8 +404,15 @@ def test_changes_name_both_publications_and_a_closed_kind() -> None:
 
 
 def test_change_kind_values_are_the_delta_vocabulary() -> None:
-    """The command's closed set is read off `ScheduleChangeKind`, never restated."""
-    assert tuple(kind.value for kind in ScheduleChangeKind) == SCHEDULE_CHANGE_KIND_VALUES
+    """The command's closed set is read off both delta vocabularies, never restated.
+
+    The PDF kinds (`ScheduleChangeKind`) in rank order, then (S7-4b) the P6
+    kinds the PDF delta does not have (`P6ChangeKind`), in their rank order.
+    """
+    pdf = tuple(kind.value for kind in ScheduleChangeKind)
+    p6_only = tuple(kind.value for kind in P6ChangeKind if kind.value not in pdf)
+    assert pdf + p6_only == SCHEDULE_CHANGE_KIND_VALUES
+    assert set(SCHEDULE_CHANGE_KIND_VALUES) == set(pdf) | {kind.value for kind in P6ChangeKind}
     schema = ListScheduleChanges.mcp_payload_properties["change_kind"]
     assert schema == {"type": "string", "enum": list(SCHEDULE_CHANGE_KIND_VALUES)}
 

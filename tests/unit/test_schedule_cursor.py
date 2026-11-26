@@ -294,9 +294,10 @@ def test_binding_covers_every_field(field: str, monkeypatch: pytest.MonkeyPatch)
     changes = {"order": ScheduleCursorOrder.CHANGES}
     base = _binding(**changes)
     if field == "algorithm_version":
-        # Offset semantics depend on the algorithm, so a new version rebinds.
-        monkeypatch.setattr(cursor_module, "DELTA_ALGORITHM_VERSION", "cpm-workbench-full-delta-v2")
-        other = _binding(**changes)
+        # Offset semantics depend on the algorithm, so another algorithm rebinds
+        # (S7-4b: a P6 Series' delta `cpm-workbench-p6-delta-v1`).
+        other = _binding(**changes, algorithm_version="cpm-workbench-p6-delta-v1")
+        assert _binding(**changes, algorithm_version=cursor_module.DELTA_ALGORITHM_VERSION) == base
     elif field == "order":
         # Two orders neither of which binds the algorithm, so only the order differs.
         base = _binding(order=ScheduleCursorOrder.SERIES)

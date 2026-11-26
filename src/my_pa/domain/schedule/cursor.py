@@ -134,12 +134,14 @@ def schedule_cursor_binding(
     request: Mapping[str, object],
     page_size: int,
     order: ScheduleCursorOrder,
+    algorithm_version: str = DELTA_ALGORITHM_VERSION,
 ) -> str:
     """The SHA-256 every cursor of this exact request carries (contract 3.7).
 
     `request` is the normalized command without its cursor; for the changes
     order the delta algorithm version is bound too, because offset semantics
-    depend on it.
+    depend on it (P6 XER S7-4b: `cpm-workbench-p6-delta-v1` for a P6 Series,
+    import contract section 11.4; the default is the PDF delta's).
     """
     document: dict[str, object] = {
         "capability": capability,
@@ -151,7 +153,7 @@ def schedule_cursor_binding(
         "order": order.value,
     }
     if order is ScheduleCursorOrder.CHANGES:
-        document["algorithm_version"] = DELTA_ALGORITHM_VERSION
+        document["algorithm_version"] = algorithm_version
     return hashlib.sha256(_canonical(document)).hexdigest()
 
 

@@ -318,9 +318,12 @@ def test_the_output_carries_no_address_subject_snippet_name_number_or_id(
 ) -> None:
     """Prove-red m19: printing one address (or any content) makes this red."""
     measured = _Measured(monkeypatch, capsys)
+    malformed_address = "oversized" * 40 + "@example.invalid"
+    measured.addresses = (malformed_address, *measured.addresses)
     for argv in ((), ("--meetings", "1", "--runs", "1")):
-        code, _out, text = _measure(capsys, *argv)
+        code, out, text = _measure(capsys, *argv)
         assert code == cli.EXIT_OK
+        assert out["probe_attendees_skipped"] == out["probes"]
         forbidden = measured.forbidden()
         assert len(forbidden) > 20  # the check decides something
         leaked = sorted(value for value in forbidden if value in text)

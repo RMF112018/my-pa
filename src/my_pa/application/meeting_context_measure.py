@@ -51,8 +51,6 @@ from datetime import datetime, timedelta
 from math import ceil
 from typing import Final
 
-from pydantic import ValidationError
-
 from my_pa.application.communications_ingest import communications_source_ids, coverage_facts
 from my_pa.application.meeting_context import (
     MAX_BRIDGE_ADDRESSES,
@@ -142,16 +140,13 @@ def probe_anchors(
 
 
 def _attendee(k: int, j: int, address: str, anchor: datetime) -> MeetingAttendeeView | None:
-    try:
-        return MeetingAttendeeView(
-            attendee_id=make_identifier(IdKind.MEETING_ATTENDEE, f"probe{k:04d}{j:04d}"),
-            email=address_match_key(address),
-            is_organizer=j == 0,
-            response_status=AttendeeResponseStatus.UNKNOWN,
-            added_at=anchor,
-        )
-    except ValidationError:  # an address no Meeting could hold
-        return None
+    return MeetingAttendeeView.try_from_email(
+        attendee_id=make_identifier(IdKind.MEETING_ATTENDEE, f"probe{k:04d}{j:04d}"),
+        email=address_match_key(address),
+        is_organizer=j == 0,
+        response_status=AttendeeResponseStatus.UNKNOWN,
+        added_at=anchor,
+    )
 
 
 def probe_meetings(

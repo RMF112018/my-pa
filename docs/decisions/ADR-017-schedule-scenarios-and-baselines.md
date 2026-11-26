@@ -3,9 +3,8 @@
 - **Status:** Proposed — directive-selected by the operator on 2026-11-03; not ratified for
   production. S6-1 is merged (#348) and S6-2 is merged (#349); S6-3 (packages I10-A, I10-B
   and I10-C: the 26 plane capability names, revision B `b77334135653`, the lineage families and read
-  shapes, ChatLLM `chatllm-data-v13`, the facade and the runbook) is implemented on the branch
-  `feat/schedule-scenarios-capabilities` and not merged. Nothing is migrated, granted or
-  deployed. Its switch
+  shapes, ChatLLM `chatllm-data-v13`, the facade and the runbook) is implemented and merged (#354).
+  Merging migrates, grants and deploys nothing. Its switch
   `MY_PA_SCHEDULE_SCENARIOS_ENABLED` is default off and effective only together with
   `MY_PA_SCHEDULE_ENABLED`. Live migration, grants, `profile-apply`, enabling either switch
   and any certified use remain operator gates.

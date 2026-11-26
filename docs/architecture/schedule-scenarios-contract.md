@@ -4228,6 +4228,8 @@ the R10 re-review:
 The implementing packages record their commands, counts, the revision B scratch-cluster
 measurement and the prove-red outcomes here.
 
+The three package records that follow describe each package's state on its branch on its date; S6-3 later merged as #354.
+
 **Package I10-A (capabilities; branch `feat/schedule-scenarios-capabilities`, 2026-11-11, not
 merged, migrated, granted or deployed).** Revision B is `b77334135653` (`down_revision =
 "4c37731671fc"`; 128 revision files). Its window, measured on a Homebrew PostgreSQL 15.15

@@ -345,27 +345,35 @@ eligibility decision (`AGENTS.md` section 5) precedes the grants.
 
 ### 12.4 Activation checklist
 
-Each step is the operator's, after section 10:
+Each step is the operator's, after section 10, in this order:
 
-1. **Migrate.** The image holds `3b3373d8268e` (on `fa18ef3d9bc0`; vocabulary only: the audit
+1. **The eligibility decision.** Record the external-model eligibility decision (`AGENTS.md`
+   section 5) for sending exported text (titles, descriptions, names) to the operator's
+   connected client and its model (section 12.3). Stop here if it is not eligible.
+2. **Migrate.** The image holds `3b3373d8268e` (on `fa18ef3d9bc0`; vocabulary only: the audit
    capability and purpose CHECKs admit the five reads and the purpose `project_reports_read`). Migrate the
    database to the image's single head, which takes `ACCESS EXCLUSIVE` on `audit_events` under a
    10 s `lock_timeout` (it aborts with `55P03` and changes nothing if the lock is held).
-2. **Grants.** The five grants of section 12.3, to the operator profile only.
-3. **The switch.** Set `MY_PA_PROJECT_REPORTS_ENABLED=true` on the gateway service and recreate
-   it. `capabilities.get` then lists the five reads `available`.
-4. **The client profile.** For the operator's client, `profile-diff`, `profile-plan`, then
-   `profile-apply --apply` at `chatllm-data-v18` (the form in
-   [`managed-knowledge-context.md`](managed-knowledge-context.md)). With the switch on,
-   `profile-plan` adds exactly the five reads.
+3. **The switch.** Set `MY_PA_PROJECT_REPORTS_ENABLED=true` on the gateway service and on the
+   remote MCP service, and recreate both. `capabilities.get` then lists the five reads
+   `available`.
+4. **The grants and the profile, as one step.** With `MY_PA_PROJECT_REPORTS_ENABLED=true` also
+   set in the CLI environment (the plane flag is read from it, section 12.2), run
+   `profile-diff`, `profile-plan`, then `profile-apply --apply` at `chatllm-data-v18` for the
+   operator's client (the form in [`managed-knowledge-context.md`](managed-knowledge-context.md)).
+   `profile-plan` adds exactly the five grants of section 12.3, to the operator profile only;
+   `profile-apply` issues them. With the switch unset in the CLI environment, v18 desires exactly
+   the v17 set and the plan adds nothing. No grant goes to a non-operator principal, and no
+   change in the repository writes one.
 5. **Smoke read.** From the client, `project_reports.coverage` with no arguments: each bound
    source with its series and versions, `freshness_seconds` as expected. Then
    `project_reports.catalog` for one Project, and one `project_reports.query` with
    `include_rows: false` and one measure of a family the catalog lists. A `not_reportable`
    answer with closed reasons is a valid answer, not a failure.
 
-**Disabling.** Set the switch off and recreate the gateway: the five reads disappear and calls
-answer `unsupported`. Rows and grants are untouched; revoke the grants separately if wanted.
+**Disabling.** Set the switch off and recreate the gateway and the remote MCP: the five reads
+disappear and calls answer `unsupported`. Rows and grants are untouched; revoke the grants
+separately if wanted.
 
 ## 13. Residuals
 

@@ -23,6 +23,9 @@ holds that from the source.
   ASCII in every locale; non-ASCII letters fold only as the cluster's ctype does.
 * **RFI numbers match exactly**: the numeric suffix by equality, the prefix by
   equality when given (`normalize_rfi_prefix`), never a textual prefix.
+* **Bytewise order** (ruling F1-1): every text `ORDER BY` takes `COLLATE "C"`
+  (field keys, paths, identifiers, check kinds), so no answer, keyset or
+  series label depends on the cluster's locale.
 
 The partition is reached through the guard: every statement composes `_mine`
 over `partition_criterion`, and every join `matching_partition_criterion`.
@@ -332,7 +335,13 @@ class SqlProjectReportReadsRepository(ProjectReportReadsRepository):
         for row in self._connection.execute(
             select(paths.c.snapshot_id, paths.c.relative_path)
             .where(_mine(paths, principal_id), paths.c.snapshot_id.in_(snapshot_ids))
-            .order_by(paths.c.snapshot_id, paths.c.first_seen_at, paths.c.relative_path)
+            # Ruling F1-1: the tie-break between two paths of one instant picks the
+            # path that names the snapshot (its labels, so its series), bytewise.
+            .order_by(
+                paths.c.snapshot_id.collate("C"),
+                paths.c.first_seen_at,
+                paths.c.relative_path.collate("C"),
+            )
         ):
             earliest.setdefault(row.snapshot_id, row.relative_path)
         return earliest
@@ -479,8 +488,8 @@ class SqlProjectReportReadsRepository(ProjectReportReadsRepository):
                 .select_from(_lines_joined())
                 .where(_mine(lines, principal_id), lines.c.record_id.in_(list(record_ids)))
                 .order_by(
-                    lines.c.record_id,
-                    project_report_current_derivations.c.snapshot_id,
+                    lines.c.record_id.collate("C"),
+                    project_report_current_derivations.c.snapshot_id.collate("C"),
                     lines.c.row_ordinal,
                 )
             )
@@ -515,7 +524,11 @@ class SqlProjectReportReadsRepository(ProjectReportReadsRepository):
             )
             # Bytewise, whatever the cluster's collation (a UTF-8 locale sorts
             # `commitment_line.amount` before `commitment.number`; the fake does not).
-            .order_by(values.c.derivation_id, values.c.row_ordinal, values.c.field_key.collate("C"))
+            .order_by(
+                values.c.derivation_id.collate("C"),
+                values.c.row_ordinal,
+                values.c.field_key.collate("C"),
+            )
         ):
             by_line.setdefault((row.derivation_id, row.row_ordinal), []).append(_to_value(row))
         return tuple(
@@ -535,7 +548,9 @@ class SqlProjectReportReadsRepository(ProjectReportReadsRepository):
             select(*(column for column in totals.c if column.name != "principal_id"))
             .select_from(totals.join(project_report_current_derivations, _current(totals)))
             .where(_mine(totals, principal_id), totals.c.derivation_id.in_(list(derivation_ids)))
-            .order_by(totals.c.derivation_id, totals.c.row_ordinal, totals.c.column_index)
+            .order_by(
+                totals.c.derivation_id.collate("C"), totals.c.row_ordinal, totals.c.column_index
+            )
         )
         return tuple(_to_total(row) for row in rows)
 
@@ -569,7 +584,9 @@ class SqlProjectReportReadsRepository(ProjectReportReadsRepository):
                 current(checks.c.right_derivation_id),
             )
             .order_by(
-                checks.c.check_kind, checks.c.left_derivation_id, checks.c.right_derivation_id
+                checks.c.check_kind.collate("C"),
+                checks.c.left_derivation_id.collate("C"),
+                checks.c.right_derivation_id.collate("C"),
             )
         )
         return tuple(_to_cross_check(row) for row in rows)
@@ -595,7 +612,7 @@ class SqlProjectReportReadsRepository(ProjectReportReadsRepository):
                 lines.c.record_family == RecordFamily.RFIS.value,
                 lines.c.identifier_numeric_suffix.in_(sorted(set(suffixes))),
             )
-            .order_by(lines.c.derivation_id, lines.c.row_ordinal)
+            .order_by(lines.c.derivation_id.collate("C"), lines.c.row_ordinal)
         )
         return tuple(
             ProjectReportRfiCandidate(
@@ -624,7 +641,7 @@ class SqlProjectReportReadsRepository(ProjectReportReadsRepository):
                 records.c.record_family == record_family.value,
                 records.c.identity_key == identity_key,
             )
-            .order_by(records.c.identity_version, records.c.record_id)
+            .order_by(records.c.identity_version.collate("C"), records.c.record_id.collate("C"))
         )
         return tuple(_to_record(row) for row in rows)
 

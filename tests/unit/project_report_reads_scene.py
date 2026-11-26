@@ -134,9 +134,12 @@ def unknown_adapter_registry() -> dict[str, pulse_csv.FamilyAdapter]:
 class Clock:
     def __init__(self) -> None:
         self.now = WHEN
+        #: While held, every reading is the same instant (two paths seen at once).
+        self.held = False
 
     def __call__(self) -> datetime:
-        self.now += timedelta(seconds=1)
+        if not self.held:
+            self.now += timedelta(seconds=1)
         return self.now
 
 

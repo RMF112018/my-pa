@@ -375,3 +375,40 @@ def test_the_fake_reads_what_the_database_reads_after_rederivation(
     # candidates before the step, so their empty answers are not vacuous.
     for key in ("totals", "rfi_candidates", "lines"):
         assert fast[f"superseded_held:{key}"] > 0, key
+
+
+def _two_paths_at_one_instant(scene: ReadsScene) -> None:
+    """Ruling F1-1: one export seen at two paths in the same instant.
+
+    The tie-break between the paths picks the one that names the snapshot (its
+    slug label, so its series). Bytewise `Z` sorts before `a`; a UTF-8
+    collation sorts them the other way, so without `COLLATE "C"` the database
+    would label the version differently from the fake on such a cluster.
+    """
+    data = rfi_export((("GMP-190", "Synthetic tie", "", "", "11/25/2026", "", ""),))
+    folder = scene.folder("rfis")
+    paths = [f"{folder}/20261125-arfistie.csv", f"{folder}/20261125-Zrfistie.csv"]
+    for path in paths:
+        scene.store.put(path, data)
+    scene.clock.held = True
+    try:
+        report = scene.lifecycle.backfill(scene.principal, scene.sources["rfis"], paths=paths)
+    finally:
+        scene.clock.held = False
+    assert report.counts["snapshots_aliased"] == 1, report.counts
+    with scene.unit() as unit:
+        (tied,) = [
+            v
+            for v in unit.project_report_reads.list_report_versions(scene.principal)
+            if v.date_label == "20261125"
+        ]
+        held = unit.ingestion.list_paths_of_snapshot(scene.principal, tied.snapshot_id)
+    assert len({p.first_seen_at for p in held}) == 1, "both paths share one instant"
+    assert tied.slug_label == "Zrfistie"
+
+
+def test_the_fake_reads_what_the_database_reads_with_two_paths_at_one_instant(
+    migrated_engine: Engine,
+) -> None:
+    """Ruling F1-1 on any cluster; the en_US.UTF-8 run is the one that can differ."""
+    _assert_equal(*_both(migrated_engine, _two_paths_at_one_instant))

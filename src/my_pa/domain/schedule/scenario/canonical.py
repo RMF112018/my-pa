@@ -19,6 +19,13 @@ whose only shape difference is the `fields` key on every non-null
 `published_reference`, digested under its own prefix. The decoder refuses a
 document whose `schema` is not the one its content implies, so every content
 has exactly one canonical form.
+
+S7-7 (section 11.7): a content holding 2 or more relationships between one
+ordered pair (`has_parallel_relationships`) is `schedule-scenario-content-v3`,
+whatever else it uses. Its shape is exactly the v2 shape (the `fields` key on
+every non-null `published_reference`), its relationships are in
+`(pred, succ, type)` order, and it is digested under its own prefix. A content
+without parallel relationships keeps its v1 or v2 bytes and digest.
 """
 
 from __future__ import annotations
@@ -49,6 +56,7 @@ from my_pa.domain.schedule.scenario.model import (
     ScenarioRelationship,
     ScenarioSettings,
     format_instant,
+    has_parallel_relationships,
     parse_instant,
     parse_lag_calendar,
     uses_v2_features,
@@ -59,6 +67,7 @@ __all__ = [
     "CONTENT_SCHEMA",
     "CONTENT_SCHEMAS",
     "CONTENT_SCHEMA_V2",
+    "CONTENT_SCHEMA_V3",
     "DISTRIBUTIONS_SCHEMA",
     "OUTPUT_SCHEMA",
     "REQUEST_SCHEMA",
@@ -66,6 +75,7 @@ __all__ = [
     "ScenarioDecodeError",
     "activity_object",
     "calendar_from_object",
+    "carries_captured_fields",
     "change_set_bytes",
     "change_set_object",
     "change_set_sha256",
@@ -86,7 +96,10 @@ CONTENT_SCHEMA: Final = "schedule-scenario-content-v1"
 #: S7-0 (section 11.7): a content using an edged milestone, a fixed lag calendar
 #: or captured fields.
 CONTENT_SCHEMA_V2: Final = "schedule-scenario-content-v2"
-CONTENT_SCHEMAS: Final = (CONTENT_SCHEMA, CONTENT_SCHEMA_V2)
+#: S7-7 (section 11.7): a content holding parallel relationships (2 or more
+#: between one ordered pair); the v2 shape, whatever engine its other content needs.
+CONTENT_SCHEMA_V3: Final = "schedule-scenario-content-v3"
+CONTENT_SCHEMAS: Final = (CONTENT_SCHEMA, CONTENT_SCHEMA_V2, CONTENT_SCHEMA_V3)
 CHANGE_SET_SCHEMA: Final = "schedule-scenario-change-set-v1"
 RESULT_SCHEMA: Final = "schedule-cpm-result-v1"
 OUTPUT_SCHEMA: Final = "schedule-scenario-output-v1"
@@ -189,15 +202,23 @@ def activity_object(activity: ScenarioActivity, *, v2: bool = False) -> dict[str
 
 
 def content_schema(content: ScenarioContent) -> str:
-    """Section 11.7: `-v2` iff the content uses a v2 feature, else `-v1`."""
+    """Section 11.7: `-v3` iff the content holds parallel relationships (S7-7), else
+    `-v2` iff it uses a v2 feature, else `-v1`."""
+    if has_parallel_relationships(content):
+        return CONTENT_SCHEMA_V3
     return CONTENT_SCHEMA_V2 if uses_v2_features(content) else CONTENT_SCHEMA
+
+
+def carries_captured_fields(schema: str) -> bool:
+    """A v2 or v3 document carries `fields` on every non-null published reference."""
+    return schema in (CONTENT_SCHEMA_V2, CONTENT_SCHEMA_V3)
 
 
 def content_object(content: ScenarioContent) -> dict[str, object]:
     """The content's canonical object (its own schema); every key present, absent = null."""
     settings = content.settings
     schema = content_schema(content)
-    v2 = schema == CONTENT_SCHEMA_V2
+    v2 = carries_captured_fields(schema)
     return {
         "schema": schema,
         "data_date": format_instant(content.data_date),
@@ -475,14 +496,15 @@ def content_from_object(obj: object) -> ScenarioContent:
     List order is not required (the records sort themselves); keys, types and
     closed values are. Cross-references are left to `content_problem`. The
     `schema` must be the one the decoded content implies (section 11.7): a v1
-    object that uses a v2 feature, or a v2 object that uses none, is refused.
+    object that uses a v2 feature, a v2 object that uses none, a v1 or v2 object
+    holding parallel relationships, or a v3 object holding none, is refused.
     """
     try:
         item = _mapping(obj, _CONTENT_KEYS)
         schema = item["schema"]
         if schema not in CONTENT_SCHEMAS:
             raise _refuse()
-        v2 = schema == CONTENT_SCHEMA_V2
+        v2 = carries_captured_fields(schema)
         settings = _mapping(item["settings"], _SETTINGS_KEYS)
         content = ScenarioContent(
             data_date=_instant(item["data_date"]),

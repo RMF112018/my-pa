@@ -174,10 +174,10 @@ from my_pa.domain.schedule.plane import (
     writer_bucket,
 )
 from my_pa.domain.schedule.scenario.canonical import (
-    CONTENT_SCHEMA_V2,
     ScenarioDecodeError,
     activity_object,
     calendar_from_object,
+    carries_captured_fields,
     content_bytes,
     content_object,
     content_schema,
@@ -194,6 +194,7 @@ from my_pa.domain.schedule.scenario.model import (
     ScenarioContent,
     VersionLabel,
     parse_instant,
+    relationship_order,
 )
 from my_pa.domain.schedule.scenario.outputs import (
     BaseRunBinding,
@@ -2031,7 +2032,7 @@ class ScheduleScenarioApplication:
             version, content, roots = self._content(work, principal_id, command.version_id)
         ordered = sorted(content.activities, key=lambda activity: activity.key)
         page, truncation = _page_offset(paging, ordered)
-        v2 = content_schema(content) == CONTENT_SCHEMA_V2
+        v2 = carries_captured_fields(content_schema(content))
         payload = {
             "version_id": version.version_id,
             "activities": [activity_object(activity, v2=v2) for activity in page],
@@ -2047,7 +2048,7 @@ class ScheduleScenarioApplication:
         paging = _paging(authorization, command, ScheduleCursorOrder.SCENARIO_CONTENT)
         with self._unit_of_work() as work:
             version, content, roots = self._content(work, principal_id, command.version_id)
-        ordered = sorted(content.relationships, key=lambda item: (item.pred, item.succ))
+        ordered = sorted(content.relationships, key=relationship_order)
         page, truncation = _page_offset(paging, ordered)
         payload = {
             "version_id": version.version_id,

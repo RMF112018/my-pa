@@ -65,7 +65,11 @@ scenario snapshot (`src/my_pa/domain/schedule/scenario/p6_snapshot.py`). Its sev
 implemented on `feat/schedule-xer-evaluation`, not merged: the operator procedure
 ([`ops/runbooks/cpm-workbench.md`](../../ops/runbooks/cpm-workbench.md) section 10), the
 engine-vs-P6 oracle (`src/my_pa/domain/schedule/p6/oracle.py`) and the read-only evaluation
-script `ops/schedule/p6_evaluate.py` (no migration, no capability). S7-6 is design only.
+script `ops/schedule/p6_evaluate.py` (no migration, no capability). S7-7 is implemented on
+`feat/scenario-parallel-relationships`, stacked on S7-5, not merged: parallel relationships
+(at most 1 per ordered pair and type) in the content schema `schedule-scenario-content-v3`,
+so a P6 snapshot keeps every relationship and no longer depends on the export's row order (no
+migration, no capability). S7-6 is design only.
 
 ## 1. What it is
 

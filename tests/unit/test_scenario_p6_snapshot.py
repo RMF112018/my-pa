@@ -19,6 +19,7 @@ from my_pa.domain.schedule.model import ScheduleCellState
 from my_pa.domain.schedule.scenario.canonical import (
     CONTENT_SCHEMA,
     CONTENT_SCHEMA_V2,
+    CONTENT_SCHEMA_V3,
     content_bytes,
     content_from_object,
     content_object,
@@ -546,10 +547,10 @@ def test_relationships_lags_and_external_ones() -> None:
     assert c["lags_quantized"] == 1
 
 
-def test_a_parallel_relationship_is_dropped_and_counted_apart() -> None:
-    # P6 allows an SS and an FF between the same 2 activities; the content keeps 1 per
-    # ordered pair (S6-D05): the first in input order, the second counted apart from the
-    # external and unknown-endpoint exclusions.
+def test_parallel_relationships_are_all_kept_and_make_the_content_v3() -> None:
+    # S7-7: P6 allows an SS and an FF between the same 2 activities; the content keeps
+    # both (one per (pred, succ, type)), so nothing is counted parallel-dropped, and
+    # the external and unknown-endpoint exclusions are counted as before.
     built = snap(
         activities=(act("SYN-1010", 2), act("SYN-1020", 3)),
         relationships=(
@@ -562,13 +563,48 @@ def test_a_parallel_relationship_is_dropped_and_counted_apart() -> None:
     links = {(r.pred, r.succ, r.type) for r in built.content.relationships}
     assert links == {
         ("sact_p6snap0002", "sact_p6snap0003", RelationshipType.SS),
+        ("sact_p6snap0002", "sact_p6snap0003", RelationshipType.FF),
         ("sact_p6snap0003", "sact_p6snap0002", RelationshipType.FS),
     }
+    assert content_schema(built.content) == CONTENT_SCHEMA_V3
     c = counts(built)
-    assert c["relationships"] == 2
-    assert c["relationships_parallel_dropped"] == 1
+    assert c["relationships"] == 3
+    assert c["relationships_parallel_dropped"] == 0
     assert c["relationships_excluded"] == 1
     assert c["external_relationships_dropped"] == 0
+
+
+def test_either_file_order_of_a_ladder_gives_the_same_content() -> None:
+    # S7-7: before, the first of the two rows survived, so the export's row order chose
+    # the network. Now both file orders give one content (bytes and digest).
+    ladder = (
+        rel("SYN-1010", "SYN-1020", "PR_SS", "8"),
+        rel("SYN-1010", "SYN-1020", "PR_FF", "16"),
+    )
+    forward = snap(relationships=ladder)
+    backward = snap(relationships=ladder[::-1])
+    assert content_bytes(forward.content) == content_bytes(backward.content)
+    assert content_schema(forward.content) == CONTENT_SCHEMA_V3
+    assert counts(forward) == counts(backward)
+    assert counts(forward)["relationships_parallel_dropped"] == 0
+    assert run_cpm(forward.content) == run_cpm(backward.content)
+
+
+def test_a_repeated_type_on_one_pair_keeps_the_largest_lag_in_any_order() -> None:
+    # P6 does not write the same type twice between one pair; if an export does, the
+    # largest lag binds both passes, so it is kept whatever the row order and the
+    # other is counted `relationships_parallel_dropped`.
+    rows = (
+        rel("SYN-1010", "SYN-1020", "PR_FS", "8"),
+        rel("SYN-1010", "SYN-1020", "PR_FS", "16"),
+    )
+    for ordered in (rows, rows[::-1]):
+        built = snap(relationships=ordered)
+        assert [(r.type, r.lag_minutes) for r in built.content.relationships] == [
+            (RelationshipType.FS, 960)
+        ]
+        assert content_schema(built.content) == CONTENT_SCHEMA
+        assert counts(built)["relationships_parallel_dropped"] == 1
 
 
 # ---- published reference and content schema -------------------------------------------

@@ -324,8 +324,11 @@ def unmodelled_settings(result: P6ParseResult, snapshot: P6Snapshot) -> tuple[st
 
     The snapshot's own (`ss_lag_from_early_start`, `use_expected_finish`) first,
     then the further SCHEDOPTIONS and PROJECT options the parser exposes, then the
-    causes the export's network carries: dropped external or parallel relationships
-    and an in-progress predecessor's SS/SF link (S6 section 3.6).
+    causes the export's network carries: dropped external relationships, a dropped
+    parallel relationship (S7-7: only a repeated `(pred, succ, type)` is still
+    dropped; parallel links of different types are all kept, so this is not
+    reported for a P6 ladder) and an in-progress predecessor's SS/SF link (S6
+    section 3.6).
     """
     project = result.project
     assert project is not None  # noqa: S101 - a snapshot exists only for a complete parse

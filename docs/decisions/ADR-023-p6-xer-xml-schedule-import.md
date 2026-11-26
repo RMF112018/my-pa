@@ -10,7 +10,10 @@
   `cpm-workbench-p6-delta-v1` and the P6 scenario snapshot, no migration, no new capability) is
   merged (#392); slice S7-5 (the operator runbook, the engine-vs-P6 oracle and the read-only
   evaluation script, no migration, no capability) is implemented on
-  `feat/schedule-xer-evaluation`, not merged; nothing else is implemented, and
+  `feat/schedule-xer-evaluation`, not merged; slice S7-7 (parallel relationships, content
+  `schedule-scenario-content-v3`, the second amendment to ADR-017 below; no migration, no
+  capability) is implemented on `feat/scenario-parallel-relationships`, stacked on S7-5, not
+  merged; nothing else is implemented, and
   nothing is migrated on any shared database, granted, switched on or deployed. The optional
   slice S7-6,
   gate G-1 and every other operator gate in the contract stays open. The operator answered the contract's open
@@ -144,6 +147,28 @@ ADR-017 decision 2 (deterministic server CPM `my-pa-cpm-v1`) is extended, not re
 - It is delivered as slice S7-0, a separate PR on the merged S6 modules, before the P6
   scenario hand-off (contract section 11.7).
 
+## Amendment to ADR-017: parallel relationships (content v3, S7-7)
+
+ADR-017's scenario content (S6-D05: at most 1 relationship per ordered pair) is extended, not
+replaced:
+
+- P6 allows 2 or more relationships between the same ordered pair (an SS + FF or SS + FS
+  ladder). With 1 per pair the P6 snapshot kept whichever came first in the file, so the
+  export's row order chose the network: a silent correctness defect (proven on 2 real
+  exports, stats only). A scenario content now holds at most 1 relationship per
+  `(pred, succ, type)`, and the P6 snapshot keeps every relationship between included
+  activities.
+- A content holding parallel relationships is `schedule-scenario-content-v3` (the v2 shape,
+  its own digest prefix), chosen by content only; every v1 and v2 document keeps its bytes
+  and digest. It runs on the engine its other content requires (`my-pa-cpm-v2` iff it uses a
+  v2 feature, else `my-pa-cpm-v1`): the engine maths was already per relationship, so no
+  engine id is added and every v1 and v2 result stays byte-identical.
+- Change sets name a parallel relationship by its `type` (additive: every earlier request
+  behaves as before); the 100,000-relationship cap counts every relationship.
+- No migration (no stored column holds a content schema name); the capability set, the MCP
+  tool input schemas and the ChatLLM profile do not change. Contract: import contract
+  section 11.7, "Parallel relationships".
+
 ## What changes against ADR-016 decision 4, and what does not
 
 | ADR-016 decision 4 says | For XER/XML (this ADR) | For PDF |
@@ -241,5 +266,10 @@ the runbook section (`ops/runbooks/cpm-workbench.md` section 10), the engine-vs-
 `src/my_pa/domain/schedule/p6/oracle.py` (a check, never a claim of equivalence) and the
 read-only, stats-only `ops/schedule/p6_evaluate.py`; its acceptance (gate G-7, the real-corpus
 run) is operator-run.
+S7-7 implemented on `feat/scenario-parallel-relationships` (stacked on S7-5, not merged; no
+migration, no capability): content `schedule-scenario-content-v3` for parallel
+relationships (model, canonical form and digest, decoder, change sets, the engine's
+critical-path edges and typed result rows, the P6 snapshot keeping every relationship, and
+the oracle's `parallel_relationships` cause narrowed to a repeated type).
 Gate G-1 (the script on the operator's sample) is not run. The optional S7-6 is not
 implemented; the contract defines its acceptance tests and the operator gates.

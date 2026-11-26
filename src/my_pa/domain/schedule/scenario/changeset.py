@@ -21,6 +21,22 @@ calendar `calendar:<key>`, a constraint on the wrong side of an edged milestone
 is `constraint_conflict`, and a calendar named as the fixed lag calendar is
 `calendar_in_use`. `op_error` gains no member. The child's content schema
 follows its content (`canonical.content_schema`).
+
+S7-7 (section 11.7) admits parallel relationships (at most one per
+`(pred, succ, type)`) additively; every request that was valid before behaves
+exactly as before, and `op_error` gains no member:
+
+* `relationship.add` keeps refusing an occupied ordered pair
+  (`relationship_exists`) unless it carries `"parallel": true`; then only the
+  same `(pred, succ, type)` is refused.
+* `relationship.edit` on a pair holding one relationship is unchanged (`type`
+  is its new type). On a pair holding 2 or more, `type` names which
+  relationship and `lag_minutes` is its new lag (both required, else
+  `invalid_field`; a type the pair does not hold is `relationship_absent`).
+* `relationship.remove` takes an optional `type`: on a pair holding one
+  relationship it must match when given; on a pair holding 2 or more it is
+  required (else `invalid_field`) and removes only that relationship.
+* `activity.remove` counts every relationship it removes.
 """
 
 from __future__ import annotations
@@ -250,6 +266,10 @@ _LATE: Final = frozenset({ConstraintType.SNLT, ConstraintType.FNLT})
 _MANDATORY: Final = frozenset({ConstraintType.MSO, ConstraintType.MFO})
 
 
+#: S7-7: a relationship's identity within one content.
+RelationshipKey = tuple[str, str, RelationshipType]
+
+
 def _slot(kind: ConstraintType) -> frozenset[ConstraintType]:
     if kind in _EARLY:
         return _EARLY
@@ -264,7 +284,12 @@ class _Working:
         self.settings = parent.settings
         self.calendars = {item.key: item for item in parent.calendars}
         self.activities = {item.key: item for item in parent.activities}
-        self.relationships = {(item.pred, item.succ): item for item in parent.relationships}
+        # S7-7: one relationship per (pred, succ, type).
+        self.relationships: dict[RelationshipKey, ScenarioRelationship] = {}
+        #: The types each ordered pair holds (an index, so a pair lookup is O(1)).
+        self.pair_types: dict[tuple[str, str], set[RelationshipType]] = {}
+        for item in parent.relationships:
+            self.put_link(item)
         self.relationships_removed = 0
 
     def content(self) -> ScenarioContent:
@@ -290,6 +315,19 @@ class _Working:
 
     def optional_calendar_key(self, value: object) -> str | None:
         return None if value is None else self.calendar_key(value)
+
+    def put_link(self, relationship: ScenarioRelationship) -> None:
+        pair = (relationship.pred, relationship.succ)
+        self.relationships[(*pair, relationship.type)] = relationship
+        self.pair_types.setdefault(pair, set()).add(relationship.type)
+
+    def drop_link(self, link: RelationshipKey) -> ScenarioRelationship:
+        pair = (link[0], link[1])
+        types = self.pair_types[pair]
+        types.discard(link[2])
+        if not types:
+            del self.pair_types[pair]
+        return self.relationships.pop(link)
 
     def put(self, activity: ScenarioActivity, changes: Mapping[str, Any]) -> None:
         self.activities[activity.key] = _build(lambda: replace(activity, **changes))
@@ -359,9 +397,9 @@ class _Working:
         fields = _fields(op, frozenset({"key"}))
         activity = self.activity(fields["key"])
         del self.activities[activity.key]
-        touching = [pair for pair in self.relationships if activity.key in pair]
-        for pair in touching:
-            del self.relationships[pair]
+        touching = [link for link in self.relationships if activity.key in (link[0], link[1])]
+        for link in touching:
+            self.drop_link(link)
         self.relationships_removed += len(touching)
 
     def duration_set(self, op: Mapping[str, object]) -> None:
@@ -398,40 +436,80 @@ class _Working:
         self.activity(succ)
         return pred, succ
 
+    def _on_pair(self, pair: tuple[str, str]) -> list[RelationshipKey]:
+        """The relationships between one ordered pair, in type order."""
+        types = self.pair_types.get(pair, set())
+        return [(pair[0], pair[1], kind) for kind in sorted(types, key=lambda kind: kind.value)]
+
     def relationship_add(self, op: Mapping[str, object]) -> None:
-        fields = _fields(op, frozenset({"pred", "succ", "type"}), frozenset({"lag_minutes"}))
+        fields = _fields(
+            op, frozenset({"pred", "succ", "type"}), frozenset({"lag_minutes", "parallel"})
+        )
         kind = _enum(RelationshipType, fields["type"])
         lag = _int(fields.get("lag_minutes", 0))
+        parallel = fields.get("parallel", False)
+        if type(parallel) is not bool:
+            raise _fail(_INVALID)
         pair = self._pair(fields)
         relationship = _build(lambda: ScenarioRelationship(pair[0], pair[1], kind, lag))
-        if pair in self.relationships:
+        link = (pair[0], pair[1], kind)
+        # Without `parallel` any relationship on the pair refuses (S6); with it, only
+        # the same type does (S7-7).
+        if link in self.relationships or (not parallel and self._on_pair(pair)):
             raise _fail(ChangeOpError.RELATIONSHIP_EXISTS)
         if len(self.relationships) >= MAX_RELATIONSHIPS:
             raise _fail(ChangeOpError.BOUND_EXCEEDED)
-        self.relationships[pair] = relationship
+        self.put_link(relationship)
 
     def relationship_edit(self, op: Mapping[str, object]) -> None:
         optional = frozenset({"type", "lag_minutes"})
         fields = _fields(op, frozenset({"pred", "succ"}), optional)
         if not set(fields) & optional:
             raise _fail(_INVALID)
-        changes: dict[str, Any] = {}
-        if "type" in fields:
-            changes["type"] = _enum(RelationshipType, fields["type"])
-        if "lag_minutes" in fields:
-            changes["lag_minutes"] = _int(fields["lag_minutes"])
+        kind = _enum(RelationshipType, fields["type"]) if "type" in fields else None
+        lag = _int(fields["lag_minutes"]) if "lag_minutes" in fields else None
         pair = self._pair(fields)
-        if pair not in self.relationships:
+        held = self._on_pair(pair)
+        if not held:
             raise _fail(ChangeOpError.RELATIONSHIP_ABSENT)
-        current = self.relationships[pair]
-        self.relationships[pair] = _build(lambda: replace(current, **changes))
+        if len(held) == 1:
+            # S6: `type` is the relationship's new type.
+            current = self.relationships[held[0]]
+            changes: dict[str, Any] = {}
+            if kind is not None:
+                changes["type"] = kind
+            if lag is not None:
+                changes["lag_minutes"] = lag
+            edited = _build(lambda: replace(current, **changes))
+            self.drop_link(held[0])
+            self.put_link(edited)
+            return
+        # S7-7: on a parallel pair `type` names the relationship, `lag_minutes` is new.
+        if kind is None or lag is None:
+            raise _fail(_INVALID)
+        link = (pair[0], pair[1], kind)
+        if link not in self.relationships:
+            raise _fail(ChangeOpError.RELATIONSHIP_ABSENT)
+        current = self.relationships[link]
+        self.put_link(_build(lambda: replace(current, lag_minutes=lag)))
 
     def relationship_remove(self, op: Mapping[str, object]) -> None:
-        fields = _fields(op, frozenset({"pred", "succ"}))
+        fields = _fields(op, frozenset({"pred", "succ"}), frozenset({"type"}))
+        kind = _enum(RelationshipType, fields["type"]) if "type" in fields else None
         pair = self._pair(fields)
-        if pair not in self.relationships:
+        held = self._on_pair(pair)
+        if not held:
             raise _fail(ChangeOpError.RELATIONSHIP_ABSENT)
-        del self.relationships[pair]
+        if kind is None:
+            # S7-7: a parallel pair needs `type` to say which relationship goes.
+            if len(held) > 1:
+                raise _fail(_INVALID)
+            link = held[0]
+        else:
+            link = (pair[0], pair[1], kind)
+            if link not in self.relationships:
+                raise _fail(ChangeOpError.RELATIONSHIP_ABSENT)
+        self.drop_link(link)
 
     def _exceptions_fit(self, replaced_key: str, calendar: ScenarioCalendar) -> None:
         others = sum(

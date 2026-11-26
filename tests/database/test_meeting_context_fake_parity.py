@@ -27,6 +27,7 @@ from sqlalchemy import Engine, insert
 
 from my_pa.application.meetings import MeetingApplication
 from my_pa.contracts.ports import MeetingContextInput, MeetingProviderReviewMarkRecord
+from my_pa.domain.communications.addresses import bridge_pattern
 from my_pa.domain.communications.identifiers import IDENTIFIER_VERSION
 from my_pa.domain.meeting.context import IDENTIFIER_SCAN_CHARACTERS
 from my_pa.domain.meeting.model import MeetingCreateRequest, normalize_attendee
@@ -43,6 +44,7 @@ pytestmark = pytest.mark.database
 
 NOW: Final = datetime(2026, 11, 21, 12, tzinfo=UTC)
 APP: Final = MeetingApplication()
+PATTERN: Final = bridge_pattern()
 
 
 def _unit(engine: Engine) -> SqlAlchemyUnitOfWork:
@@ -132,8 +134,8 @@ def test_the_communications_context_reads_answer_alike(
             assert fake.context_self_addresses(principal, limit=limit) == (
                 sql.context_self_addresses(principal, limit=limit)
             )
-            assert fake.bridge_participant_addresses(principal, limit=limit) == (
-                sql.bridge_participant_addresses(principal, limit=limit)
+            assert fake.bridge_participant_addresses(principal, pattern=PATTERN, limit=limit) == (
+                sql.bridge_participant_addresses(principal, pattern=PATTERN, limit=limit)
             )
         # Ruling B-3: a verified sent lane exists, so only its sender is the owner.
         owner = sql.context_self_addresses(principal, limit=20)
@@ -142,7 +144,7 @@ def test_the_communications_context_reads_answer_alike(
             1,
             True,
         )
-        assert sql.bridge_participant_addresses(principal, limit=20) == (
+        assert sql.bridge_participant_addresses(principal, pattern=PATTERN, limit=20) == (
             "straße@example.test",
             "οδος@example.test",
             "ꭰꭱ@example.test",

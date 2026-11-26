@@ -79,6 +79,7 @@ from my_pa.domain.communications.addresses import (
     ADDRESS_RULE,
     address_match_key,
     bridge_addresses,
+    bridge_pattern,
 )
 from my_pa.domain.communications.coverage import summarize_coverage
 from my_pa.domain.communications.identifiers import (
@@ -534,7 +535,7 @@ class MeetingContextReads:
                 self_state = SelfAddressState.DERIVED_UNVERIFIED
             # One more than the cap, so that a truncation is stated, never silent.
             stored = communications.bridge_participant_addresses(
-                principal_id, limit=MAX_BRIDGE_ADDRESSES + 1
+                principal_id, pattern=bridge_pattern(), limit=MAX_BRIDGE_ADDRESSES + 1
             )
             bridge_truncated = len(stored) > MAX_BRIDGE_ADDRESSES
             plans = [

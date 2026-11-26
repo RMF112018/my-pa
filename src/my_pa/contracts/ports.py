@@ -15380,12 +15380,17 @@ class CommunicationsRepository(ABC):
         """The owner's addresses under `self_from_sent_lane_v2`, at most `limit` (one statement)."""
 
     @abstractmethod
-    def bridge_participant_addresses(self, principal_id: str, *, limit: int) -> tuple[str, ...]:
-        """The distinct participant addresses that need a bridge, sorted, at most `limit`.
+    def bridge_participant_addresses(
+        self, principal_id: str, *, pattern: str, limit: int
+    ) -> tuple[str, ...]:
+        """The distinct participant addresses matching `pattern`, sorted, at most `limit`.
 
-        The C9 bridge (ruling D11; WP5-R1 F-4): only an address holding one of
-        `bridge_characters()` (its casefold differs from it), sorted by code
-        point.
+        The C9 bridge (ruling D11; WP5-R1 F-4): `pattern` is
+        `domain.communications.addresses.bridge_pattern()`, a regular-expression
+        bracket expression of the code points whose casefold differs from them,
+        so only an address that needs a bridge is read; sorted by code point.
+        The caller passes it, so persistence never imports the communications
+        slice (`test_communications_source_scope`).
         """
 
     @abstractmethod

@@ -83,7 +83,6 @@ from my_pa.contracts.ports import (
     MeetingContextCandidateRow,
     RepositoryFailureError,
 )
-from my_pa.domain.communications.addresses import bridge_pattern
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     matching_partition_criterion,
@@ -899,14 +898,16 @@ class SqlCommunicationsRepository(CommunicationsRepository):
             verified=bool(rows[0].any_verified) if rows else False,
         )
 
-    def bridge_participant_addresses(self, principal_id: str, *, limit: int) -> tuple[str, ...]:
+    def bridge_participant_addresses(
+        self, principal_id: str, *, pattern: str, limit: int
+    ) -> tuple[str, ...]:
         """The C9 bridge statement: the partition's addresses that need a bridge, capped."""
         participants = communication_participants
         rows = self._connection.execute(
             select(participants.c.address)
             .where(
                 _mine(participants, principal_id),
-                participants.c.address.regexp_match(bridge_pattern()),
+                participants.c.address.regexp_match(pattern),
             )
             .group_by(participants.c.address)
             .order_by(participants.c.address.collate("C"))

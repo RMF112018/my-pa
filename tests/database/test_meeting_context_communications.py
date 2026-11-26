@@ -368,7 +368,7 @@ def test_the_bridge_matches_a_lower_spelling_to_its_casefold_key(scene: Scene, r
     )
     with scene.engine.connect() as connection:
         bridged = SqlCommunicationsRepository(connection).bridge_participant_addresses(
-            scene.principal_id, limit=1000
+            scene.principal_id, pattern=bridge_pattern(), limit=1000
         )
     assert bridged == (stored,)
 
@@ -408,7 +408,7 @@ def test_the_bridge_reads_only_addresses_that_need_it_and_states_its_cap(scene: 
     with scene.engine.connect() as connection:
         repository = SqlCommunicationsRepository(connection)
         found = repository.bridge_participant_addresses(
-            scene.principal_id, limit=MAX_BRIDGE_ADDRESSES + 1
+            scene.principal_id, pattern=bridge_pattern(), limit=MAX_BRIDGE_ADDRESSES + 1
         )
     assert len(found) == MAX_BRIDGE_ADDRESSES and all("caf" not in a for a in found)
     answer = scene.read(meetings)
@@ -431,7 +431,9 @@ def test_the_bridge_reads_only_addresses_that_need_it_and_states_its_cap(scene: 
         repository = SqlCommunicationsRepository(connection)
         for limit in (MAX_BRIDGE_ADDRESSES, MAX_BRIDGE_ADDRESSES + 1):
             assert len(
-                repository.bridge_participant_addresses(scene.principal_id, limit=limit)
+                repository.bridge_participant_addresses(
+                    scene.principal_id, pattern=bridge_pattern(), limit=limit
+                )
             ) == (limit)
     over = scene.meeting("cap-over", emails=("\u00dfover.cap@example.test",))
     answer = scene.read([*meetings, over])

@@ -341,6 +341,20 @@ from my_pa.domain.schedule.baselines import (
 )
 from my_pa.domain.schedule.compare import ScheduleComparisonRow
 from my_pa.domain.schedule.currency import CurrencyPublication
+from my_pa.domain.schedule.p6_import import (
+    P6Admission,
+    P6AdmissionLimits,
+    P6ImportRequest,
+    P6Snapshot,
+)
+from my_pa.domain.schedule.p6_reads import (
+    P6CaptureEvent,
+    P6FieldObservation,
+    P6FieldPredicate,
+    P6PublicationRef,
+    P6SeriesState,
+    P6Sort,
+)
 from my_pa.domain.schedule.plane import PlaneProvenance, PlaneResultKind
 from my_pa.domain.schedule.scenario.cpm import CpmResult, CpmStatus
 from my_pa.domain.schedule.scenario.model import ScenarioContent, VersionLabel
@@ -469,6 +483,10 @@ __all__ = [
     "CommunicationParticipantRecord",
     "CommunicationProjection",
     "CommunicationQuarantineRecord",
+    "CommunicationRederiveDueRecord",
+    "CommunicationSearchQuery",
+    "CommunicationSearchQueryShape",
+    "CommunicationSearchRow",
     "CommunicationSnapshotTally",
     "CommunicationsRepository",
     "ConstraintManagementRepository",
@@ -636,6 +654,10 @@ __all__ = [
     "ScheduleAdmissionRejectedError",
     "ScheduleIntegrityError",
     "ScheduleLeaseLostError",
+    "ScheduleP6AdmissionRepository",
+    "ScheduleP6ReadRepository",
+    "ScheduleP6Repository",
+    "ScheduleP6UnitOfWork",
     "ScheduleRepository",
     "ScheduleUnitOfWork",
     "SearchOutcome",
@@ -6540,6 +6562,11 @@ class UnitOfWork(ABC):
 
     @property
     @abstractmethod
+    def project_report_reads(self) -> ProjectReportReadsRepository:
+        """The project-report reads (WP4P), inside this transaction; read-only."""
+
+    @property
+    @abstractmethod
     def issues(self) -> IssueRepository:
         """The record lineage S1 Issue plane, inside this transaction.
 
@@ -10139,6 +10166,10 @@ class ScheduleRepository(ABC):
         """The stored status, read as `FAILED` once the job is exhausted (R2 10.6)."""
 
     @abstractmethod
+    def source_format(self, principal_id: str, publication_id: str) -> str | None:
+        """S7-3/S7-4a: the publication's `source_format` (`pdf`, `p6_xer`, ...), or `None`."""
+
+    @abstractmethod
     def get_parser_runs(
         self, principal_id: str, publication_id: str
     ) -> tuple[ScheduleParserRun, ...]:
@@ -10279,6 +10310,186 @@ class ScheduleUnitOfWork(ABC):
     @abstractmethod
     def schedules(self) -> ScheduleRepository:
         """The Schedule repository, inside this transaction."""
+
+
+# --- P6 XER import S7-3 admission ports ------------------------------------------
+#
+# Contract: `docs/architecture/schedule-xer-import-contract.md` section 9.1. A
+# dedicated unit of work over the S5 and S7-2 tables; S7-4 composes it behind
+# `schedule_publications.import_p6`. Not a member of `UnitOfWork`.
+
+
+class ScheduleP6AdmissionRepository(ABC):
+    """The one P6 admission transaction (section 9.1 step 4), inside a unit of work."""
+
+    @abstractmethod
+    def admit_p6_publication(
+        self,
+        principal_id: str,
+        request: P6ImportRequest,
+        request_digest: str,
+        snapshot: P6Snapshot,
+        limits: P6AdmissionLimits | None = None,
+    ) -> P6Admission:
+        """Replay, Project, Series, format, content idempotency, snapshot, publication, job.
+
+        S7-4a: with `limits`, the section 7.7 import budgets and snapshot quota
+        are checked after every answer that writes nothing. Raises
+        `P6AdmissionRejectedError` with a closed reason; writes nothing then.
+        """
+
+
+class ScheduleP6ReadRepository(ABC):
+    """S7-4a (contract sections 7, 10): the P6 reads and the capture chain.
+
+    Every method takes the authenticated `principal_id` first; another
+    Principal's Series, publication or row reads as absent. Rows are served as
+    plain mappings of the stored columns; the application renders the 10.5
+    shapes and never serves the workspace path, raw bytes or `clndr_data`
+    (none of which these methods read).
+    """
+
+    @abstractmethod
+    def p6_series_state(
+        self, principal_id: str, series_id: str, *, for_update: bool = False
+    ) -> P6SeriesState | None:
+        """The Series, whether it holds a PDF publication, and its last capture event."""
+
+    @abstractmethod
+    def p6_capture_event(
+        self, principal_id: str, series_id: str, sequence: int
+    ) -> P6CaptureEvent | None:
+        """One event of the Series' capture chain by sequence."""
+
+    @abstractmethod
+    def append_p6_capture_event(
+        self,
+        principal_id: str,
+        series: P6SeriesState,
+        *,
+        sequence: int,
+        field_keys: Sequence[str],
+        include_personal: bool,
+        provenance: Mapping[str, object],
+    ) -> P6CaptureEvent | None:
+        """Append event `sequence`; `None` when a concurrent writer took that sequence."""
+
+    @abstractmethod
+    def p6_publication(self, principal_id: str, publication_id: str) -> P6PublicationRef | None:
+        """A P6 publication of the caller's, or `None` (absent, foreign or PDF)."""
+
+    @abstractmethod
+    def p6_series_publications(
+        self, principal_id: str, series_id: str
+    ) -> tuple[P6PublicationRef, ...]:
+        """The Series' P6 publications, newest admission first."""
+
+    @abstractmethod
+    def p6_field_observations(
+        self, principal_id: str, series_id: str
+    ) -> tuple[P6FieldObservation, ...]:
+        """Observation statistics per field key over the Series' complete P6 imports."""
+
+    @abstractmethod
+    def p6_project_block(self, principal_id: str, parser_run_id: str) -> dict[str, object] | None:
+        """The run's PROJECT/SCHEDOPTIONS row and its per-table counts."""
+
+    @abstractmethod
+    def p6_activity_rows(
+        self,
+        principal_id: str,
+        parser_run_id: str,
+        *,
+        predicates: Sequence[P6FieldPredicate] = (),
+        sort: P6Sort | None = None,
+        kinds: Sequence[str] | None = None,
+        wbs_prefix: Sequence[str] | None = None,
+        start_range: tuple[date | None, date | None] = (None, None),
+        finish_range: tuple[date | None, date | None] = (None, None),
+        offset: int,
+        limit: int,
+    ) -> tuple[dict[str, object], ...]:
+        """One run's activities, filtered and ordered (section 7.7)."""
+
+    @abstractmethod
+    def p6_relationship_rows(
+        self, principal_id: str, parser_run_id: str, *, offset: int, limit: int
+    ) -> tuple[dict[str, object], ...]:
+        """One run's relationships."""
+
+    @abstractmethod
+    def p6_calendar_rows(
+        self,
+        principal_id: str,
+        parser_run_id: str,
+        *,
+        calendar_id: int | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[dict[str, object], ...]:
+        """One run's calendars."""
+
+    @abstractmethod
+    def p6_entity_values(
+        self,
+        principal_id: str,
+        parser_run_id: str,
+        entity_kind: str,
+        entity_ids: Sequence[int],
+        field_keys: Sequence[str],
+    ) -> tuple[dict[str, object], ...]:
+        """The captured values of `field_keys` for the named entities of one run."""
+
+    @abstractmethod
+    def p6_value_rows(
+        self,
+        principal_id: str,
+        *,
+        parser_run_ids: Sequence[str],
+        schedule_activity_id: str | None,
+        entity_kind: str | None,
+        field_keys: Sequence[str] | None,
+        withheld_keys: Sequence[str],
+        predicates: Sequence[P6FieldPredicate] = (),
+        sort: P6Sort | None = None,
+        offset: int,
+        limit: int,
+    ) -> tuple[dict[str, object], ...]:
+        """Captured values of the named runs, optionally of one Stable Activity."""
+
+    @abstractmethod
+    def p6_stable_activity_runs(
+        self, principal_id: str, schedule_activity_id: str
+    ) -> tuple[P6PublicationRef, ...]:
+        """The complete P6 publications whose accepted run links this Stable Activity."""
+
+
+class ScheduleP6Repository(
+    ScheduleRepository, ScheduleP6AdmissionRepository, ScheduleP6ReadRepository
+):
+    """S7-4a: the S5 Schedule repository with the P6 admission and reads, on one connection."""
+
+
+class ScheduleP6UnitOfWork(ABC):
+    """One transaction over the Schedule and P6 tables, and the P6 repository inside it."""
+
+    @abstractmethod
+    def __enter__(self) -> ScheduleP6UnitOfWork:
+        """Begin the transaction and return the unit of work it belongs to."""
+
+    @abstractmethod
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Commit when the block succeeded, roll back when it did not."""
+
+    @property
+    @abstractmethod
+    def p6(self) -> ScheduleP6Repository:
+        """The P6 repository (S5 reads, P6 admission and reads), inside this transaction."""
 
 
 # --- Schedule Scenarios S6-2 plane ports -----------------------------------------
@@ -14632,6 +14843,23 @@ class CommunicationMessageRecord:
     identity_conflict: bool = False
     participants_reconciled: bool = False
     participants_disagreed: bool = False
+    #: The source file of the text pointer was missing or its digest differed at
+    #: the last rederive (WP4 ruling R3); the stored projection was kept.
+    source_unavailable: bool = False
+    #: The extractor version the identifier rows were last written under (WP4
+    #: ruling R2); `None` when never recorded.
+    identifiers_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationRederiveDueRecord:
+    """The columns a rederive groups a due message by (WP4-R1 F7), never its text."""
+
+    message_id: str
+    search_text_version: str
+    identifiers_version: str | None
+    source_unavailable: bool
+    text_snapshot_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -14696,6 +14924,71 @@ class CommunicationSnapshotTally:
 
     observations: int
     quarantined: int
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationSearchQueryShape:
+    """`numnode(websearch_to_tsquery(config, q))` for `english` and `simple` (WP4 D4-final)."""
+
+    english_nodes: int
+    simple_nodes: int
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationSearchQuery:
+    """A normalized `communications.search` request, as the SQL reads it (WP4-S4).
+
+    `query` is `None` when no text criterion applies (no query, or one with no
+    searchable terms). `english_terms` says the `english` query keeps a
+    lexeme; `text_fallback` adds the on-the-fly `simple` match and rank (ruling
+    D4-final). `excluded` is the query's negated terms alone (`-word`,
+    `-"..."`), which every candidate must satisfy, an identifier match
+    included (WP4-R2 G4); `None` when there are none. `to_utc` is inclusive of
+    its whole second. `after` is the last emitted
+    `(tier, rank, overlap, message_time, message_id)`.
+    """
+
+    query: str | None
+    english_terms: bool
+    text_fallback: bool
+    phrases: tuple[str, ...]
+    excluded: str | None
+    identifiers: tuple[tuple[str, str], ...]
+    identifier_version: str
+    participants: tuple[str, ...]
+    participants_all: bool
+    from_utc: datetime | None
+    to_utc: datetime | None
+    folder_role: str | None
+    conversation_id: str | None
+    collapse: bool
+    after: tuple[int, int, int, datetime, str] | None
+    limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class CommunicationSearchRow:
+    """One search result: the message's metadata and its section 14 key."""
+
+    message_id: str
+    conversation_id: str | None
+    message_time: datetime
+    subject: str | None
+    sender_address: str | None
+    has_attachments: bool | None
+    body_state: str
+    search_text_version: str
+    search_text_flags: tuple[str, ...]
+    identity_conflict: bool
+    participants_reconciled: bool
+    participants_disagreed: bool
+    source_unavailable: bool
+    tier: int
+    rank: int
+    overlap: int
+    matched_identifier_kinds: tuple[str, ...]
+    conversation_hits: int
+    snippet: str | None
 
 
 class CommunicationsRepository(ABC):
@@ -14786,6 +15079,19 @@ class CommunicationsRepository(ABC):
         """
 
     @abstractmethod
+    def set_source_unavailable(
+        self, principal_id: str, message_id: str, *, source_unavailable: bool
+    ) -> None:
+        """Set or clear `source_unavailable`; `RepositoryFailureError` when absent."""
+
+    @abstractmethod
+    def set_identifiers_version(self, principal_id: str, message_id: str, version: str) -> None:
+        """Record the extractor version of the message's identifier rows.
+
+        `RepositoryFailureError` when the message does not exist.
+        """
+
+    @abstractmethod
     def insert_item(self, principal_id: str, item: CommunicationMailboxItemRecord) -> None:
         """Attach one provider id to its message."""
 
@@ -14838,6 +15144,85 @@ class CommunicationsRepository(ABC):
     @abstractmethod
     def tally_snapshot(self, principal_id: str, snapshot_id: str) -> CommunicationSnapshotTally:
         """How many observation and quarantine rows one snapshot left."""
+
+    @abstractmethod
+    def list_rederive_due(
+        self,
+        principal_id: str,
+        *,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None = None,
+        limit: int,
+    ) -> tuple[CommunicationRederiveDueRecord, ...]:
+        """The first `limit` messages a rederive must visit, by `message_id` (WP4 ruling D2).
+
+        Only the grouping columns are read (WP4-R1 F7): each group re-reads its
+        messages whole, `FOR UPDATE`, in its own transaction.
+
+        Due: `search_text_version` differs from the given one, `identifiers_version`
+        is distinct from the given one, or `source_unavailable` is set. With
+        `ingest_source_id`, only messages whose text pointer names a snapshot of
+        that source.
+        """
+
+    @abstractmethod
+    def count_rederive_due(
+        self,
+        principal_id: str,
+        *,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None = None,
+    ) -> int:
+        """How many messages `list_rederive_due` would answer with no limit."""
+
+    # --- the WP4 reads (contract sections 13, 14 and 16; WP4-S4) -------------------
+
+    @abstractmethod
+    def search_query_shape(self, query: str) -> CommunicationSearchQueryShape:
+        """How many nodes `websearch_to_tsquery` keeps for `query` under each configuration."""
+
+    @abstractmethod
+    def search_messages(
+        self, principal_id: str, query: CommunicationSearchQuery
+    ) -> tuple[CommunicationSearchRow, ...]:
+        """One page of the section 14 order, after `query.after`, at most `query.limit` rows.
+
+        Collapse (when asked) keeps the best-ranked message of each
+        conversation, and the keyset is applied after it.
+        """
+
+    @abstractmethod
+    def list_message_lanes(
+        self, principal_id: str, message_ids: Sequence[str]
+    ) -> Mapping[str, tuple[tuple[str, str], ...]]:
+        """Per message, its distinct observed `(folder_role, lane_verification)`, sorted."""
+
+    @abstractmethod
+    def list_messages(
+        self, principal_id: str, message_ids: Sequence[str]
+    ) -> tuple[CommunicationMessageRecord, ...]:
+        """The Principal's messages among `message_ids` (any order; absent ids are omitted)."""
+
+    @abstractmethod
+    def list_conversation_page(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        *,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[CommunicationMessageRecord, ...]:
+        """A conversation's messages by `(message_time, message_id COLLATE "C")` ascending."""
+
+    @abstractmethod
+    def count_identifier_version_pending(self, principal_id: str, version: str) -> int:
+        """How many messages' `identifiers_version` is distinct from `version`."""
+
+    @abstractmethod
+    def list_search_text_versions(self, principal_id: str) -> tuple[str, ...]:
+        """The distinct stored `search_text_version` values, sorted."""
 
 
 # --- Communications intelligence WP3b: meeting sync staging and reconciliation
@@ -15625,3 +16010,188 @@ class ProjectReportsRepository(ABC):
         self, principal_id: str, project_id: str
     ) -> tuple[ProjectReportCrossCheckRecord, ...]:
         """Every cross-check of one Project, ordered by kind, then left, then right."""
+
+
+# --- project-report reads (WP4P-S2) ---------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportVersionRecord:
+    """One ingested version of one report series, through its current derivation.
+
+    The labels come from the snapshot's earliest-first-seen path (ruling D4);
+    the path itself never leaves the repository. `filter_declared_at` is the
+    source's current active revision's declaration for the series' slug, or
+    `None`; its description never leaves the repository.
+    """
+
+    series_id: str
+    snapshot_id: str
+    derivation_id: str
+    ingest_source_id: str
+    project_id: str
+    binding_revision_id: str
+    state: report_model.DerivationState
+    quarantine_reason: report_model.QuarantineReason | None
+    record_family: report_model.RecordFamily | None
+    family_view: report_model.FamilyView | None
+    adapter_version: str | None
+    identity_version: str
+    status_map_version: str
+    completeness_class: report_model.CompletenessClass | None
+    reconciliation: Mapping[str, Any] | None
+    header_signature: str
+    first_seen_at: datetime
+    date_label: str | None
+    slug_label: str | None
+    currency: str
+    declared_project_number: str
+    filter_declared_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportRfiTerm:
+    """An RFI number to match: an exact numeric suffix and, when given, an exact prefix."""
+
+    prefix: str | None
+    suffix: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportIdentifierTerm:
+    """An identifier field's exact (whitespace-normalized) text."""
+
+    field_key: str
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportLineQuery:
+    """A filtered, keyset-paged read over the lines of the given current derivations.
+
+    `derivation_ids` are in the caller's order, which is the page order with
+    `row_ordinal` inside each; `after` is the last line answered, as
+    `(index into derivation_ids, row_ordinal)`. Every filter is optional; the
+    filters combine with AND, the members of one filter with OR.
+    """
+
+    derivation_ids: tuple[str, ...]
+    limit: int
+    after: tuple[int, int] | None = None
+    status_classes: tuple[report_model.StatusClass, ...] = ()
+    statuses: tuple[str, ...] = ()
+    date_field: str | None = None
+    date_from: date | None = None
+    date_to: date | None = None
+    rfi_terms: tuple[ProjectReportRfiTerm, ...] = ()
+    identifiers: tuple[ProjectReportIdentifierTerm, ...] = ()
+    group_keys: tuple[str, ...] = ()
+    text: str | None = None
+    #: The field keys `text` searches, each value on its own (never concatenated).
+    text_fields: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportReadLine:
+    """One detail line as a read answers it, with its record key and group context."""
+
+    derivation_id: str
+    snapshot_id: str
+    row_ordinal: int
+    record_family: report_model.RecordFamily
+    family_view: report_model.FamilyView
+    line_kind: report_model.LineKind
+    identity_state: report_model.IdentityState
+    observation_state: report_model.ObservationState
+    record_id: str | None
+    identity_key: str | None
+    degraded_reasons: tuple[report_model.RowReason, ...]
+    status_raw: str | None
+    status_class: report_model.StatusClass | None
+    identifier_prefix: str | None
+    identifier_numeric_suffix: int | None
+    #: `(level, key, header ordinal)` per inherited group header.
+    group_path: tuple[tuple[int, str, int], ...]
+    values: tuple[ProjectReportLineValueRecord, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportRfiCandidate:
+    derivation_id: str
+    row_ordinal: int
+    prefix: str | None
+    suffix: int
+    record_id: str | None
+
+
+class ProjectReportReadsRepository(ABC):
+    """The project-report reads (WP4P-S2), inside one transaction; nothing here writes.
+
+    Every derivation is reached through the view
+    `project_report_current_derivations`, never the derivations table, so a
+    superseded derivation is never answered or counted. Lines exist only on
+    detail rows (the database refuses any other), and the group context is
+    read from the detail row's own role. An identifier of another Principal
+    answers nothing, exactly as an unknown one. Every list is ordered.
+    """
+
+    @abstractmethod
+    def list_report_versions(
+        self,
+        principal_id: str,
+        *,
+        project_ids: Sequence[str] | None = None,
+        record_family: report_model.RecordFamily | None = None,
+    ) -> tuple[ProjectReportVersionRecord, ...]:
+        """Every ingested version with a current derivation, by series then version order.
+
+        Series in order of their first first-seen instant, then `series_id`;
+        versions within a series by the D10 order (`version_order_key`), latest last.
+        """
+
+    @abstractmethod
+    def query_lines(
+        self, principal_id: str, query: ProjectReportLineQuery
+    ) -> tuple[ProjectReportReadLine, ...]:
+        """At most `query.limit` lines of the current derivations named, in page order."""
+
+    @abstractmethod
+    def lines_of_records(
+        self, principal_id: str, record_ids: Sequence[str]
+    ) -> tuple[ProjectReportReadLine, ...]:
+        """Every current line of the records, by record, then snapshot, then row."""
+
+    @abstractmethod
+    def stated_totals_of(
+        self, principal_id: str, derivation_ids: Sequence[str]
+    ) -> tuple[ProjectReportStatedTotalRecord, ...]:
+        """The stated totals of the current derivations named, by derivation, row, column."""
+
+    @abstractmethod
+    def cross_checks_of(
+        self, principal_id: str, derivation_ids: Sequence[str]
+    ) -> tuple[ProjectReportCrossCheckRecord, ...]:
+        """The cross-checks naming a derivation named on either side, both sides current.
+
+        Ruling A4: a check whose other side is superseded is stale and is not
+        answered, so no mismatch is raised from it.
+        """
+
+    @abstractmethod
+    def rfi_candidates(
+        self, principal_id: str, derivation_ids: Sequence[str], suffixes: Sequence[int]
+    ) -> tuple[ProjectReportRfiCandidate, ...]:
+        """The RFI lines whose numeric suffix equals one given exactly, by derivation, row."""
+
+    @abstractmethod
+    def find_records(
+        self,
+        principal_id: str,
+        project_id: str,
+        record_family: report_model.RecordFamily,
+        identity_key: str,
+    ) -> tuple[ProjectReportRecordEntry, ...]:
+        """The record identities of one key in one Project and family (WP4P-S3).
+
+        One per identity version, ordered by identity version, then `record_id`.
+        """

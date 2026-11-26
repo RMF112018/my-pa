@@ -44,7 +44,7 @@ from sqlalchemy import Engine, MetaData, insert, text
 from sqlalchemy.exc import DBAPIError
 from tests.pins import ALEMBIC_REVISION_COUNT
 from tests.schema.files_workspace_vocabulary_contract import FILES_CAPABILITIES, FILES_PURPOSES
-from tests.schema.vocabulary_admissions import capabilities_admitted_after
+from tests.schema.vocabulary_admissions import capabilities_admitted_after, purposes_admitted_after
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -188,7 +188,9 @@ def test_at_sets_are_the_live_enums_plus_the_files_names() -> None:
     declared -= capabilities_admitted_after(REVISION)
     assert at == declared | FILES_CAPABILITIES
     purposes = set(_literals(mine["_PURPOSES_AT_THIS_REVISION"]))
-    assert purposes == {member.value for member in Purpose} | FILES_PURPOSES
+    # Every purpose a later revision admits (WP4 ruling R17).
+    declared_purposes = {member.value for member in Purpose} - purposes_admitted_after(REVISION)
+    assert purposes == declared_purposes | FILES_PURPOSES
 
 
 def test_the_downgrade_refusal_names_the_plane_and_exactly_the_new_names() -> None:
@@ -603,7 +605,8 @@ def test_runtime_metadata_matches_the_revision(disposable_database: str, engine:
         )
         assert (
             set(_literals(head["purpose_is_known"]))
-            == set(_literals(runtime["purpose_is_known"])) | FILES_PURPOSES
+            == (set(_literals(runtime["purpose_is_known"])) - purposes_admitted_after(REVISION))
+            | FILES_PURPOSES
         )
     finally:
         with engine.begin() as connection:

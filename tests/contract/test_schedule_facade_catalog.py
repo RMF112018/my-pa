@@ -30,6 +30,7 @@ from my_pa.adapters.mcp.chatllm_gateway import (
     feature_label,
 )
 from my_pa.adapters.mcp.tools import TOOLS
+from my_pa.domain.identity.chatllm_capability_policy import SCHEDULE_P6_DATA_NAMES
 from my_pa.domain.identity.operation import Capability
 
 #: Contract section 3.5: `name -> (summary, kind)`.
@@ -80,6 +81,9 @@ def test_every_schedule_capability_has_a_catalog_entry() -> None:
         for capability in Capability
         if capability.value.startswith("schedule_")
         and capability not in SCHEDULE_SCENARIO_CAPABILITIES
+        # P6 XER import S7-4a: the 7 P6 names are pinned by
+        # `tests/contract/test_schedule_p6_policy_closure.py`.
+        and capability not in SCHEDULE_P6_DATA_NAMES
     }
     assert schedule == set(_TABLE)
     tools = {tool.name: tool for tool in TOOLS}

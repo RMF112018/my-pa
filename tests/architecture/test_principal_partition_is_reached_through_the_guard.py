@@ -172,6 +172,12 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # current-derivations view included), every INSERT (the get-or-create
         # record included) `_bound`. No join, no hand-written comparison.
         "infrastructure/persistence/project_reports.py",
+        # Project reports WP4P-S2's reads, in the same shape: every SELECT
+        # composes `_mine` over `partition_criterion`, and every join (the
+        # current-derivations view, the detail row role, the record, the
+        # lifecycle snapshot, path and binding rows) and every correlated value
+        # predicate `matching_partition_criterion`. It writes nothing.
+        "infrastructure/persistence/project_report_reads.py",
         # Record lineage S1's Issue plane, in the same shape: every SELECT and
         # UPDATE composes `_mine` or `principal_scoped`, every INSERT `_bound`,
         # and every correlated predicate `matching_partition_criterion`.
@@ -232,6 +238,14 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # exact pair the request names. No raw SQL and no hand-written partition
         # comparison.
         "infrastructure/persistence/schedule.py",
+        # P6 XER S7-3 (schedule XER import contract sections 9.1 and 9.3): the
+        # S5 repository's subclass. Every SELECT/UPDATE composes the S5 `_mine`
+        # over `partition_criterion`, every INSERT (the `ON CONFLICT` snapshot
+        # and Stable Activity inserts included) the S5 `_bound` over
+        # `principal_bound_values`, and every join of two partitioned tables
+        # (publication/snapshot, publication/project, publication/activity)
+        # composes `matching_partition_criterion`. No raw SQL.
+        "infrastructure/persistence/schedule_p6.py",
         # Schedule Scenarios S6-2 (contract section 14.8): the plane repository.
         # Every SELECT/UPDATE scopes each plane and S5 table through `_mine` over
         # `partition_criterion`, every INSERT is stamped through `_bound` over
@@ -625,6 +639,11 @@ PER_MODULE_ONLY: Final = {
         "(the ON CONFLICT record included) `_bound` over `principal_bound_values`; "
         "not yet in a dedicated statement-level scanner."
     ),
+    "infrastructure/persistence/project_report_reads.py": (
+        "project reports WP4P-S2: every SELECT composes `_mine` over `partition_criterion`, "
+        "every join and correlated value predicate `matching_partition_criterion`; it "
+        "writes nothing; not yet in a dedicated statement-level scanner."
+    ),
     "infrastructure/persistence/issue_handoffs.py": (
         "record lineage S2: every SELECT composes `_mine` over `partition_criterion`, "
         "the INSERT `_bound` over `principal_bound_values`, the anchor join "
@@ -649,6 +668,13 @@ PER_MODULE_ONLY: Final = {
         "`principal_bound_values`, the canonicalization link joins its two "
         "partitioned tables with `matching_partition_criterion`; not yet in a "
         "dedicated statement-level scanner."
+    ),
+    "infrastructure/persistence/schedule_p6.py": (
+        "P6 XER S7-3: every SELECT/UPDATE composes the S5 `_mine` over "
+        "`partition_criterion`, every INSERT the S5 `_bound` over "
+        "`principal_bound_values`, every join of two partitioned tables "
+        "`matching_partition_criterion`; not yet in a dedicated statement-level "
+        "scanner."
     ),
     "infrastructure/persistence/schedule_scenarios.py": (
         "Schedule Scenarios S6-2: every SELECT/UPDATE composes `_mine` over "

@@ -133,6 +133,9 @@ def test_all_fixtures_accepted_exits_zero(capsys: pytest.CaptureFixture[str]) ->
     assert main([str(p) for p in paths]) == 0
     document = json.loads(capsys.readouterr().out)
     assert [f["file"] for f in document["files"]] == list(s.COMMITTED)
+    # WP4: the aggregate reports, and measures with, the current versions.
+    assert document["search_text_version"] == "comms_search_text_v2"
+    assert document["identifier_version"] == "comms_identifiers_v2"
     summary = document["summary"]
     assert summary["accepted"] == len(s.COMMITTED)
     # The lean fixture's pair and the 49 h fixture's self-addressed pair: distinct ids.

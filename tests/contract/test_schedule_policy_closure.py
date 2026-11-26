@@ -91,6 +91,7 @@ from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
     SCHEDULE_DATA_NAMES,
+    SCHEDULE_P6_DATA_NAMES,
     ChatLLMCapabilityClass,
     ChatLLMCompositionPrerequisite,
     is_chatllm_data_management,
@@ -267,8 +268,11 @@ def _purposes(scene: Scene) -> None:
     assert permitted_purposes(IMPORT) == frozenset({Purpose.SCHEDULE_IMPORT})
     for capability in READS:
         assert permitted_purposes(capability) == frozenset({Purpose.SCHEDULE_READ}), capability
+    # P6 XER import S7-4a (schedule XER import contract section 10.1): the 5 P6
+    # reads reuse `schedule_read` by contract; the P6 writes have purposes of
+    # their own (`tests/contract/test_schedule_p6_policy_closure.py`).
     for capability in Capability:
-        if capability not in SEVEN:
+        if capability not in SEVEN and capability not in SCHEDULE_P6_DATA_NAMES:
             assert not permitted_purposes(capability) & {
                 Purpose.SCHEDULE_IMPORT,
                 Purpose.SCHEDULE_READ,
@@ -540,8 +544,11 @@ def test_v11_targets() -> None:
     default_all = _planes(constraints=True, lineage=True, program_reporting=True, schedule=True)
     assert len(_desired(default_all)) == 150
     # The `schedule_scenarios` flag doubles the compositions, 512 -> 1,024, and
-    # the files workspace's `files_workspace` flag again, 1,024 -> 2,048.
-    assert len(_every_composition()) == 2048
+    # the files workspace's `files_workspace` flag again, 1,024 -> 2,048, and
+    # communications WP4-S5's `communications` flag again, 2,048 -> 4,096.
+    # P6 XER import S7-4a: the 13th plane flag (`schedule_p6`), 4,096 -> 8,192,
+    # and project-report reads WP4P-S4's `project_reports` flag, 8,192 -> 16,384.
+    assert len(_every_composition()) == 16384
 
 
 def test_planner_desires_schedule_reads_only_with_the_switch() -> None:

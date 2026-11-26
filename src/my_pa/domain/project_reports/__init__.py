@@ -17,7 +17,11 @@ records have been read:
 * detail-only measures with status separation (`measures.py`);
 * the pure validation of the operator's bindings file (`bindings.py`);
 * filename labels and the version order (`labels.py`), and the comparison of a
-  series' versions that never infers closure from absence (`versions.py`).
+  series' versions that never infers closure from absence (`versions.py`);
+* the reads' closed field catalogue and generated measure set
+  (`catalogue.py`), their pure rules (series identity, Decimal strings,
+  per-version filter semantics, comparison, the measure planner; `reads.py`)
+  and their opaque cursor (`cursor.py`).
 
 Nothing here does IO, reads a clock, mints an identifier or names an export
 provider's header strings: those live in the infrastructure reader alone.

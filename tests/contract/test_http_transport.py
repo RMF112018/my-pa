@@ -40,6 +40,11 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
+from tests.communications_reads_samples import (
+    COMMUNICATIONS_READ_CAPABILITIES,
+    communications_commands,
+    communications_payloads,
+)
 from tests.conftest import (
     DEFAULT_LIMITS,
     WHEN,
@@ -86,6 +91,16 @@ from tests.files_workspace_samples import (
     FILES_WORKSPACE_CAPABILITIES,
     files_commands,
     files_payloads,
+)
+from tests.project_reports_reads_samples import (
+    PROJECT_REPORTS_READ_CAPABILITIES,
+    project_reports_commands,
+    project_reports_payloads,
+)
+from tests.schedule_p6_samples import (
+    SCHEDULE_P6_CAPABILITIES,
+    schedule_p6_commands,
+    schedule_p6_payloads,
 )
 from tests.schedule_scenario_samples import (
     SCHEDULE_SCENARIO_CAPABILITIES,
@@ -566,6 +581,12 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         *SCHEDULE_SCENARIO_CAPABILITIES,
         # Files workspace WP5: the 17 `files.*` names (no workspace root here).
         *FILES_WORKSPACE_CAPABILITIES,
+        # Communications intelligence WP4-S5: the 3 reads (scopeless, read switch off).
+        *COMMUNICATIONS_READ_CAPABILITIES,
+        # P6 XER import S7-4a: the 7 P6 names (scopeless, P6 switch off).
+        *SCHEDULE_P6_CAPABILITIES,
+        # Project-report reads WP4P-S4: the 5 reads (scopeless, read switch off).
+        *PROJECT_REPORTS_READ_CAPABILITIES,
         # Reports Modernization WP06 T14: the 4 transfer uploads need a report
         # content store and the transfer staging; this harness composes neither.
         Capability.REPORTS_TRANSFER_BEGIN,
@@ -2042,6 +2063,9 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         **scenario_payloads("http"),
         # Files workspace WP5: synthetic plane samples.
         **files_payloads("http"),
+        **communications_payloads("http"),
+        **schedule_p6_payloads("http"),
+        **project_reports_payloads("http"),
     }
 
 
@@ -3422,6 +3446,9 @@ def commands_for(
         **scenario_commands("http"),
         # Files workspace WP5: synthetic plane samples.
         **files_commands("http"),
+        **communications_commands("http"),
+        **schedule_p6_commands("http"),
+        **project_reports_commands("http"),
     }
 
 

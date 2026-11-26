@@ -876,6 +876,62 @@ class SafeDetail(StrEnum):
     INCLUDE_SHA256 = "include_sha256"
     SIZE = "size"
     AFTER = "after"
+    #: P6 XER import S7-3 (schedule XER import contract sections 9.1, 10.3 and
+    #: 10.6): the admitted bytes' digest did not equal `expected_sha256`; the
+    #: bytes are not a P6 export the build reads; the Series holds another
+    #: format; and the identity-override field. `WORKSPACE_ID`, `PATH`,
+    #: `EXPECTED_VERSION`, `MAX_BYTES`, `FORMAT`, `PROJECT_ID`, `SERIES_ID`,
+    #: `SERIES_NAME`, `SERIES_AUTO`, `SUPERSEDES_PUBLICATION_ID` and
+    #: `IDEMPOTENCY_KEY` are reused.
+    EXPECTED_SHA256 = "expected_sha256"
+    SOURCE_FORMAT = "source_format"
+    SERIES_FORMAT = "series_format"
+    ACCEPT_PROJECT_IDENTITY_CHANGE = "accept_project_identity_change"
+
+    #: Communications reads (contract section 16, WP4-S4): the request fields of
+    #: `communications.search`, `.read` and `.coverage`. `QUERY`, `IDENTIFIERS`,
+    #: `LIMIT` and `CURSOR` are reused.
+    PARTICIPANTS = "participants"
+    PARTICIPANT_MODE = "participant_mode"
+    FROM_UTC = "from_utc"
+    TO_UTC = "to_utc"
+    FOLDER_ROLE = "folder_role"
+    CONVERSATION_ID = "conversation_id"
+    COLLAPSE = "collapse"
+    MESSAGE_IDS = "message_ids"
+    INCLUDE_TEXT = "include_text"
+    SOURCE = "source"
+    #: P6 XER import S7-4a (schedule XER import contract sections 7.7, 10.3 and
+    #: 10.6): a captured-field key outside the 7.7 grammar, not selectable or
+    #: not served to this caller (`field_keys`, `fields`); a filter or sort
+    #: outside the closed 7.7 grammar; the `personal` opt-in; the field-value
+    #: entity kind; and the one calendar whose exceptions a read pages.
+    #: `SEQUENCE` (the compare-and-swap on the capture chain), `STORAGE_QUOTA`,
+    #: `PATH` (the request field `path`, the contract's `WORKSPACE_PATH`) and the
+    #: S7-3 tokens are reused.
+    FIELD_KEY = "field_key"
+    FIELD_FILTER = "field_filter"
+    INCLUDE_PERSONAL = "include_personal"
+    ENTITY_KIND = "entity_kind"
+    CALENDAR_ID = "calendar_id"
+    #: Project-report reads (WP4P design section 2.10, WP4P-S3): the request
+    #: fields of `project_reports.catalog`, `.query`, `.record_history`,
+    #: `.compare` and `.coverage`. `PROJECT_ID`, `PROJECT_IDS`, `SERIES_ID`,
+    #: `TEXT`, `IDENTIFIERS`, `LIMIT` and `CURSOR` are reused.
+    RECORD_FAMILY = "record_family"
+    VERSION = "version"
+    FROM_VERSION = "from_version"
+    TO_VERSION = "to_version"
+    STATUS_CLASSES = "status_classes"
+    STATUSES = "statuses"
+    DATE_FIELD = "date_field"
+    DATE_FROM = "date_from"
+    DATE_TO = "date_to"
+    GROUP_KEYS = "group_keys"
+    MEASURES = "measures"
+    INCLUDE_ROWS = "include_rows"
+    RECORD_IDS = "record_ids"
+    IDENTITY_KEY = "identity_key"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

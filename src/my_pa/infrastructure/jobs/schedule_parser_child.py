@@ -35,6 +35,13 @@ socket system calls after memory corruption (U2-01), native file effects that
 do not grow a file, and a forged but well-formed frame (U2-10). The mitigations
 are operator-level.
 
+**P6 XER (S7-3)**, schedule XER import contract section 9.3 H4: with first
+argument `p6_xer` the child parses the admitted XER bytes with the S7-1 entry
+point `parse_xer` under the publication's capture selection and writes one
+`P6_FRAME_MAGIC` frame instead. The containment is the same, in the same
+order; PDFium is never imported on this path, and the parser package is
+imported only here, never by the parent.
+
 This module imports only the standard library at module level and the
 `my_pa.domain.schedule` / `my_pa.infrastructure.schedule` packages inside
 `main`. It prints nothing and writes nothing but the frame.
@@ -42,6 +49,8 @@ This module imports only the standard library at module level and the
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import os
 import resource
@@ -61,6 +70,8 @@ __all__ = [
     "FRAME_SCHEMA",
     "MAX_CHILD_INPUT_BYTES",
     "MAX_CHILD_OUTPUT_BYTES",
+    "P6_FRAME_MAGIC",
+    "P6_MODE",
     "PRODUCTION_CHILD_LIMITS",
     "ChildLimits",
     "ContainmentError",
@@ -71,6 +82,11 @@ __all__ = [
 
 FRAME_MAGIC: Final = b"CPMWB-PARSE-1\n"
 FRAME_SCHEMA: Final = "cpm-workbench-parse-frame-v1"
+#: S7-3: the P6 frame -- magic, then the canonical JSON of the bytes' digest and
+#: size and the `cpm-workbench-p6-frame-v1` frame object (contract 9.3 H4).
+P6_FRAME_MAGIC: Final = b"CPMWB-P6-PARSE-1\n"
+#: The first argument that selects the P6 XER parse.
+P6_MODE: Final = "p6_xer"
 
 #: Exit codes the parent classifies (contract 3.4.6).
 EXIT_MEMORY: Final = 3
@@ -257,10 +273,90 @@ def _frame(result: object) -> bytes:
     )
 
 
-def main(args: Sequence[str]) -> int:
-    """Contain, read, parse, frame. Returns the exit code (contract 3.4.2)."""
-    started = time.monotonic()
-    _limit_files()
+@dataclass(frozen=True, slots=True)
+class _P6Arguments:
+    capture: tuple[str, ...] | None
+    wall_seconds: float
+    limits: ChildLimits
+
+
+def _p6_arguments(args: Sequence[str]) -> _P6Arguments:
+    """`p6_xer <capture JSON or "-"> <wall ms> <address space> <open files> <output bytes>`."""
+    if len(args) != 6 or args[0] != P6_MODE:
+        raise ValueError("usage")
+    _mode, capture, wall_ms, address_space, open_files, output_bytes = args
+    wall = int(wall_ms)
+    if wall < 1:
+        raise ValueError("usage")
+    keys: tuple[str, ...] | None = None
+    if capture != "-":
+        decoded = json.loads(capture)
+        if not isinstance(decoded, list) or not all(isinstance(key, str) for key in decoded):
+            raise ValueError("usage")
+        keys = tuple(decoded)
+    return _P6Arguments(
+        capture=keys,
+        wall_seconds=wall / 1000,
+        limits=ChildLimits(
+            address_space=int(address_space),
+            open_files=int(open_files),
+            output_bytes=int(output_bytes),
+        ),
+    )
+
+
+def _p6_frame(data: bytes, result: object) -> bytes:
+    """The one P6 frame: magic, then the canonical JSON of digest, size and frame."""
+    from my_pa.domain.schedule.p6.frame import frame_object
+    from my_pa.domain.schedule.p6.model import P6ParseResult
+
+    if not isinstance(result, P6ParseResult):
+        raise TypeError("a frame carries a parse result")
+    return P6_FRAME_MAGIC + json.dumps(
+        {
+            "document_sha256": hashlib.sha256(data).hexdigest(),
+            "document_size_bytes": len(data),
+            "frame": frame_object(result),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("ascii")
+
+
+def _read_input() -> bytes | None:
+    data = sys.stdin.buffer.read(MAX_CHILD_INPUT_BYTES + 1)
+    return None if len(data) > MAX_CHILD_INPUT_BYTES else data
+
+
+def _main_p6(args: Sequence[str]) -> int | bytes:
+    """S7-3: contain, read, parse the XER bytes, frame (or an exit code)."""
+    try:
+        arguments = _p6_arguments(args)
+    except ValueError:
+        return EXIT_USAGE
+    from my_pa.domain.schedule.p6.parser import parse_xer
+
+    try:
+        apply_containment(arguments.limits, arguments.wall_seconds)
+    except ContainmentError:
+        return EXIT_CONTAINMENT
+    data = _read_input()
+    if data is None:
+        return EXIT_INPUT
+    try:
+        result = parse_xer(data, capture=arguments.capture)
+        return _p6_frame(data, result)
+    except ValueError:
+        # A malformed capture selection: the parent's programming error.
+        return EXIT_USAGE
+    except MemoryError:
+        return EXIT_MEMORY
+
+
+def _main_pdf(args: Sequence[str], started: float) -> int | bytes:
+    """Contain, read, parse the PDF bytes, frame (or an exit code)."""
     try:
         arguments = _arguments(args)
     except ValueError:
@@ -273,8 +369,8 @@ def main(args: Sequence[str]) -> int:
         apply_containment(arguments.limits, arguments.wall_seconds)
     except ContainmentError:
         return EXIT_CONTAINMENT
-    data = sys.stdin.buffer.read(MAX_CHILD_INPUT_BYTES + 1)
-    if len(data) > MAX_CHILD_INPUT_BYTES:
+    data = _read_input()
+    if data is None:
         return EXIT_INPUT
     try:
         result = parse_full_schedule(
@@ -282,9 +378,18 @@ def main(args: Sequence[str]) -> int:
             expected_data_date=arguments.expected_data_date,
             deadline=started + max(arguments.wall_seconds - 1.0, 0.0),
         )
-        frame = _frame(result)
+        return _frame(result)
     except MemoryError:
         return EXIT_MEMORY
-    sys.stdout.buffer.write(frame)
+
+
+def main(args: Sequence[str]) -> int:
+    """Contain, read, parse, frame. Returns the exit code (contract 3.4.2)."""
+    started = time.monotonic()
+    _limit_files()
+    outcome = _main_p6(args) if args and args[0] == P6_MODE else _main_pdf(args, started)
+    if isinstance(outcome, int):
+        return outcome
+    sys.stdout.buffer.write(outcome)
     sys.stdout.buffer.flush()
     return 0

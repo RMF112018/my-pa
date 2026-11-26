@@ -7,7 +7,8 @@
   (WP3P). A consumer reaches it only through the
   injected `IngestConsumerHandler` port;
 * the lifecycle calls only `list_directory`, `stat` and `open_download` on a
-  `FileWorkspaceStore` (ruling m5), and names no other store method at all.
+  `FileWorkspaceStore` (ruling m5), and names no other store method at all;
+  the communications rederive (WP4-S3) calls only `stat` and `open_download`.
 
 Both rules are parsed from the source, so a call on a path never executed by a
 test is still caught. Each has a planted prove-red below.
@@ -24,6 +25,9 @@ from my_pa.contracts.ports import FileWorkspaceStore
 
 PACKAGE: Final = Path(__file__).resolve().parents[2] / "src" / "my_pa"
 LIFECYCLE: Final = PACKAGE / "application" / "ingestion.py"
+#: The communications rederive (WP4-S3) re-reads snapshot files through the
+#: same stores: by known path only, so `stat` and `open_download`, never a listing.
+REDERIVE: Final = PACKAGE / "application" / "communications_rederive.py"
 
 #: Module prefixes a consumer-neutral lifecycle may not import.
 CONSUMER_SLICES: Final = (
@@ -136,3 +140,9 @@ def test_a_planted_store_write_is_caught() -> None:
     planted = _lifecycle() + "\n\ndef _planted(store):\n    store.write_text('a', 'b')\n"
     assert "write_text" in _store_calls(planted)
     assert _forbidden_names(planted) == {"write_text"}
+
+
+def test_the_rederive_calls_only_stat_and_open_download() -> None:
+    source = REDERIVE.read_text(encoding="utf-8")
+    assert _store_calls(source) == {"stat", "open_download"}
+    assert _forbidden_names(source) == set()

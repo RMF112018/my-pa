@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v16"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v20"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -49,6 +49,17 @@ class ChatLLMCompositionPrerequisite(StrEnum):
     #: Files workspace (chatllm-data-v14; files-workspace contract section 12):
     #: `MY_PA_FILES_WORKSPACE_ROOT` composes the store; needs no other plane.
     FILES_WORKSPACE = "FILES_WORKSPACE"
+    #: Communications intelligence WP4-S5 (chatllm-data-v17; communications
+    #: contract section 16, ruling D7): `MY_PA_COMMUNICATIONS_ENABLED`; needs no
+    #: other plane.
+    COMMUNICATIONS = "COMMUNICATIONS"
+    #: P6 XER import S7-4a (chatllm-data-v19; schedule XER import contract
+    #: section 10.7): `MY_PA_SCHEDULE_P6_ENABLED`, which stacks on the Schedule
+    #: switch.
+    SCHEDULE_P6 = "SCHEDULE_P6"
+    #: Project-report reads WP4P-S4 (chatllm-data-v20; WP4P-W1 design section
+    #: 2.10): `MY_PA_PROJECT_REPORTS_ENABLED`; needs no other plane.
+    PROJECT_REPORTS = "PROJECT_REPORTS"
     NONE = "NONE"
 
 
@@ -392,6 +403,32 @@ _DATA_CONDITIONAL: Final[frozenset[Capability]] = frozenset(
         Capability.FILES_RESTORE,
         Capability.FILES_UPLOAD_FINALIZE,
         Capability.FILES_WRITE_TEXT,
+        # Communications intelligence WP4-S5 (chatllm-data-v17; ruling D7): the 3
+        # `communications.*` reads, conditional on `MY_PA_COMMUNICATIONS_ENABLED`
+        # by explicit name (`COMMUNICATIONS_DATA_NAMES`). Derived text only, never
+        # a raw body (R-OP-3).
+        Capability.COMMUNICATIONS_SEARCH,
+        Capability.COMMUNICATIONS_READ,
+        Capability.COMMUNICATIONS_COVERAGE,
+        # P6 XER import S7-4a (chatllm-data-v19; contract section 10.7): the 7 P6
+        # names (2 writes, 5 reads), conditional on the P6 switch by explicit
+        # name (`SCHEDULE_P6_DATA_NAMES`). None is operator-only; the 2 writes
+        # are write grants (`--write`).
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6,
+        Capability.SCHEDULE_P6_FIELDS_AVAILABLE,
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED,
+        Capability.SCHEDULE_P6_ACTIVITIES_LIST,
+        Capability.SCHEDULE_P6_RELATIONSHIPS_LIST,
+        Capability.SCHEDULE_P6_CALENDARS_LIST,
+        Capability.SCHEDULE_P6_FIELD_VALUES_LIST,
+        # Project-report reads WP4P-S4 (chatllm-data-v20): the 5
+        # `project_reports.*` reads, conditional on `MY_PA_PROJECT_REPORTS_ENABLED`
+        # by explicit name (`PROJECT_REPORTS_DATA_NAMES`).
+        Capability.PROJECT_REPORTS_CATALOG,
+        Capability.PROJECT_REPORTS_QUERY,
+        Capability.PROJECT_REPORTS_RECORD_HISTORY,
+        Capability.PROJECT_REPORTS_COMPARE,
+        Capability.PROJECT_REPORTS_COVERAGE,
     }
 )
 
@@ -622,6 +659,46 @@ FILES_WORKSPACE_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
+#: Communications intelligence WP4-S5 (chatllm-data-v17; communications contract
+#: section 16, ruling D7): the 3 `communications.*` reads, composed only when
+#: `MY_PA_COMMUNICATIONS_ENABLED` is on. None is operator-only.
+COMMUNICATIONS_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.COMMUNICATIONS_SEARCH,
+        Capability.COMMUNICATIONS_READ,
+        Capability.COMMUNICATIONS_COVERAGE,
+    }
+)
+
+#: P6 XER import S7-4a (chatllm-data-v19; schedule XER import contract section
+#: 10.7): the 7 P6 names, composed only when `MY_PA_SCHEDULE_ENABLED` and
+#: `MY_PA_SCHEDULE_P6_ENABLED` are both on. Explicit names, matched before any
+#: prefix rule. Equals the service's `_SCHEDULE_P6_CAPABILITIES`.
+SCHEDULE_P6_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6,
+        Capability.SCHEDULE_P6_FIELDS_AVAILABLE,
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED,
+        Capability.SCHEDULE_P6_ACTIVITIES_LIST,
+        Capability.SCHEDULE_P6_RELATIONSHIPS_LIST,
+        Capability.SCHEDULE_P6_CALENDARS_LIST,
+        Capability.SCHEDULE_P6_FIELD_VALUES_LIST,
+    }
+)
+
+#: Project-report reads WP4P-S4 (chatllm-data-v20; WP4P-W1 design section 2.10):
+#: the 5 `project_reports.*` reads, composed only when
+#: `MY_PA_PROJECT_REPORTS_ENABLED` is on. None is operator-only.
+PROJECT_REPORTS_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.PROJECT_REPORTS_CATALOG,
+        Capability.PROJECT_REPORTS_QUERY,
+        Capability.PROJECT_REPORTS_RECORD_HISTORY,
+        Capability.PROJECT_REPORTS_COMPARE,
+        Capability.PROJECT_REPORTS_COVERAGE,
+    }
+)
+
 #: Files workspace native handles (ADR-019 Amendment 1, files-workspace contract
 #: section 17.4; operator ruling 2026-11-15): the primary file names a
 #: compact-façade client is *also* offered as top-level MCP tools, under their
@@ -756,6 +833,12 @@ def _prerequisite_of(
         return ChatLLMCompositionPrerequisite.SCHEDULE_SCENARIOS
     if capability in FILES_WORKSPACE_DATA_NAMES:
         return ChatLLMCompositionPrerequisite.FILES_WORKSPACE
+    if capability in COMMUNICATIONS_DATA_NAMES:
+        return ChatLLMCompositionPrerequisite.COMMUNICATIONS
+    if capability in SCHEDULE_P6_DATA_NAMES:
+        return ChatLLMCompositionPrerequisite.SCHEDULE_P6
+    if capability in PROJECT_REPORTS_DATA_NAMES:
+        return ChatLLMCompositionPrerequisite.PROJECT_REPORTS
     value = capability.value
     if value.startswith("documents."):
         return ChatLLMCompositionPrerequisite.MANAGED_DOCUMENTS

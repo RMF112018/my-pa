@@ -1,4 +1,4 @@
-"""Searchable-text derivation `comms_search_text_v1` (pure, standard library only).
+"""Searchable-text derivation `comms_search_text_v2` (pure, standard library only).
 
 **Basis, in order of preference** (`derive_search_text`):
 
@@ -34,10 +34,10 @@ paragraph holding the first marker to the end, never leaving the text empty):
   space -- `normalize_plain_text` keeps that one line's trailing space) with at
   most `SIGNATURE_TAIL_LINES` non-blank lines after it; the cut is at the
   delimiter itself. A bare `--` line is ordinary text;
-* a line starting `Disclaimer`, or
-  `if you have received this (e-mail|email|message|communication) in error`;
 * a *paragraph-start* line in the *trailing region* that starts with
-  `confidentiality notice` or `if you are not the intended recipient`, or with
+  `disclaimer`, `if you have received this (e-mail|email|message|communication)
+  in error`, `confidentiality notice` or `if you are not the intended
+  recipient`, or with
   `this` / `the information (contained) in this`, then
   `e-mail|email|message|communication|transmission`, then
   `confidential|privileged` within the line. The trailing region is at most
@@ -52,7 +52,18 @@ paragraph holding the first marker to the end, never leaving the text empty):
   pricing ..." or "If you are not the intended recipient of the GMP, tell me"
   directly under a greeting never truncates body text.
 
-**Version.** These rules are pre-merge corrections of `comms_search_text_v1`
+**Version.** `comms_search_text_v2` (communications WP4, contract section 6)
+anchors the two markers v1 honoured on *any* line -- a line starting
+`Disclaimer`, and a line holding `if you have received this ... in error`
+anywhere -- to the trailing-paragraph rule above; v1 cut a whole body at a
+mid-body "Disclaimer language for the contract ..." line. Nothing else moved:
+v2's candidate cut lines are a subset of v1's and the cut placement is the
+same, so the v1 text of a message is always a prefix of its v2 text and
+neither ever cuts to empty (the projection-selection key is unchanged).
+`derive_search_text_v1` keeps v1 callable for the measurement and that
+property test; ingestion writes v2 only.
+
+The v1 rules were pre-merge corrections of `comms_search_text_v1`
 (WP1 fix F1 after review R1, fix F2 after review R2, and fix F3 after review
 R3): the identifier stays `v1` because no searchable text has been persisted
 or published under it, so no stored output changes meaning. Corpus counts
@@ -84,18 +95,25 @@ from my_pa.domain.communications.model import BodyState, ContentType, Normalized
 __all__ = [
     "MAX_SEARCH_TEXT_CHARS",
     "SEARCH_TEXT_VERSION",
+    "SEARCH_TEXT_VERSION_V1",
+    "SEARCH_TEXT_VERSION_V2",
     "SIGNATURE_TAIL_LINES",
     "SearchText",
     "SearchTextBasis",
     "SearchTextFlag",
     "derive_search_text",
+    "derive_search_text_v1",
     "html_to_text",
     "normalize_plain_text",
     "strip_disclaimer",
     "strip_quoted_chain",
+    "unstripped_text",
 ]
 
-SEARCH_TEXT_VERSION: Final = "comms_search_text_v1"
+SEARCH_TEXT_VERSION_V1: Final = "comms_search_text_v1"
+SEARCH_TEXT_VERSION_V2: Final = "comms_search_text_v2"
+#: The version ingestion and rederive write (WP4 ruling R10: the current one only).
+SEARCH_TEXT_VERSION: Final = SEARCH_TEXT_VERSION_V2
 #: The RFC 3676 signature delimiter line (`-- `, with its trailing space).
 _SIGNATURE_DELIMITER: Final = "-- "
 MAX_SEARCH_TEXT_CHARS: Final = 262_144
@@ -268,12 +286,13 @@ def strip_quoted_chain(text: str) -> tuple[str, SearchTextFlag | None]:
 SIGNATURE_TAIL_LINES: Final = 15
 #: A signature break: the RFC 3676 delimiter or a rule of five or more dashes.
 _SIGNATURE_BREAK: Final = re.compile(r"-- |-{5,}")
-_DISCLAIMER_MARKERS: Final = (
+#: `comms_search_text_v1` only: markers that count on any line, wherever it sits.
+_V1_LINE_MARKERS: Final = (
     re.compile(r"disclaimer\b", re.I),
     re.compile(r".*\bif you have received this (?:e-?mail|message|communication) in error\b", re.I),
 )
-#: Markers that count only on a paragraph-start line in the trailing region.
-_TAIL_PARAGRAPH_MARKERS: Final = (
+#: Markers that count only on a paragraph-start line in the trailing region (v1).
+_V1_TAIL_PARAGRAPH_MARKERS: Final = (
     re.compile(r"confidentiality notice\b", re.I),
     re.compile(r"if you are not the intended recipient\b", re.I),
     re.compile(
@@ -283,6 +302,21 @@ _TAIL_PARAGRAPH_MARKERS: Final = (
         re.I,
     ),
 )
+#: `comms_search_text_v2` (WP4, contract section 6): no marker counts on any
+#: line. The two v1 line markers are anchored like the others -- a
+#: paragraph-start line in the trailing region -- and the in-error marker must
+#: start that line (no leading `.*`). Their phrases are not widened.
+_V2_LINE_MARKERS: Final[tuple[re.Pattern[str], ...]] = ()
+_V2_TAIL_PARAGRAPH_MARKERS: Final = (
+    *_V1_TAIL_PARAGRAPH_MARKERS,
+    re.compile(r"disclaimer\b", re.I),
+    re.compile(r"if you have received this (?:e-?mail|message|communication) in error\b", re.I),
+)
+#: Version -> (any-line markers, trailing-paragraph markers).
+_MARKERS: Final = {
+    SEARCH_TEXT_VERSION_V1: (_V1_LINE_MARKERS, _V1_TAIL_PARAGRAPH_MARKERS),
+    SEARCH_TEXT_VERSION_V2: (_V2_LINE_MARKERS, _V2_TAIL_PARAGRAPH_MARKERS),
+}
 
 
 def _in_tail(lines: list[str], index: int) -> bool:
@@ -297,26 +331,33 @@ def _starts_paragraph(lines: list[str], index: int) -> bool:
     return _SIGNATURE_BREAK.fullmatch(above) is not None and _in_tail(lines, index - 1)
 
 
-def _is_disclaimer_start(lines: list[str], index: int) -> bool:
+def _is_disclaimer_start(lines: list[str], index: int, version: str) -> bool:
+    line_markers, tail_markers = _MARKERS[version]
     line = lines[index]
-    if any(marker.match(line) for marker in _DISCLAIMER_MARKERS):
+    if any(marker.match(line) for marker in line_markers):
         return True
     return (
-        any(marker.match(line) for marker in _TAIL_PARAGRAPH_MARKERS)
+        any(marker.match(line) for marker in tail_markers)
         and _in_tail(lines, index)
         and _starts_paragraph(lines, index)
     )
 
 
-def strip_disclaimer(text: str) -> tuple[str, bool]:
-    """Cut from the paragraph holding the first disclaimer/signature marker to the end."""
+def strip_disclaimer(text: str, *, version: str = SEARCH_TEXT_VERSION) -> tuple[str, bool]:
+    """Cut from the paragraph holding the first disclaimer/signature marker to the end.
+
+    `version` selects the marker set (`comms_search_text_v1` or `_v2`); the cut
+    placement is the same in both.
+    """
+    if version not in _MARKERS:
+        raise ValueError("unknown search text version")
     lines = text.split("\n")
     for index, line in enumerate(lines):
         if not any(part.strip() for part in lines[:index]):
             continue
         if line == _SIGNATURE_DELIMITER and _in_tail(lines, index + 1):
             cut = index
-        elif _is_disclaimer_start(lines, index):
+        elif _is_disclaimer_start(lines, index, version):
             cut = index
             if _SIGNATURE_BREAK.fullmatch(lines[index - 1]):
                 # The paragraph starts under a break: cut at the break itself,
@@ -333,9 +374,9 @@ def strip_disclaimer(text: str) -> tuple[str, bool]:
     return text, False
 
 
-def _metadata_only(*flags: SearchTextFlag) -> SearchText:
+def _metadata_only(version: str, *flags: SearchTextFlag) -> SearchText:
     return SearchText(
-        SEARCH_TEXT_VERSION,
+        version,
         SearchTextBasis.NONE,
         None,
         frozenset({*flags, SearchTextFlag.METADATA_ONLY}),
@@ -353,39 +394,67 @@ def _to_text(content: str, content_type: ContentType, flags: set[SearchTextFlag]
     return text
 
 
-def derive_search_text(message: NormalizedMessage) -> SearchText:
-    """The `comms_search_text_v1` text for one normalized message (module docstring)."""
+def _basis_text(
+    message: NormalizedMessage, version: str, flags: set[SearchTextFlag]
+) -> SearchText | tuple[SearchTextBasis, str]:
+    """The chosen basis and its text before any cut, or the metadata-only result."""
     body, unique = message.body, message.unique_body
     if body.state is BodyState.WITHHELD or (
         unique is not None and unique.state is BodyState.WITHHELD
     ):
-        return _metadata_only(SearchTextFlag.WITHHELD)
+        return _metadata_only(version, SearchTextFlag.WITHHELD)
     if body.state is BodyState.TRUNCATED:
-        return _metadata_only(SearchTextFlag.TRUNCATED)
-
-    flags: set[SearchTextFlag] = set()
+        return _metadata_only(version, SearchTextFlag.TRUNCATED)
     derived = message.derived_text
     if unique is not None and unique.state is BodyState.PRESENT and unique.content:
-        basis = SearchTextBasis.UNIQUE_BODY
-        text = _to_text(unique.content, unique.content_type, flags)
-    elif derived is not None and derived.usable and derived.text:
-        basis = SearchTextBasis.PRODUCER_DERIVED_TEXT
-        text = normalize_plain_text(derived.text)
-    elif body.state is BodyState.PRESENT and body.content:
-        basis = SearchTextBasis.BODY_CONTENT
-        text = _to_text(body.content, body.content_type, flags)
-    else:
-        return _metadata_only(SearchTextFlag.EMPTY)
+        return SearchTextBasis.UNIQUE_BODY, _to_text(unique.content, unique.content_type, flags)
+    if derived is not None and derived.usable and derived.text:
+        return SearchTextBasis.PRODUCER_DERIVED_TEXT, normalize_plain_text(derived.text)
+    if body.state is BodyState.PRESENT and body.content:
+        return SearchTextBasis.BODY_CONTENT, _to_text(body.content, body.content_type, flags)
+    return _metadata_only(version, SearchTextFlag.EMPTY)
 
+
+def unstripped_text(message: NormalizedMessage) -> str | None:
+    """The basis text before the quoted chain and disclaimer are cut; `None` without one.
+
+    For the counts-only identifier measurement (`measurement.py`), which asks how
+    many identifiers live only in quoted or trailing text. Never stored.
+    """
+    selected = _basis_text(message, SEARCH_TEXT_VERSION, set())
+    return None if isinstance(selected, SearchText) else selected[1]
+
+
+def derive_search_text(
+    message: NormalizedMessage, *, version: str = SEARCH_TEXT_VERSION
+) -> SearchText:
+    """The searchable text for one normalized message (module docstring).
+
+    `version` is the current `comms_search_text_v2` unless a caller names
+    `comms_search_text_v1`, which only the measurement and the prefix property
+    test do (`derive_search_text_v1`); ingestion writes the current version only.
+    """
+    if version not in _MARKERS:
+        raise ValueError("unknown search text version")
+    flags: set[SearchTextFlag] = set()
+    selected = _basis_text(message, version, flags)
+    if isinstance(selected, SearchText):
+        return selected
+    basis, text = selected
     text, quote_flag = strip_quoted_chain(text)
     if quote_flag is not None:
         flags.add(quote_flag)
-    text, disclaimer_removed = strip_disclaimer(text)
+    text, disclaimer_removed = strip_disclaimer(text, version=version)
     if disclaimer_removed:
         flags.add(SearchTextFlag.DISCLAIMER_REMOVED)
     if not text:
-        return _metadata_only(SearchTextFlag.EMPTY, *flags)
+        return _metadata_only(version, SearchTextFlag.EMPTY, *flags)
     if len(text) > MAX_SEARCH_TEXT_CHARS:
         text = text[:MAX_SEARCH_TEXT_CHARS]
         flags.add(SearchTextFlag.TEXT_CAPPED)
-    return SearchText(SEARCH_TEXT_VERSION, basis, text, frozenset(flags))
+    return SearchText(version, basis, text, frozenset(flags))
+
+
+def derive_search_text_v1(message: NormalizedMessage) -> SearchText:
+    """The frozen `comms_search_text_v1` text: for the measurement and the prefix property only."""
+    return derive_search_text(message, version=SEARCH_TEXT_VERSION_V1)

@@ -24,9 +24,90 @@
       "reason": "ADR-022 ruling D6 (WP3b-S4): optional occurrence-only adopt_provider_series on bind, additive, default false",
       "section": "tools",
       "to": "6d71474937529164398b0dfebabd7f54bd45b90adcd08200a45a341ba9544243"
+    },
+    {
+      "date": "2026-11-25",
+      "kind": "added",
+      "names": [
+        "communications.coverage",
+        "communications.read",
+        "communications.search"
+      ],
+      "section": "tools"
+    },
+    {
+      "date": "2026-11-25",
+      "from": "4e34fc71fcbf1ffc3e9844bac156f0d271fddc059eabaea203e200b904bf1ffa",
+      "kind": "changed",
+      "name": "communications.read",
+      "reason": "WP4-R2 G6: the communications cursor schema publishes maxLength 2048 (contract section 16)",
+      "section": "tools",
+      "to": "7c1beb128005b0b98a7de44eec51fe96e3485f3cb850dc7328603f5fa758d0b4"
+    },
+    {
+      "date": "2026-11-25",
+      "from": "1db684af436b47993e02ddbe55038204bba7a80e47e184883e89882de3d67d35",
+      "kind": "changed",
+      "name": "communications.search",
+      "reason": "WP4-R2 G6: the communications cursor schema publishes maxLength 2048 (contract section 16)",
+      "section": "tools",
+      "to": "c77a238a49c8a937551c853821d4c0eebe7d88a152defb9ad295fd6f2f0c9f0e"
+    },
+    {
+      "date": "2026-11-25",
+      "kind": "added",
+      "names": [
+        "schedule_p6_activities.list",
+        "schedule_p6_calendars.list",
+        "schedule_p6_field_values.list",
+        "schedule_p6_fields.available",
+        "schedule_p6_fields.set_captured",
+        "schedule_p6_relationships.list",
+        "schedule_publications.import_p6"
+      ],
+      "section": "tools"
+    },
+    {
+      "date": "2026-11-25",
+      "kind": "added",
+      "names": [
+        "project_reports.catalog",
+        "project_reports.compare",
+        "project_reports.coverage",
+        "project_reports.query",
+        "project_reports.record_history"
+      ],
+      "section": "tools"
+    },
+    {
+      "date": "2026-11-25",
+      "from": "81192f6b7ef68f47200a882ed8aa9375da13c4cc94d55ceaa6021331d798afe8",
+      "kind": "changed",
+      "name": "project_reports.compare",
+      "reason": "WP4P-R3 R3-07 (ruling C-1, ADR-024): the compare, coverage and record_history field descriptions publish the tool text",
+      "section": "tools",
+      "to": "9af167b6128bd2d040317297e004b6339bd28884405251d2db7912d27771588c"
+    },
+    {
+      "date": "2026-11-25",
+      "from": "4b8a0e8044d6136b6639d5512513bd1099e94a52d6b473c0ddbaec79d950091c",
+      "kind": "changed",
+      "name": "project_reports.coverage",
+      "reason": "WP4P-R3 R3-07 (ruling C-1, ADR-024): the compare, coverage and record_history field descriptions publish the tool text",
+      "section": "tools",
+      "to": "5251ab29c5d3ad55c0e7b0dacf28a9bfc5743a5e8a413fbb1e6114dc8c208951"
+    },
+    {
+      "date": "2026-11-25",
+      "from": "61c3fb86e914853172d6a59454f5615505614e65297a27c991dcbc3a8e04bd40",
+      "kind": "changed",
+      "name": "project_reports.record_history",
+      "reason": "WP4P-R3 R3-07 (ruling C-1, ADR-024): the compare, coverage and record_history field descriptions publish the tool text",
+      "section": "tools",
+      "to": "73da67ebf86b626db86f0fa3a4c7bbd08ef4eca390c4736239ddabc4a8e325ac"
     }
   ],
-  "seal": "fa545dd9b79d41412c023a9f7d12ebf610a0abc9178cf84bfa547168bffdfb6e",
+  "seal": "4dd326c0a863152ad04113368b939c46cc6e3fcf3f191491bc6109a54c1fdff4",
   "tools": {
     "canvas.workspace.get": "65876ad8f7197a4e8465b3a9019dd234b782f605dfda37d10c1026b660941fb3",
     "canvas.workspace.put": "985bbd6cd28bbaffe0520daa1883b0503a592f4369171a366ca14de8b43a5a8b",
@@ -50,6 +131,9 @@
     "commitments.v2.search": "d3294a20627fd7528e810439e0936c387e907e9c2c324ba8f66d648637613f54",
     "commitments.v2.waiting_on": "056f8b696246aaed5336e50afb38bcecedb5fc7f3a7108c949b2a9585f827743",
     "commitments.waiting_on": "bc218ddd5d3f8241f86eebf3ff40abd870066e2790d37f6bd2ffe1cb38793360",
+    "communications.coverage": "52d40b147526c06f93cfcdae745e87e713784355d247419850518de00df1336c",
+    "communications.read": "7c1beb128005b0b98a7de44eec51fe96e3485f3cb850dc7328603f5fa758d0b4",
+    "communications.search": "c77a238a49c8a937551c853821d4c0eebe7d88a152defb9ad295fd6f2f0c9f0e",
     "constraint_categories.create": "bb1b5439c85d65f1c3a794bea5d08882eab161bae6340b59463bab7194b0a680",
     "constraint_categories.deactivate": "fc26e7aba5203032175e0d08571352af41e91ed539371bf05870b299d1673b9a",
     "constraint_categories.list": "3eae328f415522d78455ddecabfafcd5e1dde94f92b548897b29dfee7fb1967f",
@@ -230,6 +314,11 @@
     "programs.overview": "28a20ac098b923d152829f14e24f75d94014fe225cd04f84e9df80500b09f850",
     "project_controls.configure": "3a3c2ca1101aec02551e33f9a77685599984d32b134b0fa417d9fd157d590751",
     "project_controls.status": "bf7f9192978f1785b0939d890a89c3b562db9125d34cb44f988d990e2bbc509c",
+    "project_reports.catalog": "2d678389c451245076ddb69b6e1eaf59f717c4b0c060c6107272a9fda24f2564",
+    "project_reports.compare": "9af167b6128bd2d040317297e004b6339bd28884405251d2db7912d27771588c",
+    "project_reports.coverage": "5251ab29c5d3ad55c0e7b0dacf28a9bfc5743a5e8a413fbb1e6114dc8c208951",
+    "project_reports.query": "8beaa5bcf34786805697ba08ef7fbdd2c6dc7df628969b22759012ebb24c0dd5",
+    "project_reports.record_history": "73da67ebf86b626db86f0fa3a4c7bbd08ef4eca390c4736239ddabc4a8e325ac",
     "record_events.list": "1efe7e2fb210ad5cec490222b0c221377e2df62ca4bcaf0f05b9c791a896ced1",
     "record_events.provenance": "3f30d92e5aedac32468ebb2271dda8fd5742d4afbcdf20ef4b26a95997f9ff7c",
     "records.associations.assert": "539f2144d0157da5d87e912812de345d0af90774f6043c495cf21dc95eb7b149",
@@ -296,7 +385,14 @@
     "schedule_cpm_runs.activities": "76f15e8c092dac34713e19646cffb6bb3e0d46c125b45711ee87f0e8f6922fd4",
     "schedule_cpm_runs.create": "d8516505e03f07aaf291f343be71e4fbba02194e940f031a438ede56941a1699",
     "schedule_cpm_runs.read": "1d860a54722de9bc496bc24a16d1fe8a647a42423a3dc5181532bba9ea067f35",
+    "schedule_p6_activities.list": "11ad53f00c2e69414090ab7b99d17bbef601d6d49831786fc92e270f4edeb619",
+    "schedule_p6_calendars.list": "fd830c3992204c340122db3fbb47c6870dfd1d432a5af4789d36b9765791eb00",
+    "schedule_p6_field_values.list": "c171c0202edaa6de9c14e7eed2b5a8a63d89423ce5721232b23bec699283f9b8",
+    "schedule_p6_fields.available": "fffcf4b7085098172a688569773177e143540a59887831ba2f92051fc59eddeb",
+    "schedule_p6_fields.set_captured": "d32bd47c15dfcf0b6ca396e24148078fc4d861e9f65c16beb7bd9f54ed51183b",
+    "schedule_p6_relationships.list": "545b44ab602e84a1b763ce41e446a6bc557264d9248d084bfe0dc5f0ebe04230",
     "schedule_publications.import": "9b5ea929d8ffd044df76b4aa728ca6306deff16a79b08822067e5d65e2b32fff",
+    "schedule_publications.import_p6": "515fa0ae93c5ba743b24071212afb7055613be0ef2365321c27c1d04ed7fb5e0",
     "schedule_publications.list": "cf62882d83c5df05798ef0ab8fbf97e8576a6b11aa7f9aaa0dab77f52b646035",
     "schedule_publications.read": "0ec191e2675a1b289b155ef613312a6e30003327d9339222e328cee2c74d944f",
     "schedule_scenario_outputs.list": "ab220c5411db068e2b2ef7779f0312376fcf93bcda523de473420413ab975794",

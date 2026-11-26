@@ -52,6 +52,7 @@ from my_pa.application.errors import (
 from my_pa.application.lineage_authority import attested_lineage_authority
 from my_pa.contracts.ports import (
     ScheduleAdmissionRejectedError,
+    ScheduleP6UnitOfWork,
     ScheduleRepository,
     ScheduleUnitOfWork,
 )
@@ -70,6 +71,7 @@ from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.schedule import (
+    SCHEDULE_PDF_FORMAT,
     ScheduleActivityObservation,
     ScheduleActivityRowView,
     ScheduleAdmissionOutcome,
@@ -107,8 +109,11 @@ from my_pa.domain.schedule.cursor import (
     encode_schedule_cursor,
     schedule_cursor_binding,
 )
+from my_pa.domain.schedule.p6.catalogue import CATALOGUE_VERSION
+from my_pa.domain.schedule.p6.model import PROFILE_ID as P6_PROFILE_ID
 
 __all__ = [
+    "P6_READ_TRUST_BASIS",
     "SCHEDULE_IMPORT_TRUST_BASIS",
     "SCHEDULE_READ_TRUST_BASIS",
     "ScheduleAnswer",
@@ -121,6 +126,9 @@ __all__ = [
 SCHEDULE_READ_TRUST_BASIS: Final = ("cpm-workbench-full-parser", "p6_full_v1")
 #: Section 3.8: an admission rests on the admission checks, not on a parse.
 SCHEDULE_IMPORT_TRUST_BASIS: Final = ("schedule_admission",)
+#: P6 XER import contract section 10.4: a P6 read rests on the `p6_xer_v1`
+#: profile and the catalogue version that typed its fields.
+P6_READ_TRUST_BASIS: Final = (P6_PROFILE_ID, CATALOGUE_VERSION)
 _TRUNCATION_REASON: Final = "page_size_reached"
 _NO_TRUNCATION: Final = Truncation()
 _SERVED: Final = frozenset({SchedulePublicationStatus.COMPLETE, SchedulePublicationStatus.PARTIAL})
@@ -232,10 +240,10 @@ def _coverage(statuses: Sequence[SchedulePublicationStatus]) -> Coverage:
 
 def schedule_disclosure(
     *,
-    publications: Sequence[tuple[ScheduleSourceBinding, SchedulePublicationStatus]],
+    publications: Sequence[tuple[ScheduleSourceBinding | None, SchedulePublicationStatus]],
     observed_at: datetime,
     truncation: Truncation = _NO_TRUNCATION,
-    trust_basis: tuple[str, ...] = SCHEDULE_READ_TRUST_BASIS,
+    trust_basis: tuple[str, ...] | None = None,
 ) -> Disclosure:
     """The envelope of a Schedule answer over the publications it references.
 
@@ -243,9 +251,21 @@ def schedule_disclosure(
     effective status. Scope and source references name exactly those; the
     coverage counts them (section 3.8), and an empty set is `eligible` with
     every count 0.
+
+    P6 XER import S7-4a (contract section 10.4): a P6 publication has no
+    source binding (`None`: it was admitted from a files workspace, not an
+    enrolled source), so it adds no scope or source reference, and the trust
+    basis is the P6 profile and catalogue version. `trust_basis=None` derives
+    the basis from the publications: the PDF parser's, the P6 profile's, or
+    both when an answer references both formats.
     """
     coverage = _coverage([status for _, status in publications])
-    bindings = [binding for binding, _ in publications]
+    bindings = [binding for binding, _ in publications if binding is not None]
+    if trust_basis is None:
+        trust_basis = _derived_basis(
+            pdf=len(bindings) > 0 or not publications,
+            p6=len(bindings) < len(publications),
+        )
     return Disclosure(
         scope=Scope(
             source_ids=tuple(sorted({binding.source_id for binding in bindings})),
@@ -270,6 +290,14 @@ def schedule_disclosure(
         classification=Classification.PRIVATE_LOCAL,
         cloud_eligible=False,
     )
+
+
+def _derived_basis(*, pdf: bool, p6: bool) -> tuple[str, ...]:
+    if p6 and not pdf:
+        return P6_READ_TRUST_BASIS
+    if p6:
+        return (*SCHEDULE_READ_TRUST_BASIS, *P6_READ_TRUST_BASIS)
+    return SCHEDULE_READ_TRUST_BASIS
 
 
 def schedule_import_disclosure(
@@ -550,6 +578,8 @@ def _paging(
     authorization: Authorization,
     command: Any,  # noqa: ANN401 - a Schedule list command (has `page_size`, `cursor`)
     order: ScheduleCursorOrder,
+    *,
+    lenient: bool = False,
 ) -> _Paging:
     """Bind and decode before any database read, so a bad cursor never reaches one."""
     size = command.page_size or DEFAULT_SCHEDULE_PAGE_SIZE
@@ -570,7 +600,7 @@ def _paging(
             ).position
         except ScheduleCursorError:
             refused = True
-        if refused:
+        if refused and not lenient:
             raise ConflictError(SafeDetail.CURSOR)
     return _Paging(
         page_size=size,
@@ -600,10 +630,24 @@ def _typed[T](value: object, kind: type[T]) -> T:
 
 
 class ScheduleApplication:
-    """The 7 Schedule use cases on the Schedule unit of work (contract sections 3.6-3.11)."""
+    """The 7 Schedule use cases on the Schedule unit of work (contract sections 3.6-3.11).
 
-    def __init__(self, unit_of_work: Callable[[], ScheduleUnitOfWork]) -> None:
+    P6 XER import S7-4a (schedule XER import contract sections 10.1, 14 D8): the
+    reads serve P6 publications too. `p6_unit_of_work` (composed with the
+    Schedule plane) reads what only a P6 publication has: the additive `p6`
+    block of `schedule_publications.read` and a P6 publication's activities for
+    `schedule_activities.list`. `schedule_changes.list` between P6 publications
+    is the P6 delta (contract section 11.4, slice S7-4b) and answers
+    `unsupported(source_format)` until then.
+    """
+
+    def __init__(
+        self,
+        unit_of_work: Callable[[], ScheduleUnitOfWork],
+        p6_unit_of_work: Callable[[], ScheduleP6UnitOfWork] | None = None,
+    ) -> None:
         self._unit_of_work = unit_of_work
+        self._p6_unit_of_work = p6_unit_of_work
 
     # ---- import (section 3.6) -------------------------------------------------------
 
@@ -670,6 +714,12 @@ class ScheduleApplication:
         if source_id is None:  # pragma: no cover - authorization scoped this enrollment
             raise InternalError()
         publication = admission.publication
+        if (
+            publication.enrollment_id is None
+            or publication.source_object_id is None
+            or publication.source_version_id is None
+        ):  # pragma: no cover - a PDF admission is always bound (the S7-2 CHECK)
+            raise InternalError()
         return ScheduleAnswer(
             payload={
                 "series_id": admission.series.series_id,
@@ -797,19 +847,53 @@ class ScheduleApplication:
             )
         if detail is None:
             raise NotFoundError(SafeDetail.PUBLICATION_ID)
+        payload = _publication_detail(detail)
+        if detail.publication.source_format != SCHEDULE_PDF_FORMAT:
+            payload["p6"] = self._p6_block(principal_id, command.publication_id)
         return ScheduleAnswer(
-            payload=_with_match_state(_publication_detail(detail), detail, intake),
+            payload=_with_match_state(payload, detail, intake),
             disclosure=schedule_disclosure(
                 publications=[(detail.source, detail.effective_status)],
                 observed_at=authorization.at,
             ),
         )
 
+    def _p6_block(self, principal_id: str, publication_id: str) -> dict[str, Any] | None:
+        """S7-4a: the `p6` block of a P6 publication (section 10.1), or `None`."""
+        factory = self._p6_unit_of_work
+        if factory is None:  # pragma: no cover - composed with the Schedule plane
+            return None
+        # Imported here: `schedule_p6_reads` builds on this module's disclosure.
+        from my_pa.application.schedule_p6_reads import p6_publication_block
+
+        with factory() as work:
+            publication = work.p6.p6_publication(principal_id, publication_id)
+            if publication is None:  # pragma: no cover - the detail read it
+                return None
+            run = publication.accepted_parser_run_id
+            project = None if run is None else work.p6.p6_project_block(principal_id, run)
+        return p6_publication_block(publication, project)
+
     def list_activities(
         self, authorization: Authorization, command: ListScheduleActivities
     ) -> ScheduleAnswer:
-        paging = _paging(authorization, command, ScheduleCursorOrder.ACTIVITIES)
+        # S7-4a: the cursor decodes before any read as either order; the
+        # publication's format then decides which one may continue it.
+        paging = _paging(authorization, command, ScheduleCursorOrder.ACTIVITIES, lenient=True)
+        p6_paging = _paging(
+            authorization, command, ScheduleCursorOrder.SCENARIO_CONTENT, lenient=True
+        )
+        if command.cursor is not None and paging.position is None and p6_paging.position is None:
+            raise ConflictError(SafeDetail.CURSOR)
         principal_id = authorization.principal.principal_id
+        with self._unit_of_work() as work:
+            source_format = work.schedules.source_format(principal_id, command.publication_id)
+        if source_format is not None and source_format != SCHEDULE_PDF_FORMAT:
+            if command.cursor is not None and p6_paging.position is None:
+                raise ConflictError(SafeDetail.CURSOR)
+            return self._p6_activities(authorization, command, p6_paging)
+        if command.cursor is not None and paging.position is None:
+            raise ConflictError(SafeDetail.CURSOR)
         after = (
             None
             if paging.position is None
@@ -840,6 +924,64 @@ class ScheduleApplication:
                 publications=[(detail.source, detail.effective_status)],
                 observed_at=authorization.at,
                 truncation=paging.truncation(len(found) > paging.page_size, last),
+            ),
+        )
+
+    def _p6_activities(
+        self, authorization: Authorization, command: ListScheduleActivities, paging: _Paging
+    ) -> ScheduleAnswer:
+        """S7-4a (contract 10.1): a P6 publication's activities in the S5 row shape.
+
+        Activity ID order; the S5 filters map onto the typed P6 columns (row
+        type onto the activity kind, the hierarchy prefix onto the WBS path, the
+        date ranges onto the derived start and finish). The provenance is the
+        record's physical line in the export, never a page or a box.
+        """
+        factory = self._p6_unit_of_work
+        if factory is None:  # pragma: no cover - composed with the Schedule plane
+            raise UnsupportedError()
+        principal_id = authorization.principal.principal_id
+        offset = 0 if paging.position is None else _typed(paging.position[0], int)
+        kinds = (
+            None
+            if command.row_type is None
+            else _P6_KINDS_BY_ROW_TYPE[ScheduleRowType(command.row_type)]
+        )
+        with factory() as work:
+            detail = _eligible(work.p6, principal_id, command.publication_id)
+            run = detail.publication.accepted_parser_run_id
+            if run is None:  # pragma: no cover - an eligible publication has a run
+                raise InternalError()
+            rows = work.p6.p6_activity_rows(
+                principal_id,
+                run,
+                kinds=kinds,
+                wbs_prefix=command.hierarchy_prefix,
+                start_range=(_date_or_none(command.start_from), _date_or_none(command.start_to)),
+                finish_range=(_date_or_none(command.finish_from), _date_or_none(command.finish_to)),
+                offset=offset,
+                limit=paging.page_size + 1,
+            )
+        page = rows[: paging.page_size]
+        more = len(rows) > paging.page_size
+        return ScheduleAnswer(
+            payload={
+                "publication_id": command.publication_id,
+                "activities": [_p6_activity_row(row) for row in page],
+                "page_size": paging.page_size,
+            },
+            disclosure=schedule_disclosure(
+                publications=[(detail.source, detail.effective_status)],
+                observed_at=authorization.at,
+                truncation=(
+                    Truncation(
+                        is_truncated=True,
+                        reason=_TRUNCATION_REASON,
+                        next_cursor=paging.next_cursor((offset + paging.page_size,)),
+                    )
+                    if more
+                    else _NO_TRUNCATION
+                ),
             ),
         )
 
@@ -916,6 +1058,12 @@ class ScheduleApplication:
             if command.from_publication_id in intake:
                 raise InvalidRequestError(SafeDetail.FROM_PUBLICATION_ID)
             a, b = first.publication, second.publication
+            if SCHEDULE_PDF_FORMAT not in (a.source_format, b.source_format) or (
+                a.source_format != b.source_format
+            ):
+                # S7-4a: the P6 delta `cpm-workbench-p6-delta-v1` (contract
+                # section 11.4) is slice S7-4b; until then a P6 end is refused.
+                raise UnsupportedError(SafeDetail.SOURCE_FORMAT)
             if (a.project_id, a.series_id) != (b.project_id, b.series_id):
                 raise InvalidRequestError(SafeDetail.TO_PUBLICATION_ID)
             if not {first.effective_status, second.effective_status} <= _SERVED:
@@ -962,6 +1110,49 @@ class ScheduleApplication:
                 trust_basis=(*SCHEDULE_READ_TRUST_BASIS, DELTA_ALGORITHM_VERSION),
             ),
         )
+
+
+#: S7-4a: the S5 row-type filter over the P6 activity kinds.
+_P6_KINDS_BY_ROW_TYPE: Final[Mapping[ScheduleRowType, tuple[str, ...]]] = {
+    ScheduleRowType.ACTIVITY: ("task",),
+    ScheduleRowType.MILESTONE: ("start_milestone", "finish_milestone"),
+}
+
+
+def _p6_hours(value: object) -> dict[str, Any]:
+    if value is None:
+        return {"state": "published_blank", "value": None}
+    return {"state": "published_value", "value": _units(Decimal(str(value)))}
+
+
+def _p6_day(value: object) -> dict[str, Any]:
+    if not isinstance(value, datetime):
+        return {"state": "published_blank", "value": None, "marker": None}
+    return {"state": "published_value", "value": value.date().isoformat(), "marker": None}
+
+
+def _p6_activity_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """A P6 activity in the S5 `schedule_activities.list` row shape (S7-4a)."""
+    kind = str(row["kind"])
+    return {
+        "schedule_activity_id": row["schedule_activity_id"],
+        "published_activity_id": row["activity_id"],
+        "activity_name": row["activity_name"],
+        "row_type": (
+            ScheduleRowType.ACTIVITY.value if kind == "task" else ScheduleRowType.MILESTONE.value
+        ),
+        "row_ordinal": row["record_line"],
+        "page_number": None,
+        "hierarchy_path": list(row["wbs_path"]),
+        "original_duration": _p6_hours(row["original_hours"]),
+        "remaining_duration": _p6_hours(row["remaining_hours"]),
+        "start": _p6_day(row["start_at"]),
+        "finish": _p6_day(row["finish_at"]),
+        "warning_codes": [],
+        "provenance": {"record_line": row["record_line"]},
+        "source_format": "p6_xer",
+        "activity_kind": kind,
+    }
 
 
 def _series_kind(intake: bool) -> str:

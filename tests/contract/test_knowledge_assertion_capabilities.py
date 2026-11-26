@@ -65,7 +65,10 @@ from tests.conftest import (
     metadata_for,
 )
 from tests.schema.vocabulary_admissions import SINCE as ADMISSIONS_SINCE
-from tests.schema.vocabulary_admissions import capabilities_admitted_after
+from tests.schema.vocabulary_admissions import (
+    admitted_ahead_of_the_domain,
+    capabilities_admitted_after,
+)
 from tests.unit.test_knowledge_assertion_domain import SEEDS, _predicate_from_seed
 
 from my_pa.application import chatllm_data_profile
@@ -1047,9 +1050,11 @@ _POST_KLP_CAPABILITIES: Final = frozenset(
         "files.upload.finalize",
         "files.write_text",
     }
-) | capabilities_admitted_after(ADMISSIONS_SINCE)
+) | (capabilities_admitted_after(ADMISSIONS_SINCE) - admitted_ahead_of_the_domain("capability"))
 # Every family admitted after the files workspace revision (communications
-# intelligence WP2-W3's `meetings.provider.bind` onward) comes from its one home.
+# intelligence WP2-W3's `meetings.provider.bind` onward) comes from its one home;
+# a family the schema admits ahead of the domain (P6 XER import S7-2) is not yet
+# a `Capability` member and is set aside until it is.
 _EVENT: Final = "rcev_fastworld000000001"
 
 

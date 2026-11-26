@@ -574,6 +574,25 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.FILES_RESTORE, Purpose.FILE_WORKSPACE_AUTHORING),
         (Capability.FILES_UPLOAD_FINALIZE, Purpose.FILE_WORKSPACE_AUTHORING),
         (Capability.FILES_WRITE_TEXT, Purpose.FILE_WORKSPACE_AUTHORING),
+        # Communications intelligence WP4-S5 (ruling D7): each read under its one purpose.
+        (Capability.COMMUNICATIONS_SEARCH, Purpose.COMMUNICATIONS_READ),
+        (Capability.COMMUNICATIONS_READ, Purpose.COMMUNICATIONS_READ),
+        (Capability.COMMUNICATIONS_COVERAGE, Purpose.COMMUNICATIONS_READ),
+        # P6 XER import S7-4a (contract section 10.1): the 2 writes under their own
+        # purposes, the 5 reads under the Schedule read purpose.
+        (Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6, Purpose.SCHEDULE_P6_IMPORT),
+        (Capability.SCHEDULE_P6_FIELDS_AVAILABLE, Purpose.SCHEDULE_READ),
+        (Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED, Purpose.SCHEDULE_P6_CONFIGURATION),
+        (Capability.SCHEDULE_P6_ACTIVITIES_LIST, Purpose.SCHEDULE_READ),
+        (Capability.SCHEDULE_P6_RELATIONSHIPS_LIST, Purpose.SCHEDULE_READ),
+        (Capability.SCHEDULE_P6_CALENDARS_LIST, Purpose.SCHEDULE_READ),
+        (Capability.SCHEDULE_P6_FIELD_VALUES_LIST, Purpose.SCHEDULE_READ),
+        # Project-report reads WP4P-S4: each read under its one purpose.
+        (Capability.PROJECT_REPORTS_CATALOG, Purpose.PROJECT_REPORTS_READ),
+        (Capability.PROJECT_REPORTS_QUERY, Purpose.PROJECT_REPORTS_READ),
+        (Capability.PROJECT_REPORTS_RECORD_HISTORY, Purpose.PROJECT_REPORTS_READ),
+        (Capability.PROJECT_REPORTS_COMPARE, Purpose.PROJECT_REPORTS_READ),
+        (Capability.PROJECT_REPORTS_COVERAGE, Purpose.PROJECT_REPORTS_READ),
     }
 )
 

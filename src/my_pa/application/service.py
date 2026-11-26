@@ -161,6 +161,8 @@ from my_pa.application.commands import (
     CloseProject,
     Command,
     CommitIntelligenceArtifact,
+    CommunicationsCoverage,
+    CompareProjectReports,
     CompareScheduleBaseline,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
@@ -237,6 +239,7 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
+    ImportScheduleP6Publication,
     ImportSchedulePublication,
     ListCaptures,
     ListCommitments,
@@ -273,6 +276,11 @@ from my_pa.application.commands import (
     ListScheduleBaselines,
     ListScheduleChanges,
     ListScheduleCpmRunActivities,
+    ListScheduleP6Activities,
+    ListScheduleP6AvailableFields,
+    ListScheduleP6Calendars,
+    ListScheduleP6FieldValues,
+    ListScheduleP6Relationships,
     ListSchedulePublications,
     ListScheduleScenarioActivities,
     ListScheduleScenarioChanges,
@@ -294,15 +302,20 @@ from my_pa.application.commands import (
     PreviewConstraintSync,
     PreviewEntityMerge,
     PreviewEntitySplit,
+    ProjectReportRecordHistory,
+    ProjectReportsCatalog,
+    ProjectReportsCoverage,
     ProposeRelationshipMemory,
     ProposeScheduleBaseline,
     PublishConstraint,
     PublishGeneralReport,
     PullGoodNotesWork,
     PutCanvasWorkspace,
+    QueryProjectReports,
     ReadCapture,
     ReadCommitment,
     ReadCommitmentV2,
+    ReadCommunications,
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
@@ -386,6 +399,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchCommitments,
     SearchCommitmentsV2,
+    SearchCommunications,
     SearchConstraints,
     SearchEntities,
     SearchGoodNotes,
@@ -398,6 +412,7 @@ from my_pa.application.commands import (
     SearchTasks,
     SetGoverningScheduleBaseline,
     SetReportRetention,
+    SetScheduleP6CapturedFields,
     SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
@@ -437,6 +452,12 @@ from my_pa.application.commitments_v2 import (
     page_follow_ups,
     read_commitment_page,
     require_owned_projects,
+)
+from my_pa.application.communications_search import (
+    CommunicationsReads,
+    coverage_payload,
+    read_payload,
+    search_payload,
 )
 from my_pa.application.constraint_management import (
     ConstraintCategoryMutationResult,
@@ -670,6 +691,16 @@ from my_pa.application.program_membership import (
     resolve_program_members,
 )
 from my_pa.application.program_work import read_program_overview, recompute_program_reference
+from my_pa.application.project_reports_reads import (
+    ProjectReportReads,
+    catalog_payload,
+    compare_payload,
+    query_payload,
+    record_history_payload,
+)
+from my_pa.application.project_reports_reads import (
+    coverage_payload as project_reports_coverage_payload,
+)
 from my_pa.application.record_events import (
     MemoryDisclosure,
     list_record_events,
@@ -697,8 +728,14 @@ from my_pa.application.relationship_memory import (
     ReviseMemoryCommand,
 )
 from my_pa.application.report_retention import report_purge_eligibility
+from my_pa.application.schedule_p6 import ScheduleP6Application
+from my_pa.application.schedule_p6_reads import ScheduleP6Reads
 from my_pa.application.schedule_scenarios import ScheduleScenarioApplication
-from my_pa.application.schedules import ScheduleApplication
+from my_pa.application.schedules import (
+    SCHEDULE_IMPORT_TRUST_BASIS,
+    ScheduleApplication,
+    schedule_disclosure,
+)
 from my_pa.application.tasks import (
     TaskManagementService,
     TaskMutationReceipt,
@@ -720,6 +757,7 @@ from my_pa.contracts.ports import (
     EntityMutationAdmission,
     EntitySummary,
     EvidenceUnavailableError,
+    FileWorkspaceStore,
     GeneralReportRepository,
     GoodNotesPullRepositoryConflictError,
     IssueCursorError,
@@ -776,6 +814,7 @@ from my_pa.contracts.ports import (
     ScenarioCpmRunner,
     ScenarioRecordBuilders,
     ScenarioUnitOfWork,
+    ScheduleP6UnitOfWork,
     ScheduleUnitOfWork,
     SearchOutcome,
     TransactionConflictError,
@@ -1089,6 +1128,8 @@ from my_pa.domain.reports.vocabulary import (
     StorageKind,
     TransferState,
 )
+from my_pa.domain.schedule import SchedulePublicationStatus
+from my_pa.domain.schedule.p6_import import P6AdmissionLimits
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
     MAX_PAGE_SIZE,
@@ -3533,6 +3574,12 @@ _RECORD_EVENT_TRUST_BASIS: Final = ("principal_partition",)
 #: partition, read through no configured source and no enrollment, so the basis
 #: is the partition exactly as the Constraint and task planes' is (WP-MTG-04).
 _MEETING_TRUST_BASIS: Final = ("principal_partition",)
+#: Communications intelligence WP4-S5: the reads answer derived rows of the
+#: acting Principal's own partition.
+_COMMUNICATIONS_TRUST_BASIS: Final = ("principal_partition",)
+#: Project-report reads WP4P-S4: the reads answer derived rows of the acting
+#: Principal's own partition.
+_PROJECT_REPORTS_TRUST_BASIS: Final = ("principal_partition",)
 
 
 @contextmanager
@@ -5066,8 +5113,38 @@ class ApplicationService:
         report_preservation_store: ReportContentStore | None = None,
         report_transfer_staging: ReportTransferStaging | None = None,
         file_workspace: FileWorkspaceApplication | None = None,
+        communications_enabled: bool = False,
+        communications_identifier_version: str | None = None,
+        schedule_p6_enabled: bool = False,
+        schedule_p6_unit_of_work: Callable[[], ScheduleP6UnitOfWork] | None = None,
+        schedule_p6_limits: P6AdmissionLimits | None = None,
+        project_reports_enabled: bool = False,
     ) -> None:
         self._unit_of_work = unit_of_work
+        #: P6 XER import S7-4a (schedule XER import contract section 10.2):
+        #: `MY_PA_SCHEDULE_P6_ENABLED` (never on in a restricted composition), the
+        #: P6 unit of work (composed with the Schedule plane, `None` otherwise)
+        #: and the section 7.7 limits. The 7 P6 names are served only while the
+        #: Schedule plane is too, the switch is on and the factory composed
+        #: (`_schedule_p6_is_composed`); every P6 handler answers `unsupported`
+        #: first otherwise. The S5 reads serve P6 publications through the
+        #: factory whatever the switch says (they disclose what is stored).
+        self._schedule_p6_enabled = schedule_p6_enabled
+        self._schedule_p6_unit_of_work = schedule_p6_unit_of_work
+        self._schedule_p6_limits = schedule_p6_limits
+        #: Project-report reads WP4P-S4 (design section 2.9):
+        #: `MY_PA_PROJECT_REPORTS_ENABLED`. Off -- the default -- withholds the 5
+        #: `project_reports.*` reads here and answers each `unsupported`
+        #: (`_project_reports`).
+        self._project_reports_enabled = project_reports_enabled
+        #: Communications intelligence WP4-S5 (contract section 16, ruling D7):
+        #: `MY_PA_COMMUNICATIONS_ENABLED`. Off -- the default -- withholds the 3
+        #: `communications.*` reads here and answers each `unsupported`
+        #: (`_communications`); the identifier version is the read setting
+        #: `MY_PA_COMMUNICATIONS_IDENTIFIER_VERSION` (rulings D3, R10); `None`
+        #: is the version ingestion writes.
+        self._communications_enabled = communications_enabled
+        self._communications_identifier_version = communications_identifier_version
         #: Files workspace (files-workspace contract section 9): the handlers over
         #: the composed store, or `None` -- what an unset
         #: `MY_PA_FILES_WORKSPACE_ROOT` composes -- which withholds the 17
@@ -5355,6 +5432,17 @@ class ApplicationService:
         # Files workspace (contract section 9): no composed store, no `files.*` name.
         if self._file_workspace is None:
             served -= FILE_WORKSPACE_CAPABILITIES
+        # Communications intelligence WP4-S5 (ruling D7): the read switch withholds
+        # the 3 `communications.*` reads from `capabilities.get`, readiness, the
+        # MCP tool list, the remote profile and the ChatLLM composition.
+        if not self._communications_enabled:
+            served -= _COMMUNICATIONS_CAPABILITIES
+        # Project-report reads WP4P-S4 (design section 2.9): the read switch
+        # withholds the 5 `project_reports.*` reads from `capabilities.get`,
+        # readiness, the MCP tool list, the remote profile and the ChatLLM
+        # composition.
+        if not self._project_reports_enabled:
+            served -= _PROJECT_REPORTS_CAPABILITIES
         if not self._relationship_intelligence_enabled:
             served -= _ENTITY_CAPABILITIES
         # The write half, narrowed separately. Subtracted after the line above
@@ -5415,6 +5503,17 @@ class ApplicationService:
             and self._scenario_record_builders is not None
         ):
             served -= _SCHEDULE_SCENARIO_CAPABILITIES
+        # P6 XER import S7-4a (contract section 10.2): the P6 switch on top of the
+        # Schedule plane, and the P6 factory, withhold the 7 P6 names from
+        # `capabilities.get`, readiness, the MCP tool list, the remote profile,
+        # the facade and the ChatLLM composition.
+        if not (
+            self._schedule_enabled
+            and self._schedule_unit_of_work is not None
+            and self._schedule_p6_enabled
+            and self._schedule_p6_unit_of_work is not None
+        ):
+            served -= _SCHEDULE_P6_CAPABILITIES
         # A proposal surface without a trusted server registration would
         # advertise a write every authenticated caller can only be denied.
         # Withhold both producer capabilities when composition has no exact
@@ -5785,6 +5884,14 @@ class ApplicationService:
     def _schedule_is_composed(self) -> bool:
         """Whether the Schedule plane is served: its switch and its factory (contract 3.1)."""
         return self._schedule_enabled and self._schedule_unit_of_work is not None
+
+    def _schedule_p6_is_composed(self) -> bool:
+        """Whether the 7 P6 names are served (schedule XER import contract 10.2)."""
+        return (
+            self._schedule_is_composed()
+            and self._schedule_p6_enabled
+            and self._schedule_p6_unit_of_work is not None
+        )
 
     def _scenario_plane_is_composed(self) -> bool:
         """Whether the Schedule Scenarios plane is effective (contract section 15.8).
@@ -15998,7 +16105,135 @@ class ApplicationService:
         factory = self._schedule_unit_of_work
         if factory is None:  # pragma: no cover - `_schedule_plane` refused first
             raise UnsupportedError()
-        return ScheduleApplication(factory)
+        return ScheduleApplication(factory, self._schedule_p6_unit_of_work)
+
+    # P6 XER import S7-4a (schedule XER import contract section 10). Each of the 7
+    # handlers asks the P6 composition first, before any read, write or replay
+    # (`invoke` routes into `_HANDLERS` without consulting
+    # `available_capabilities`); a read then re-checks the remote grant, a write
+    # the remote write grant, and the behaviour runs on the P6 unit of work.
+    def _schedule_p6_plane(self) -> Callable[[], ScheduleP6UnitOfWork]:
+        factory = self._schedule_p6_unit_of_work
+        if not self._schedule_p6_is_composed() or factory is None:
+            raise UnsupportedError()
+        return factory
+
+    def _schedule_p6_workspace(self, workspace_id: str) -> FileWorkspaceStore | None:
+        """Section 9.1 step 2: the composed files workspace by alias, or `None`."""
+        files = self._file_workspace
+        if files is None:
+            return None
+        for space in files.workspaces:
+            if space.workspace_id == workspace_id:
+                return space.store
+        return None
+
+    def _schedule_publications_import_p6(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ImportScheduleP6Publication,
+    ) -> _Result:
+        """`schedule_publications.import_p6`: admit one P6 XER export (section 9.1)."""
+        del unit_of_work
+        factory = self._schedule_p6_plane()
+        require_write_grant(authorization.capability_grants, command.capability)
+        answer = ScheduleP6Application(
+            factory,
+            self._schedule_p6_workspace,
+            enabled=self._schedule_p6_is_composed,
+            limits=self._schedule_p6_limits,
+        ).import_p6(
+            authorization.principal.principal_id,
+            command.import_payload(),
+            scenario_plane_effective=self._scenario_plane_is_composed(),
+        )
+        return _Result(
+            payload=answer,
+            disclosure=schedule_disclosure(
+                publications=[(None, _p6_admitted_status(answer))],
+                observed_at=authorization.at,
+                trust_basis=SCHEDULE_IMPORT_TRUST_BASIS,
+            ),
+        )
+
+    def _schedule_p6_fields_available(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListScheduleP6AvailableFields,
+    ) -> _Result:
+        """`schedule_p6_fields.available` (sections 7.1, 7.4, 10.5)."""
+        del unit_of_work
+        factory = self._schedule_p6_plane()
+        require_read_grant(authorization.capability_grants, command.capability)
+        answer = ScheduleP6Reads(factory).available(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_p6_fields_set_captured(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SetScheduleP6CapturedFields,
+    ) -> _Result:
+        """`schedule_p6_fields.set_captured` (sections 7.2, 10.3)."""
+        del unit_of_work
+        factory = self._schedule_p6_plane()
+        require_write_grant(authorization.capability_grants, command.capability)
+        answer = ScheduleP6Reads(factory).set_captured(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_p6_activities_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListScheduleP6Activities,
+    ) -> _Result:
+        """`schedule_p6_activities.list` (sections 7.5, 10.5)."""
+        del unit_of_work
+        factory = self._schedule_p6_plane()
+        require_read_grant(authorization.capability_grants, command.capability)
+        answer = ScheduleP6Reads(factory).activities(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_p6_relationships_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListScheduleP6Relationships,
+    ) -> _Result:
+        """`schedule_p6_relationships.list` (section 10.5)."""
+        del unit_of_work
+        factory = self._schedule_p6_plane()
+        require_read_grant(authorization.capability_grants, command.capability)
+        answer = ScheduleP6Reads(factory).relationships(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_p6_calendars_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListScheduleP6Calendars,
+    ) -> _Result:
+        """`schedule_p6_calendars.list` (section 10.5)."""
+        del unit_of_work
+        factory = self._schedule_p6_plane()
+        require_read_grant(authorization.capability_grants, command.capability)
+        answer = ScheduleP6Reads(factory).calendars(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
+
+    def _schedule_p6_field_values_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListScheduleP6FieldValues,
+    ) -> _Result:
+        """`schedule_p6_field_values.list` (sections 7.3, 7.5, 10.4, 10.5)."""
+        del unit_of_work
+        factory = self._schedule_p6_plane()
+        require_read_grant(authorization.capability_grants, command.capability)
+        answer = ScheduleP6Reads(factory).field_values(authorization, command)
+        return _Result(payload=answer.payload, disclosure=answer.disclosure)
 
     def _schedule_publications_import(
         self,
@@ -18071,6 +18306,131 @@ class ApplicationService:
         payload = files.handle(unit_of_work, authorization, command)
         return _Result(payload=payload, disclosure=unenrolled_disclosure(authorization.at))
 
+    def _communications(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: Command
+    ) -> _Result:
+        """The 3 `communications.*` reads (communications contract section 16, WP4-S5).
+
+        `unsupported` when `MY_PA_COMMUNICATIONS_ENABLED` is off, before anything
+        is read: the names are withheld from `available_capabilities` then, and a
+        transport dispatching straight through `_HANDLERS` meets the same
+        refusal (ruling D8: the standard disabled refusal, not an empty answer).
+        The reads run in this invocation's unit of work, scoped to the acting
+        Principal; the cursors bind to it and to its grants on the 3 names.
+        """
+        if not self._communications_enabled:
+            raise UnsupportedError()
+        version = self._communications_identifier_version
+        reads: CommunicationsReads = (
+            CommunicationsReads(
+                unit_of_work=lambda: nullcontext(unit_of_work), clock=lambda: authorization.at
+            )
+            if version is None
+            else CommunicationsReads(
+                unit_of_work=lambda: nullcontext(unit_of_work),
+                identifier_version=version,
+                clock=lambda: authorization.at,
+            )
+        )
+        principal_id = authorization.principal.principal_id
+        held = authorization.capability_grants
+        grants = (
+            None
+            if held is None
+            else tuple(
+                (granted.value, None if purpose is None else purpose.value)
+                for granted, purpose in held
+            )
+        )
+        next_cursor: str | None = None
+        with _translated():
+            if isinstance(command, SearchCommunications):
+                searched = reads.search(principal_id, command.search_request(), grants=grants)
+                payload = search_payload(searched)
+                next_cursor = searched.next_cursor
+            elif isinstance(command, ReadCommunications):
+                read = reads.read(principal_id, command.read_request(), grants=grants)
+                payload = read_payload(read)
+                next_cursor = read.next_cursor
+            elif isinstance(command, CommunicationsCoverage):
+                payload = coverage_payload(reads.coverage(principal_id, command.coverage_request()))
+            else:  # pragma: no cover - bound to exactly the 3 names below
+                raise UnsupportedError()
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_COMMUNICATIONS_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=next_cursor is not None,
+                    reason="page_size_reached" if next_cursor is not None else None,
+                    next_cursor=next_cursor,
+                ),
+            ),
+        )
+
+    def _project_reports(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: Command
+    ) -> _Result:
+        """The 5 `project_reports.*` reads (WP4P-W1 design sections 2.1-2.9, WP4P-S4).
+
+        `unsupported` when `MY_PA_PROJECT_REPORTS_ENABLED` is off, before anything
+        is read: the names are withheld from `available_capabilities` then, and a
+        transport dispatching straight through `_HANDLERS` meets the same
+        refusal (the standard disabled refusal, not an empty answer). The reads
+        run in this invocation's unit of work, scoped to the acting Principal;
+        the cursors bind to it and to its grants on the 5 names.
+        """
+        if not self._project_reports_enabled:
+            raise UnsupportedError()
+        reads = ProjectReportReads(
+            unit_of_work=lambda: nullcontext(unit_of_work), clock=lambda: authorization.at
+        )
+        principal_id = authorization.principal.principal_id
+        held = authorization.capability_grants
+        grants = (
+            None
+            if held is None
+            else tuple(
+                (granted.value, None if purpose is None else purpose.value)
+                for granted, purpose in held
+            )
+        )
+        next_cursor: str | None = None
+        with _translated():
+            if isinstance(command, ProjectReportsCatalog):
+                payload = catalog_payload(reads.catalog(principal_id, command.catalog_request()))
+            elif isinstance(command, QueryProjectReports):
+                queried = reads.query(principal_id, command.query_request(), grants=grants)
+                payload = query_payload(queried)
+                next_cursor = queried.next_cursor
+            elif isinstance(command, ProjectReportRecordHistory):
+                payload = record_history_payload(
+                    reads.record_history(principal_id, command.record_history_request())
+                )
+            elif isinstance(command, CompareProjectReports):
+                compared = reads.compare(principal_id, command.compare_request(), grants=grants)
+                payload = compare_payload(compared)
+                next_cursor = compared.next_cursor
+            elif isinstance(command, ProjectReportsCoverage):
+                payload = project_reports_coverage_payload(
+                    reads.coverage(principal_id, command.coverage_request())
+                )
+            else:  # pragma: no cover - bound to exactly the 5 names below
+                raise UnsupportedError()
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_PROJECT_REPORTS_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=next_cursor is not None,
+                    reason="page_size_reached" if next_cursor is not None else None,
+                    next_cursor=next_cursor,
+                ),
+            ),
+        )
+
     def _reports_transfer_begin(
         self,
         unit_of_work: UnitOfWork,
@@ -19874,6 +20234,16 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.MEETINGS_PROVIDER_BIND: ApplicationService._meetings_provider_bind,
         Capability.MEETINGS_PROVIDER_REVIEW: ApplicationService._meetings_provider_review,
         Capability.MEETINGS_PROVIDER_RECONCILE: ApplicationService._meetings_provider_reconcile,
+        # Communications intelligence WP4-S5: one binding for the 3 reads.
+        Capability.COMMUNICATIONS_SEARCH: ApplicationService._communications,
+        Capability.COMMUNICATIONS_READ: ApplicationService._communications,
+        Capability.COMMUNICATIONS_COVERAGE: ApplicationService._communications,
+        # Project-report reads WP4P-S4: one binding for the 5 reads.
+        Capability.PROJECT_REPORTS_CATALOG: ApplicationService._project_reports,
+        Capability.PROJECT_REPORTS_QUERY: ApplicationService._project_reports,
+        Capability.PROJECT_REPORTS_RECORD_HISTORY: ApplicationService._project_reports,
+        Capability.PROJECT_REPORTS_COMPARE: ApplicationService._project_reports,
+        Capability.PROJECT_REPORTS_COVERAGE: ApplicationService._project_reports,
         Capability.ISSUES_CREATE: ApplicationService._issues_create,
         Capability.ISSUES_READ: ApplicationService._issues_read,
         Capability.ISSUES_LIST: ApplicationService._issues_list,
@@ -19924,6 +20294,20 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.SCHEDULE_ACTIVITIES_LIST: ApplicationService._schedule_activities_list,
         Capability.SCHEDULE_ACTIVITIES_HISTORY: ApplicationService._schedule_activities_history,
         Capability.SCHEDULE_CHANGES_LIST: ApplicationService._schedule_changes_list,
+        # P6 XER import S7-4a (contract section 10.1): the 7 P6 names.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6: (
+            ApplicationService._schedule_publications_import_p6
+        ),
+        Capability.SCHEDULE_P6_FIELDS_AVAILABLE: ApplicationService._schedule_p6_fields_available,
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED: (
+            ApplicationService._schedule_p6_fields_set_captured
+        ),
+        Capability.SCHEDULE_P6_ACTIVITIES_LIST: ApplicationService._schedule_p6_activities_list,
+        Capability.SCHEDULE_P6_RELATIONSHIPS_LIST: (
+            ApplicationService._schedule_p6_relationships_list
+        ),
+        Capability.SCHEDULE_P6_CALENDARS_LIST: ApplicationService._schedule_p6_calendars_list,
+        Capability.SCHEDULE_P6_FIELD_VALUES_LIST: ApplicationService._schedule_p6_field_values_list,
         # Schedule Scenarios S6-3 (schedule-scenarios contract section 15.3).
         Capability.SCHEDULE_SCENARIOS_CREATE: ApplicationService._schedule_scenarios_create,
         Capability.SCHEDULE_SCENARIO_VERSIONS_CREATE: (
@@ -20530,6 +20914,28 @@ _PROGRAM_READ_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability for capability in Capability if capability.value in PROGRAM_READ_CAPABILITIES
 )
 
+#: Project-report reads WP4P-S4 (design section 2.9): the 5 reads, withheld
+#: unless `project_reports_enabled` is on.
+_PROJECT_REPORTS_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.PROJECT_REPORTS_CATALOG,
+        Capability.PROJECT_REPORTS_QUERY,
+        Capability.PROJECT_REPORTS_RECORD_HISTORY,
+        Capability.PROJECT_REPORTS_COMPARE,
+        Capability.PROJECT_REPORTS_COVERAGE,
+    }
+)
+
+#: Communications intelligence WP4-S5 (contract section 16, ruling D7): the 3
+#: reads, withheld unless `communications_enabled` is on.
+_COMMUNICATIONS_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.COMMUNICATIONS_SEARCH,
+        Capability.COMMUNICATIONS_READ,
+        Capability.COMMUNICATIONS_COVERAGE,
+    }
+)
+
 #: CPM Workbench S5b-2 (contract section 3.1): the 7 Schedule names, withheld
 #: unless `schedule_enabled` is on and the Schedule factory is composed.
 _SCHEDULE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
@@ -20575,6 +20981,27 @@ _SCHEDULE_SCENARIO_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.SCHEDULE_BASELINES_COMPARE,
     }
 )
+#: P6 XER import S7-4a (schedule XER import contract section 10.1): the 7 P6
+#: names, withheld unless the P6 switch is on over the Schedule plane and the
+#: P6 factory is composed (`SCHEDULE_P6_DATA_NAMES` in the ChatLLM policy).
+_SCHEDULE_P6_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6,
+        Capability.SCHEDULE_P6_FIELDS_AVAILABLE,
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED,
+        Capability.SCHEDULE_P6_ACTIVITIES_LIST,
+        Capability.SCHEDULE_P6_RELATIONSHIPS_LIST,
+        Capability.SCHEDULE_P6_CALENDARS_LIST,
+        Capability.SCHEDULE_P6_FIELD_VALUES_LIST,
+    }
+)
+
+
+def _p6_admitted_status(answer: Mapping[str, Any]) -> SchedulePublicationStatus:
+    """The admitted publication's effective status, for the import's disclosure."""
+    return SchedulePublicationStatus(str(answer["status"]))
+
+
 #: The 6 Schedule reads (`SCHEDULE_DATA_NAMES` in the ChatLLM policy).
 _SCHEDULE_READ_CAPABILITIES: Final[frozenset[Capability]] = _SCHEDULE_CAPABILITIES - {
     Capability.SCHEDULE_PUBLICATIONS_IMPORT

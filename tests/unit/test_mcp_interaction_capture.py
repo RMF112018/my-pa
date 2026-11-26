@@ -2354,8 +2354,11 @@ def test_the_unparsed_body_check_is_cheap_and_total_on_odd_input() -> None:
         b"\xff\xfe" * 1024 + b"text",
         b"x" * (16 * 1024 * 1024),
     ]
+    # About 2.5 s locally. The bound catches a superlinear scan of the 16 MiB
+    # body, which would take far longer; 30 s leaves headroom for a loaded CI
+    # xdist runner (10 s failed there at about 11 s, operator-approved change).
     for raw in bodies:
         started = time.perf_counter()
         row = _row(_exchange(raw_request=raw, request_overflowed=True))
-        assert time.perf_counter() - started < 10
+        assert time.perf_counter() - started < 30
         assert row["capability"] is None

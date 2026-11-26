@@ -115,6 +115,9 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # (chatllm-data-v11): the 6 Schedule reads, 131 -> 137. Schedule Scenarios
     # S6-3 (chatllm-data-v13): the 22 client-usable plane names, 137 -> 159.
     # Files workspace WP5 (chatllm-data-v14): the 17 `files.*` names, 159 -> 176.
+    # Communications intelligence WP4-S5 (chatllm-data-v17): the 3
+    # `communications.*` reads, 176 -> 179. Project-report reads WP4P-S4
+    # (chatllm-data-v20): the 5 `project_reports.*` reads, 179 -> 184.
     assert (
         counts[ChatLLMCapabilityClass.DATA_CONDITIONAL]
         == pins.CHATLLM_CLASS_COUNTS[ChatLLMCapabilityClass.DATA_CONDITIONAL.value]

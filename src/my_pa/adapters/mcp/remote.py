@@ -138,6 +138,11 @@ _WRITE_PURPOSES: Final = frozenset(
         # writes are disabled and routed to `my_pa.read`. `file_workspace_read`
         # (and so `files.download.begin`) stays out.
         Purpose.FILE_WORKSPACE_AUTHORING,
+        # P6 XER import S7-4a (contract section 10.7): the 2 P6 writes' purposes.
+        # Without them the import and the selection would be classified remote
+        # reads -- published while writes are disabled and routed to `my_pa.read`.
+        Purpose.SCHEDULE_P6_IMPORT,
+        Purpose.SCHEDULE_P6_CONFIGURATION,
         Purpose.RELATIONSHIP_MEMORY_AUTHORING,
         Purpose.ENTITY_OBSERVATION_INGEST,
         Purpose.ENTITY_AUTHORING,

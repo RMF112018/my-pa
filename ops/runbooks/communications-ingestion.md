@@ -38,9 +38,8 @@ workspace. my-pa **reads** them; it never writes, renames or trashes them.
 | `MY_PA_COMMUNICATIONS_INGEST_ENABLED` | `false` | Off: the cycles plane runs no ingestion poll, and so no scheduled meeting sync staging or apply (section 11.8). With it, `MY_PA_CYCLE_SCHEDULER_ENABLED` and `MY_PA_PROJECT_REPORTS_INGEST_ENABLED` all off, the plane exits 2 (`plane cycles disabled`). |
 | `MY_PA_COMMUNICATIONS_INGEST_POLL_SECONDS` | `900` | The poll interval, 60 to 86,400 s. |
 | `MY_PA_FILES_WORKSPACES` | unset | Set by the overlay to `mcp=/srv/my-pa/workspaces/mcp;mode=read_only`. |
-
-`MY_PA_COMMUNICATIONS_ENABLED` (the contract's read switch) is not introduced here: WP3a adds no
-read capability for it to gate. It arrives with the reads in WP4.
+| `MY_PA_COMMUNICATIONS_ENABLED` | `false` | The read switch for `communications.search`, `.read` and `.coverage` (WP4, section 12.3). Off, the three are withheld from `capabilities.get`, the tool list, readiness, the remote profile and the ChatLLM composition, and a call answers the standard `unsupported`. It is read by the gateway (HTTP and MCP), not by the cycles plane, and changes no row. |
+| `MY_PA_COMMUNICATIONS_IDENTIFIER_VERSION` | `comms_identifiers_v2` | The identifier version the reads match and normalize queries with. `comms_identifiers_v1` is a rollback lever that answers only for messages that still carry v1 rows. |
 
 ## 3. Prerequisites
 
@@ -89,7 +88,8 @@ docker compose -p my-pa-remote-mcp -f ... \
 ```
 
 Output is one JSON line: source ids, run ids, closed codes, counts and UTC timestamps. Exit `0`
-done, `1` refused (`{"refused": CODE}`), `2` usage, `3` a run finished `partial` or `failed`.
+done, `1` refused (`{"refused": CODE}`), `2` usage, `3` a run finished `partial` or `failed`
+(for `rederive`, a snapshot group failed: `messages_failed`).
 `coverage` and `aggregate` refuse `source_not_found` for a source id that was never admitted.
 
 ## 5. Admission
@@ -275,7 +275,7 @@ Everything here is part of the R-OP-7 consolidated activation and is unexecuted.
      `coverage` is omitted. Never an empty or partial object: it rejects the whole publication
      (`invalid_coverage`). Without `coverage` my-pa never marks a binding `not_seen`.
 3. **The client (R-OP-2, D13).** The reconciliation pass runs through the operator's connected
-   client: activate ChatLLM profile `chatllm-data-v16` (instead of v15) and grant
+   client: activate ChatLLM profile `chatllm-data-v20` (instead of v15; it contains v16 and v17) and grant
    `meetings.provider.review` and `meetings.provider.reconcile`, with
    `meetings.provider.bind`, to the **operator profile only**, as part of the consolidated
    activation's grants.
@@ -414,7 +414,126 @@ applied ahead of it, and every later poll retries it. The other sources continue
 - Nothing deletes staged publications, events, marks, the latch or tombstones; the WP3b
   revision's downgrade refuses while any exists.
 
-## 12. Residuals
+## 12. Rederive and the FTS measurement (WP4)
+
+WP4 changed two stored derivations: `comms_search_text_v2` anchors the two disclaimer markers
+that v1 matched anywhere in a body, and `comms_identifiers_v2` adds the change-order family
+(`co`, `pco`, `cor`), `:` separators and the submittal and `FP&L` forms. New ingestion writes
+v2 at once. Messages already stored keep their v1 text and rows until `rederive` brings them to
+the current versions (WP4 rulings D2, D3). The revision `fa18ef3d9bc0` must be applied first.
+
+### 12.1 Rederive
+
+Dry run first. It reads only the due set from the database, reads no file, writes nothing and
+takes no lock:
+
+```sh
+python apps/cli/communications_ingest.py <assertions> rederive --dry-run
+python apps/cli/communications_ingest.py <assertions> rederive [--source <CANONICAL>] [--limit N]
+```
+
+- **Due.** A message is due when its `search_text_version` or its `identifiers_version` is not
+  the current one, or it is flagged `source_unavailable`. `messages_due_text` and
+  `messages_due_identifiers` split the due set. `--source` limits it to messages whose text
+  pointer names a snapshot of that source (`source_not_found` for an unknown one).
+- **Bounded and resumable.** At most `--limit` due messages per run (default 1,000, at most
+  20,000), by message id; the rest are `messages_deferred`. The due set is the stored state, so
+  run it again until `messages_checked` is `0`; a finished rerun writes nothing.
+- **The file is re-read and verified.** Each text-due snapshot is read once through the same
+  read-only workspace store (`stat`, then `open_download` bound to that version, by the
+  snapshot's known paths, current path first) and accepted only when its SHA-256 equals the
+  snapshot's (`snapshots_read`). The text is derived again from the same record, so the pointer
+  and the body columns do not move; `messages_text_changed` counts the messages whose text grew
+  (the v1 text is always a prefix of the v2 text). `search_document` is regenerated by the server.
+- **Missing or changed file.** When no path yields matching bytes (`snapshots_unavailable`) the
+  stored text is kept, the message is flagged `source_unavailable`
+  (`messages_source_unavailable`), and its v2 identifiers are still extracted from the stored
+  text (ruling R9). Such a message stays due; once the original bytes are back, the next run
+  rebuilds it and clears the flag (`messages_source_restored`).
+- **`messages_pointer_mismatch`** means the snapshot no longer holds the record the message's
+  pointer names; nothing is written for it. **`snapshots_unparseable`** means the parser now
+  rejects bytes it once accepted; its messages count `messages_failed` and stay due.
+- **One transaction per snapshot**, under the poll's lock `COMMS_INGEST_LOCK_KEY`: while a poll
+  or another run holds it the command refuses `lock_held` (exit `1`) and writes nothing. A failed
+  snapshot rolls back alone and counts its messages `messages_failed`; the exit is then `3`.
+- **No audit row and no capability**, as for every command here. Output is one JSON line:
+  `dry_run`, the two current versions and the closed counts; never a path, digest, subject or id.
+- **Prune is deferred (ruling R4).** `communication_identifiers` stays append-only: the v1 rows
+  stay beside the v2 rows, reads filter by the configured version
+  (`MY_PA_COMMUNICATIONS_IDENTIFIER_VERSION`, default v2), and there is no `--prune-version`.
+  `aggregate` reports identifiers per extractor version, so the two never mix.
+
+After the rederive, `aggregate` shows the v2 identifier rows, and in this read-only check every
+message not flagged `source_unavailable` is at `comms_search_text_v2` and `comms_identifiers_v2`:
+
+```sql
+SELECT search_text_version, identifiers_version, source_unavailable, count(*)
+FROM knowledge.communication_messages GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
+```
+
+### 12.2 `measure-fts` (ruling D4)
+
+```sh
+python apps/cli/communications_ingest.py <assertions> measure-fts [--source <CANONICAL>] [--limit N]
+```
+
+Read-only and counts only. Over stored messages with text (at most `--limit`, default 20,000,
+in batches of 500) it forms probe terms per message: the surface form of each current-version
+identifier row (`identifier`) and the alphabetic parts of three or more letters of its
+participants' address local parts (`name`). Per class it prints `probes`, `present` (the term
+occurs in subject and text), `english_hit_of_present` and `simple_hit_of_present` (each
+configuration's full-text match), `english_miss_simple_hit`,
+`english_miss_covered_by_identifier` (identifier probes: the identifier index answers them),
+`english_miss_uncovered` (name probes nothing else answers) and `stopword_empty` (the `english`
+query is empty: a name that is an English stop word, such as "Will" or "Don").
+`english_miss_uncovered_material` is true when a class's uncovered misses exceed
+`material_share` (1%) of its present probes. D4 keeps `english` unless that loss is material
+for identifiers or names; stop-word names are the expected loss, and the participants filter
+answers name lookups by address. Run it after the rederive so the identifier rows are current.
+
+### 12.3 The read switch and activation (WP4)
+
+The three reads answer from the stored rows; they never read a workspace file. Activate in this
+order, as part of the consolidated activation (communications contract section 20.6); each step
+is the operator's:
+
+1. **Migrate.** The image holds `fa18ef3d9bc0`, and the database is migrated to the single head
+   (section 3).
+2. **Rederive.** `rederive --dry-run`, then `rederive` until `messages_checked` is `0`
+   (section 12.1), so the stored text and identifiers are v2 before a client searches them. Then
+   `measure-fts` if the full-text figures are wanted (section 12.2).
+3. **The switch.** Set `MY_PA_COMMUNICATIONS_ENABLED=true` on the gateway service (and
+   `MY_PA_COMMUNICATIONS_IDENTIFIER_VERSION` only to roll back to v1, which answers only for
+   messages that still carry v1 rows) and recreate it. `capabilities.get` then lists the 3
+   names `available`. A restricted MCP database role composition never serves them (its roles
+   hold no privilege on the communications tables).
+4. **The grants and the profile.** The client is the operator's connected client. Activate the
+   ChatLLM profile `chatllm-data-v20` (it contains v16 and v17) and grant, to the **operator profile
+   only**, each with purpose `communications_read`:
+
+   | Capability | Purpose |
+   | --- | --- |
+   | `communications.search` | `communications_read` |
+   | `communications.read` | `communications_read` |
+   | `communications.coverage` | `communications_read` |
+
+   With the switch on, `profile-plan` adds exactly these three; with it off, v17 desires exactly
+   the v16 set. No grant goes to a non-operator principal, and no change in the repository
+   writes one.
+
+**What a client sees.** Every search and read answer states the stored search-text versions,
+the identifier version (and, for a search, `identifier_version_pending`, the messages whose rows
+are not yet at it) and the coverage of the range searched or of each message's snapshot. A
+search may say `text_fallback: "simple_stopwords"` (a stop-word name matched through the
+`simple` configuration) or `query_state: "no_searchable_terms"`. A cursor is bound to the
+request and the caller's grants: after a grant change the answer is
+`cursor_state: "scope_changed_restart_required"` and the client starts again without it. A
+withheld or truncated body has no text, and no raw body is ever returned.
+
+**Disabling.** Set the switch off and recreate the gateway; the 3 names disappear and calls
+answer `unsupported`. Rows and grants are untouched; revoke the grants separately if wanted.
+
+## 13. Residuals
 
 - `poll_enabled` stops at the first source whose workspace is unavailable; the poll is then
   logged `comms_ingest.failed` and retried after the interval.
@@ -431,3 +550,25 @@ applied ahead of it, and every later poll retries it. The other sources continue
 - Meeting sync: a Meeting made by hand after the latch can be duplicated (section 11.5);
   `not_seen` is only as good as the collector's `coverage` claim; a tombstone cannot be released;
   staged publications and events are never pruned (retention deferred, ruling D14).
+- Rederive and identifiers: the v1 identifier rows are never pruned in WP4 (ruling R4); a message
+  whose file stays missing stays `source_unavailable` with its v1 text, and every rederive
+  re-checks it.
+- `measure-fts` refuses `statement_timeout` when the statement timeout cancels it; rerun with a
+  lower `--limit`. In the `identifier` class every probe is covered by the identifier index by
+  construction, so `english_miss_uncovered` is 0 there and `material` is decided by the `name`
+  class alone.
+- Search text v2 (review WP4-R1, finding F3, accepted as design of record): in a short message
+  (at most 15 non-blank lines, so the whole message is the trailing region) a paragraph that
+  starts with "Disclaimer" or "If you have received this email in error" is cut, with every
+  identifier after it. For example, a greeting, a blank line, then "Disclaimer language for the
+  contract is attached; please review RFI 12 ..." keeps only the greeting. The Manager's corpus
+  count is 89 messages with `disclaimer_removed` under v2.
+- Identifiers v2 (review WP4-R1, finding F6, accepted residuals): `CO: 25 ppm` (a carbon
+  monoxide reading) reads as `co:25`, and the spaced thousands form `RFI 1 740` reads as
+  `rfi:1`. A number followed by `:` and a digit (`RFI 10:30`) or directly by a letter
+  (`PCO 12a`, `RFI 174A`) yields nothing, so a revision suffix is not searchable as an
+  identifier; full-text search still finds it. `fpl` accepts exactly `FPL`, `FP&L` and `F.P.L.`.
+- Identifiers (WP4-C ruling): the prefixed RFI number form `RFI CON-132` is recognized by neither
+  version, so such an RFI is found by full text only; a later extractor version may add it.
+- Reads: the stop-word fallback costs about 470 ms at p50 at real-corpus size (accepted for
+  interactive search); WP5 measures the 10-Meeting context latency.

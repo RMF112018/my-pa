@@ -31,13 +31,16 @@ from my_pa.adapters.mcp.server import published_tools
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.file_workspace import FILE_WORKSPACE_CAPABILITIES
 from my_pa.application.service import (
+    _COMMUNICATIONS_CAPABILITIES,
     _ENTITY_CAPABILITIES,
     _ENTITY_WRITE_CAPABILITIES,
     _HANDLERS,
     _LINEAGE_CAPABILITIES,
     _PROGRAM_REPORTING_CAPABILITIES,
+    _PROJECT_REPORTS_CAPABILITIES,
     _REPORT_TRANSFER_UPLOAD_CAPABILITIES,
     _SCHEDULE_CAPABILITIES,
+    _SCHEDULE_P6_CAPABILITIES,
     _SCHEDULE_SCENARIO_CAPABILITIES,
 )
 from my_pa.bootstrap.gateway import build_gateway_runtime
@@ -405,11 +408,20 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
         # Files workspace WP5: the 17 `files.*` names, served only with the
         # workspace store (`MY_PA_FILES_WORKSPACE_ROOT`, unset by default).
         or capability in FILE_WORKSPACE_CAPABILITIES
+        # Communications intelligence WP4-S5: the 3 `communications.*` reads,
+        # behind `MY_PA_COMMUNICATIONS_ENABLED` (default off).
+        or capability in _COMMUNICATIONS_CAPABILITIES
+        # P6 XER import S7-4a: the 7 P6 names, behind `MY_PA_SCHEDULE_P6_ENABLED`
+        # on top of the Schedule switch (default off).
+        or capability in _SCHEDULE_P6_CAPABILITIES
+        # Project-report reads WP4P-S4: the 5 `project_reports.*` reads, behind
+        # `MY_PA_PROJECT_REPORTS_ENABLED` (default off).
+        or capability in _PROJECT_REPORTS_CAPABILITIES
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
     assert implemented == total
-    assert len(withheld_families) == 174
+    assert len(withheld_families) == 189
     assert unwired == set()
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
@@ -480,7 +492,16 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # Communications intelligence WP3b-S4's `meetings.provider.review` and
     # `meetings.provider.reconcile` are core and in no withheld family: the
     # default grows by two, the withheld figure holds.
-    assert default == 127 and withheld == 174
+    # Communications intelligence WP4-S5's three `communications.*` reads are a
+    # tenth withheld family (default-off switch): the default is unchanged and
+    # the withheld figure grows by three.
+    # P6 XER import S7-4a's 7 P6 names are an eleventh withheld family
+    # (default-off switch): the default is unchanged and the withheld figure
+    # grows by seven.
+    # Project-report reads WP4P-S4's five `project_reports.*` reads are a
+    # twelfth withheld family (default-off switch): the default is unchanged
+    # and the withheld figure grows by five.
+    assert default == 127 and withheld == 189
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured

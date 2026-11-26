@@ -86,8 +86,19 @@ _FEATURE_BY_FAMILY: Final[Mapping[str, str]] = {
     "schedule_cpm_runs": "schedule",
     "schedule_scenario_outputs": "schedule",
     "schedule_baselines": "schedule",
+    # P6 XER import S7-4a (contract section 10.1): the 5 P6 families;
+    # `schedule_publications.import_p6` is `schedule_publications`.
+    "schedule_p6_fields": "schedule",
+    "schedule_p6_activities": "schedule",
+    "schedule_p6_relationships": "schedule",
+    "schedule_p6_calendars": "schedule",
+    "schedule_p6_field_values": "schedule",
     # Files workspace (files-workspace contract section 12): the 17 `files.*` names.
     "files": "files",
+    # Communications intelligence WP4-S5 (contract section 16): the 3 reads.
+    "communications": "communications",
+    # Project-report reads WP4P-S4 (design section 2.9): the 5 reads.
+    "project_reports": "project_reports",
 }
 
 _WRAPPER_SCHEMA: Final[dict[str, Any]] = {

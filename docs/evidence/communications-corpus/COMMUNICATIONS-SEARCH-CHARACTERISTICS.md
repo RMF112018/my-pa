@@ -49,6 +49,8 @@ Quoted-chain stripping removed a chain in 2,011 records against 2,143 records th
 
 **Open WP4 item (Manager ruling 2026-11-21: not fixed in WP1).** Two disclaimer markers are still unanchored: a line starting `Disclaimer` and the "if you have received this … in error" phrase match on any line anywhere in the text, not only on a paragraph-start line in the trailing region as the other markers do, and the "received this … in error" phrase matches anywhere within its line. WP4 must anchor them, with tests; until then they can cut body text that merely mentions a disclaimer.
 
+**Closed in WP4 (`comms_search_text_v2`).** Both markers now count only as a trailing paragraph start, and the v1 text of a message is always a prefix of its v2 text. `disclaimer_removed`: 108 under v1, 89 under v2 (Manager real-corpus run, 2026-11-25).
+
 ## Privacy screen (rich dialect only)
 
 | Class | Records |
@@ -79,6 +81,32 @@ Readings:
 - **Change orders.** v1 extracts only upper-case `CO` with a separator and excludes `PCO`/`COR` (letter before), and found none; the analysis pattern included `PCO` and `COR`. Per Manager ruling 2026-11-21 (R5), this low recall is an **open WP4 defect**, to be fixed with tests; WP4 decides whether `pco`/`cor` kinds are added.
 - **FPL and submittals** drop most sharply because v1 requires an upper-case acronym (`FPL`) and a number after `Submittal`; the analysis matched words. Recall of v1 against labelled examples is a WP4 acceptance item; per Manager ruling 2026-11-21 (R5), the low FPL and submittal recall is part of the same **open WP4 defect**, to be fixed with tests.
 - **Exactness.** `RFI 17` never matches `RFI 174` or `RFI 1740` in v1 (token-bounded, leading zeros dropped for integer kinds), and `RFI 1,740` is not `rfi:1` (a number never continues into `,` followed by a digit, added in fix F1); the unit tests pin it.
+
+## Technical identifiers under `comms_identifiers_v2` (WP4)
+
+Measured with the counts-only identifier measurement entry point (Manager real-corpus run, 2026-11-25; 31 files, 4,141 records; after review fix F6). Records with at least one identifier of the kind:
+
+| Kind | Analysis: records with a match | Contract v1: records | Contract v2: records |
+| --- | ---: | ---: | ---: |
+| RFI number | 67 | 75 | 74 |
+| Change bulletin (`CB #n`) | 11 | 10 | 10 |
+| GMP | 518 | 458 | 459 |
+| FPL | 263 | 134 | 134 |
+| Change order family (`co`, `pco`, `cor`) | 104 | 0 | 91 (`pco` 89, `cor` 2) |
+| Submittal | 128 | 31 | 44 |
+| Spec section (cued only) | 1,713 (six-digit numbers) | 5 | 5 |
+
+Readings:
+
+- **Change orders and submittals.** The remaining gap against the analysis is mentions without a number, which are not identifiers: mostly the change-order keyword alone (52 records) and 118 submittal mentions with no number. Every gap that has a number is covered; the Manager closed R5.
+- **RFI** fell by one record: the 6 values v2 no longer extracts were all v1 false positives (hexadecimal ids and one malformed match), so precision improved.
+- **FPL** is unchanged: 94 records mention it only in quoted or tail text, excluded by design, and 10 use a shape v2 does not admit (ruling R5b stays (a)).
+- **Stored, after the rederive** (Manager real-corpus database run, 2026-11-25): 3,459 messages rederived, 21 with changed text, 817 v2 identifier rows added, 0 unavailable or failed; v2 adds `pco` in 69 messages (124 rows) and `cor` in 2, and submittals go from 23 to 36 messages.
+- **Residuals.** `CO: 25 ppm` reads as `co:25`; `RFI 1 740` reads as `rfi:1`; the prefixed form `RFI CON-132` is recognized by neither version.
+
+## Full-text configuration (WP4, ruling D4-final)
+
+`measure-fts` (Manager real-corpus database run, 2026-11-25): identifier probes, 0 uncovered by the identifier index; name probes, 3,887 present, `english` finds 3,130 and `simple` 3,396; the `english`-only loss is exactly the 267 stop-word names. `english` stays the stored document; a query that `english` reduces (a stop-word name) also matches through `simple` at query time and says so (`text_fallback: "simple_stopwords"`).
 
 ## Text size planning
 

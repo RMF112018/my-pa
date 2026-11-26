@@ -14,8 +14,9 @@ one-line wrapper over `principal_bound_values`), and the one join (a provider
 id's item to its message) composes `matching_partition_criterion`.
 
 **Only the projection moves.** The revision's trigger refuses an UPDATE of any
-column but the projection group, `latest_snapshot_id` and the three flags; the
-update methods here name only those columns. A provider id is matched, never
+column but the projection group, `latest_snapshot_id`, the three flags and (since
+`fa18ef3d9bc0`) `source_unavailable` and `identifiers_version`; the update
+methods here name only those columns. A provider id is matched, never
 rekeyed (Manager ruling M6): there is no method that changes an item.
 
 **The operator aggregate.** `communications_aggregate` is the one read outside
@@ -29,11 +30,35 @@ address, a provider id, an identifier value or a row id.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timedelta
 from typing import Any, Final
 
-from sqlalchemy import ColumnElement, Select, Table, func, insert, select, update
+from sqlalchemy import (
+    BigInteger,
+    ColumnElement,
+    ScalarSelect,
+    Select,
+    Table,
+    Text,
+    and_,
+    case,
+    exists,
+    func,
+    insert,
+    literal,
+    literal_column,
+    not_,
+    or_,
+    select,
+    tuple_,
+    union_all,
+    update,
+)
+from sqlalchemy.dialects.postgresql import ARRAY, REGCONFIG, TSQUERY
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Result, Row
+from sqlalchemy.sql.base import ReadOnlyColumnCollection
+from sqlalchemy.sql.selectable import Subquery
 
 from my_pa.contracts.ports import (
     CommunicationIdentifierRecord,
@@ -43,6 +68,10 @@ from my_pa.contracts.ports import (
     CommunicationParticipantRecord,
     CommunicationProjection,
     CommunicationQuarantineRecord,
+    CommunicationRederiveDueRecord,
+    CommunicationSearchQuery,
+    CommunicationSearchQueryShape,
+    CommunicationSearchRow,
     CommunicationSnapshotTally,
     CommunicationsRepository,
     RepositoryFailureError,
@@ -63,7 +92,14 @@ from my_pa.infrastructure.persistence.tables import (
     ingest_snapshots,
 )
 
-__all__ = ["SqlCommunicationsRepository", "communications_aggregate"]
+__all__ = [
+    "FTS_COUNT_KEYS",
+    "FTS_MATERIAL_SHARE",
+    "FTS_PROBE_CLASSES",
+    "SqlCommunicationsRepository",
+    "communications_aggregate",
+    "communications_fts_measurement",
+]
 
 
 def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
@@ -101,6 +137,8 @@ _MESSAGE_COLUMNS: Final = (
     communication_messages.c.identity_conflict,
     communication_messages.c.participants_reconciled,
     communication_messages.c.participants_disagreed,
+    communication_messages.c.source_unavailable,
+    communication_messages.c.identifiers_version,
 )
 
 _ITEM_COLUMNS: Final = (
@@ -179,6 +217,8 @@ def _to_message(row: Row[Any]) -> CommunicationMessageRecord:
         identity_conflict=row.identity_conflict,
         participants_reconciled=row.participants_reconciled,
         participants_disagreed=row.participants_disagreed,
+        source_unavailable=row.source_unavailable,
+        identifiers_version=row.identifiers_version,
     )
 
 
@@ -344,6 +384,8 @@ class SqlCommunicationsRepository(CommunicationsRepository):
                         "identity_conflict": message.identity_conflict,
                         "participants_reconciled": message.participants_reconciled,
                         "participants_disagreed": message.participants_disagreed,
+                        "source_unavailable": message.source_unavailable,
+                        "identifiers_version": message.identifiers_version,
                     },
                 )
             )
@@ -402,6 +444,14 @@ class SqlCommunicationsRepository(CommunicationsRepository):
         if not values:
             raise ValueError("set_message_flags names no flag")
         self._update_message(principal_id, message_id, values)
+
+    def set_source_unavailable(
+        self, principal_id: str, message_id: str, *, source_unavailable: bool
+    ) -> None:
+        self._update_message(principal_id, message_id, {"source_unavailable": source_unavailable})
+
+    def set_identifiers_version(self, principal_id: str, message_id: str, version: str) -> None:
+        self._update_message(principal_id, message_id, {"identifiers_version": version})
 
     # --- items, observations, quarantine -------------------------------------
 
@@ -605,6 +655,513 @@ class SqlCommunicationsRepository(CommunicationsRepository):
             for row in rows
         )
 
+    # --- the rederive's due set (WP4 ruling D2) -------------------------------
+
+    def list_rederive_due(
+        self,
+        principal_id: str,
+        *,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None = None,
+        limit: int,
+    ) -> tuple[CommunicationRederiveDueRecord, ...]:
+        messages = communication_messages
+        rows = self._connection.execute(
+            select(
+                messages.c.message_id,
+                messages.c.search_text_version,
+                messages.c.identifiers_version,
+                messages.c.source_unavailable,
+                messages.c.text_snapshot_id,
+            )
+            .where(
+                *_rederive_due(
+                    principal_id, search_text_version, identifiers_version, ingest_source_id
+                )
+            )
+            .order_by(messages.c.message_id)
+            .limit(limit)
+        )
+        return tuple(
+            CommunicationRederiveDueRecord(
+                message_id=row.message_id,
+                search_text_version=row.search_text_version,
+                identifiers_version=row.identifiers_version,
+                source_unavailable=row.source_unavailable,
+                text_snapshot_id=row.text_snapshot_id,
+            )
+            for row in rows
+        )
+
+    def count_rederive_due(
+        self,
+        principal_id: str,
+        *,
+        search_text_version: str,
+        identifiers_version: str,
+        ingest_source_id: str | None = None,
+    ) -> int:
+        return int(
+            self._connection.execute(
+                select(func.count()).where(
+                    *_rederive_due(
+                        principal_id, search_text_version, identifiers_version, ingest_source_id
+                    )
+                )
+            ).scalar_one()
+        )
+
+    # --- the WP4 reads (contract sections 13, 14 and 16; WP4-S4) ---------------
+
+    def search_query_shape(self, query: str) -> CommunicationSearchQueryShape:
+        english, simple = self._connection.execute(
+            select(
+                func.numnode(_tsquery("english", query)),
+                func.numnode(_tsquery("simple", query)),
+            )
+        ).one()
+        return CommunicationSearchQueryShape(english_nodes=english, simple_nodes=simple)
+
+    def search_messages(
+        self, principal_id: str, query: CommunicationSearchQuery
+    ) -> tuple[CommunicationSearchRow, ...]:
+        return tuple(
+            CommunicationSearchRow(
+                message_id=row.message_id,
+                conversation_id=row.conversation_id,
+                message_time=row.message_time,
+                subject=row.subject,
+                sender_address=row.sender_address,
+                has_attachments=row.has_attachments,
+                body_state=row.body_state,
+                search_text_version=row.search_text_version,
+                search_text_flags=tuple(row.search_text_flags),
+                identity_conflict=row.identity_conflict,
+                participants_reconciled=row.participants_reconciled,
+                participants_disagreed=row.participants_disagreed,
+                source_unavailable=row.source_unavailable,
+                tier=row.tier,
+                rank=row.rank,
+                overlap=row.overlap,
+                matched_identifier_kinds=tuple(sorted(set(row.id_kinds))),
+                conversation_hits=row.conversation_hits,
+                snippet=row.snippet,
+            )
+            for row in self._connection.execute(_search_statement(principal_id, query))
+        )
+
+    def list_message_lanes(
+        self, principal_id: str, message_ids: Sequence[str]
+    ) -> Mapping[str, tuple[tuple[str, str], ...]]:
+        if not message_ids:
+            return {}
+        observations, items = communication_observations, communication_mailbox_items
+        rows = self._connection.execute(
+            select(items.c.message_id, observations.c.folder_role, observations.c.lane_verification)
+            .distinct()
+            .join(
+                items,
+                matching_partition_criterion(items, observations)
+                & (items.c.item_id == observations.c.item_id),
+            )
+            .where(_mine(observations, principal_id), items.c.message_id.in_(list(message_ids)))
+            .order_by(
+                items.c.message_id, observations.c.folder_role, observations.c.lane_verification
+            )
+        )
+        lanes: dict[str, list[tuple[str, str]]] = {}
+        for row in rows:
+            lanes.setdefault(row.message_id, []).append((row.folder_role, row.lane_verification))
+        return {message_id: tuple(found) for message_id, found in lanes.items()}
+
+    def list_messages(
+        self, principal_id: str, message_ids: Sequence[str]
+    ) -> tuple[CommunicationMessageRecord, ...]:
+        if not message_ids:
+            return ()
+        rows = self._connection.execute(
+            select(*_MESSAGE_COLUMNS).where(
+                _mine(communication_messages, principal_id),
+                communication_messages.c.message_id.in_(sorted(set(message_ids))),
+            )
+        )
+        return tuple(_to_message(row) for row in rows)
+
+    def list_conversation_page(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        *,
+        after: tuple[datetime, str] | None,
+        limit: int,
+    ) -> tuple[CommunicationMessageRecord, ...]:
+        messages = communication_messages
+        message_id = messages.c.message_id.collate("C")
+        statement = select(*_MESSAGE_COLUMNS).where(
+            _mine(messages, principal_id), messages.c.conversation_id == conversation_id
+        )
+        if after is not None:
+            at, last = after
+            statement = statement.where(
+                or_(
+                    messages.c.message_time > at,
+                    and_(messages.c.message_time == at, message_id > last),
+                )
+            )
+        rows = self._connection.execute(
+            statement.order_by(messages.c.message_time, message_id).limit(limit)
+        )
+        return tuple(_to_message(row) for row in rows)
+
+    def count_identifier_version_pending(self, principal_id: str, version: str) -> int:
+        messages = communication_messages
+        return int(
+            self._connection.execute(
+                select(func.count()).where(
+                    _mine(messages, principal_id),
+                    messages.c.identifiers_version.is_distinct_from(version),
+                )
+            ).scalar_one()
+        )
+
+    def list_search_text_versions(self, principal_id: str) -> tuple[str, ...]:
+        messages = communication_messages
+        rows = self._connection.execute(
+            select(messages.c.search_text_version)
+            .distinct()
+            .where(_mine(messages, principal_id))
+            .order_by(messages.c.search_text_version)
+        )
+        return tuple(rows.scalars())
+
+
+def _source_snapshots(principal_id: str, ingest_source_ids: Sequence[str]) -> ScalarSelect[str]:
+    """The snapshot ids of the given sources, as a scalar subquery."""
+    return (
+        select(ingest_snapshots.c.snapshot_id)
+        .where(
+            _mine(ingest_snapshots, principal_id),
+            ingest_snapshots.c.ingest_source_id.in_(sorted(set(ingest_source_ids))),
+        )
+        .scalar_subquery()
+    )
+
+
+def _rederive_due(
+    principal_id: str,
+    search_text_version: str,
+    identifiers_version: str,
+    ingest_source_id: str | None,
+) -> tuple[ColumnElement[bool], ...]:
+    messages = communication_messages
+    criteria: tuple[ColumnElement[bool], ...] = (
+        _mine(messages, principal_id),
+        or_(
+            messages.c.search_text_version != search_text_version,
+            messages.c.identifiers_version.is_distinct_from(identifiers_version),
+            messages.c.source_unavailable.is_(True),
+        ),
+    )
+    if ingest_source_id is not None:
+        criteria += (
+            messages.c.text_snapshot_id.in_(_source_snapshots(principal_id, [ingest_source_id])),
+        )
+    return criteria
+
+
+# --- the search statement (contract sections 13 and 14; WP4 D4-final, D9, R6-R8) ------
+
+#: Quoted phrases are confirmed by exact substring over this fold of both
+#: sides: lower case, every whitespace run one space; punctuation is kept.
+_FOLD_PATTERN: Final = r"\s+"
+#: `ts_headline` options for a snippet; it runs on the returned page only.
+_HEADLINE_OPTIONS: Final = 'MaxFragments=2,MaxWords=30,MinWords=10,StartSel="",StopSel=""'
+SNIPPET_CHARACTERS: Final = 300
+_NO_TEXT_BODY_STATES: Final = ("withheld", "truncated")
+
+
+type _Columns = ReadOnlyColumnCollection[str, Any]
+
+
+def _config(name: str) -> ColumnElement[Any]:
+    return literal(name).cast(REGCONFIG)
+
+
+def _tsquery(config: str, query: str) -> ColumnElement[Any]:
+    return func.websearch_to_tsquery(_config(config), literal(query), type_=TSQUERY)
+
+
+def _fold(expression: ColumnElement[Any]) -> ColumnElement[Any]:
+    return func.regexp_replace(func.lower(expression), _FOLD_PATTERN, " ", "g")
+
+
+def _simple_document() -> ColumnElement[Any]:
+    """D4-final: the `simple` tsvector of subject and text, computed on the fly."""
+    messages = communication_messages
+    return func.to_tsvector(
+        _config("simple"),
+        func.coalesce(messages.c.subject, "") + " " + func.coalesce(messages.c.search_text, ""),
+    )
+
+
+def _integer_rank(document: ColumnElement[Any], tsquery: ColumnElement[Any]) -> ColumnElement[Any]:
+    return func.floor(func.ts_rank_cd(document, tsquery) * 1_000_000).cast(BigInteger)
+
+
+def _text_criteria(
+    query: CommunicationSearchQuery,
+) -> tuple[ColumnElement[bool], ColumnElement[Any]]:
+    """`(text_hit, rank)` for a query with searchable terms (section 14 rank)."""
+    if query.query is None:
+        raise ValueError("a text criterion needs a query")
+    messages = communication_messages
+    matches: list[ColumnElement[bool]] = []
+    ranks: list[ColumnElement[Any]] = []
+    if query.english_terms:
+        english = _tsquery("english", query.query)
+        matches.append(messages.c.search_document.bool_op("@@")(english))
+        ranks.append(_integer_rank(messages.c.search_document, english))
+    if query.text_fallback:
+        simple = _tsquery("simple", query.query)
+        matches.append(_simple_document().bool_op("@@")(simple))
+        ranks.append(_integer_rank(_simple_document(), simple))
+    # WP4-R2 G5: each field is confirmed alone, so a phrase never spans the
+    # end of the subject and the start of the text.
+    fields = (
+        _fold(func.coalesce(messages.c.subject, "")),
+        _fold(func.coalesce(messages.c.search_text, "")),
+    )
+    confirmed = [
+        or_(*(func.strpos(field, _fold(literal(phrase))) > 0 for field in fields))
+        for phrase in query.phrases
+    ]
+    text_hit = and_(or_(*matches), *confirmed)
+    rank = ranks[0] if len(ranks) == 1 else func.greatest(*ranks)
+    return text_hit, case((text_hit, rank), else_=literal(0, BigInteger))
+
+
+def _not_excluded(excluded: str) -> ColumnElement[bool]:
+    """The stored document satisfies the negated terms (`-word`, `-"..."`) alone.
+
+    A negated `english` stop word leaves no lexeme, and an empty tsquery
+    matches nothing: it excludes nothing here.
+    """
+    negation = _tsquery("english", excluded)
+    return or_(
+        func.numnode(negation) == 0,
+        communication_messages.c.search_document.bool_op("@@")(negation),
+    )
+
+
+def _after(columns: _Columns, after: tuple[int, int, int, datetime, str]) -> ColumnElement[bool]:
+    """Strictly after `after` in (tier ASC, rank DESC, overlap DESC, time DESC, id DESC)."""
+    tier, rank, overlap, at, message_id = after
+    return or_(
+        columns.tier > tier,
+        and_(
+            columns.tier == tier,
+            or_(
+                columns.rank < rank,
+                and_(
+                    columns.rank == rank,
+                    or_(
+                        columns.overlap < overlap,
+                        and_(
+                            columns.overlap == overlap,
+                            or_(
+                                columns.message_time < at,
+                                and_(
+                                    columns.message_time == at,
+                                    columns.message_id.collate("C") < message_id,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def _total_order(columns: _Columns) -> tuple[ColumnElement[Any], ...]:
+    """Section 14: tier, rank, participant overlap, time, then id -- a total order."""
+    return (
+        columns.tier.asc(),
+        columns.rank.desc(),
+        columns.overlap.desc(),
+        columns.message_time.desc(),
+        columns.message_id.collate("C").desc(),
+    )
+
+
+def _search_statement(principal_id: str, query: CommunicationSearchQuery) -> Select[Any]:
+    """One statement: candidates, tiers, collapse, keyset, page, snippets (module docstring)."""
+    messages = communication_messages
+    identifiers = communication_identifiers
+    participants = communication_participants
+    observations, items = communication_observations, communication_mailbox_items
+    n_ids = len(query.identifiers)
+
+    # The requested identifiers each message matched (the (principal, kind, value) index).
+    id_hit: ColumnElement[Any] = literal(0)
+    id_kinds: ColumnElement[Any] = literal([], ARRAY(Text))
+    source: Any = messages
+    if n_ids:
+        matched = (
+            select(
+                identifiers.c.message_id,
+                func.count(tuple_(identifiers.c.kind, identifiers.c.value).distinct()).label("hit"),
+                func.array_agg(identifiers.c.kind.distinct()).label("kinds"),
+            )
+            .where(
+                _mine(identifiers, principal_id),
+                identifiers.c.extractor_version == query.identifier_version,
+                tuple_(identifiers.c.kind, identifiers.c.value).in_(list(query.identifiers)),
+            )
+            .group_by(identifiers.c.message_id)
+            .subquery("matched")
+        )
+        source = messages.outerjoin(matched, matched.c.message_id == messages.c.message_id)
+        id_hit = func.coalesce(matched.c.hit, 0)
+        id_kinds = func.coalesce(matched.c.kinds, literal([], ARRAY(Text)))
+
+    # The criteria: a requested identifier, or the text; neither asked is a browse (R8).
+    text_hit: ColumnElement[bool] | None = None
+    rank: ColumnElement[Any] = literal(0, BigInteger)
+    if query.query is not None:
+        text_hit, rank = _text_criteria(query)
+    criteria: list[ColumnElement[bool]] = []
+    if n_ids and text_hit is not None:
+        criteria.append(or_(id_hit > 0, text_hit))
+    elif n_ids:
+        criteria.append(id_hit > 0)
+    elif text_hit is not None:
+        criteria.append(text_hit)
+    # WP4-R2 G4: a negated term excludes in every tier, an identifier match too.
+    if query.excluded is not None:
+        criteria.append(_not_excluded(query.excluded))
+
+    # Structured filters intersect.
+    if query.from_utc is not None:
+        criteria.append(messages.c.message_time >= query.from_utc)
+    if query.to_utc is not None:
+        criteria.append(messages.c.message_time < query.to_utc + timedelta(seconds=1))
+    if query.conversation_id is not None:
+        criteria.append(messages.c.conversation_id == query.conversation_id)
+    if query.folder_role is not None:
+        criteria.append(
+            exists(
+                select(literal(1))
+                .select_from(observations)
+                .join(
+                    items,
+                    matching_partition_criterion(items, observations)
+                    & (items.c.item_id == observations.c.item_id),
+                )
+                .where(
+                    _mine(observations, principal_id),
+                    items.c.message_id == messages.c.message_id,
+                    observations.c.folder_role == query.folder_role,
+                )
+            )
+        )
+    overlap: ColumnElement[Any] = literal(0)
+    if query.participants:
+        overlap = (
+            select(func.count(participants.c.address.distinct()))
+            .where(
+                _mine(participants, principal_id),
+                participants.c.message_id == messages.c.message_id,
+                participants.c.address.in_(list(query.participants)),
+            )
+            .scalar_subquery()
+        )
+        if query.participants_all:
+            criteria.append(overlap == len(query.participants))
+        else:
+            criteria.append(overlap >= 1)
+
+    tier: ColumnElement[Any] = literal(3)
+    if n_ids:
+        tier = case((id_hit == n_ids, 1), (id_hit > 0, 2), else_=3)
+    group = func.coalesce(messages.c.conversation_id, messages.c.message_id)
+    candidates = (
+        select(
+            messages.c.message_id,
+            messages.c.conversation_id,
+            messages.c.message_time,
+            messages.c.subject,
+            messages.c.sender_address,
+            messages.c.has_attachments,
+            messages.c.body_state,
+            messages.c.search_text_version,
+            messages.c.search_text_flags,
+            messages.c.identity_conflict,
+            messages.c.participants_reconciled,
+            messages.c.participants_disagreed,
+            messages.c.source_unavailable,
+            (text_hit if text_hit is not None else literal(False)).label("text_hit"),
+            tier.label("tier"),
+            rank.label("rank"),
+            overlap.label("overlap"),
+            id_kinds.label("id_kinds"),
+            group.label("group_key"),
+        )
+        .select_from(source)
+        .where(_mine(messages, principal_id), *criteria)
+        .subquery("candidates")
+    )
+    hits = func.count().over(partition_by=candidates.c.group_key).label("conversation_hits")
+    ranked = select(candidates, hits)
+    if query.collapse:
+        # D9: the representative is the best message of its conversation by the
+        # full total order; the keyset is applied after the collapse.
+        ranked = ranked.distinct(candidates.c.group_key).order_by(
+            candidates.c.group_key, *_total_order(candidates.c)
+        )
+    representatives = ranked.subquery("representatives")
+    page = select(representatives)
+    if query.after is not None:
+        page = page.where(_after(representatives.c, query.after))
+    page_rows = page.order_by(*_total_order(representatives.c)).limit(query.limit).subquery("page")
+    return select(page_rows, _snippet(principal_id, query, page_rows).label("snippet")).order_by(
+        *_total_order(page_rows.c)
+    )
+
+
+def _snippet(
+    principal_id: str, query: CommunicationSearchQuery, page: Subquery
+) -> ColumnElement[Any]:
+    """At most 300 characters of a page row's text; `NULL` when it has none.
+
+    A text match gets `ts_headline` (the `simple` configuration under the
+    stop-word fallback); any other row the start of its text. A withheld or
+    truncated body has no text (the table's CHECK), and is refused here too.
+    """
+    messages = communication_messages
+    text = messages.c.search_text
+    plain: ColumnElement[Any] = func.left(text, SNIPPET_CHARACTERS)
+    if query.query is not None:
+        config = "simple" if query.text_fallback else "english"
+        headline = func.left(
+            func.ts_headline(
+                _config(config), text, _tsquery(config, query.query), _HEADLINE_OPTIONS
+            ),
+            SNIPPET_CHARACTERS,
+        )
+        plain = case((page.c.text_hit, headline), else_=plain)
+    return (
+        select(
+            case(
+                (messages.c.body_state.in_(_NO_TEXT_BODY_STATES), literal(None, Text)),
+                else_=plain,
+            )
+        )
+        .where(_mine(messages, principal_id), messages.c.message_id == page.c.message_id)
+        .scalar_subquery()
+    )
+
 
 def _counts(rows: Result[Any]) -> dict[str, int]:
     return {str(code): int(count) for code, count in rows}
@@ -625,7 +1182,10 @@ def communications_aggregate(
       WP1 aggregate summed over publications; `multi_lane_items` the distinct
       items among them;
     * `messages_identity_conflict` -- scoped messages flagged `identity_conflict`;
-    * `identifiers` -- per kind, stored identifier rows and distinct messages.
+    * `identifiers` -- per extractor version, then per kind, stored identifier
+      rows and distinct messages. Versions are kept apart because the rows of
+      every version stay side by side (the table is append-only, WP4 ruling R4),
+      so a kind's count summed over versions would count one message twice.
     """
     ids = sorted(set(ingest_source_ids))
     observations = communication_observations
@@ -679,19 +1239,23 @@ def communications_aggregate(
         _mine(communication_identifiers, principal_id),
         communication_identifiers.c.message_id.in_(select(message_ids.c.message_id)),
     )
-    identifiers: dict[str, dict[str, int]] = {
-        str(kind): {"rows": int(rows), "messages": int(distinct)}
-        for kind, rows, distinct in connection.execute(
-            select(
-                communication_identifiers.c.kind,
-                func.count(),
-                func.count(func.distinct(communication_identifiers.c.message_id)),
-            )
-            .where(*identifier_scope)
-            .group_by(communication_identifiers.c.kind)
-            .order_by(communication_identifiers.c.kind)
+    version, kind = communication_identifiers.c.extractor_version, communication_identifiers.c.kind
+    identifiers: dict[str, dict[str, dict[str, int]]] = {}
+    for extractor_version, identifier_kind, rows, distinct in connection.execute(
+        select(
+            version,
+            kind,
+            func.count(),
+            func.count(func.distinct(communication_identifiers.c.message_id)),
         )
-    }
+        .where(*identifier_scope)
+        .group_by(version, kind)
+        .order_by(version, kind)
+    ):
+        identifiers.setdefault(str(extractor_version), {})[str(identifier_kind)] = {
+            "rows": int(rows),
+            "messages": int(distinct),
+        }
     return {
         "observations": {
             "total": int(total),
@@ -729,4 +1293,205 @@ def communications_aggregate(
             ).scalar_one()
         ),
         "identifiers": identifiers,
+    }
+
+
+# --- the english-against-simple measurement (WP4 ruling D4, report section 2.4) ---
+
+#: The classes of probe term `communications_fts_measurement` forms per message.
+FTS_PROBE_CLASSES: Final = ("identifier", "name")
+#: The counts of each class, always present.
+FTS_COUNT_KEYS: Final = (
+    "probes",
+    "present",
+    "english_hit_of_present",
+    "simple_hit_of_present",
+    "english_miss_simple_hit",
+    "english_miss_covered_by_identifier",
+    "english_miss_uncovered",
+    "stopword_empty",
+)
+#: `english_miss_uncovered` is material for a class above this share of its
+#: present probes (the D4 decision rule; the Manager reads the counts too).
+FTS_MATERIAL_SHARE: Final = 0.01
+_ENGLISH: Final[ColumnElement[Any]] = literal_column("'english'::regconfig")
+_SIMPLE: Final[ColumnElement[Any]] = literal_column("'simple'::regconfig")
+_BARE_KINDS: Final = ("gmp", "fpl")
+
+
+def _measured_ids(
+    connection: Connection,
+    scope: tuple[ColumnElement[bool], ...],
+    after: str,
+    limit: int | None,
+) -> list[str]:
+    messages = communication_messages
+    statement = (
+        select(messages.c.message_id)
+        .where(*scope, messages.c.message_id > after)
+        .order_by(messages.c.message_id)
+    )
+    if limit is not None:
+        statement = statement.limit(limit)
+    return [str(row) for row in connection.execute(statement).scalars()]
+
+
+def _probe_counts(
+    connection: Connection, principal_id: str, identifiers_version: str, ids: Sequence[str]
+) -> dict[str, dict[str, int]]:
+    """One batch's counts per probe class (`communications_fts_measurement`)."""
+    messages = communication_messages
+    identifiers = communication_identifiers
+    participants = communication_participants
+    surface = case(
+        (identifiers.c.kind.in_(_BARE_KINDS), func.upper(identifiers.c.kind)),
+        (identifiers.c.kind == "submittal", func.concat("Submittal ", identifiers.c.value)),
+        (identifiers.c.kind == "spec", identifiers.c.value),
+        else_=func.concat(func.upper(identifiers.c.kind), " ", identifiers.c.value),
+    )
+    identifier_probes = select(
+        identifiers.c.message_id.label("message_id"),
+        literal("identifier").label("cls"),
+        surface.label("term"),
+        literal(True).label("covered"),
+    ).where(
+        _mine(identifiers, principal_id),
+        identifiers.c.extractor_version == identifiers_version,
+        identifiers.c.message_id.in_(ids),
+    )
+    tokens = (
+        select(
+            participants.c.message_id.label("message_id"),
+            func.unnest(
+                func.regexp_split_to_array(
+                    func.lower(func.split_part(participants.c.address, "@", 1)), "[^a-z]+"
+                )
+            ).label("token"),
+        )
+        .where(_mine(participants, principal_id), participants.c.message_id.in_(ids))
+        .subquery("tokens")
+    )
+    name_probes = (
+        select(
+            tokens.c.message_id,
+            literal("name").label("cls"),
+            tokens.c.token.label("term"),
+            literal(False).label("covered"),
+        )
+        .where(func.length(tokens.c.token) >= 3)
+        .distinct()
+    )
+    probes = union_all(identifier_probes, name_probes).subquery("probes")
+    body = func.concat(func.coalesce(messages.c.subject, ""), " ", messages.c.search_text)
+    english_query = func.websearch_to_tsquery(_ENGLISH, probes.c.term)
+    present = func.strpos(func.lower(body), func.lower(probes.c.term)) > 0
+    english = messages.c.search_document.bool_op("@@")(english_query)
+    simple = func.to_tsvector(_SIMPLE, body).bool_op("@@")(
+        func.websearch_to_tsquery(_SIMPLE, probes.c.term)
+    )
+    english_miss = and_(present, not_(english))
+    filters: dict[str, ColumnElement[bool] | None] = {
+        "probes": None,
+        "present": present,
+        "english_hit_of_present": and_(present, english),
+        "simple_hit_of_present": and_(present, simple),
+        "english_miss_simple_hit": and_(english_miss, simple),
+        "english_miss_covered_by_identifier": and_(english_miss, probes.c.covered.is_(True)),
+        "english_miss_uncovered": and_(english_miss, probes.c.covered.is_(False)),
+        "stopword_empty": and_(present, func.numnode(english_query) == 0),
+    }
+    rows = connection.execute(
+        select(
+            probes.c.cls,
+            *(
+                (func.count() if where is None else func.count().filter(where)).label(name)
+                for name, where in filters.items()
+            ),
+        )
+        .select_from(
+            probes.join(
+                messages,
+                and_(
+                    _mine(messages, principal_id),
+                    messages.c.message_id == probes.c.message_id,
+                ),
+            )
+        )
+        .group_by(probes.c.cls)
+    )
+    return {
+        str(row.cls): {name: int(row._mapping[name]) for name in FTS_COUNT_KEYS} for row in rows
+    }
+
+
+def communications_fts_measurement(
+    connection: Connection,
+    principal_id: str,
+    *,
+    identifiers_version: str,
+    ingest_source_id: str | None = None,
+    limit: int,
+    batch_size: int = 500,
+) -> dict[str, object]:
+    """Counts only: `english` against `simple` over stored messages (report section 2.4).
+
+    For each stored message with text (scoped to one source's snapshots by its
+    text pointer when `ingest_source_id` is given), in `message_id` keyset
+    batches of `batch_size`, at most `limit` messages, it forms probe terms:
+
+    * `identifier` -- the surface form of each of its `identifiers_version`
+      rows (`RFI 174`, `Submittal 033000-01`, `GMP`); the identifier index
+      answers these, so an `english` miss is `english_miss_covered_by_identifier`;
+    * `name` -- the alphabetic components of three characters or more of its
+      participants' address local parts; no index answers these, so an
+      `english` miss is `english_miss_uncovered`.
+
+    A probe is `present` when its term occurs (case-folded `strpos`) in
+    `subject || ' ' || search_text`; it is an `english` hit when the stored
+    `search_document` matches `websearch_to_tsquery('english', term)`, a
+    `simple` hit when `to_tsvector('simple', ...)` matches the `simple` query,
+    and `stopword_empty` when the `english` query has no node. The answer is
+    per-class counts plus `material`, which is true when a class's
+    `english_miss_uncovered` exceeds `FTS_MATERIAL_SHARE` of its present
+    probes. No term, address, subject, identifier value or id is returned.
+    """
+    if type(limit) is not int or limit < 1 or type(batch_size) is not int or batch_size < 1:
+        raise ValueError("a measurement limit and batch size are positive integers")
+    messages = communication_messages
+    scope: tuple[ColumnElement[bool], ...] = (
+        _mine(messages, principal_id),
+        messages.c.search_text.is_not(None),
+    )
+    if ingest_source_id is not None:
+        scope += (
+            messages.c.text_snapshot_id.in_(_source_snapshots(principal_id, [ingest_source_id])),
+        )
+    totals = {name: dict.fromkeys(FTS_COUNT_KEYS, 0) for name in FTS_PROBE_CLASSES}
+    measured, after = 0, ""
+    while measured < limit:
+        ids = _measured_ids(connection, scope, after, min(batch_size, limit - measured))
+        if not ids:
+            break
+        measured, after = measured + len(ids), ids[-1]
+        for name, counts in _probe_counts(
+            connection, principal_id, identifiers_version, ids
+        ).items():
+            for key, value in counts.items():
+                totals[name][key] += value
+    deferred = int(
+        connection.execute(
+            select(func.count()).where(*scope, messages.c.message_id > after)
+        ).scalar_one()
+    )
+    material = any(
+        counts["english_miss_uncovered"] > FTS_MATERIAL_SHARE * counts["present"]
+        for counts in totals.values()
+    )
+    return {
+        "identifier_version": identifiers_version,
+        "messages_measured": measured,
+        "messages_deferred": deferred,
+        "classes": totals,
+        "material_share": FTS_MATERIAL_SHARE,
+        "english_miss_uncovered_material": material,
     }

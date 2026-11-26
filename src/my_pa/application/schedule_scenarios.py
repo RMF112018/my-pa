@@ -81,6 +81,7 @@ from my_pa.application.errors import (
     NotFoundError,
     RateLimitedError,
     SafeDetail,
+    UnsupportedError,
 )
 from my_pa.application.lineage_authority import (
     attested_lineage_authority,
@@ -132,6 +133,7 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.schedule import (
+    SCHEDULE_PDF_FORMAT,
     ScheduleImportApproval,
     SchedulePublicationStatus,
     ScheduleSourceBinding,
@@ -539,15 +541,18 @@ def _coverage(statuses: Sequence[SchedulePublicationStatus]) -> Coverage:
 
 
 def _disclosure(
-    roots: Sequence[tuple[ScheduleSourceBinding, SchedulePublicationStatus]],
+    roots: Sequence[tuple[ScheduleSourceBinding | None, SchedulePublicationStatus]],
     *,
     observed_at: datetime,
     basis: tuple[str, ...],
     truncation: Truncation = _NO_TRUNCATION,
 ) -> Disclosure:
-    """Section 15.6.3: the scope and sources of the answer's root publications."""
+    """Section 15.6.3: the scope and sources of the answer's root publications.
+
+    P6 XER import S7-4a: a P6 root has no source binding and adds no scope.
+    """
     coverage = _coverage([status for _, status in roots])
-    bindings = [binding for binding, _ in roots]
+    bindings = [binding for binding, _ in roots if binding is not None]
     return Disclosure(
         scope=Scope(
             source_ids=tuple(sorted({binding.source_id for binding in bindings})),
@@ -883,7 +888,7 @@ class ScheduleScenarioApplication:
 
     def _roots(
         self, work: ScenarioUnitOfWork, principal_id: str, publication_ids: Iterable[str]
-    ) -> list[tuple[ScheduleSourceBinding, SchedulePublicationStatus]]:
+    ) -> list[tuple[ScheduleSourceBinding | None, SchedulePublicationStatus]]:
         found = []
         for publication_id in sorted(set(publication_ids)):
             detail = work.schedules.get_publication_detail(principal_id, publication_id)
@@ -911,7 +916,7 @@ class ScheduleScenarioApplication:
         self,
         authorization: Authorization,
         payload: dict[str, Any],
-        roots: Sequence[tuple[ScheduleSourceBinding, SchedulePublicationStatus]],
+        roots: Sequence[tuple[ScheduleSourceBinding | None, SchedulePublicationStatus]],
         basis: tuple[str, ...],
         truncation: Truncation = _NO_TRUNCATION,
     ) -> ScenarioAnswer:
@@ -1013,6 +1018,14 @@ class ScheduleScenarioApplication:
                 publication_id = stored.publication_id
             if publication_id is None:  # pragma: no cover - the command named one origin
                 raise InternalError()
+            # P6 XER import S7-4a: the P6 snapshot mapping (contract section
+            # 11.5, acceptance D6) is S7-4b; until then a P6 origin is refused
+            # rather than snapshotted from rows it does not have.
+            if work.schedules.source_format(principal_id, publication_id) not in (
+                None,
+                SCHEDULE_PDF_FORMAT,
+            ):
+                raise UnsupportedError(SafeDetail.SOURCE_FORMAT)
             source = work.scenarios.snapshot_source(principal_id, publication_id)
             state = (
                 None
@@ -1901,7 +1914,9 @@ class ScheduleScenarioApplication:
     def _content(
         self, work: ScenarioUnitOfWork, principal_id: str, version_id: str
     ) -> tuple[
-        StoredScenarioVersion, Any, list[tuple[ScheduleSourceBinding, SchedulePublicationStatus]]
+        StoredScenarioVersion,
+        Any,
+        list[tuple[ScheduleSourceBinding | None, SchedulePublicationStatus]],
     ]:
         version = work.scenarios.get_version(principal_id, version_id)
         content = None if version is None else work.scenarios.load_content(principal_id, version_id)

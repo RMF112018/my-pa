@@ -1151,7 +1151,9 @@ def _observe_field(
         table_position=table.position,
         field=safe_name(name),
         position=position,
-        field_key=key if field is not None or (safe_name(table.name) and safe_name(name)) else None,
+        # Section 7.7: a key only when it is one (an unknown table may be named by
+        # 5.2 and still not be a key's upper-case table).
+        field_key=key if FIELD_KEY_PATTERN.match(key) else None,
         catalogued=field is not None or wildcard,
         tier=field.tier.value if field is not None else None,
         records=len(table.rows),

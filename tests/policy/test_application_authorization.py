@@ -36,6 +36,10 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+from tests.communications_reads_samples import (
+    COMMUNICATIONS_READ_CAPABILITIES,
+    communications_commands,
+)
 from tests.conftest import (
     DEFAULT_LIMITS,
     WHEN,
@@ -52,6 +56,14 @@ from tests.conftest import (
     staged_search,
 )
 from tests.files_workspace_samples import FILES_WORKSPACE_CAPABILITIES, files_commands
+from tests.project_reports_reads_samples import (
+    PROJECT_REPORTS_READ_CAPABILITIES,
+    project_reports_commands,
+)
+from tests.schedule_p6_samples import (
+    SCHEDULE_P6_CAPABILITIES,
+    schedule_p6_commands,
+)
 from tests.schedule_scenario_samples import SCHEDULE_SCENARIO_CAPABILITIES, scenario_commands
 
 from my_pa.application.commands import (
@@ -1665,6 +1677,9 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         **scenario_commands("policy"),
         # Files workspace WP5: synthetic plane commands.
         **files_commands("policy"),
+        **communications_commands("policy"),
+        **schedule_p6_commands("policy"),
+        **project_reports_commands("policy"),
     }
 
 
@@ -2182,6 +2197,12 @@ SCOPED_CAPABILITIES = [
         *SCHEDULE_SCENARIO_CAPABILITIES,
         # Files workspace WP5: the 17 `files.*` names, also in `_SCOPELESS`.
         *FILES_WORKSPACE_CAPABILITIES,
+        # Communications intelligence WP4-S5: the 3 reads (scopeless, read switch off).
+        *COMMUNICATIONS_READ_CAPABILITIES,
+        # P6 XER import S7-4a: the 7 P6 names.
+        *SCHEDULE_P6_CAPABILITIES,
+        # Project-report reads WP4P-S4: the 5 reads (scopeless, read switch off).
+        *PROJECT_REPORTS_READ_CAPABILITIES,
     }
 ]
 
@@ -2549,6 +2570,12 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         *SCHEDULE_SCENARIO_CAPABILITIES,
         # Files workspace WP5: the 17 `files.*` names, also in `_SCOPELESS`.
         *FILES_WORKSPACE_CAPABILITIES,
+        # Communications intelligence WP4-S5: the 3 reads (scopeless, read switch off).
+        *COMMUNICATIONS_READ_CAPABILITIES,
+        # P6 XER import S7-4a: the 7 P6 names.
+        *SCHEDULE_P6_CAPABILITIES,
+        # Project-report reads WP4P-S4: the 5 reads (scopeless, read switch off).
+        *PROJECT_REPORTS_READ_CAPABILITIES,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

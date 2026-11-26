@@ -52,7 +52,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Final
+from typing import Final, Literal
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -645,6 +645,25 @@ class Settings(StrictModel):
     #: changes no row. Enabling it anywhere but a test is an operator gate
     #: (contract section 15.17).
     schedule_scenarios_enabled: bool = False
+    #: P6 XER import switch (schedule XER import contract section 10.2, S7-3),
+    #: env `MY_PA_SCHEDULE_P6_ENABLED`. Default off, and it widens nothing alone:
+    #: effective only while this and `schedule_enabled` are both on (and the
+    #: composition is unrestricted). Off, the P6 admission (`import_p6`) answers
+    #: `unsupported` before reading anything, and the `schedule` worker fails a
+    #: `p6_*` publication's job closed as a transient `unavailable` without
+    #: parsing. Turning it on or off changes no row. Enabling it anywhere but a
+    #: test is an operator gate (contract section 15).
+    schedule_p6_enabled: bool = False
+    #: P6 XER import S7-4a (schedule XER import contract section 7.7), env
+    #: `MY_PA_SCHEDULE_P6_SNAPSHOT_QUOTA_BYTES`: the retained snapshot bytes one
+    #: Principal may hold. An import whose new snapshot would pass it answers
+    #: `rate_limited(storage_quota)` and writes nothing; bytes already held (the
+    #: per-Principal SHA-256 deduplication) never count twice. The default is
+    #: the 8 GiB placeholder kept by operator decision 2026-11-23;
+    #: operator-adjustable, 1 byte to 1 TiB.
+    schedule_p6_snapshot_quota_bytes: int = Field(
+        default=8 * 1024 * 1024 * 1024, ge=1, le=1024 * 1024 * 1024 * 1024
+    )
     #: Daily cycle scheduler switch (ADR-010 amendment of 2026-11-20), env
     #: `MY_PA_CYCLE_SCHEDULER_ENABLED`. Default off. Off, `apps/worker.py`
     #: refuses the `cycles` plane (exit 2, before an engine is built). It
@@ -667,6 +686,22 @@ class Settings(StrictModel):
     #: across two consecutive polls, so one is ingested 1-2 intervals after
     #: the collector finishes writing it.
     communications_ingest_poll_seconds: int = Field(default=900, ge=60, le=86_400)
+    #: Communications read switch (communications contract section 16, WP4
+    #: ruling D7), env `MY_PA_COMMUNICATIONS_ENABLED`. Default off. On, the
+    #: `communications.search`, `communications.read` and
+    #: `communications.coverage` reads are served (their MCP wiring is WP4-S5);
+    #: off, they are withheld and answer the standard disabled refusal. It
+    #: changes no row by being set.
+    communications_enabled: bool = False
+    #: The identifier extractor version the communications reads match and
+    #: normalize queries with (WP4 rulings D3, R10), env
+    #: `MY_PA_COMMUNICATIONS_IDENTIFIER_VERSION`. Default
+    #: `comms_identifiers_v2`, the version ingestion and rederive write.
+    #: `comms_identifiers_v1` is a documented rollback lever: it answers only
+    #: for messages that still carry v1 rows (nothing is pruned in WP4, ruling R4).
+    communications_identifier_version: Literal["comms_identifiers_v1", "comms_identifiers_v2"] = (
+        "comms_identifiers_v2"
+    )
     #: Project-reports ingestion poll switch (WP3P ruling D5), env
     #: `MY_PA_PROJECT_REPORTS_INGEST_ENABLED`. Default off. On, the `cycles`
     #: plane runs its own step (`project_reports_ingest`, under its own lock):
@@ -678,6 +713,13 @@ class Settings(StrictModel):
     #: The project-reports step's interval in seconds, env
     #: `MY_PA_PROJECT_REPORTS_INGEST_POLL_SECONDS` (900 by default, 60..86,400).
     project_reports_ingest_poll_seconds: int = Field(default=900, ge=60, le=86_400)
+    #: Project-report read switch (WP4P-W1 design section 2.9), env
+    #: `MY_PA_PROJECT_REPORTS_ENABLED`. Default off. On, the five
+    #: `project_reports.*` reads are served; off, they are withheld and answer
+    #: the standard disabled refusal. Independent of the ingest switch: reads
+    #: may run over a frozen store, and ingest may run with reads off. It
+    #: changes no row by being set.
+    project_reports_enabled: bool = False
     #: KLP-WP-04 (R6 section 3.4, KLP-AC-019). The exact OAuth client ids bound
     #: as Knowledge discovery clients. Compared exactly, never by prefix; empty --
     #: the default -- binds no client, so `knowledge.assertions.submit` and

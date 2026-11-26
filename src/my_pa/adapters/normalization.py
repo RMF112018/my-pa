@@ -56,6 +56,7 @@ separate transport decision; clients split change sets across versions.
 from __future__ import annotations
 
 import dataclasses
+import re
 from base64 import b64decode
 from binascii import Error as BinasciiError
 from collections.abc import Callable, Mapping
@@ -104,6 +105,8 @@ from my_pa.application.commands import (
     CloseProject,
     Command,
     CommitIntelligenceArtifact,
+    CommunicationsCoverage,
+    CompareProjectReports,
     CompareScheduleBaseline,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
@@ -183,6 +186,7 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
+    ImportScheduleP6Publication,
     ImportSchedulePublication,
     ListCaptures,
     ListCommitments,
@@ -220,6 +224,11 @@ from my_pa.application.commands import (
     ListScheduleBaselines,
     ListScheduleChanges,
     ListScheduleCpmRunActivities,
+    ListScheduleP6Activities,
+    ListScheduleP6AvailableFields,
+    ListScheduleP6Calendars,
+    ListScheduleP6FieldValues,
+    ListScheduleP6Relationships,
     ListSchedulePublications,
     ListScheduleScenarioActivities,
     ListScheduleScenarioChanges,
@@ -244,15 +253,20 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     PreviewFile,
+    ProjectReportRecordHistory,
+    ProjectReportsCatalog,
+    ProjectReportsCoverage,
     ProposeRelationshipMemory,
     ProposeScheduleBaseline,
     PublishConstraint,
     PublishGeneralReport,
     PullGoodNotesWork,
     PutCanvasWorkspace,
+    QueryProjectReports,
     ReadCapture,
     ReadCommitment,
     ReadCommitmentV2,
+    ReadCommunications,
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
@@ -335,6 +349,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchCommitments,
     SearchCommitmentsV2,
+    SearchCommunications,
     SearchConstraints,
     SearchEntities,
     SearchFiles,
@@ -348,6 +363,7 @@ from my_pa.application.commands import (
     SearchTasks,
     SetGoverningScheduleBaseline,
     SetReportRetention,
+    SetScheduleP6CapturedFields,
     SplitEntity,
     StartGsqsB0,
     StatFile,
@@ -496,6 +512,8 @@ PAYLOAD_KEY: Final = "payload"
 #: `test_the_request_ceiling_admits_the_largest_request_the_contract_allows`,
 #: which builds identifiers at the real maximum and measures the result.
 _IDENTIFIER_JSON_BYTES: Final = 75
+#: An exact ISO calendar day (the project-report reads' `date_from` / `date_to`).
+_ISO_DAY: Final = re.compile(r"\A[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
 
 #: Everything a request carries that is not `sources.enroll`'s object list. An
 #: enrollment may name 32 media types and neither the domain nor the contract
@@ -1075,6 +1093,21 @@ def _schedule_activities_request(payload: Mapping[str, Any]) -> dict[str, Any]:
         converted["hierarchy_prefix"] = _strings(
             converted["hierarchy_prefix"], SafeDetail.HIERARCHY_PREFIX
         )
+    return converted
+
+
+def _p6_request(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """P6 XER import S7-4a: arrays become tuples (`field_keys`, `fields`, `filter`).
+
+    Only the container converts; the command checks every item's type and the
+    section 7.7 grammar, so a non-list value reaches it unchanged and is refused
+    there naming its field.
+    """
+    converted = dict(payload)
+    for name in ("field_keys", "fields", "filter"):
+        supplied = converted.get(name)
+        if isinstance(supplied, list):
+            converted[name] = tuple(supplied)
     return converted
 
 
@@ -2898,6 +2931,50 @@ def _reconcile_meeting_providers(payload: Mapping[str, Any]) -> Command:
     return ReconcileMeetingProviders(**converted)
 
 
+def _communications_shapes(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The communications reads (WP4-S5): instants become `datetime`, arrays tuples.
+
+    Nothing else converts; the commands check every shape and bound.
+    """
+    converted = dict(payload)
+    for name in ("from_utc", "to_utc"):
+        if name in converted:
+            converted[name] = _meeting_instant(converted[name])
+    for name in ("identifiers", "participants", "message_ids"):
+        supplied = converted.get(name)
+        if isinstance(supplied, list):
+            converted[name] = tuple(supplied)
+    return converted
+
+
+def _project_reports_shapes(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """The project-report reads (WP4P-S4): ISO dates become `date`, arrays tuples.
+
+    A date that is not an exact `YYYY-MM-DD` string is passed on as given and
+    refused by the command. Nothing else converts; the commands check every
+    shape and bound.
+    """
+    converted = dict(payload)
+    for name in ("date_from", "date_to"):
+        supplied = converted.get(name)
+        if isinstance(supplied, str) and _ISO_DAY.fullmatch(supplied):
+            with suppress(ValueError):
+                converted[name] = date.fromisoformat(supplied)
+    for name in (
+        "project_ids",
+        "status_classes",
+        "statuses",
+        "identifiers",
+        "group_keys",
+        "measures",
+        "record_ids",
+    ):
+        supplied = converted.get(name)
+        if isinstance(supplied, list):
+            converted[name] = tuple(supplied)
+    return converted
+
+
 def _update_issue(payload: Mapping[str, Any]) -> Command:
     """`issues.update`: `clear_fields` becomes a tuple; nothing else converts.
 
@@ -3155,6 +3232,30 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.MEETINGS_PROVIDER_BIND: _bind_meeting_provider,
         Capability.MEETINGS_PROVIDER_REVIEW: lambda payload: ReviewMeetingProviders(**payload),
         Capability.MEETINGS_PROVIDER_RECONCILE: _reconcile_meeting_providers,
+        Capability.COMMUNICATIONS_SEARCH: lambda payload: SearchCommunications(
+            **_communications_shapes(payload)
+        ),
+        Capability.COMMUNICATIONS_READ: lambda payload: ReadCommunications(
+            **_communications_shapes(payload)
+        ),
+        Capability.COMMUNICATIONS_COVERAGE: lambda payload: CommunicationsCoverage(
+            **_communications_shapes(payload)
+        ),
+        Capability.PROJECT_REPORTS_CATALOG: lambda payload: ProjectReportsCatalog(
+            **_project_reports_shapes(payload)
+        ),
+        Capability.PROJECT_REPORTS_QUERY: lambda payload: QueryProjectReports(
+            **_project_reports_shapes(payload)
+        ),
+        Capability.PROJECT_REPORTS_RECORD_HISTORY: lambda payload: ProjectReportRecordHistory(
+            **_project_reports_shapes(payload)
+        ),
+        Capability.PROJECT_REPORTS_COMPARE: lambda payload: CompareProjectReports(
+            **_project_reports_shapes(payload)
+        ),
+        Capability.PROJECT_REPORTS_COVERAGE: lambda payload: ProjectReportsCoverage(
+            **_project_reports_shapes(payload)
+        ),
         Capability.RECORD_EVENTS_LIST: _list_record_events,
         Capability.RECORD_EVENTS_PROVENANCE: lambda payload: GetRecordEventProvenance(**payload),
         Capability.KNOWLEDGE_ASSERTIONS_READ: lambda payload: ReadKnowledgeAssertion(**payload),
@@ -3261,6 +3362,29 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
             **payload
         ),
         Capability.SCHEDULE_CHANGES_LIST: lambda payload: ListScheduleChanges(**payload),
+        # P6 XER import S7-4a (contract section 10.3): every field as sent, the
+        # arrays as tuples; the commands check the strict inputs.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6: lambda payload: ImportScheduleP6Publication(
+            **payload
+        ),
+        Capability.SCHEDULE_P6_FIELDS_AVAILABLE: lambda payload: ListScheduleP6AvailableFields(
+            **payload
+        ),
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED: lambda payload: SetScheduleP6CapturedFields(
+            **_p6_request(payload)
+        ),
+        Capability.SCHEDULE_P6_ACTIVITIES_LIST: lambda payload: ListScheduleP6Activities(
+            **_p6_request(payload)
+        ),
+        Capability.SCHEDULE_P6_RELATIONSHIPS_LIST: lambda payload: ListScheduleP6Relationships(
+            **_p6_request(payload)
+        ),
+        Capability.SCHEDULE_P6_CALENDARS_LIST: lambda payload: ListScheduleP6Calendars(
+            **_p6_request(payload)
+        ),
+        Capability.SCHEDULE_P6_FIELD_VALUES_LIST: lambda payload: ListScheduleP6FieldValues(
+            **_p6_request(payload)
+        ),
         # Schedule Scenarios S6-3 (contract section 15.5): every field as sent;
         # the heavy documents stay opaque JSON until the handler.
         Capability.SCHEDULE_SCENARIOS_CREATE: lambda payload: CreateScheduleScenario(**payload),

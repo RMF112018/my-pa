@@ -34,6 +34,7 @@ __all__ = [
     "RfiNumber",
     "match_rfi",
     "normalize_commitment_number",
+    "normalize_rfi_prefix",
     "normalize_whitespace",
     "record_identity",
     "split_rfi_number",
@@ -140,6 +141,11 @@ def split_rfi_number(exported: str) -> RfiNumber | None:
     return RfiNumber(text, prefix or None, int(match.group(2)))
 
 
+def normalize_rfi_prefix(prefix: str) -> str:
+    """A given RFI prefix as the matching rule compares it (separators trimmed)."""
+    return normalize_whitespace(prefix).rstrip(_PREFIX_SEPARATORS)
+
+
 @dataclass(frozen=True, slots=True)
 class RfiMatch:
     matches: tuple[RfiNumber, ...]
@@ -150,7 +156,7 @@ def match_rfi(prefix: str | None, suffix: int, candidates: Iterable[RfiNumber]) 
     """Exact suffix; exact prefix when given; `ambiguous_prefix` over 2+ prefixes."""
     if type(suffix) is not int or suffix < 0:
         raise ValueError("an RFI suffix is a non-negative integer")
-    wanted = None if prefix is None else normalize_whitespace(prefix).rstrip(_PREFIX_SEPARATORS)
+    wanted = None if prefix is None else normalize_rfi_prefix(prefix)
     found = tuple(
         candidate
         for candidate in candidates

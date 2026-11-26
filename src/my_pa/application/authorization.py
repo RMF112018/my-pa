@@ -83,6 +83,8 @@ from my_pa.application.commands import (
     CloseProject,
     Command,
     CommitIntelligenceArtifact,
+    CommunicationsCoverage,
+    CompareProjectReports,
     CompareScheduleBaseline,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
@@ -161,6 +163,7 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
+    ImportScheduleP6Publication,
     ImportSchedulePublication,
     ListCaptures,
     ListCommitments,
@@ -198,6 +201,11 @@ from my_pa.application.commands import (
     ListScheduleBaselines,
     ListScheduleChanges,
     ListScheduleCpmRunActivities,
+    ListScheduleP6Activities,
+    ListScheduleP6AvailableFields,
+    ListScheduleP6Calendars,
+    ListScheduleP6FieldValues,
+    ListScheduleP6Relationships,
     ListSchedulePublications,
     ListScheduleScenarioActivities,
     ListScheduleScenarioChanges,
@@ -222,15 +230,20 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     PreviewFile,
+    ProjectReportRecordHistory,
+    ProjectReportsCatalog,
+    ProjectReportsCoverage,
     ProposeRelationshipMemory,
     ProposeScheduleBaseline,
     PublishConstraint,
     PublishGeneralReport,
     PullGoodNotesWork,
     PutCanvasWorkspace,
+    QueryProjectReports,
     ReadCapture,
     ReadCommitment,
     ReadCommitmentV2,
+    ReadCommunications,
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
@@ -312,6 +325,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchCommitments,
     SearchCommitmentsV2,
+    SearchCommunications,
     SearchConstraints,
     SearchEntities,
     SearchFiles,
@@ -325,6 +339,7 @@ from my_pa.application.commands import (
     SearchTasks,
     SetGoverningScheduleBaseline,
     SetReportRetention,
+    SetScheduleP6CapturedFields,
     SplitEntity,
     StartGsqsB0,
     StatFile,
@@ -795,6 +810,29 @@ def _requested_scope(
             # staged events and latch, never a configured source.
             | ReviewMeetingProviders()
             | ReconcileMeetingProviders()
+            # WP4-S5: the communications reads name the caller's own
+            # communications rows (a `source` filter is checked against the
+            # caller's own communications sources), never a configured source.
+            | SearchCommunications()
+            | ReadCommunications()
+            | CommunicationsCoverage()
+            # P6 XER import S7-4a (contract section 10.1): the 7 P6 names name a
+            # files-workspace alias and path or the caller's own Series,
+            # publication and Stable Activity rows, never a configured source.
+            | ImportScheduleP6Publication()
+            | ListScheduleP6AvailableFields()
+            | SetScheduleP6CapturedFields()
+            | ListScheduleP6Activities()
+            | ListScheduleP6Relationships()
+            | ListScheduleP6Calendars()
+            | ListScheduleP6FieldValues()
+            # WP4P-S4: the project-report reads name the caller's own Projects,
+            # series, versions and records, never a configured source.
+            | ProjectReportsCatalog()
+            | QueryProjectReports()
+            | ProjectReportRecordHistory()
+            | CompareProjectReports()
+            | ProjectReportsCoverage()
             # `record_events.list` (WP-RE-06) names only the acting Principal's
             # own change feed, never a configured source (G1-RD-011).
             | ListRecordEvents()

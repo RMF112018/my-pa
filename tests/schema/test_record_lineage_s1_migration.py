@@ -54,7 +54,8 @@ from tests.schema.lineage_s4_schema_ahead_contract import S4_CAPABILITIES, S4_PU
 from tests.schema.lineage_s31_schema_ahead_contract import S31_CAPABILITIES
 from tests.schema.lineage_schema_ahead_contract import S1_CAPABILITIES, S1_PURPOSES
 from tests.schema.schedule_scenarios_vocabulary_contract import S63_CAPABILITIES, S63_PURPOSES
-from tests.schema.vocabulary_admissions import capabilities_admitted_after
+from tests.schema.vocabulary_admissions import SINCE as ADMISSIONS_SINCE
+from tests.schema.vocabulary_admissions import capabilities_admitted_after, purposes_admitted_after
 
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
@@ -413,6 +414,8 @@ def test_at_vocabulary_adds_exactly_the_s1_names() -> None:
             - S5B2_PURPOSES
             - S63_PURPOSES
             - FILES_PURPOSES
+            # Every purpose admitted after the files workspace revision (WP4 ruling R17).
+            - purposes_admitted_after(ADMISSIONS_SINCE)
             # Reports Modernization WP03's purpose, the head's (4c37731671fc).
             - {"report_lifecycle", "report_hold", "report_retention"}
         )

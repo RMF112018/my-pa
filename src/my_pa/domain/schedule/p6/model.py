@@ -73,6 +73,10 @@ class P6IssueCode(StrEnum):
     CALENDAR_MISSING = "p6_calendar_missing"
     CAPTURE_CAP_REACHED = "p6_capture_cap_reached"
     TOLERATED_FIELD_MISSING = "p6_tolerated_field_missing"
+    #: Section 11.1: raised by the worker (S7-3), never by the parser; it makes the
+    #: publication `review_required`. Declared here so the issue vocabulary the
+    #: schema admits (S7-2) is one closed set.
+    PROJECT_IDENTITY_CHANGED = "p6_project_identity_changed"
 
 
 #: Codes that are fatal whenever they occur (5.5). `p6_value_invalid` and

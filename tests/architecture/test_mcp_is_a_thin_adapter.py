@@ -400,6 +400,20 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("files.upload.begin", "download_url"),
         ("files.upload.begin", "file_id"),
         ("files.upload.begin", "file_name"),
+        # Communications intelligence WP4-S5 (contract section 16, ruling R7):
+        # `folder_role` is a closed vocabulary of observed mailbox lanes (`inbox`,
+        # `sent`, ...), a claim matched against stored rows, never a location
+        # anything opens or reads.
+        ("communications.search", "folder_role"),
+        # P6 XER import S7-4a (schedule XER import contract section 9.1): the
+        # import's `path` is a files-workspace-relative path read only through
+        # the workspace store's contained read path (no symlink, no special or
+        # multiply-linked file), version- and SHA-256-bound, stored for
+        # provenance and never served. The two reads' `direction` is a sort
+        # order (`asc`/`desc`) nested in `sort`, never a location.
+        ("schedule_publications.import_p6", "path"),
+        ("schedule_p6_activities.list", "direction"),
+        ("schedule_p6_field_values.list", "direction"),
         # Reports Modernization WP02 (contract D): an association names what a
         # standalone report is about, not where a file lives. `target_kind` is a
         # closed enum; a resolvable `target_ref` must name a record the caller's
@@ -831,7 +845,9 @@ def test_the_location_scan_would_catch_one() -> None:
     # `path`/`to_path` fields on the `files.*` names (contract sections 2-3).
     # Plus ADR-019 Amendment 1's 4 native-handle names on `files.upload.begin`
     # (`source_file` and its `download_url`, `file_id`, `file_name`).
-    assert len(EXEMPT_PROPERTIES) == 94
+    # Plus communications WP4-S5's `folder_role` lane vocabulary. Plus P6 XER
+    # import S7-4a's workspace `path` and its 2 reads' nested sort `direction`.
+    assert len(EXEMPT_PROPERTIES) == 98
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

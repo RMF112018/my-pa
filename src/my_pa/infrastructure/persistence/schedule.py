@@ -47,7 +47,7 @@ from contextlib import AbstractContextManager
 from datetime import date, datetime
 from decimal import Decimal
 from types import MappingProxyType, TracebackType
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from sqlalchemy import (
     ColumnElement,
@@ -62,6 +62,7 @@ from sqlalchemy import (
     func,
     insert,
     literal,
+    or_,
     select,
     tuple_,
     update,
@@ -117,6 +118,7 @@ from my_pa.domain.schedule import (
     SchedulePublicationSummary,
     ScheduleRowType,
     ScheduleSeries,
+    ScheduleSeriesName,
     ScheduleSeriesSummary,
     ScheduleSourceBinding,
     StableScheduleActivity,
@@ -127,6 +129,7 @@ from my_pa.domain.schedule import (
 )
 from my_pa.domain.schedule.baselines import BaselineType
 from my_pa.domain.schedule.compare import ScheduleComparisonRow
+from my_pa.domain.schedule.p6.model import P6IssueCode
 from my_pa.domain.schedule.plane import PLANE_ATTESTED_DECISION_CHANNELS, intake_series_name
 from my_pa.domain.source.registry import issue_identifier
 
@@ -155,6 +158,7 @@ from my_pa.infrastructure.persistence.tables import (
     schedule_import_issues,
     schedule_intake_series,
     schedule_jobs,
+    schedule_p6_activities,
     schedule_parser_runs,
     schedule_publications,
     schedule_rows,
@@ -163,7 +167,31 @@ from my_pa.infrastructure.persistence.tables import (
     source_object_versions,
 )
 
-__all__ = ["SqlAlchemyScheduleUnitOfWork", "SqlScheduleRepository"]
+__all__ = ["ScheduleSeriesSelection", "SqlAlchemyScheduleUnitOfWork", "SqlScheduleRepository"]
+
+
+class ScheduleSeriesSelection(Protocol):
+    """What the Series resolution reads of a request (the S5/S6 rule, any format).
+
+    `ScheduleImportRequest` (PDF) and `P6ImportRequest` (S7-3) both carry it, so
+    a P6 admission resolves its Series by exactly the S5/S6 code path.
+    """
+
+    @property
+    def project_id(self) -> str: ...
+
+    @property
+    def series_id(self) -> str | None: ...
+
+    @property
+    def series_name(self) -> ScheduleSeriesName | None: ...
+
+    @property
+    def series_auto(self) -> bool: ...
+
+    @property
+    def series_name_if_new(self) -> ScheduleSeriesName | None: ...
+
 
 #: The row types that carry a published ID and link a Stable Activity.
 _LINKABLE: Final = (ScheduleRowType.ACTIVITY.value, ScheduleRowType.MILESTONE.value)
@@ -240,6 +268,7 @@ def _to_publication(row: RowMapping, principal_id: str) -> SchedulePublication:
         processing_started_at=row["processing_started_at"],
         completed_at=row["completed_at"],
         updated_at=row["updated_at"],
+        source_format=row["source_format"],
     )
 
 
@@ -266,7 +295,7 @@ def _to_run(row: RowMapping, principal_id: str) -> ScheduleParserRun:
         issue_count=row["issue_count"],
         warning_count=row["warning_count"],
         parse_result_sha256=row["parse_result_sha256"],
-        failure_code=None if failure is None else ScheduleIssueCode(failure),
+        failure_code=None if failure is None else issue_code(failure),
         started_at=row["started_at"],
         completed_at=row["completed_at"],
     )
@@ -360,18 +389,39 @@ _ROW_CONTENT_COLUMNS: Final = (
 )
 
 
-def _bound_join(pubs: Table) -> Join:
-    """A publication joined to the enrollment it was admitted through (its source)."""
-    return pubs.join(enrollments, enrollments.c.enrollment_id == pubs.c.enrollment_id)
+def _bound_join(pubs: Table, principal_id: str) -> Join:
+    """A publication joined to the enrollment it was admitted through (its source).
+
+    S7-4a (schedule XER import contract 14 D8): an outer join, so a P6
+    publication -- which has no enrollment (the S7-2 CHECK) -- is read too; the
+    enrollment's own partition and the matching partition stay in the join
+    condition, and `_bound_criteria` keeps refusing a PDF publication whose
+    enrollment is not the caller's.
+    """
+    return pubs.outerjoin(
+        enrollments,
+        and_(
+            enrollments.c.enrollment_id == pubs.c.enrollment_id,
+            _mine(enrollments, principal_id),
+            matching_partition_criterion(pubs, enrollments),
+        ),
+    )
 
 
 def _bound_criteria(principal_id: str) -> tuple[ColumnElement[bool], ...]:
     pubs = schedule_publications
     return (
         _mine(pubs, principal_id),
-        _mine(enrollments, principal_id),
-        matching_partition_criterion(pubs, enrollments),
+        or_(pubs.c.enrollment_id.is_(None), enrollments.c.enrollment_id.is_not(None)),
     )
+
+
+def issue_code(value: str) -> ScheduleIssueCode | P6IssueCode:
+    """A stored issue or failure code: the S5 vocabulary, else the P6 `p6_*` one (S7-4a)."""
+    try:
+        return ScheduleIssueCode(value)
+    except ValueError:
+        return P6IssueCode(value)
 
 
 def _accepted_rows() -> Join:
@@ -424,7 +474,10 @@ def _eligible_data_date(value: date | None) -> date:
     return value
 
 
-def _source_binding(row: RowMapping) -> ScheduleSourceBinding:
+def _source_binding(row: RowMapping) -> ScheduleSourceBinding | None:
+    if row["enrollment_id"] is None:
+        # S7-4a: a P6 publication was admitted from a files workspace, not a source.
+        return None
     return ScheduleSourceBinding(
         source_id=row["source_id"],
         enrollment_id=row["enrollment_id"],
@@ -443,6 +496,28 @@ def _duration(state: str, value: Decimal | None) -> ScheduleDurationCell:
 
 def _date(state: str, value: date | None, marker: str | None) -> ScheduleDateCell:
     return ScheduleDateCell(state=ScheduleCellState(state), value=value, marker=marker)
+
+
+#: S7-4a: a P6 hours value in the S5 duration cell (3 decimals, NUMERIC(12,3)).
+_P6_HOURS_PLACES: Final = Decimal("0.001")
+_P6_HOURS_BOUND: Final = Decimal("1000000000")
+
+
+def _p6_hours(value: Decimal | None) -> ScheduleDurationCell:
+    if value is None:
+        return ScheduleDurationCell(state=ScheduleCellState.PUBLISHED_BLANK, value=None)
+    hours = Decimal(value).quantize(_P6_HOURS_PLACES)
+    if not Decimal(0) <= hours < _P6_HOURS_BOUND:
+        return ScheduleDurationCell(state=ScheduleCellState.EXTRACTION_FAILED, value=None)
+    return ScheduleDurationCell(state=ScheduleCellState.PUBLISHED_VALUE, value=hours)
+
+
+def _p6_date(value: datetime | None) -> ScheduleDateCell:
+    if value is None:
+        return ScheduleDateCell(state=ScheduleCellState.PUBLISHED_BLANK, value=None, marker=None)
+    return ScheduleDateCell(
+        state=ScheduleCellState.PUBLISHED_VALUE, value=value.date(), marker=None
+    )
 
 
 def _to_activity_row(row: RowMapping) -> ScheduleActivityRowView:
@@ -722,7 +797,7 @@ class SqlScheduleRepository(ScheduleRepository):
     def _mark_intake(
         self,
         principal_id: str,
-        request: ScheduleImportRequest,
+        request: ScheduleSeriesSelection,
         series: ScheduleSeries,
         publication_id: str,
     ) -> None:
@@ -776,7 +851,7 @@ class SqlScheduleRepository(ScheduleRepository):
             raise _refuse(ScheduleAdmissionRefusal.IDEMPOTENCY_KEY_CONFLICT)
         return self._replayed(principal_id, found)
 
-    def _require_project(self, principal_id: str, request: ScheduleImportRequest) -> None:
+    def _require_project(self, principal_id: str, request: ScheduleSeriesSelection) -> None:
         owned = self._connection.execute(
             select(projects.c.project_id).where(
                 _mine(projects, principal_id), projects.c.project_id == request.project_id
@@ -821,7 +896,7 @@ class SqlScheduleRepository(ScheduleRepository):
             raise _refuse(ScheduleAdmissionRefusal.SOURCE_TOO_LARGE)
 
     def _find_series(
-        self, principal_id: str, request: ScheduleImportRequest, request_digest: str
+        self, principal_id: str, request: ScheduleSeriesSelection, request_digest: str
     ) -> ScheduleSeries | None:
         criteria = [
             _mine(schedule_series, principal_id),
@@ -979,7 +1054,7 @@ class SqlScheduleRepository(ScheduleRepository):
             raise _refuse(ScheduleAdmissionRefusal.SUPERSEDED_PUBLICATION_HAS_SUCCESSOR)
 
     def _create_series(
-        self, principal_id: str, request: ScheduleImportRequest, request_digest: str
+        self, principal_id: str, request: ScheduleSeriesSelection, request_digest: str
     ) -> tuple[ScheduleSeries, bool]:
         name = intake_series_name(request_digest) if request.series_auto else request.series_name
         if name is None:  # `_find_series` has already refused an unknown id
@@ -1130,6 +1205,36 @@ class SqlScheduleRepository(ScheduleRepository):
         lease: ScheduleLease,
         identity: ScheduleParserIdentity,
     ) -> ScheduleParserRunStart:
+        run, reused = self._start_run_row(
+            principal_id,
+            publication_id,
+            lease,
+            parser_name=identity.parser_name,
+            parser_version=identity.parser_version,
+            profile_id=identity.profile_id,
+            profile_version=identity.profile_version,
+            pypdfium2_version=identity.pypdfium2_version,
+            pdfium_version=identity.pdfium_version,
+        )
+        return ScheduleParserRunStart(run=_to_run(run, principal_id), reused=reused)
+
+    def _start_run_row(
+        self,
+        principal_id: str,
+        publication_id: str,
+        lease: ScheduleLease,
+        *,
+        parser_name: str,
+        parser_version: str,
+        profile_id: str,
+        profile_version: int,
+        pypdfium2_version: str | None,
+        pdfium_version: str | None,
+    ) -> tuple[RowMapping, bool]:
+        """Start (or reuse) the attempt's run; the row and whether it was reused.
+
+        Shared by the PDF and the P6 (S7-3) paths: a P6 run names no engine.
+        """
         publication = self._held_publication(principal_id, publication_id, lease)
         self._require_processing(publication)
         document = publication["document_sha256"]
@@ -1148,10 +1253,10 @@ class SqlScheduleRepository(ScheduleRepository):
                 select(runs).where(
                     *mine,
                     runs.c.status == _PARSED,
-                    runs.c.parser_name == identity.parser_name,
-                    runs.c.parser_version == identity.parser_version,
-                    runs.c.profile_id == identity.profile_id,
-                    runs.c.profile_version == identity.profile_version,
+                    runs.c.parser_name == parser_name,
+                    runs.c.parser_version == parser_version,
+                    runs.c.profile_id == profile_id,
+                    runs.c.profile_version == profile_version,
                     runs.c.document_sha256 == document,
                 )
             )
@@ -1159,7 +1264,7 @@ class SqlScheduleRepository(ScheduleRepository):
             .one_or_none()
         )
         if reusable is not None:
-            return ScheduleParserRunStart(run=_to_run(reusable, principal_id), reused=True)
+            return reusable, True
         this_attempt = (
             self._connection.execute(
                 select(runs).where(*mine, runs.c.attempt_number == lease.attempt)
@@ -1170,7 +1275,7 @@ class SqlScheduleRepository(ScheduleRepository):
         if this_attempt is not None:
             if this_attempt["status"] != _RUNNING:
                 raise ScheduleIntegrityError("attempt_already_ran")
-            return ScheduleParserRunStart(run=_to_run(this_attempt, principal_id), reused=True)
+            return this_attempt, True
         self._connection.execute(
             update(runs)
             .where(*mine, runs.c.status == _RUNNING, runs.c.attempt_number < lease.attempt)
@@ -1190,12 +1295,12 @@ class SqlScheduleRepository(ScheduleRepository):
                             "publication_id": publication_id,
                             "operation_id": lease.operation_id,
                             "attempt_number": lease.attempt,
-                            "parser_name": identity.parser_name,
-                            "parser_version": identity.parser_version,
-                            "profile_id": identity.profile_id,
-                            "profile_version": identity.profile_version,
-                            "pypdfium2_version": identity.pypdfium2_version,
-                            "pdfium_version": identity.pdfium_version,
+                            "parser_name": parser_name,
+                            "parser_version": parser_version,
+                            "profile_id": profile_id,
+                            "profile_version": profile_version,
+                            "pypdfium2_version": pypdfium2_version,
+                            "pdfium_version": pdfium_version,
                             "document_sha256": document,
                         },
                     )
@@ -1205,7 +1310,7 @@ class SqlScheduleRepository(ScheduleRepository):
             .mappings()
             .one()
         )
-        return ScheduleParserRunStart(run=_to_run(started, principal_id), reused=False)
+        return started, False
 
     def insert_rows(
         self,
@@ -1575,6 +1680,22 @@ class SqlScheduleRepository(ScheduleRepository):
     ) -> SchedulePublication:
         if ISSUE_SEVERITY[code] is not ScheduleIssueSeverity.ERROR:
             raise ValueError("a publication fails only on an error code")
+        failed = self._fail_row(principal_id, publication_id, lease, code, parser_run_id)
+        return _to_publication(failed, principal_id)
+
+    def _fail_row(
+        self,
+        principal_id: str,
+        publication_id: str,
+        lease: ScheduleLease,
+        code: ScheduleIssueCode,
+        parser_run_id: str | None,
+    ) -> RowMapping:
+        """HF: one error issue, the run and every other running run failed, the row.
+
+        Shared by the PDF and the P6 (S7-3) paths; returns the failed row so a
+        P6 caller never hydrates a PDF-shaped `SchedulePublication`.
+        """
         publication = self._held_publication(principal_id, publication_id, lease)
         self._require_processing(publication)
         runs = schedule_parser_runs
@@ -1617,14 +1738,18 @@ class SqlScheduleRepository(ScheduleRepository):
                 .where(_mine(runs, principal_id), runs.c.parser_run_id == parser_run_id)
                 .values(status=_FAILED_RUN, failure_code=code.value, completed_at=func.now())
             )
-        # R6-F03: every other attempt's run ends with this publication.
+        return self._end_failed(principal_id, publication_id)
+
+    def _end_failed(self, principal_id: str, publication_id: str) -> RowMapping:
+        """Every running run ends with the publication, which ends `failed` (R6-F03)."""
+        issues = schedule_import_issues
         self._close_running_runs(principal_id, publication_id)
         issue_count = self._connection.execute(
             select(func.count())
             .select_from(issues)
             .where(_mine(issues, principal_id), issues.c.publication_id == publication_id)
         ).scalar_one()
-        failed = (
+        return (
             self._connection.execute(
                 update(schedule_publications)
                 .where(
@@ -1642,7 +1767,6 @@ class SqlScheduleRepository(ScheduleRepository):
             .mappings()
             .one()
         )
-        return _to_publication(failed, principal_id)
 
     # ---- point reads ------------------------------------------------------------
 
@@ -1655,6 +1779,17 @@ class SqlScheduleRepository(ScheduleRepository):
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         row = self._publication(principal_id, publication_id)
         return None if row is None else _to_publication(row, principal_id)
+
+    def source_format(self, principal_id: str, publication_id: str) -> str | None:
+        """S7-3: the publication's `source_format` (the handler's dispatch), or `None`."""
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        found = self._connection.execute(
+            select(schedule_publications.c.source_format).where(
+                _mine(schedule_publications, principal_id),
+                schedule_publications.c.publication_id == publication_id,
+            )
+        ).scalar_one_or_none()
+        return None if found is None else str(found)
 
     def get_effective_status(
         self, principal_id: str, publication_id: str
@@ -1756,7 +1891,7 @@ class SqlScheduleRepository(ScheduleRepository):
             str(row["series_id"]): self._latest_update(row)
             for row in self._connection.execute(
                 select(*_BOUND_PUBLICATION_COLUMNS, enrollments.c.source_id)
-                .select_from(_bound_join(pubs))
+                .select_from(_bound_join(pubs, principal_id))
                 .where(
                     *_bound_criteria(principal_id),
                     pubs.c.series_id.in_(ids),
@@ -1821,7 +1956,7 @@ class SqlScheduleRepository(ScheduleRepository):
                 runs.c.pdfium_version,
             )
             .select_from(
-                _bound_join(pubs)
+                _bound_join(pubs, principal_id)
                 .join(jobs, jobs.c.publication_id == pubs.c.publication_id)
                 .outerjoin(
                     runs,
@@ -1880,7 +2015,7 @@ class SqlScheduleRepository(ScheduleRepository):
         found = (
             self._connection.execute(
                 select(*pubs.c, enrollments.c.source_id)
-                .select_from(_bound_join(pubs))
+                .select_from(_bound_join(pubs, principal_id))
                 .where(*_bound_criteria(principal_id), pubs.c.publication_id == publication_id)
             )
             .mappings()
@@ -1916,7 +2051,7 @@ class SqlScheduleRepository(ScheduleRepository):
         if found["status"] in _ACCEPTED:
             counted = counted.where(issues.c.parser_run_id == found["accepted_parser_run_id"])
         issue_counts = {
-            ScheduleIssueCode(code): int(count)
+            issue_code(code): int(count)
             for code, count in self._connection.execute(counted.group_by(issues.c.code))
         }
         persisted = SchedulePublicationStatus(found["status"])
@@ -1934,7 +2069,11 @@ class SqlScheduleRepository(ScheduleRepository):
             ),
             runs=self.get_parser_runs(principal_id, publication_id),
             issue_counts=MappingProxyType(
-                {code: issue_counts[code] for code in ScheduleIssueCode if code in issue_counts}
+                {
+                    code: issue_counts[code]
+                    for code in (*ScheduleIssueCode, *P6IssueCode)
+                    if code in issue_counts
+                }
             ),
             source=_source_binding(found),
         )
@@ -2004,12 +2143,36 @@ class SqlScheduleRepository(ScheduleRepository):
             )
             .exists()
         )
+        # S7-4a (schedule XER import contract 10.1): or through an activity of a
+        # complete P6 publication's accepted run.
+        acts, pubs = schedule_p6_activities, schedule_publications
+        observed_p6 = (
+            select(acts.c.p6_task_id)
+            .select_from(
+                acts.join(
+                    pubs,
+                    and_(
+                        pubs.c.publication_id == acts.c.publication_id,
+                        pubs.c.accepted_parser_run_id == acts.c.parser_run_id,
+                    ),
+                )
+            )
+            .where(
+                _mine(acts, principal_id),
+                _mine(pubs, principal_id),
+                matching_partition_criterion(acts, pubs),
+                matching_partition_criterion(acts, activities),
+                pubs.c.status.in_(_ELIGIBLE),
+                acts.c.schedule_activity_id == activities.c.schedule_activity_id,
+            )
+            .exists()
+        )
         found = (
             self._connection.execute(
                 select(activities).where(
                     _mine(activities, principal_id),
                     activities.c.schedule_activity_id == schedule_activity_id,
-                    observed,
+                    or_(observed, observed_p6),
                 )
             )
             .mappings()
@@ -2073,7 +2236,7 @@ class SqlScheduleRepository(ScheduleRepository):
                 limit
             )
         ).mappings()
-        return tuple(
+        observations = tuple(
             ScheduleActivityObservation(
                 publication_id=row["publication_id"],
                 publication_role=SchedulePublicationRole(row["publication_role"]),
@@ -2093,6 +2256,91 @@ class SqlScheduleRepository(ScheduleRepository):
                 start=_date(row["start_state"], row["start_date"], row["start_marker"]),
                 finish=_date(row["finish_state"], row["finish_date"], row["finish_marker"]),
                 source=_source_binding(row),
+            )
+            for row in found
+        )
+        if observations:
+            return observations
+        # S7-4a (contract 10.1): a Stable Activity of a P6 Series is observed in
+        # its complete P6 publications' accepted runs (a Series holds one format).
+        return self._p6_activity_history(
+            principal_id, schedule_activity_id, after=after, limit=limit
+        )
+
+    def _p6_activity_history(
+        self,
+        principal_id: str,
+        schedule_activity_id: str,
+        *,
+        after: tuple[date, datetime, str] | None,
+        limit: int,
+    ) -> tuple[ScheduleActivityObservation, ...]:
+        acts, pubs = schedule_p6_activities, schedule_publications
+        statement = (
+            select(
+                acts.c.activity_name,
+                acts.c.kind,
+                acts.c.wbs_path,
+                acts.c.original_hours,
+                acts.c.remaining_hours,
+                acts.c.start_at,
+                acts.c.finish_at,
+                pubs.c.publication_id,
+                pubs.c.publication_role,
+                pubs.c.baseline_kind,
+                pubs.c.status,
+                pubs.c.data_date,
+                pubs.c.admitted_at,
+            )
+            .select_from(
+                acts.join(
+                    pubs,
+                    and_(
+                        pubs.c.publication_id == acts.c.publication_id,
+                        pubs.c.accepted_parser_run_id == acts.c.parser_run_id,
+                    ),
+                )
+            )
+            .where(
+                _mine(acts, principal_id),
+                _mine(pubs, principal_id),
+                matching_partition_criterion(acts, pubs),
+                pubs.c.status.in_(_ELIGIBLE),
+                acts.c.schedule_activity_id == schedule_activity_id,
+            )
+        )
+        if after is not None:
+            statement = statement.where(
+                tuple_(pubs.c.data_date, pubs.c.admitted_at, pubs.c.publication_id)
+                > _position(after)
+            )
+        found = self._connection.execute(
+            statement.order_by(pubs.c.data_date, pubs.c.admitted_at, pubs.c.publication_id).limit(
+                limit
+            )
+        ).mappings()
+        return tuple(
+            ScheduleActivityObservation(
+                publication_id=row["publication_id"],
+                publication_role=SchedulePublicationRole(row["publication_role"]),
+                baseline_kind=(
+                    None
+                    if row["baseline_kind"] is None
+                    else ScheduleBaselineKind(row["baseline_kind"])
+                ),
+                status=SchedulePublicationStatus(row["status"]),
+                data_date=_eligible_data_date(row["data_date"]),
+                admitted_at=row["admitted_at"],
+                activity_name=row["activity_name"],
+                row_type=(
+                    ScheduleRowType.ACTIVITY if row["kind"] == "task" else ScheduleRowType.MILESTONE
+                ),
+                hierarchy_path=tuple(row["wbs_path"]),
+                original_duration=_p6_hours(row["original_hours"]),
+                remaining_duration=_p6_hours(row["remaining_hours"]),
+                start=_p6_date(row["start_at"]),
+                finish=_p6_date(row["finish_at"]),
+                source=None,
             )
             for row in found
         )

@@ -48,6 +48,7 @@ from collections.abc import Callable, Iterable, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from math import ceil
 from typing import Final
 
 from pydantic import ValidationError
@@ -201,7 +202,7 @@ def probe_meetings(
 
 def _percentile_95(samples: Sequence[float]) -> float:
     ordered = sorted(samples)
-    return ordered[int(0.95 * (len(ordered) - 1))]
+    return ordered[ceil(0.95 * len(ordered)) - 1]
 
 
 def _tally(values: Iterable[str]) -> dict[str, int]:

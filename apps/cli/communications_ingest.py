@@ -146,10 +146,13 @@ from my_pa.bootstrap.communications_ingest import (
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.settings import Settings, load_settings
 from my_pa.contracts.ports import (
+    EvidenceUnavailableError,
     FileWorkspaceRootError,
     IngestConsumer,
     IngestRunOutcome,
     IngestSourceRecord,
+    RepositoryFailureError,
+    TransactionConflictError,
 )
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.jobs.cycle_scheduler import COMMS_INGEST_LOCK_KEY, single_flight
@@ -455,6 +458,10 @@ def _measure_context(engine: Engine, principal_id: str, args: argparse.Namespace
         if getattr(error.orig, "sqlstate", None) == _QUERY_CANCELED:
             raise _RefusalError("statement_timeout") from None
         raise
+    except EvidenceUnavailableError:
+        raise _RefusalError("database_unreachable") from None
+    except (RepositoryFailureError, TransactionConflictError):
+        raise _RefusalError("database_unavailable") from None
     _emit({"command": "measure-context", **measured})
     return EXIT_OK
 

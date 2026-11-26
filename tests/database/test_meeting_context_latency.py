@@ -31,6 +31,7 @@ import statistics
 import time
 from collections.abc import Callable
 from datetime import timedelta
+from math import ceil
 from typing import Final
 
 import pytest
@@ -75,7 +76,7 @@ def _timed(call: Callable[[], object]) -> tuple[float, float]:
         call()
         samples.append(time.perf_counter() - start)
     samples.sort()
-    return statistics.median(samples), samples[int(0.95 * (len(samples) - 1))]
+    return statistics.median(samples), samples[ceil(0.95 * len(samples)) - 1]
 
 
 def test_the_context_latency_on_the_wp4_seed(

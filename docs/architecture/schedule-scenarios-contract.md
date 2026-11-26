@@ -6,9 +6,9 @@ deterministic CPM engine), S6-2 (schema, migrations, persistence, unit of work, 
 and S6-3 (capabilities, handlers, façade, catalog, ChatLLM, remote policy, lineage endpoints,
 guidance) implementers code against. S6-1 (the pure domain and engine) is implemented and
 merged (#348, section 9.1.1); S6-2 (schema, revision A `2a90f91dd786`, persistence, worker
-hook; section 14) is implemented and merged (#349); S6-3 (section 15) is implemented on
-`feat/schedule-scenarios-capabilities` by packages I10-A, I10-B and I10-C (section 15.19) and
-not merged. No plane capability, grant or switch exists in any deployment. It authorizes
+hook; section 14) is implemented and merged (#349); S6-3 (section 15) was implemented by
+packages I10-A, I10-B and I10-C (section 15.19) and is merged (#354). Merging grants no
+capability and deploys nothing; deployment status is recorded in the runbooks. It authorizes
 **no** production migration, grant, `profile-apply`, OAuth change or deployment, and its
 switch `MY_PA_SCHEDULE_SCENARIOS_ENABLED` (added by S6-3) is **off by default** and stacks on
 `MY_PA_SCHEDULE_ENABLED` (off by default). The governing
@@ -109,8 +109,9 @@ written `MM-DD HH:MM` in 2027 unless the month is 12 (then 2026).
 
 Directive-selected design, not ratified for production. S6-1 (the pure domain and the
 CPM engine, section 9.1) is implemented and merged (#348); S6-2 is implemented and merged
-(#349, section 14); S6-3 is designed in section 15 and not implemented. No plane capability is
-granted or served, and the plane's switch does not exist yet (S6-3 adds it, default off). The server verifies
+(#349, section 14); S6-3 is designed in section 15 and implemented and merged (#354). The plane's
+switch exists (S6-3 added it, default off), and a capability is served only where the operator has
+granted it. The server verifies
 shapes, bounds, ownership, references, idempotency, compare-and-swap and its own
 computation; it cannot verify that any client-authored logic, duration, distribution, Monte
 Carlo result or baseline proposal is true, nor who composed a client call, and it never says
@@ -3084,10 +3085,10 @@ helper is `tests/database/schedule_plane_world.py`.
 
 ---
 
-## 15. S6-3 implementation note (design D10; implemented on this branch by I10-A, I10-B and I10-C, not merged)
+## 15. S6-3 implementation note (design D10; implemented by I10-A, I10-B and I10-C; merged as #354)
 
-**Status.** Implemented on `feat/schedule-scenarios-capabilities` by packages I10-A, I10-B and
-I10-C (section 15.19); not merged, migrated, granted or deployed. Written by D10 on
+**Status.** Implemented by packages I10-A, I10-B and I10-C (section 15.19) and merged as #354;
+merging migrates, grants and deploys nothing. Written by D10 on
 `feat/schedule-scenarios-capabilities` at base `59f333d72c10b1eaebd6ee988e7ec9f31735c6b3`, tree
 `93e82197887b9758cc3a10c8b70f5d232ed0c271` (= `origin/main` with S6-2 #349 merged as `3a1bdea7`
 and then Reports Modernization #351). Once design review R10 passes it, this section and the

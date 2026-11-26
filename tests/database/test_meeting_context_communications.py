@@ -424,6 +424,69 @@ def test_english_stems_each_title_term(scene: Scene) -> None:
     assert _ids(context) == [inspection]
 
 
+#: The on-the-fly `simple` document as EXPLAIN prints it (`'simple'::regconfig`,
+#: or the bound `('simple'::cstring)::regconfig`).
+_SIMPLE_TSVECTOR: Final = re.compile(r"to_tsvector\(\(?'simple'")
+
+
+def _evaluations(plan: dict[str, Any], marker: re.Pattern[str]) -> int:
+    """Rows a plan evaluated `marker` on: loops x (rows kept + rows removed), summed."""
+    total = 0
+    for key, removed in (
+        ("Filter", "Rows Removed by Filter"),
+        ("Join Filter", "Rows Removed by Join Filter"),
+    ):
+        if marker.search(plan.get(key, "")):
+            total += plan["Actual Loops"] * (plan["Actual Rows"] + plan.get(removed, 0))
+    for child in plan.get("Plans", ()):
+        total += _evaluations(child, marker)
+    return total
+
+
+def test_the_simple_text_is_built_once_per_message_not_per_meeting(scene: Scene) -> None:
+    """WP5-R1 F-1: the Project number's `simple` text never per (Meeting, message).
+
+    Ten Meetings with the same number and title terms over one window: the
+    on-the-fly `to_tsvector('simple', ...)` is evaluated at most once per
+    message of the partition, which a per-pair rebuild exceeds tenfold.
+    """
+    for n in range(1, 31):
+        scene.mail.message(
+            n,
+            subject="Slab pour",
+            text=f"Slab pour {NUMBER} note {n}" if n % 3 == 0 else f"Slab pour note {n}",
+            when=at(10 + n % 10, 10),
+        )
+    query = MeetingContextCandidateQuery(
+        meetings=tuple(
+            MeetingContextCandidateInput(
+                ordinal=k,
+                window_start=at(7),
+                window_end=at(21),
+                addresses=((A, A),),
+                identifiers=(("rfi", str(k)),),
+                title_terms=("slab",),
+                project_number=NUMBER,
+            )
+            for k in range(10)
+        ),
+        identifier_version=IDENTIFIER_VERSION,
+        limit=15,
+    )
+    with scene.engine.connect() as connection:
+        repository = SqlCommunicationsRepository(connection)
+        with _statements(scene.engine) as seen:
+            rows = repository.context_candidates(scene.principal_id, query)
+        assert len({row.ordinal for row in rows if row.project_number_hit}) == 10
+        ((statement, parameters),) = seen
+        (plan,) = connection.exec_driver_sql(
+            "EXPLAIN (ANALYZE, FORMAT JSON) " + statement, parameters
+        ).scalar_one()
+    evaluated = _evaluations(plan["Plan"], _SIMPLE_TSVECTOR)
+    # The fixture's message and these 30: every message of the partition.
+    assert 0 < evaluated <= 31, evaluated
+
+
 # ---- order, collapse, limit ------------------------------------------------------------
 
 

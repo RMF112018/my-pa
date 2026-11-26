@@ -919,34 +919,7 @@ class SqlCommunicationsRepository(CommunicationsRepository):
         if not query.meetings:
             return ()
         return tuple(
-            MeetingContextCandidateRow(
-                ordinal=row.ord,
-                message_id=row.message_id,
-                conversation_id=row.conversation_id,
-                message_time=row.message_time,
-                subject=row.subject,
-                sender_address=row.sender_address,
-                has_attachments=row.has_attachments,
-                body_state=row.body_state,
-                search_text_version=row.search_text_version,
-                search_text_flags=tuple(row.search_text_flags),
-                identity_conflict=row.identity_conflict,
-                participants_reconciled=row.participants_reconciled,
-                participants_disagreed=row.participants_disagreed,
-                source_unavailable=row.source_unavailable,
-                tier=row.tier,
-                overlap=row.overlap,
-                rank=row.rank,
-                matched_keys=tuple(sorted(row.matched_keys)),
-                matched_identifiers=tuple(
-                    sorted((kind, value) for kind, _, value in map(_split, row.matched_identifiers))
-                ),
-                title_hit=row.title_hit,
-                project_number_hit=row.number_hit,
-                conversation_hits=row.conversation_hits,
-                matched_total=row.matched_total,
-                snippet=row.snippet,
-            )
+            _to_candidate(row)
             for row in self._connection.execute(_context_statement(principal_id, query))
         )
 
@@ -1325,11 +1298,18 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
 
     The inputs are arrays unnested into `inputs` (one row per Meeting),
     `addresses` and `identifiers` (one row per criterion). Each evidence class
-    is joined to the Meeting's window on its own index; the three are a
-    `UNION ALL` grouped per `(Meeting, message)` -- a full outer join by
-    another name -- so one message is one row with all its reasons. Then the
-    tier, the collapse by conversation (the best of each by the D5 order), the
-    per-Meeting position and total, the page, and the snippet of the page only.
+    -- participants, identifiers, title terms, the Project number -- is joined
+    to the Meeting's window on its own index; the four are a `UNION ALL`
+    grouped per `(Meeting, message)` -- a full outer join by another name -- so
+    one message is one row with all its reasons. Then the tier, the collapse by
+    conversation (the best of each by the D5 order, over narrow rows), the
+    per-Meeting position and total, and the page, joined to its messages for
+    their columns and the snippet.
+
+    WP5-R1 F-1: the Project number's on-the-fly `simple` text is built once per
+    (distinct number, message), never per (Meeting, message), and only behind
+    a `strpos` superset pre-filter. The answer is row-for-row that of the
+    per-pair form it replaced (`tests/database/test_meeting_context_equivalence.py`).
     """
     messages = communication_messages
     participants = communication_participants
@@ -1445,32 +1425,109 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
         )
         .where(_mine(messages, principal_id), windowed())
     )
-    # Text: the title terms (`english`, the stored document) and the Project
-    # number (one exact `simple` term, on the fly), over the window's messages.
+    # Title terms: `english`, the stored document (its GIN index), per Meeting window.
     title_query = func.to_tsquery(_config("english"), inputs.c.title_q, type_=TSQUERY)
-    title_hit = func.coalesce(messages.c.search_document.bool_op("@@")(title_query), False)
-    number_query = func.plainto_tsquery(_config("simple"), inputs.c.number, type_=TSQUERY)
-    number_hit = func.coalesce(_simple_document().bool_op("@@")(number_query), False)
-    by_text = (
+    by_title = (
         select(
             inputs.c.ord,
             messages.c.message_id,
             no_text.label("key"),
             no_text.label("ident"),
-            title_hit.label("title_hit"),
-            number_hit.label("number_hit"),
-            case(
-                (title_hit, _integer_rank(messages.c.search_document, title_query)),
-                else_=zero,
-            ).label("rank"),
+            literal(True, Boolean).label("title_hit"),
+            no.label("number_hit"),
+            _integer_rank(messages.c.search_document, title_query).label("rank"),
         )
         .select_from(inputs.join(messages, and_(_mine(messages, principal_id), windowed())))
         .where(
-            or_(inputs.c.title_q.is_not(None), inputs.c.number.is_not(None)),
-            or_(title_hit, number_hit),
+            inputs.c.title_q.is_not(None),
+            messages.c.search_document.bool_op("@@")(title_query),
         )
     )
-    hits = union_all(by_participant, by_identifier, by_text).subquery("hits")
+    # The Project number (one exact `simple` term, ruling D6), set-based (WP5-R1 F-1):
+    # the `simple` text is built once per (distinct number, message of the union of
+    # its Meetings' windows), never per (Meeting, message), and only for a message
+    # whose lowered text holds the number's longest lexeme. That is a superset
+    # of the exact match, which it then confirms: `plainto_tsquery` ANDs every
+    # lexeme of the number, and a `simple` lexeme is its token's text lowered by
+    # the same `lower`, so a matching text holds each of them. (The whole
+    # lowered number is not: `Q 77` matches "77 q".) A Meeting without a number
+    # asks nothing.
+    spans = (
+        select(
+            inputs.c.number,
+            func.min(inputs.c.w_start).label("w_start"),
+            func.max(inputs.c.w_until).label("w_until"),
+        )
+        .where(inputs.c.number.is_not(None))
+        .group_by(inputs.c.number)
+        .subquery("spans")
+    )
+    lexeme = column("lexeme", Text)
+    needle = (
+        select(lexeme)
+        .select_from(
+            func.unnest(func.tsvector_to_array(func.to_tsvector(_config("simple"), spans.c.number)))
+            .table_valued(lexeme)
+            .render_derived()
+        )
+        .order_by(func.length(lexeme).desc(), lexeme.collate("C"))
+        .limit(1)
+        .scalar_subquery()
+    )
+    numbers = select(spans, needle.label("needle")).cte("numbers").prefix_with("MATERIALIZED")
+    simple_text = (
+        func.coalesce(messages.c.subject, "") + " " + func.coalesce(messages.c.search_text, "")
+    )
+    number_query = func.plainto_tsquery(_config("simple"), numbers.c.number, type_=TSQUERY)
+    number_hits = (
+        select(numbers.c.number, messages.c.message_id, messages.c.message_time)
+        .select_from(
+            numbers.join(
+                messages,
+                and_(
+                    _mine(messages, principal_id),
+                    messages.c.message_time >= numbers.c.w_start,
+                    messages.c.message_time < numbers.c.w_until,
+                ),
+            )
+        )
+        .where(
+            # CASE fixes the order: the cheap `strpos` first, the tsvector only after it.
+            case(
+                (
+                    func.strpos(func.lower(simple_text), numbers.c.needle) > 0,
+                    func.coalesce(
+                        func.to_tsvector(_config("simple"), simple_text).bool_op("@@")(
+                            number_query
+                        ),
+                        False,
+                    ),
+                ),
+                else_=False,
+            )
+        )
+        .cte("number_hits")
+        .prefix_with("MATERIALIZED")
+    )
+    by_number = select(
+        inputs.c.ord,
+        number_hits.c.message_id,
+        no_text.label("key"),
+        no_text.label("ident"),
+        no.label("title_hit"),
+        literal(True, Boolean).label("number_hit"),
+        zero.label("rank"),
+    ).select_from(
+        inputs.join(
+            number_hits,
+            and_(
+                number_hits.c.number == inputs.c.number,
+                number_hits.c.message_time >= inputs.c.w_start,
+                number_hits.c.message_time < inputs.c.w_until,
+            ),
+        )
+    )
+    hits = union_all(by_participant, by_identifier, by_title, by_number).subquery("hits")
     grouped = (
         select(
             hits.c.ord,
@@ -1506,16 +1563,6 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
             messages.c.message_id,
             messages.c.conversation_id,
             messages.c.message_time,
-            messages.c.subject,
-            messages.c.sender_address,
-            messages.c.has_attachments,
-            messages.c.body_state,
-            messages.c.search_text_version,
-            messages.c.search_text_flags,
-            messages.c.identity_conflict,
-            messages.c.participants_reconciled,
-            messages.c.participants_disagreed,
-            messages.c.source_unavailable,
             tier.label("tier"),
             grouped.c.overlap,
             grouped.c.rank,
@@ -1537,7 +1584,8 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
         )
         .subquery("candidates")
     )
-    # D5 (iii): each conversation's representative is its best message.
+    # D5 (iii): each conversation's representative is its best message. The rows
+    # sorted here are narrow; the message's other columns join the page only.
     representatives = (
         select(candidates)
         .distinct(candidates.c.ord, candidates.c.group_key)
@@ -1552,18 +1600,65 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
         func.count().over(partition_by=representatives.c.ord).label("matched_total"),
     ).subquery("numbered")
     page = select(numbered).where(numbered.c.position <= query.limit).subquery("page")
-    text = messages.c.search_text
-    snippet = (
+    snippet = case(
+        (messages.c.body_state.in_(_NO_TEXT_BODY_STATES), literal(None, Text)),
+        else_=func.left(messages.c.search_text, SNIPPET_CHARACTERS),
+    )
+    return (
         select(
-            case(
-                (messages.c.body_state.in_(_NO_TEXT_BODY_STATES), literal(None, Text)),
-                else_=func.left(text, SNIPPET_CHARACTERS),
+            page,
+            messages.c.subject,
+            messages.c.sender_address,
+            messages.c.has_attachments,
+            messages.c.body_state,
+            messages.c.search_text_version,
+            messages.c.search_text_flags,
+            messages.c.identity_conflict,
+            messages.c.participants_reconciled,
+            messages.c.participants_disagreed,
+            messages.c.source_unavailable,
+            snippet.label("snippet"),
+        )
+        .select_from(
+            page.join(
+                messages,
+                and_(_mine(messages, principal_id), messages.c.message_id == page.c.message_id),
             )
         )
-        .where(_mine(messages, principal_id), messages.c.message_id == page.c.message_id)
-        .scalar_subquery()
+        .order_by(page.c.ord, page.c.position)
     )
-    return select(page, snippet.label("snippet")).order_by(page.c.ord, page.c.position)
+
+
+def _to_candidate(row: Row[Any]) -> MeetingContextCandidateRow:
+    """One row of the context statement as the port's record."""
+    return MeetingContextCandidateRow(
+        ordinal=row.ord,
+        message_id=row.message_id,
+        conversation_id=row.conversation_id,
+        message_time=row.message_time,
+        subject=row.subject,
+        sender_address=row.sender_address,
+        has_attachments=row.has_attachments,
+        body_state=row.body_state,
+        search_text_version=row.search_text_version,
+        search_text_flags=tuple(row.search_text_flags),
+        identity_conflict=row.identity_conflict,
+        participants_reconciled=row.participants_reconciled,
+        participants_disagreed=row.participants_disagreed,
+        source_unavailable=row.source_unavailable,
+        tier=row.tier,
+        overlap=row.overlap,
+        rank=row.rank,
+        matched_keys=tuple(sorted(row.matched_keys)),
+        matched_identifiers=tuple(
+            sorted((kind, value) for kind, _, value in map(_split, row.matched_identifiers))
+        ),
+        title_hit=row.title_hit,
+        project_number_hit=row.number_hit,
+        conversation_hits=row.conversation_hits,
+        matched_total=row.matched_total,
+        snippet=row.snippet,
+    )
 
 
 def _split(pair: str) -> tuple[str, str, str]:

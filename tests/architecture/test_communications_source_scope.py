@@ -112,6 +112,9 @@ IMPORTERS = {
     # WP5-S2: the Meeting context inputs extract identifiers from a Meeting's
     # own text with the versioned extractor (design section 3.4, ruling D4).
     "domain/meeting/context.py",
+    # WP5-S3: the Meeting context assembly keys attendees with the C9 bridge,
+    # summarizes coverage and maps the matched identifiers.
+    "application/meeting_context.py",
 }
 
 

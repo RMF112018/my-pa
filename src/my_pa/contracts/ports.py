@@ -490,6 +490,7 @@ __all__ = [
     "CommunicationSearchQuery",
     "CommunicationSearchQueryShape",
     "CommunicationSearchRow",
+    "CommunicationSelfAddresses",
     "CommunicationSnapshotTally",
     "CommunicationsRepository",
     "ConstraintManagementRepository",
@@ -591,6 +592,9 @@ __all__ = [
     "ManagedWriteRequest",
     "MeetingAttachmentRecord",
     "MeetingAttendeeRecord",
+    "MeetingContextCandidateInput",
+    "MeetingContextCandidateQuery",
+    "MeetingContextCandidateRow",
     "MeetingContextInput",
     "MeetingCursorAnchor",
     "MeetingEntityState",
@@ -15042,6 +15046,92 @@ class CommunicationSearchRow:
     snippet: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class CommunicationSelfAddresses:
+    """The mailbox owner's addresses under `self_from_sent_lane_v1` (WP5 ruling D3).
+
+    `addresses` are the first `limit` by address of the distinct `from`
+    participant addresses of messages with a `sent` observation, in their
+    stored form; `total` is how many distinct ones there are before the cap.
+    """
+
+    addresses: tuple[str, ...]
+    total: int
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingContextCandidateInput:
+    """One Meeting's criteria in the set-based context statement (WP5 design 3.10, #16).
+
+    `ordinal` names the Meeting in the batch. The window is
+    `[window_start, window_end]`, inclusive of both whole seconds.
+    `addresses` are `(stored spelling, attendee key)` pairs: each non-self
+    attendee key under its own spelling and under every bridged non-ASCII
+    spelling (ruling D11); the participant overlap counts distinct keys.
+    `identifiers` are `(kind, value)` pairs under the query's
+    `identifier_version`. `title_terms` are OR'ed, each under the `english`
+    configuration (Manager ruling A-3); `project_number` is one exact `simple`
+    term (ruling D6), `None` without one.
+    """
+
+    ordinal: int
+    window_start: datetime
+    window_end: datetime
+    addresses: tuple[tuple[str, str], ...]
+    identifiers: tuple[tuple[str, str], ...]
+    title_terms: tuple[str, ...]
+    project_number: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingContextCandidateQuery:
+    """Every Meeting of one context batch, read in one statement; `limit` per Meeting."""
+
+    meetings: tuple[MeetingContextCandidateInput, ...]
+    identifier_version: str
+    limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingContextCandidateRow:
+    """One returned message of one Meeting, collapsed by conversation (ruling D5).
+
+    `tier`: 1 an identifier or project-number match and a participant match,
+    2 the former only, 3 a participant match only, 4 title terms only.
+    `overlap` counts the distinct attendee keys matched (`matched_keys`);
+    `rank` is the integer title-terms rank (0 without a title match).
+    `conversation_hits` counts the Meeting's matches in the conversation before
+    the collapse; `matched_total` the Meeting's messages after it. `snippet` is
+    the first 300 characters of the derived text, `None` for a withheld or
+    truncated body (ruling D8).
+    """
+
+    ordinal: int
+    message_id: str
+    conversation_id: str | None
+    message_time: datetime
+    subject: str | None
+    sender_address: str | None
+    has_attachments: bool | None
+    body_state: str
+    search_text_version: str
+    search_text_flags: tuple[str, ...]
+    identity_conflict: bool
+    participants_reconciled: bool
+    participants_disagreed: bool
+    source_unavailable: bool
+    tier: int
+    overlap: int
+    rank: int
+    matched_keys: tuple[str, ...]
+    matched_identifiers: tuple[tuple[str, str], ...]
+    title_hit: bool
+    project_number_hit: bool
+    conversation_hits: int
+    matched_total: int
+    snippet: str | None
+
+
 class CommunicationsRepository(ABC):
     """The communications tables (contract sections 5.1 and 5.2), inside one transaction.
 
@@ -15274,6 +15364,37 @@ class CommunicationsRepository(ABC):
     @abstractmethod
     def list_search_text_versions(self, principal_id: str) -> tuple[str, ...]:
         """The distinct stored `search_text_version` values, sorted."""
+
+    # --- the Meeting context reads (WP5 design sections 3.8-3.11; WP5-S3) ----------
+
+    @abstractmethod
+    def context_self_addresses(
+        self, principal_id: str, *, limit: int
+    ) -> CommunicationSelfAddresses:
+        """The owner's addresses under `self_from_sent_lane_v1`, at most `limit` (one statement)."""
+
+    @abstractmethod
+    def non_ascii_participant_addresses(self, principal_id: str, *, limit: int) -> tuple[str, ...]:
+        """The distinct non-ASCII participant addresses, sorted, at most `limit` (the C9 bridge)."""
+
+    @abstractmethod
+    def context_candidates(
+        self, principal_id: str, query: MeetingContextCandidateQuery
+    ) -> tuple[MeetingContextCandidateRow, ...]:
+        """Every Meeting's returned messages in one statement, by ordinal, then the D5 order.
+
+        A Meeting's candidates are the union of its participant, identifier,
+        project-number and title-term matches inside its window, one row per
+        message; collapsed by conversation to the best by the D5 total order
+        (tier, overlap descending, rank descending, time descending, id
+        descending); at most `query.limit` per Meeting.
+        """
+
+    @abstractmethod
+    def list_message_identifiers(
+        self, principal_id: str, message_ids: Sequence[str], *, kind: str, version: str
+    ) -> Mapping[str, tuple[str, ...]]:
+        """Per message, its values of one identifier kind under one version, sorted."""
 
 
 # --- Communications intelligence WP3b: meeting sync staging and reconciliation

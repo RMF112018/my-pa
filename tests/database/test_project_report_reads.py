@@ -105,3 +105,42 @@ def test_the_runtime_backstop_catches_an_unjoined_child_read(migrated_engine: En
         migrated_engine.connect() as connection,
     ):
         connection.execute(bare).all()
+
+
+def test_the_runtime_backstop_refuses_a_join_that_does_not_filter(migrated_engine: Engine) -> None:
+    """Ruling R3-01: the view joined, but every superseded row still passes through.
+
+    An outer join (mutant M15's `.outerjoin`), a full join, an ON clause that
+    is `true` or on another column, and an anti-join each fail the listener;
+    the semi-join on `derivation_id` passes it.
+    """
+    from sqlalchemy import exists, literal, select, true
+
+    from my_pa.infrastructure.persistence.tables import (
+        project_report_current_derivations as view,
+    )
+    from my_pa.infrastructure.persistence.tables import project_report_lines as lines
+
+    here = (Path(__file__),)
+    on = lines.c.derivation_id == view.c.derivation_id
+    semi = exists(select(literal(1)).where(view.c.derivation_id == lines.c.derivation_id))
+    refused = {
+        "outer": select(lines.c.row_ordinal).select_from(lines.outerjoin(view, on)),
+        "isouter": select(lines.c.row_ordinal).select_from(lines.join(view, on, isouter=True)),
+        "full": select(lines.c.row_ordinal).select_from(lines.join(view, on, full=True)),
+        "on true": select(lines.c.row_ordinal).select_from(lines.join(view, true())),
+        "other column": select(lines.c.row_ordinal).select_from(
+            lines.join(view, lines.c.principal_id == view.c.principal_id)
+        ),
+        "anti-join": select(lines.c.row_ordinal).where(~semi),
+    }
+    for statement in refused.values():
+        with (
+            pytest.raises(AssertionError, match="without joining"),
+            current_derivations_backstop(here),
+            migrated_engine.connect() as connection,
+        ):
+            connection.execute(statement).all()
+    with current_derivations_backstop(here) as seen, migrated_engine.connect() as connection:
+        connection.execute(select(lines.c.row_ordinal).where(semi)).all()
+    assert seen.checked == 1

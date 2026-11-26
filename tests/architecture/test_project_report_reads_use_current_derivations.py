@@ -14,10 +14,17 @@ still caught:
   five child tables **joins** the view in the same statement. A statement is
   a `select(...)` / `Select(...)` / `text(...)` call under any name it is
   imported as (ruling R2-02), with its whole method chain and the extensions
-  made through the variable it is assigned to. "Joins" means a `.join` of
-  the view, a semi-join of a child column on it (`==`, or `.in_(select(view))`),
-  or a `text()` that spells `JOIN <the view>`; a view merely mentioned (an
-  uncorrelated `exists`, a cross-join predicate) never counts;
+  made through the variable it is assigned to. "Joins" (ruling R3-01) means
+  an inner `.join` of the view whose ON clause equates a child's
+  `derivation_id` with the view's; a semi-join of a child's derivation column
+  on the view's `derivation_id` (`==`, or `.in_(select(view.c.derivation_id))`)
+  that sits under no `~`, `not_()`, `or_()` or `|`; or a `text()` that spells
+  an inner or plain `JOIN <the view>` with `ON ... derivation_id = ...
+  derivation_id` or `USING (derivation_id)` (`inner_joins_view`, shared with
+  the runtime backstop). An `outerjoin`, `isouter=`, `full=`, a LEFT, RIGHT,
+  FULL or CROSS join, an ON clause of `true()` or on another column, and a
+  view merely mentioned (an uncorrelated `exists`, a cross-join predicate)
+  never count;
 * a statement nested in another (a subquery) that brings in a child table
   the outer statement does not read must join the view itself or be
   correlated to the outer statement (an `==` or `.in_` between the new child
@@ -53,6 +60,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+from tests.database.project_report_reads_backstop import inner_joins_view
 
 PACKAGE: Final = Path(__file__).resolve().parents[2] / "src" / "my_pa"
 PERSISTENCE: Final = PACKAGE / "infrastructure" / "persistence" / "project_report_reads.py"
@@ -105,10 +113,40 @@ _TABLE_METHODS: Final = frozenset(
     {"c", "columns", "join", "outerjoin", "alias", "select", "subquery", "cte", "lateral"}
 )
 _JOINS: Final = frozenset({"join", "outerjoin"})
+#: Calls whose arguments are negated or alternatives: a link under one never filters.
+_WEAKENS: Final = frozenset({"not_", "or_"})
+#: A child column that names a derivation (`derivation_id`, `left_derivation_id`).
+_DERIVATION_COLUMN: Final = re.compile(r"(?:\w+_)?derivation_id\Z")
 #: A string that ends in this prefix computes a table name (`"project_report_" + kind`).
 _COMPUTED: Final = re.compile(r"project_report_\Z")
-#: A `text()` statement joins the view only by spelling `JOIN <the view>`.
-_JOINS_VIEW_IN_SQL: Final = re.compile(rf"\bJOIN\s+(?:\w+\.)?{VIEW}\b", re.IGNORECASE)
+
+
+@dataclass
+class _Link:
+    """One `==` or `.in_(...)`: the names and columns of each side, and whether it filters."""
+
+    left: set[str]
+    right: set[str]
+    #: The columns a side is (`t.c.derivation_id`), or None for anything else.
+    left_columns: frozenset[str] | None = None
+    right_columns: frozenset[str] | None = None
+    #: False under `~`, `not_()`, `or_()` or `|` (ruling R3-01).
+    filters: bool = True
+
+    def on_derivation(self) -> bool:
+        """The view's `derivation_id` equated with a child's derivation column."""
+        return any(
+            VIEW in view
+            and view_columns == {"derivation_id"}
+            and child & CHILDREN
+            and VIEW not in child
+            and child_columns
+            and all(_DERIVATION_COLUMN.match(c) for c in child_columns)
+            for view, view_columns, child, child_columns in (
+                (self.left, self.left_columns, self.right, self.right_columns),
+                (self.right, self.right_columns, self.left, self.left_columns),
+            )
+        )
 
 
 @dataclass
@@ -118,10 +156,10 @@ class _Facts:
     names: set[str] = field(default_factory=set)
     #: Table positions that resolve to neither a known table nor a statement local.
     unresolved: set[str] = field(default_factory=set)
-    #: The view is a joined table (`.join(view, ...)`, or a join built on it).
+    #: The view is inner-joined on `derivation_id` (`.join(view, <on>)`, or `text()`).
     joins_view: bool = False
-    #: `(left names, right names)` of every `==` and every `.in_(...)`.
-    links: list[tuple[set[str], set[str]]] = field(default_factory=list)
+    #: Every `==` and every `.in_(...)`.
+    links: list[_Link] = field(default_factory=list)
 
     @property
     def children(self) -> set[str]:
@@ -129,14 +167,19 @@ class _Facts:
 
     def linked(self, one: set[str], other: set[str]) -> bool:
         return any(
-            (left & one and right & other) or (left & other and right & one)
-            for left, right in self.links
+            (link.left & one and link.right & other) or (link.left & other and link.right & one)
+            for link in self.links
         )
 
     @property
+    def semi_joined(self) -> bool:
+        """A filtering link of the view's `derivation_id` to a child's (ruling R3-01)."""
+        return any(link.filters and link.on_derivation() for link in self.links)
+
+    @property
     def joined(self) -> bool:
-        """The view is joined, or semi-joined on a child (`==` or `.in_(select(view))`)."""
-        return self.joins_view or self.linked({VIEW}, set(CHILDREN))
+        """The view is inner-joined, or semi-joined on a child's `derivation_id`."""
+        return self.joins_view or self.semi_joined
 
 
 class _Module:
@@ -290,25 +333,26 @@ class _Module:
         seen: set[tuple[object, ...]],
         *,
         nested: bool,
+        weakened: bool = False,
     ) -> None:
         own = _chain_root(root, self.statement_calls)
-        todo: list[ast.AST] = [root]
+        todo: list[tuple[ast.AST, bool]] = [(root, weakened)]
         while todo:
-            node = todo.pop()
+            node, weak = todo.pop()
             for child in ast.iter_child_nodes(node):
                 start = _chain_root(child, self.statement_calls)
                 if nested or start is own or not self.starts(start):
-                    todo.append(child)
+                    todo.append((child, weak or _weakens(node, child)))
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 facts.names |= set(_SPELLED.findall(node.value))
-                if _JOINS_VIEW_IN_SQL.search(node.value):
+                if inner_joins_view(node.value):
                     facts.joins_view = True
             elif isinstance(node, ast.BinOp):
                 folded = _fold(node)
                 if folded is not None:
                     facts.names |= set(_SPELLED.findall(folded))
             elif isinstance(node, ast.Name):
-                self._reach_name(node, bound, facts, seen, nested=nested)
+                self._reach_name(node, bound, facts, seen, nested=nested, weakened=weak)
             elif isinstance(node, ast.Attribute):
                 facts.names.add(node.attr)
                 if node.attr in _TABLE_METHODS:
@@ -316,15 +360,63 @@ class _Module:
             elif isinstance(node, ast.Subscript):
                 self._subscript(node, facts)
             if isinstance(node, ast.Call):
-                self._reach_call(node, bound, facts, seen, nested=nested)
+                self._reach_call(node, bound, facts, seen, nested=nested, weakened=weak)
             if (
                 isinstance(node, ast.Compare)
                 and len(node.ops) == 1
                 and isinstance(node.ops[0], ast.Eq)
             ):
                 facts.links.append(
-                    (self._names(node.left, bound), self._names(node.comparators[0], bound))
+                    self._link(node.left, node.comparators[0], bound, filters=not weak)
                 )
+
+    def _link(self, left: ast.AST, right: ast.AST, bound: _Bound, *, filters: bool) -> _Link:
+        return _Link(
+            self._names(left, bound),
+            self._names(right, bound),
+            self._columns(left, bound, set()),
+            self._columns(right, bound, set()),
+            filters=filters,
+        )
+
+    def _columns(self, node: ast.AST, bound: _Bound, seen: set[int]) -> frozenset[str] | None:
+        """The columns `node` always is (`t.c.x`, `t.c["x"]`, `select(t.c.x)`), else None."""
+        if id(node) in seen:
+            return None
+        seen.add(id(node))
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr in {"c", "columns"}
+        ):
+            return frozenset({node.attr})
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr in {"c", "columns"}
+        ):
+            key = _fold(node.slice)
+            return None if key is None else frozenset({key})
+        if isinstance(node, ast.Call | ast.Attribute):
+            root = _chain_root(node, self.statement_calls)
+            if (
+                isinstance(root, ast.Call)
+                and self.starts(root)
+                and len(root.args) == 1
+                and not root.keywords
+            ):
+                return self._columns(root.args[0], bound, seen)
+            return None
+        if isinstance(node, ast.Name):
+            values = list(self.assigned(node))
+            function = self.owner(node)
+            if function is not None:
+                values += bound.get((id(function), node.id)) or self.arguments(function, node.id)
+            found = [self._columns(value, bound, seen) for value in values]
+            if not found or any(columns is None for columns in found):
+                return None
+            return frozenset().union(*(c for c in found if c is not None))
+        return None
 
     def _reach_name(
         self,
@@ -334,24 +426,27 @@ class _Module:
         seen: set[tuple[object, ...]],
         *,
         nested: bool,
+        weakened: bool,
     ) -> None:
         facts.names.add(self.aliases.get(node.id, node.id))
         for value in self.assigned(node):
-            key = ("local", id(value))
+            key = ("local", id(value), weakened)
             if key not in seen:
                 seen.add(key)
-                self._reach(value, bound, facts, seen, nested=nested)
+                self._reach(value, bound, facts, seen, nested=nested, weakened=weakened)
         function = self.owner(node)
         if function is not None:
             values = bound.get((id(function), node.id)) or self.arguments(function, node.id)
             for value in values:
-                key = ("argument", id(value), id(function))
+                key = ("argument", id(value), id(function), weakened)
                 if key not in seen:
                     seen.add(key)
-                    self._reach(value, bound, facts, seen, nested=nested)
+                    self._reach(value, bound, facts, seen, nested=nested, weakened=weakened)
         if not isinstance(self.parent.get(node), ast.Call) or self.parent[node].func is not node:
             for function in self.functions.get(node.id, []):
-                self._reach_returns(function, bound, facts, seen, nested=nested, key=id(node))
+                self._reach_returns(
+                    function, bound, facts, seen, nested=nested, key=id(node), weakened=weakened
+                )
 
     def _reach_call(
         self,
@@ -361,25 +456,21 @@ class _Module:
         seen: set[tuple[object, ...]],
         *,
         nested: bool,
+        weakened: bool,
     ) -> None:
         called = _called_name(node)
         for function in self.functions.get(called or "", []):
             inner = dict(bound)
             for parameter, values in _bound(self, function, node).items():
                 inner[(id(function), parameter)] = values
-            self._reach_returns(function, inner, facts, seen, nested=nested, key=id(node))
+            self._reach_returns(
+                function, inner, facts, seen, nested=nested, key=id(node), weakened=weakened
+            )
         func = node.func
-        if isinstance(func, ast.Attribute) and func.attr in _JOINS:
-            if VIEW in self._joined_tables(node, bound):
-                facts.joins_view = True
-        elif (
-            isinstance(func, ast.Name)
-            and func.id in _JOINS
-            and VIEW in set().union(*(self._names(a, bound) for a in node.args[:2]))
-        ):
+        if self._inner_join_on_derivation(node, bound):
             facts.joins_view = True
         if isinstance(func, ast.Attribute) and func.attr == "in_" and node.args:
-            facts.links.append((self._names(func.value, bound), self._names(node.args[0], bound)))
+            facts.links.append(self._link(func.value, node.args[0], bound, filters=not weakened))
         if isinstance(func, ast.Attribute) and func.attr == "select_from":
             for argument in node.args:
                 self._table_position(argument, bound, facts)
@@ -396,6 +487,32 @@ class _Module:
         ):
             facts.unresolved.add(ast.unparse(node))
 
+    def _inner_join_on_derivation(self, node: ast.Call, bound: _Bound) -> bool:
+        """`a.join(b, on)` / `join(a, b, on)`: inner, the view a side, `on` on `derivation_id`.
+
+        Ruling R3-01: `outerjoin`, `isouter=`, `full=`, an ON clause that is
+        `true()` or on another column, and an ON link under `or_()` / `not_()`
+        never count.
+        """
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == "join":
+            sides = self._joined_tables(node, bound)
+            positional = node.args[1:2]
+        elif isinstance(func, ast.Name) and func.id == "join":
+            sides = set().union(*(self._names(a, bound) for a in node.args[:2]))
+            positional = node.args[2:3]
+        else:
+            return False
+        keywords = {k.arg: k.value for k in node.keywords if k.arg is not None}
+        for flag in ("isouter", "full"):
+            value = keywords.get(flag)
+            if value is not None and not (isinstance(value, ast.Constant) and value.value is False):
+                return False
+        on = positional[0] if positional else keywords.get("onclause")
+        if VIEW not in sides or on is None:
+            return False
+        return self.facts([on], bound=bound).semi_joined
+
     def _reach_returns(
         self,
         function: _Def,
@@ -405,13 +522,14 @@ class _Module:
         *,
         nested: bool,
         key: int,
+        weakened: bool,
     ) -> None:
-        marker = ("returns", id(function), key)
+        marker = ("returns", id(function), key, weakened)
         if marker in seen:
             return
         seen.add(marker)
         for value in _returns(function):
-            self._reach(value, bound, facts, seen, nested=nested)
+            self._reach(value, bound, facts, seen, nested=nested, weakened=weakened)
 
     def _joined_tables(self, node: ast.Call, bound: _Bound) -> set[str]:
         """The tables a `.join(...)` chain joins (never the names in its ON clauses)."""
@@ -568,6 +686,32 @@ def _called_name(node: ast.Call) -> str | None:
     if isinstance(node.func, ast.Attribute):
         return node.func.attr
     return None
+
+
+def _weakens(parent: ast.AST, child: ast.AST) -> bool:
+    """`child` is a negation, an alternative or an ON clause: its links never filter.
+
+    `~`, `not`, `not_()`, `or_()` and `|` weaken what they hold. A join's ON
+    clause filters only as an inner join of the view (`_inner_join_on_derivation`
+    reads it on its own), so an outer join's ON never passes for a semi-join.
+    """
+    if isinstance(parent, ast.Call) and _called_name(parent) in _JOINS:
+        first_on = 1 if isinstance(parent.func, ast.Attribute) else 2
+        if child in parent.args[first_on:] or (
+            isinstance(child, ast.keyword) and child.arg == "onclause"
+        ):
+            return True
+    if isinstance(parent, ast.UnaryOp) and isinstance(parent.op, ast.Invert | ast.Not):
+        return True
+    if isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.BitOr):
+        return True
+    if isinstance(parent, ast.BoolOp) and isinstance(parent.op, ast.Or):
+        return True
+    return (
+        isinstance(parent, ast.Call)
+        and child is not parent.func
+        and _called_name(parent) in _WEAKENS
+    )
 
 
 def _fold(node: ast.AST) -> str | None:
@@ -858,7 +1002,9 @@ _PLANTED_HEAD: Final = (
     "    project_report_stated_totals as totals,\n"
     ")\n"
 )
-_JOINED: Final = "lines.join(project_report_current_derivations, x)"
+#: The ON clause a join of the view filters on (ruling R3-01).
+_ON: Final = "{t}.c.derivation_id == project_report_current_derivations.c.derivation_id"
+_JOINED: Final = f"lines.join(project_report_current_derivations, {_ON.format(t='lines')})"
 
 
 def _planted(body: str) -> list[str]:
@@ -881,7 +1027,8 @@ def test_a_planted_unjoined_child_read_is_caught() -> None:
     current = (
         "def read():\n"
         "    return select(checks.c.outcome).where(exists(select(literal(1)).where(\n"
-        "        project_report_current_derivations.c.derivation_id == checks.c.left)))\n"
+        "        project_report_current_derivations.c.derivation_id\n"
+        "        == checks.c.left_derivation_id)))\n"
     )
     assert _planted(current) == []
 
@@ -899,13 +1046,13 @@ def test_a_helper_returning_a_bare_child_table_is_caught() -> None:
     # A join the helper performs but does not return never counts.
     performed = bare.replace(
         "    return totals\n",
-        "    joined = totals.join(project_report_current_derivations, x)\n    return totals\n",
+        "    joined = totals.join(project_report_current_derivations, on)\n    return totals\n",
     )
     assert _planted(performed) == ["helper _source", "read"]
     # The returned join is the helper's value: it counts, for the helper and its callers.
     returned = bare.replace(
         "    return totals\n",
-        "    return totals.join(project_report_current_derivations, x)\n",
+        f"    return totals.join(project_report_current_derivations, {_ON.format(t='totals')})\n",
     )
     assert _planted(returned) == []
 
@@ -978,7 +1125,8 @@ def test_a_table_passed_as_an_argument_is_caught() -> None:
     assert _planted(planted) == ["_evidence"]
     joined = planted.replace(
         "select(table.c.x)",
-        "select(table.c.x).select_from(table.join(project_report_current_derivations, x))",
+        "select(table.c.x).select_from(table.join(project_report_current_derivations, "
+        f"{_ON.format(t='table')}))",
     )
     assert _planted(joined) == []
     # A default argument binds the parameter too.
@@ -1100,3 +1248,116 @@ def test_a_helper_returning_a_child_column_is_not_a_bare_table() -> None:
     # The control: a helper returning the bare table is still caught.
     table = column.replace("return lines.c.derivation_id", "return lines")
     assert _planted(table) == ["helper _col"]
+
+
+# --- ruling R3-01: a join of the view that does not filter --------------------------
+
+
+def _read(statement: str) -> str:
+    return f"def read():\n    return {statement}\n"
+
+
+_CURRENT: Final = "project_report_current_derivations"
+_ON_LINES: Final = _ON.format(t="lines")
+_SEMI: Final = (
+    f"exists(select(literal(1)).where({_CURRENT}.c.derivation_id == lines.c.derivation_id))"
+)
+_IN: Final = f"lines.c.derivation_id.in_(select({_CURRENT}.c.derivation_id))"
+
+
+@pytest.mark.parametrize(
+    "joined",
+    [
+        f"lines.outerjoin({_CURRENT}, {_ON_LINES})",
+        f"lines.join({_CURRENT}, {_ON_LINES}, isouter=True)",
+        f"lines.join({_CURRENT}, {_ON_LINES}, full=True)",
+        f"join(lines, {_CURRENT}, {_ON_LINES}, isouter=True)",
+    ],
+    ids=["outerjoin", "isouter", "full", "join-function-isouter"],
+)
+def test_an_outer_join_of_the_view_is_caught(joined: str) -> None:
+    """Probe (a): a LEFT or FULL join keeps every line, superseded or not."""
+    assert _planted(_read(f"select(lines.c.x).select_from({joined})")) == ["read"]
+    inner = joined.replace("outerjoin", "join")
+    for flag in (", isouter=True", ", full=True"):
+        inner = inner.replace(flag, "")
+    assert _planted(_read(f"select(lines.c.x).select_from({inner})")) == []
+
+
+@pytest.mark.parametrize(
+    "where",
+    [f"~{_SEMI}", f"~{_IN}", f"not_({_SEMI})", f"or_({_SEMI}, true())", f"{_IN} | true()"],
+    ids=["invert-exists", "invert-in", "not_", "or_", "bitor"],
+)
+def test_an_anti_join_or_an_alternative_is_caught(where: str) -> None:
+    """Probe (b): a negated or alternative semi-join reads the superseded derivations too."""
+    assert _planted(_read(f"select(lines.c.x).where({where})")) == ["read"]
+    # The controls: the same semi-joins, plain or under `and_`, filter.
+    assert _planted(_read(f"select(lines.c.x).where({_SEMI})")) == []
+    assert _planted(_read(f"select(lines.c.x).where(and_({_IN}, true()))")) == []
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "FROM knowledge.project_report_lines LEFT JOIN knowledge.{v} USING (derivation_id)",
+        "FROM knowledge.project_report_lines LEFT OUTER JOIN knowledge.{v} v "
+        "ON l.derivation_id = v.derivation_id",
+        "FROM knowledge.project_report_lines RIGHT JOIN knowledge.{v} USING (derivation_id)",
+        "FROM knowledge.project_report_lines FULL JOIN knowledge.{v} USING (derivation_id)",
+        "FROM knowledge.project_report_lines CROSS JOIN knowledge.{v}",
+        "FROM knowledge.project_report_lines JOIN knowledge.{v} ON true",
+        "FROM knowledge.project_report_lines l JOIN knowledge.{v} v "
+        "ON l.principal_id = v.principal_id",
+        "FROM knowledge.project_report_lines l JOIN knowledge.{v} v "
+        "ON l.derivation_id = v.derivation_id OR true",
+    ],
+    ids=["left", "left-outer", "right", "full", "cross", "on-true", "other-column", "on-or"],
+)
+def test_a_text_join_that_does_not_filter_is_caught(sql: str) -> None:
+    """Probe (c): `text()` must spell an inner join of the view on `derivation_id`."""
+    assert _planted(_read(f'text("SELECT 1 {sql.format(v=_CURRENT)}")')) == ["read"]
+
+
+def test_a_text_inner_join_on_the_derivation_filters() -> None:
+    for sql in (
+        "FROM knowledge.project_report_lines JOIN knowledge.{v} USING (derivation_id)",
+        "FROM knowledge.project_report_lines INNER JOIN knowledge.{v} USING (derivation_id)",
+        "FROM knowledge.project_report_lines l JOIN knowledge.{v} AS v "
+        "ON l.principal_id = v.principal_id AND l.derivation_id = v.derivation_id WHERE x",
+    ):
+        assert _planted(_read(f'text("SELECT 1 {sql.format(v=_CURRENT)}")')) == [], sql
+
+
+@pytest.mark.parametrize(
+    "joined",
+    [
+        f"lines.join({_CURRENT}, true())",
+        f"lines.join({_CURRENT}, lines.c.principal_id == {_CURRENT}.c.principal_id)",
+        f"lines.join({_CURRENT}, lines.c.row_ordinal == {_CURRENT}.c.derivation_id)",
+        f"lines.join({_CURRENT}, lines.c.derivation_id == {_CURRENT}.c.snapshot_id)",
+        f"lines.join({_CURRENT}, or_({_ON_LINES}, true()))",
+        f"lines.join({_CURRENT})",
+    ],
+    ids=["on-true", "principal", "wrong-child-column", "wrong-view-column", "on-or", "no-on"],
+)
+def test_a_join_on_the_wrong_column_is_caught(joined: str) -> None:
+    """Probe (d): only `derivation_id` = the view's `derivation_id` links the two."""
+    assert _planted(_read(f"select(lines.c.x).select_from({joined})")) == ["read"]
+
+
+def test_a_semi_join_on_the_wrong_column_is_caught() -> None:
+    """Probe (d): a bare `==` semi-join counts only on `derivation_id`."""
+    principal = f"lines.c.principal_id == {_CURRENT}.c.principal_id"
+    assert _planted(_read(f"select(lines.c.x).where({principal})")) == ["read"]
+    assert _planted(_read(f"select(lines.c.x).where({_ON_LINES})")) == []
+    # The ON clause through a helper whose parameter is the child (the module's `_current`).
+    helper = (
+        "def _current(child):\n"
+        f"    return and_(child.c.principal_id == {_CURRENT}.c.principal_id,\n"
+        f"                child.c.derivation_id == {_CURRENT}.c.derivation_id)\n"
+    )
+    joined = f"select(lines.c.x).select_from(lines.join({_CURRENT}, _current(lines)))"
+    assert _planted(helper + _read(joined)) == []
+    wrong = helper.replace("child.c.derivation_id ==", "child.c.row_ordinal ==")
+    assert _planted(wrong + _read(joined)) == ["read"]

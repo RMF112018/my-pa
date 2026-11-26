@@ -81,6 +81,7 @@ from my_pa.application.service import (
     _PROGRAM_REPORTING_CAPABILITIES,
     _REPORT_TRANSFER_UPLOAD_CAPABILITIES,
     _SCHEDULE_CAPABILITIES,
+    _SCHEDULE_P6_CAPABILITIES,
     _SCHEDULE_SCENARIO_CAPABILITIES,
     ApplicationService,
 )
@@ -679,6 +680,8 @@ def test_capabilities_get_reports_phase_a_pull_contracts_as_not_implemented(
         | FILE_WORKSPACE_CAPABILITIES
         # Communications intelligence WP4-S5: behind the default-off read switch.
         | _COMMUNICATIONS_CAPABILITIES
+        # P6 XER import S7-4a: behind the default-off P6 switch.
+        | _SCHEDULE_P6_CAPABILITIES
     )
     assert {
         Capability(name)
@@ -726,6 +729,8 @@ def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derive
         - FILE_WORKSPACE_CAPABILITIES
         # Communications intelligence WP4-S5: the read switch is off here.
         - _COMMUNICATIONS_CAPABILITIES
+        # P6 XER import S7-4a: the P6 switch is off here.
+        - _SCHEDULE_P6_CAPABILITIES
     )
     # Reports Modernization WP02 adds `reports.publish`, ungated like `reports.read`;
     # WP03 adds `reports.update`, `.history`, `.archive`, `.delete`, `.restore`, ungated too;
@@ -735,6 +740,7 @@ def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derive
     # Files workspace WP5: its 17 names are all gated on the root, likewise.
     # Communications intelligence WP3b-S4: the review and the reconcile are ungated.
     # Communications intelligence WP4-S5: its 3 reads are gated on the read switch.
+    # P6 XER import S7-4a: its 7 names are gated on the P6 switch, so the count holds.
     assert len(expected_available) == 194
     assert readiness["implemented_capabilities"] == len(expected_available)
     assert readiness["limitations"]

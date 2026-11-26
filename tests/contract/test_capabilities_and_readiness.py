@@ -371,6 +371,14 @@ def test_capability_names_match_the_published_contract() -> None:
         "communications.search",
         "communications.read",
         "communications.coverage",
+        # P6 XER import S7-4a (schedule XER import contract section 10.1).
+        "schedule_publications.import_p6",
+        "schedule_p6_fields.available",
+        "schedule_p6_fields.set_captured",
+        "schedule_p6_activities.list",
+        "schedule_p6_relationships.list",
+        "schedule_p6_calendars.list",
+        "schedule_p6_field_values.list",
     }
 
 

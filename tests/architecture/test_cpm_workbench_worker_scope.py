@@ -31,7 +31,9 @@ JOBS: Final = SRC / "my_pa/infrastructure/jobs"
 HANDLER: Final = JOBS / "schedule.py"
 PARENT: Final = JOBS / "schedule_parser_process.py"
 CHILD: Final = JOBS / "schedule_parser_child.py"
-WORKER_MODULES: Final = (HANDLER, PARENT, CHILD)
+#: P6 XER S7-3: the handler's P6 path (schedule XER import contract 9.3).
+P6_HANDLER: Final = JOBS / "schedule_p6.py"
+WORKER_MODULES: Final = (HANDLER, PARENT, CHILD, P6_HANDLER)
 
 #: No network, TLS, HTTP or database client, and no application layer, may be
 #: reachable from the child (contract 3.4.2: `urllib.parse` only).
@@ -56,6 +58,14 @@ _FORBIDDEN_IN_CHILD: Final = (
     "my_pa.infrastructure.providers",
 )
 _PDFIUM: Final = ("pypdfium2", "my_pa.infrastructure.schedule")
+#: S7-3 (acceptance C4): the P6 parser front end, loaded only in the child.
+_P6_PARSER: Final = (
+    "my_pa.domain.schedule.p6.parser",
+    "my_pa.domain.schedule.p6.reader",
+    "my_pa.domain.schedule.p6.values",
+    "my_pa.domain.schedule.p6.calendar",
+    "my_pa.domain.schedule.p6.profile",
+)
 
 
 def _modules_after(statement: str) -> set[str]:
@@ -114,6 +124,41 @@ def test_the_worker_parent_never_imports_pdfium() -> None:
         }
         for name in imported:
             assert not name.startswith(_PDFIUM), f"{path.name} imports {name}"
+
+
+def test_the_worker_parent_never_imports_the_p6_parser() -> None:
+    """S7-3 C4: the handler, its P6 path, the process module, the P6 persistence and the
+    admission service leave the parser front end unloaded; only the child parses."""
+    modules = _modules_after(
+        "import my_pa.infrastructure.jobs.schedule, "
+        "my_pa.infrastructure.jobs.schedule_p6, "
+        "my_pa.infrastructure.jobs.schedule_parser_process, "
+        "my_pa.infrastructure.persistence.schedule_p6, "
+        "my_pa.application.schedule_p6"
+    )
+    assert "my_pa.domain.schedule.p6_frame_codec" in modules
+    assert "my_pa.domain.schedule.p6.catalogue" in modules
+    for name in (*_P6_PARSER, *_PDFIUM):
+        assert not _reached(modules, name), name
+    for path in (HANDLER, PARENT, P6_HANDLER):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        imported = {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+        }
+        assert not any(name.startswith(_P6_PARSER) for name in imported), path.name
+
+
+def test_the_p6_child_closure_parses_without_pdfium() -> None:
+    """S7-3: the child's P6 path imports the parser and never PDFium."""
+    modules = _modules_after(
+        "from my_pa.infrastructure.jobs import schedule_parser_child\n"
+        "from my_pa.domain.schedule.p6.parser import parse_xer"
+    )
+    assert "my_pa.domain.schedule.p6.parser" in modules
+    for name in (*_PDFIUM, *_FORBIDDEN_IN_CHILD):
+        assert not _reached(modules, name), name
 
 
 def _calls(tree: ast.AST) -> list[str]:

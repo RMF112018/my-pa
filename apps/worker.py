@@ -599,6 +599,10 @@ def _run(args: argparse.Namespace) -> int:
             scenario_plane_effective=(
                 settings.schedule_enabled and settings.schedule_scenarios_enabled
             ),
+            # P6 XER S7-3 (schedule XER import contract section 10.2): a `p6_*`
+            # publication is processed only with both switches on, else its job
+            # fails closed transient and nothing parses.
+            p6_enabled=settings.schedule_enabled and settings.schedule_p6_enabled,
         )
     owner = issue_worker_owner()
     stop = threading.Event()

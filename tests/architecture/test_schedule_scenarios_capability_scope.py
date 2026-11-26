@@ -325,7 +325,9 @@ def test_worker_passes_the_effective_plane(
     bound = _bound_handler(monkeypatch, schedule=True, scenarios=scenarios)
     assert bound is not None, "the schedule plane's handler was not bound"
     assert bound.function is process_schedule_publication
-    assert bound.keywords == {"scenario_plane_effective": effective}
+    # P6 XER S7-3 (schedule XER import contract 10.2): the P6 bit rides beside it,
+    # off here because `MY_PA_SCHEDULE_P6_ENABLED` is unset.
+    assert bound.keywords == {"scenario_plane_effective": effective, "p6_enabled": False}
 
 
 def test_the_scenario_switch_alone_never_starts_a_worker(

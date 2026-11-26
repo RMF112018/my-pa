@@ -645,6 +645,15 @@ class Settings(StrictModel):
     #: changes no row. Enabling it anywhere but a test is an operator gate
     #: (contract section 15.17).
     schedule_scenarios_enabled: bool = False
+    #: P6 XER import switch (schedule XER import contract section 10.2, S7-3),
+    #: env `MY_PA_SCHEDULE_P6_ENABLED`. Default off, and it widens nothing alone:
+    #: effective only while this and `schedule_enabled` are both on (and the
+    #: composition is unrestricted). Off, the P6 admission (`import_p6`) answers
+    #: `unsupported` before reading anything, and the `schedule` worker fails a
+    #: `p6_*` publication's job closed as a transient `unavailable` without
+    #: parsing. Turning it on or off changes no row. Enabling it anywhere but a
+    #: test is an operator gate (contract section 15).
+    schedule_p6_enabled: bool = False
     #: Daily cycle scheduler switch (ADR-010 amendment of 2026-11-20), env
     #: `MY_PA_CYCLE_SCHEDULER_ENABLED`. Default off. Off, `apps/worker.py`
     #: refuses the `cycles` plane (exit 2, before an engine is built). It

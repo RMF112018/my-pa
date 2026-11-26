@@ -59,7 +59,7 @@ measurable at collection and is carried (`regen --measure --fast-skipped N`).
 | --- | --- | --- | --- |
 | FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 55,731 | 55,593 passed, 138 skipped |
 | Architecture | `pytest tests/architecture` | 10,313 | 10,313 passed, 0 skipped |
-| Database | `pytest -m "database or recovery or e2e"` | 7,459 | 7,459 passed, 0 skipped |
+| Database | `pytest -m "database or recovery or e2e"` | 7,466 | 7,466 passed, 0 skipped |
 | Evaluation | `pytest -m "evaluation"` | 2 | 2 passed |
 | mypy corpus | `mypy` (`[tool.mypy] files`) | 800 files | no issues found |
 | Source modules | `find src/my_pa -name "*.py"` | 600 |  |

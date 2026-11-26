@@ -115,6 +115,9 @@ IMPORTERS = {
     # WP5-S3: the Meeting context assembly keys attendees with the C9 bridge,
     # summarizes coverage and maps the matched identifiers.
     "application/meeting_context.py",
+    # WP5-S6: `measure-context` keys its in-memory probe attendees, bridges
+    # them and writes their identifiers in a surface form the extractor reads.
+    "application/meeting_context_measure.py",
 }
 
 

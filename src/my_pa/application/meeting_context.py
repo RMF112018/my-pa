@@ -693,84 +693,128 @@ class MeetingContextReads:
         now = self._clock()
         with self._unit_of_work() as unit:
             found = unit.meetings.read_context_inputs(principal_id, meeting_ids)
-            communications = unit.communications
-            versions = ContextVersions(
-                search_text_versions=communications.list_search_text_versions(principal_id),
+            return self._assemble(unit, principal_id, meeting_ids, found, lookback_days, limit, now)
+
+    def read_inputs(
+        self,
+        principal_id: str,
+        meetings: Sequence[MeetingContextInput],
+        *,
+        lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+        per_meeting_limit: int = DEFAULT_PER_MEETING_LIMIT,
+    ) -> MeetingContextAnswer:
+        """The same assembly over Meetings given, never read: the `MeetingContextInput` seam.
+
+        `measure-context` (WP5-S6) times the capability's assembler over
+        in-memory probe Meetings that are never persisted: everything after
+        `read_context_inputs` is `read`'s own code, statement for statement.
+        The bounds are `read`'s (`invalid_request` with the same tokens).
+        """
+        meeting_ids, lookback_days, limit = check_context_request(
+            MeetingContextRequest(
+                meeting_ids=tuple(meeting.meeting_id for meeting in meetings),
+                lookback_days=lookback_days,
+                per_meeting_limit=per_meeting_limit,
+            )
+        )
+        found: dict[str, MeetingContextInput] = {}
+        for meeting in meetings:
+            found.setdefault(meeting.meeting_id, meeting)
+        now = self._clock()
+        with self._unit_of_work() as unit:
+            return self._assemble(
+                unit, principal_id, meeting_ids, tuple(found.values()), lookback_days, limit, now
+            )
+
+    def _assemble(
+        self,
+        unit: UnitOfWork,
+        principal_id: str,
+        meeting_ids: Sequence[str],
+        found: Sequence[MeetingContextInput],
+        lookback_days: int,
+        limit: int,
+        now: datetime,
+    ) -> MeetingContextAnswer:
+        """Everything after the Meeting inputs, inside the caller's unit of work."""
+        communications = unit.communications
+        versions = ContextVersions(
+            search_text_versions=communications.list_search_text_versions(principal_id),
+            identifier_version=self._identifier_version,
+            identifier_version_pending=communications.count_identifier_version_pending(
+                principal_id, self._identifier_version
+            ),
+        )
+        summary = summarize_coverage(
+            coverage_facts(unit, principal_id, communications_source_ids(unit, principal_id)),
+            now=now,
+        )
+        owner = communications.context_self_addresses(principal_id, limit=MAX_SELF_ADDRESSES)
+        self_keys = frozenset(address_match_key(a) for a in owner.addresses)
+        if not owner.addresses:
+            self_state = SelfAddressState.UNKNOWN
+        elif owner.verified:
+            self_state = SelfAddressState.DERIVED
+        else:
+            self_state = SelfAddressState.DERIVED_UNVERIFIED
+        # One more than the cap, so that a truncation is stated, never silent.
+        stored = communications.bridge_participant_addresses(
+            principal_id, pattern=bridge_pattern(), limit=MAX_BRIDGE_ADDRESSES + 1
+        )
+        bridge_truncated = len(stored) > MAX_BRIDGE_ADDRESSES
+        plans = [
+            _plan(
+                meeting,
+                lookback_days=lookback_days,
+                now=now,
+                self_keys=self_keys,
+                self_state=self_state,
+                bridge_truncated=bridge_truncated,
                 identifier_version=self._identifier_version,
-                identifier_version_pending=communications.count_identifier_version_pending(
-                    principal_id, self._identifier_version
+            )
+            for meeting in found
+        ]
+        bridged = bridge_addresses(
+            stored[:MAX_BRIDGE_ADDRESSES], {key for plan in plans for key in plan.keys}
+        )
+        asked = [
+            MeetingContextCandidateInput(
+                ordinal=ordinal,
+                window_start=plan.window.start,
+                window_end=plan.window.end,
+                addresses=tuple(
+                    (spelling, key)
+                    for key in plan.keys
+                    for spelling in (key, *bridged.get(key, ()))
+                ),
+                identifiers=tuple((i.kind.value, i.value) for i in plan.identifiers),
+                title_terms=plan.terms,
+                project_number=plan.project_number,
+            )
+            for ordinal, plan in enumerate(plans)
+            if plan.asks
+        ]
+        rows: tuple[MeetingContextCandidateRow, ...] = ()
+        if asked:
+            rows = communications.context_candidates(
+                principal_id,
+                MeetingContextCandidateQuery(
+                    meetings=tuple(asked),
+                    identifier_version=self._identifier_version,
+                    limit=limit,
                 ),
             )
-            summary = summarize_coverage(
-                coverage_facts(unit, principal_id, communications_source_ids(unit, principal_id)),
-                now=now,
+        lanes: Mapping[str, tuple[tuple[str, str], ...]] = {}
+        if rows:
+            lanes = communications.list_message_lanes(
+                principal_id, sorted({row.message_id for row in rows})
             )
-            owner = communications.context_self_addresses(principal_id, limit=MAX_SELF_ADDRESSES)
-            self_keys = frozenset(address_match_key(a) for a in owner.addresses)
-            if not owner.addresses:
-                self_state = SelfAddressState.UNKNOWN
-            elif owner.verified:
-                self_state = SelfAddressState.DERIVED
-            else:
-                self_state = SelfAddressState.DERIVED_UNVERIFIED
-            # One more than the cap, so that a truncation is stated, never silent.
-            stored = communications.bridge_participant_addresses(
-                principal_id, pattern=bridge_pattern(), limit=MAX_BRIDGE_ADDRESSES + 1
-            )
-            bridge_truncated = len(stored) > MAX_BRIDGE_ADDRESSES
-            plans = [
-                _plan(
-                    meeting,
-                    lookback_days=lookback_days,
-                    now=now,
-                    self_keys=self_keys,
-                    self_state=self_state,
-                    bridge_truncated=bridge_truncated,
-                    identifier_version=self._identifier_version,
-                )
-                for meeting in found
-            ]
-            bridged = bridge_addresses(
-                stored[:MAX_BRIDGE_ADDRESSES], {key for plan in plans for key in plan.keys}
-            )
-            asked = [
-                MeetingContextCandidateInput(
-                    ordinal=ordinal,
-                    window_start=plan.window.start,
-                    window_end=plan.window.end,
-                    addresses=tuple(
-                        (spelling, key)
-                        for key in plan.keys
-                        for spelling in (key, *bridged.get(key, ()))
-                    ),
-                    identifiers=tuple((i.kind.value, i.value) for i in plan.identifiers),
-                    title_terms=plan.terms,
-                    project_number=plan.project_number,
-                )
-                for ordinal, plan in enumerate(plans)
-                if plan.asks
-            ]
-            rows: tuple[MeetingContextCandidateRow, ...] = ()
-            if asked:
-                rows = communications.context_candidates(
-                    principal_id,
-                    MeetingContextCandidateQuery(
-                        meetings=tuple(asked),
-                        identifier_version=self._identifier_version,
-                        limit=limit,
-                    ),
-                )
-            lanes: Mapping[str, tuple[tuple[str, str], ...]] = {}
-            if rows:
-                lanes = communications.list_message_lanes(
-                    principal_id, sorted({row.message_id for row in rows})
-                )
-            by_ordinal: dict[int, list[MeetingContextCandidateRow]] = {}
-            for row in rows:
-                by_ordinal.setdefault(row.ordinal, []).append(row)
-            pages = {ordinal: by_ordinal.get(ordinal, [])[:limit] for ordinal in range(len(plans))}
-            # PULSE-AC-16: everything above is communications; the pulse reads follow.
-            pulse = self._pulse(unit, principal_id, plans, pages)
+        by_ordinal: dict[int, list[MeetingContextCandidateRow]] = {}
+        for row in rows:
+            by_ordinal.setdefault(row.ordinal, []).append(row)
+        pages = {ordinal: by_ordinal.get(ordinal, [])[:limit] for ordinal in range(len(plans))}
+        # PULSE-AC-16: everything above is communications; the pulse reads follow.
+        pulse = self._pulse(unit, principal_id, plans, pages)
         contexts = []
         for ordinal, plan in enumerate(plans):
             mine = pages[ordinal]

@@ -44,6 +44,7 @@ from sqlalchemy import (
     Table,
     Text,
     and_,
+    any_,
     case,
     column,
     exists,
@@ -108,9 +109,11 @@ __all__ = [
     "SqlCommunicationsRepository",
     "communications_aggregate",
     "communications_fts_measurement",
+    "meeting_context_probe_facts",
     "number_prefilter",
     "number_prefilter_haystack",
     "number_prefilter_needle",
+    "quarantined_reason_count",
 ]
 
 
@@ -2103,3 +2106,119 @@ def communications_fts_measurement(
         "material_share": FTS_MATERIAL_SHARE,
         "english_miss_uncovered_material": material,
     }
+
+
+# --- the `measure-context` probe facts (WP5-S6, design section 3.12) -------------------
+
+
+def meeting_context_probe_facts(
+    connection: Connection,
+    principal_id: str,
+    *,
+    anchors: Sequence[datetime],
+    lookback: timedelta,
+    excluded_addresses: Sequence[str],
+    identifier_version: str,
+    max_attendees: int,
+    min_participants: int,
+    identifiers: int,
+) -> tuple[tuple[tuple[str, ...], tuple[tuple[str, str], ...]], ...]:
+    """Per anchor, a probe Meeting's attendee addresses and identifiers (read-only).
+
+    For each anchor, in order, two statements over the Principal's own rows:
+
+    * the distinct participant addresses (at most `max_attendees`, in
+      code-point order) of the latest message at or before the anchor that has
+      at least `min_participants` participants outside `excluded_addresses`
+      (the owner's derived addresses), less those addresses;
+    * the `identifiers` most frequent `identifier_version` identifiers, the
+      bare `gmp` and `fpl` excluded (ruling D4), among the messages of
+      `[anchor - lookback, anchor]`, by distinct messages descending, then
+      `(kind, value)`.
+
+    The answer stays in memory: `measure-context` builds probe Meetings from
+    it and prints counts only, never an address or an identifier.
+    """
+    messages = communication_messages
+    participants = communication_participants
+    found: list[tuple[tuple[str, ...], tuple[tuple[str, str], ...]]] = []
+    excluded = list(excluded_addresses)
+
+    def others(message_id: ColumnElement[Any]) -> ColumnElement[bool]:
+        criteria = [_mine(participants, principal_id), participants.c.message_id == message_id]
+        if excluded:
+            criteria.append(participants.c.address.not_in(excluded))
+        return and_(*criteria)
+
+    for anchor in anchors:
+        crowded = (
+            select(func.count(func.distinct(participants.c.address)))
+            .where(others(messages.c.message_id))
+            .scalar_subquery()
+        )
+        latest = (
+            select(messages.c.message_id)
+            .where(
+                _mine(messages, principal_id),
+                messages.c.message_time <= anchor,
+                crowded >= min_participants,
+            )
+            .order_by(messages.c.message_time.desc(), messages.c.message_id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        addresses = tuple(
+            str(address)
+            for address in connection.execute(
+                select(participants.c.address)
+                .where(others(latest))
+                .distinct()
+                .order_by(participants.c.address)
+                .limit(max_attendees)
+            ).scalars()
+        )
+        ids = communication_identifiers
+        frequent = tuple(
+            (str(kind), str(value))
+            for kind, value in connection.execute(
+                select(ids.c.kind, ids.c.value)
+                .select_from(
+                    ids.join(
+                        messages,
+                        and_(
+                            _mine(messages, principal_id),
+                            messages.c.message_id == ids.c.message_id,
+                        ),
+                    )
+                )
+                .where(
+                    _mine(ids, principal_id),
+                    ids.c.extractor_version == identifier_version,
+                    ids.c.kind.not_in(_BARE_KINDS),
+                    messages.c.message_time >= anchor - lookback,
+                    messages.c.message_time <= anchor,
+                )
+                .group_by(ids.c.kind, ids.c.value)
+                .order_by(
+                    func.count(func.distinct(ids.c.message_id)).desc(),
+                    ids.c.kind,
+                    ids.c.value,
+                )
+                .limit(identifiers)
+            )
+        )
+        found.append((addresses, frequent))
+    return tuple(found)
+
+
+def quarantined_reason_count(connection: Connection, principal_id: str, reason: str) -> int:
+    """How many of the Principal's quarantine rows carry `reason` (a closed code)."""
+    quarantine = communication_quarantine
+    return int(
+        connection.execute(
+            select(func.count()).where(
+                _mine(quarantine, principal_id),
+                literal(reason) == any_(quarantine.c.reasons),
+            )
+        ).scalar_one()
+    )

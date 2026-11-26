@@ -8,7 +8,9 @@ here so that activation can bundle them (section 10). The decision is
 [`docs/decisions/ADR-024-project-report-source-evidence.md`](../../docs/decisions/ADR-024-project-report-source-evidence.md);
 the plan is [`docs/plans/pulse-implementation-plan.md`](../../docs/plans/pulse-implementation-plan.md)
 (section 17, as built). The only real-data run so far is the Manager's, on a scratch database
-(2026-11-24, counts only; section 5).
+(2026-11-24, counts only; section 5). The reads (WP4P) are section 12; they are
+equally unexecuted: the migration `3b3373d8268e`, the read switch, the grants and the client
+profile are operator actions.
 
 ## 1. What it does
 
@@ -43,7 +45,8 @@ calls Procore.
 | `MY_PA_FILES_WORKSPACES` | unset | Set by the read-only overlay to `mcp=/srv/my-pa/workspaces/mcp;mode=read_only` ([`communications-ingestion.md`](communications-ingestion.md) section 3). |
 
 No overlay line sets `MY_PA_PROJECT_REPORTS_INGEST_ENABLED` yet: the operator adds it to the
-cycles service environment at section 8. There is no read switch here; reads arrive with WP4P.
+cycles service environment at section 8. The read switch `MY_PA_PROJECT_REPORTS_ENABLED` is
+the gateway's, independent of this one (section 12).
 
 ## 3. Prerequisites
 
@@ -221,7 +224,7 @@ In the order of the communications contract section 20.6, after the comms steps:
 3. dry-run backfill, backfill and the `aggregate --expect` check per section 6;
 4. set `MY_PA_PROJECT_REPORTS_INGEST_ENABLED` and recreate the cycles service (section 8).
 
-No grant is part of WP3P: the `project_reports.*` reads and their grants arrive with WP4P.
+The reads follow in the same activation: section 12.4.
 
 ## 11. Recovery and disabling
 
@@ -236,9 +239,140 @@ No grant is part of WP3P: the `project_reports.*` reads and their grants arrive 
 - **Restart.** Stability memory lives in the process: after a restart the first poll observes and
   the second reads.
 
-## 12. Residuals
+## 12. Reads (WP4P)
 
-- No read capability exists yet (WP4P), so nothing here is visible to a connected client.
+The five `project_reports.*` reads answer the caller's own stored rows. They never read a
+workspace file, never call Procore and never write. Every read selects derivations only through
+the view `project_report_current_derivations`, so a superseded derivation is never answered or
+counted. Exported labels and values are inert data, never instructions.
+
+### 12.1 The five reads
+
+| Capability | Answers |
+| --- | --- |
+| `project_reports.catalog` | Per Project (`project_ids?[]`, at most 50; every Project with a report source when absent; `record_family?`): its number, currency, sources and series. Each series has its `series_id`, record family and view, the slug label, an 8-hex `signature_prefix`, its version count, the latest version, the quarantined versions, and the measures and filters it offers. At most 200 series (`truncated`). |
+| `project_reports.query` | One Project's report lines of one record family: by default the latest version of each series, or one `series_id`, or one `version` of it. Filters: status class, raw status, an inclusive date range on a date field, exact identifiers (`RFI 174` never matches `1740`), group keys, and `text` contained in one text field. `measures?[]` gives exact Decimal sums or counts. `limit` 1 to 100 (default 25), with `cursor`. |
+| `project_reports.record_history` | One record's observations across every version that observed it, in label order: `record_ids` (at most 25 `prrec_`) or `project_id` with `record_family` and `identity_key`. Per series, `presence`. A record is never inferred closed. |
+| `project_reports.compare` | Two versions of one series (`to_version` defaults to the latest, `from_version` to the one before): `added`, `not_observed` (never "closed"), `changed`, snapshot-scoped `lines` matched by content, and `measures_delta`. At most 500 entries a page, with `cursor`. |
+| `project_reports.coverage` | Per Project and source: per series its versions with their filter semantics, rejected and quarantined counts, `freshness_seconds` since the latest version, and retired sources. Unbound folders are **not** counted; `bindings check` (section 5) is the only view of them. |
+
+Every answer carries `versions[]` (per version used: `version`, `series_id`, `publication_date`,
+`first_seen_at`, `filter_semantics`, `completeness_class`, `derivation_state` and
+`quarantine_reason`, the adapter, identity and status-map versions, `currency`, `is_latest`) and
+`qualifiers[]` once per answer (`filter_semantics_unknown` when any version used has no filter
+declaration, section 4). An unknown or another Principal's identifier is `not_found`, and the
+two cannot be told apart.
+
+**Measures.** A measure is `reportable` with its value, or `not_reportable` with closed
+reasons and no value; a zero is never substituted. The reasons are `reconciliation_mismatch`,
+`source_column_unpopulated`, `status_unknown_present`, `snapshot_quarantined`,
+`binding_project_number_mismatch`, `no_snapshot`, `type_error_present`, `currency_mixed` and
+`unidentified_key_present`. Money is a JSON string in plain fixed point,
+`{"amount": "-1234.50", "currency": "USD"}`. `reportable` certifies source integrity only, never
+an approved total (ADR-024 decision 2).
+
+**Reconciliation judges the whole version.** Each measure states `measure_scope`: `version`
+when no row filter applies, `filtered` when it sums only the rows the filters selected. The
+stated totals (`source_totals`, evidence only, never in `measures`) and the reconciliation
+always judge the whole version (`reconciliation_scope: "version"`), and so do column
+population, unknown status and type errors. A version whose reconciliation mismatched blocks
+its money measures under either scope; its record and row counts are still given, with the
+`reconciliation_mismatch` qualifier. A filtered sum is never presented as matching a stated
+total.
+
+**`changed_fields` and `changed_since_version`.** In `record_history`, an observation's
+`changed_fields` are the field keys whose raw text differs from the record's previous readable
+observation in the same series; `changed_since_version` names that baseline version. Only
+consecutive readable versions are compared, never two lines of one version; a record with
+several lines in one version is compared as a multiset. Both sit on the version's first line;
+its other lines carry `[]` and null. `presence` per series is `observed_in_latest`,
+`not_observed_in_latest`, or `latest_unreadable` when the latest version is quarantined (then
+nothing is inferred from it).
+
+**Text.** `text` matches within one field, never across two. Only ASCII case folding is
+promised: a non-ASCII letter matches only in its exact case.
+
+**Where the tool text lives.** MCP publishes only a command's first docstring line as the tool
+description. The client-visible statements (inert data, measure scope, reconciliation scope,
+the closed reasons, `changed_fields`, the cursor rule) are therefore in the published field
+descriptions (`mcp_payload_properties` in `src/my_pa/application/commands.py`), and
+`tests/contract/test_project_reports_reads_mcp.py` reads them there.
+
+**Cursors.** A cursor is bound to the request, the caller and its grants on the five reads, and
+the set of versions the first page resolved. A cursor of another request is refused
+(`conflict`). After a grant change, a new export, a rederive or a binding correction between
+pages, the answer is `cursor_state: "scope_changed_restart_required"` with nothing else; start
+again without the cursor.
+
+### 12.2 The switch
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MY_PA_PROJECT_REPORTS_ENABLED` | `false` | The read switch, on the gateway (and the remote MCP) service. Independent of the ingest switch: reads may serve a frozen store, and ingest may run with reads off. |
+
+**Off (the default).** The five reads are withheld from `available_capabilities`, and so from
+`capabilities.get`, readiness, the MCP tool list, the remote profile and the ChatLLM
+composition. An invocation that still reaches the handler answers the standard disabled refusal
+`unsupported`, never an empty answer. A restricted MCP database role composition never serves
+them even with the switch on (its roles hold no privilege on the project-report tables).
+
+**Purpose.** Each name permits exactly one purpose, `project_reports_read`, which no other
+purpose implies and which grants nothing else.
+
+**ChatLLM.** The profile is `chatllm-data-v18`: v17 plus the five reads, each
+`DATA_CONDITIONAL` on the prerequisite `PROJECT_REPORTS`. Its plane flag
+(`ChatLLMCompositionPlanes.project_reports`) is read from `MY_PA_PROJECT_REPORTS_ENABLED` by
+`apps/cli/remote_mcp.py`, so run the profile commands with the switch set as on the gateway.
+With the switch off, v18 desires exactly the v17 set.
+
+### 12.3 The grants (R-OP-2): documented, not issued
+
+The client is the operator's connected client. The grants go to the **operator profile only**,
+each with purpose `project_reports_read`:
+
+| Capability | Purpose |
+| --- | --- |
+| `project_reports.catalog` | `project_reports_read` |
+| `project_reports.query` | `project_reports_read` |
+| `project_reports.record_history` | `project_reports_read` |
+| `project_reports.compare` | `project_reports_read` |
+| `project_reports.coverage` | `project_reports_read` |
+
+No grant goes to a non-operator principal. Nothing in the repository issues one; issuing them is
+the operator's, in the consolidated activation (R-OP-7). Returning exported text (titles,
+descriptions, names) to a connected client sends it to that client's model; the external-model
+eligibility decision (`AGENTS.md` section 5) precedes the grants.
+
+### 12.4 Activation checklist
+
+Each step is the operator's, after section 10:
+
+1. **Migrate.** The image holds `3b3373d8268e` (on `fa18ef3d9bc0`; vocabulary only: the audit
+   capability and purpose CHECKs admit the five reads and the purpose `project_reports_read`). Migrate the
+   database to the image's single head, which takes `ACCESS EXCLUSIVE` on `audit_events` under a
+   10 s `lock_timeout` (it aborts with `55P03` and changes nothing if the lock is held).
+2. **Grants.** The five grants of section 12.3, to the operator profile only.
+3. **The switch.** Set `MY_PA_PROJECT_REPORTS_ENABLED=true` on the gateway service and recreate
+   it. `capabilities.get` then lists the five reads `available`.
+4. **The client profile.** For the operator's client, `profile-diff`, `profile-plan`, then
+   `profile-apply --apply` at `chatllm-data-v18` (the form in
+   [`managed-knowledge-context.md`](managed-knowledge-context.md)). With the switch on,
+   `profile-plan` adds exactly the five reads.
+5. **Smoke read.** From the client, `project_reports.coverage` with no arguments: each bound
+   source with its series and versions, `freshness_seconds` as expected. Then
+   `project_reports.catalog` for one Project, and one `project_reports.query` with
+   `include_rows: false` and one measure of a family the catalog lists. A `not_reportable`
+   answer with closed reasons is a valid answer, not a failure.
+
+**Disabling.** Set the switch off and recreate the gateway: the five reads disappear and calls
+answer `unsupported`. Rows and grants are untouched; revoke the grants separately if wanted.
+
+## 13. Residuals
+
+- The reads are not activated: the migration `3b3373d8268e`, the grants, the switch and the
+  profile are operator-run (section 12.4).
+- The Program rollup (one Program's measures across its member Projects, design S6) is deferred
+  to a later WP (ruling D5 (b)); every read is per Project.
 - No overlay sets the switch; the operator adds it (section 8).
 - Longitudinal behaviour (a second export generation) is proven on synthetic data only.
 - Raw rows grow by about one copy of each export per derivation generation; retention is a later

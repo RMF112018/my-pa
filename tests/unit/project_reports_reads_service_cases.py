@@ -477,7 +477,7 @@ def case_changed_fields_compare_consecutive_versions_only(scene: ReadsScene) -> 
     _linked(scene, "20261123-qxrfilinks.csv", ("SYN-A2", "SYN-A1"))
     _linked(scene, "20261124-qxrfilinks.csv", ("SYN-A1", "SYN-A3"))
 
-    def linked() -> list[tuple[str, list[str]]]:
+    def linked() -> list[tuple[str, list[str], str | None]]:
         payload = record_history_payload(
             service(scene).record_history(
                 scene.principal,
@@ -489,12 +489,16 @@ def case_changed_fields_compare_consecutive_versions_only(scene: ReadsScene) -> 
         (record,) = payload["records"]
         dates = {v["version"]: v["publication_date"] for v in payload["versions"]}
         return [
-            (dates[o["version"]], o["changed_fields"])
+            (
+                dates[o["version"]],
+                o["changed_fields"],
+                None if o["changed_since_version"] is None else dates[o["changed_since_version"]],
+            )
             for o in record["observations"]
             if o["family_view"] == "linked_to_drawings"
         ]
 
-    assert linked() == [
+    assert [(when, changed) for when, changed, _since in linked()] == [
         # Two lines of one version are never a change of each other.
         ("2026-11-21", []),
         ("2026-11-21", []),
@@ -504,6 +508,44 @@ def case_changed_fields_compare_consecutive_versions_only(scene: ReadsScene) -> 
         # One link replaced: answered once, on the version's first line.
         ("2026-11-24", ["rfi.drawing_number"]),
         ("2026-11-24", []),
+    ]
+    # Ruling R2-07: the first line of each version names its baseline (the
+    # previous observation's version); the other lines name none.
+    assert [(when, since) for when, _changed, since in linked()] == [
+        ("2026-11-21", None),
+        ("2026-11-21", None),
+        ("2026-11-23", "2026-11-21"),
+        ("2026-11-23", None),
+        ("2026-11-24", "2026-11-23"),
+        ("2026-11-24", None),
+    ]
+
+
+def case_changed_since_names_the_readable_baseline_across_a_gap(scene: ReadsScene) -> None:
+    """Ruling R2-07: across an unreadable version, `changed_fields` names its baseline.
+
+    v1 classified, v2 quarantined, v3 classified with a changed subject: v3's
+    change is judged against v1 (nothing is inferred from v2), and
+    `changed_since_version` says so.
+    """
+    changed = (("GMP-201", "Synthetic hotel changed", "", "", "11/1/2026", "", ""),)
+    scene.ingest("rfis", "20261130-qxrfiq.csv", rfi_export(changed))
+    payload = record_history_payload(
+        service(scene).record_history(
+            scene.principal,
+            RecordHistoryRequest(
+                project_id=RFI_PROJECT[1], record_family="rfis", identity_key="rfi:GMP-201"
+            ),
+        )
+    )
+    dates = {v["version"]: v["publication_date"] for v in payload["versions"]}
+    (record,) = payload["records"]
+    assert [
+        (dates[o["version"]], o["changed_fields"], o["changed_since_version"])
+        for o in record["observations"]
+    ] == [
+        ("2026-11-01", [], None),
+        ("2026-11-30", ["rfi.subject"], next(k for k, d in dates.items() if d == "2026-11-01")),
     ]
 
 
@@ -982,6 +1024,7 @@ CASES: Final = (
     case_a_stale_cross_check_is_ignored_after_a_rederivation,
     case_record_history_spans_three_rfi_views,
     case_changed_fields_compare_consecutive_versions_only,
+    case_changed_since_names_the_readable_baseline_across_a_gap,
     case_an_absent_record_is_not_observed_never_closed,
     case_a_quarantined_latest_version_is_latest_unreadable,
     case_a_quarantined_side_is_never_compared,

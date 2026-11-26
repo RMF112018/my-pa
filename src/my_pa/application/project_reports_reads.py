@@ -408,6 +408,10 @@ class Observation:
     line: ProjectReportReadLine
     series_id: str
     changed_fields: tuple[str, ...]
+    #: Ruling R2-07: the baseline `changed_fields` is judged against, the version
+    #: of the record's previous readable observation in the series (None on the
+    #: series' first observation, and on every line but a version's first).
+    changed_since_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1426,18 +1430,20 @@ class ProjectReportReads:
             in_version: dict[str, list[ProjectReportReadLine]] = {}
             for line in mine:
                 in_version.setdefault(line.snapshot_id, []).append(line)
-            previous: dict[str, Mapping[str, str]] = {}
+            previous: dict[str, tuple[str, Mapping[str, str]]] = {}
             for line in mine:
                 version = by_snapshot[line.snapshot_id]
                 group = in_version[line.snapshot_id]
                 changed: tuple[str, ...] = ()
+                since: str | None = None
                 if line is group[0]:
                     raw = _multiset_raw(group)
                     before = previous.get(version.series_id)
                     if before is not None:
-                        changed = changed_fields(before, raw)
-                    previous[version.series_id] = raw
-                observations.append(Observation(line, version.series_id, changed))
+                        since, prior = before
+                        changed = changed_fields(prior, raw)
+                    previous[version.series_id] = (line.snapshot_id, raw)
+                observations.append(Observation(line, version.series_id, changed, since))
             presences: list[SeriesPresence] = []
             for series_id in dict.fromkeys(o.series_id for o in observations):
                 members = series[series_id]
@@ -2149,6 +2155,7 @@ def _observation_payload(observation: Observation) -> dict[str, object]:
         "status_class": None if line.status_class is None else line.status_class.value,
         "dates": dates,
         "changed_fields": list(observation.changed_fields),
+        "changed_since_version": observation.changed_since_version,
     }
 
 

@@ -158,21 +158,21 @@
     "classes": {
       "CHATLLM_COMPATIBILITY_ONLY": 2,
       "CHATLLM_CONTROL_PLANE_EXCLUDED": 33,
-      "CHATLLM_DATA_CONDITIONAL": 186,
+      "CHATLLM_DATA_CONDITIONAL": 191,
       "CHATLLM_DATA_REQUIRED": 88,
       "CHATLLM_OPERATOR_DECISION_REQUIRED": 2,
       "CHATLLM_RETIRED": 0
     },
-    "policy_sha256": "b8b470e42cc3ca7817ad34ba0c737bd0745b936113842dbae7d68d898046357f",
-    "version": "chatllm-data-v19"
+    "policy_sha256": "9375c20a3f6b632d6455fe5cb60f29da46ae606d76118f675ba1b930d4d7b0cd",
+    "version": "chatllm-data-v20"
   },
   "counts": {
-    "alembic_revisions": 136,
-    "capability": 311,
-    "chatllm_policy_entries": 311,
+    "alembic_revisions": 137,
+    "capability": 316,
+    "chatllm_policy_entries": 316,
     "id_kind": 197,
-    "purpose": 73,
-    "safe_detail": 461
+    "purpose": 74,
+    "safe_detail": 475
   },
   "vocabulary": {
     "capability": [
@@ -990,6 +990,7 @@
       "include_manifest",
       "include_manifests",
       "include_personal",
+      "include_rows",
       "include_sha256",
       "include_statement",
       "include_text",

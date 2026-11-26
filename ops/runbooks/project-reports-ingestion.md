@@ -319,11 +319,11 @@ them even with the switch on (its roles hold no privilege on the project-report 
 **Purpose.** Each name permits exactly one purpose, `project_reports_read`, which no other
 purpose implies and which grants nothing else.
 
-**ChatLLM.** The profile is `chatllm-data-v18`: v17 plus the five reads, each
+**ChatLLM.** The profile is `chatllm-data-v20`: v19 plus the five reads, each
 `DATA_CONDITIONAL` on the prerequisite `PROJECT_REPORTS`. Its plane flag
 (`ChatLLMCompositionPlanes.project_reports`) is read from `MY_PA_PROJECT_REPORTS_ENABLED` by
 `apps/cli/remote_mcp.py`, so run the profile commands with the switch set as on the gateway.
-With the switch off, v18 desires exactly the v17 set.
+With the switch off, v20 desires exactly the v19 set.
 
 ### 12.3 The grants (R-OP-2): documented, not issued
 
@@ -359,11 +359,11 @@ Each step is the operator's, after section 10, in this order:
    `available`.
 4. **The grants and the profile, as one step.** With `MY_PA_PROJECT_REPORTS_ENABLED=true` also
    set in the CLI environment (the plane flag is read from it, section 12.2), run
-   `profile-diff`, `profile-plan`, then `profile-apply --apply` at `chatllm-data-v18` for the
+   `profile-diff`, `profile-plan`, then `profile-apply --apply` at `chatllm-data-v20` for the
    operator's client (the form in [`managed-knowledge-context.md`](managed-knowledge-context.md)).
    `profile-plan` adds exactly the five grants of section 12.3, to the operator profile only;
-   `profile-apply` issues them. With the switch unset in the CLI environment, v18 desires exactly
-   the v17 set and the plan adds nothing. No grant goes to a non-operator principal, and no
+   `profile-apply` issues them. With the switch unset in the CLI environment, v20 desires exactly
+   the v19 set and the plan adds nothing. No grant goes to a non-operator principal, and no
    change in the repository writes one.
 5. **Smoke read.** From the client, `project_reports.coverage` with no arguments: each bound
    source with its series and versions, `freshness_seconds` as expected. Then

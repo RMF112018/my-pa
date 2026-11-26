@@ -288,7 +288,7 @@ def test_profile_apply_installs_the_create_grant_with_its_purpose(
         communications_enabled=False,
         # P6 XER import S7-4a (chatllm-data-v19): the P6 switch off, its default.
         schedule_p6_enabled=False,
-        # Project-report reads WP4P-S4 (chatllm-data-v18): the read switch off,
+        # Project-report reads WP4P-S4 (chatllm-data-v20): the read switch off,
         # its default.
         project_reports_enabled=False,
         knowledge_discovery_oauth_client_id_set=frozenset,

@@ -109,7 +109,8 @@ def test_the_three_are_declared_dispatched_built_and_published_as_reads() -> Non
 
 
 def test_chatllm_classifies_the_three_conditional_on_communications() -> None:
-    # Introduced at v17; later profiles (v18, project-report reads WP4P-S4) contain it.
+    # Introduced at v17; later profiles (v19, P6 XER import S7-4a; v20, project-report
+    # reads WP4P-S4) contain it.
     assert int(CHATLLM_DATA_PROFILE_VERSION.removeprefix("chatllm-data-v")) >= 17
     for capability in READS:
         policy = CHATLLM_CAPABILITY_POLICY[capability]

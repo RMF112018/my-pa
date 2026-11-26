@@ -556,7 +556,7 @@ composition and in every MCP publication that composition produces.
   family, and each Meeting capability appears in it only for an authenticated
   client whose grants, purpose, capability version and write gates admit it.
 - **Desired ChatLLM profile.** The repository's ChatLLM data profile is
-  `chatllm-data-v19` (P6 XER import S7-4a: v17 plus the 7 P6 names, `schedule_publications.import_p6` and `schedule_p6_fields.set_captured` as write grants and the 5 `schedule_p6_*` reads, all `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_P6_ENABLED` over `MY_PA_SCHEDULE_ENABLED`; v19 with that switch off desires exactly the v17 set; `chatllm-data-v18` is held for communications WP4P S4; v17, communications intelligence WP4-S5: v16 plus the 3 `communications.*` reads, `DATA_CONDITIONAL` on `MY_PA_COMMUNICATIONS_ENABLED`, their grants to the operator profile only, purpose `communications_read`; v17 with that switch off desires exactly the v16 set; v16, WP3b-S4: v15 plus `meetings.provider.review` and `meetings.provider.reconcile`, both `DATA_REQUIRED` on the core plane, the profile to activate at the consolidated goal deploy instead of v15 (Manager ruling D13), their grants to the operator profile only (R-OP-2); v15, WP2-W3: v14 plus `meetings.provider.bind`, `DATA_REQUIRED` on the core plane; v14, files workspace WP5: the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set). Since `chatllm-data-v3` it has classified the six
+  `chatllm-data-v20` (project-report reads WP4P-S4: v19 plus the 5 `project_reports.*` reads, `DATA_CONDITIONAL` on `MY_PA_PROJECT_REPORTS_ENABLED`, their grants to the operator profile only, purpose `project_reports_read`; v20 with that switch off desires exactly the v19 set; v19, P6 XER import S7-4a: v17 plus the 7 P6 names, `schedule_publications.import_p6` and `schedule_p6_fields.set_captured` as write grants and the 5 `schedule_p6_*` reads, all `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_P6_ENABLED` over `MY_PA_SCHEDULE_ENABLED`; v19 with that switch off desires exactly the v17 set; `chatllm-data-v18` was never issued; v17, communications intelligence WP4-S5: v16 plus the 3 `communications.*` reads, `DATA_CONDITIONAL` on `MY_PA_COMMUNICATIONS_ENABLED`, their grants to the operator profile only, purpose `communications_read`; v17 with that switch off desires exactly the v16 set; v16, WP3b-S4: v15 plus `meetings.provider.review` and `meetings.provider.reconcile`, both `DATA_REQUIRED` on the core plane, the profile to activate at the consolidated goal deploy instead of v15 (Manager ruling D13), their grants to the operator profile only (R-OP-2); v15, WP2-W3: v14 plus `meetings.provider.bind`, `DATA_REQUIRED` on the core plane; v14, files workspace WP5: the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set). Since `chatllm-data-v3` it has classified the six
   `meetings.` names as `DATA_REQUIRED`: reads under `meeting_read`, writes under
   `meeting_authoring`; `chatllm-data-v4` adds `record_events.list` under
   `record_event_read`; `chatllm-data-v5` adds `capture.archive` and
@@ -836,10 +836,10 @@ python -m alembic heads
 python apps/cli/health.py
 python apps/cli/remote_mcp.py profile-diff \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v19
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v20
 python apps/cli/remote_mcp.py profile-plan \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v19
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v20
 ```
 
 `apps/cli/health.py` answers `not_at_head` for a database below `c8e4a1b70d35`,

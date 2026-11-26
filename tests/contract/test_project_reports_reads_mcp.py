@@ -4,7 +4,7 @@ WP4P-W1 design sections 2.1-2.10 and the Manager's rulings: the 5 names are
 declared, dispatched, built and published as reads (`read_only_hint`) under
 `project_reports_read` only; scopeless and not operator-only;
 `DATA_CONDITIONAL` on the `PROJECT_REPORTS` prerequisite at
-`chatllm-data-v18` (AC-15). With `MY_PA_PROJECT_REPORTS_ENABLED` off (the
+`chatllm-data-v20` (AC-15). With `MY_PA_PROJECT_REPORTS_ENABLED` off (the
 default) every one is withheld from `capabilities.get` and the tool list and
 answers the standard `unsupported`, never an empty result. The measure enum
 is frozen from the ruling A1 names and holds no non-additive column (the
@@ -47,6 +47,7 @@ from my_pa.adapters.normalization import _BUILDERS, normalize
 from my_pa.application.chatllm_data_profile import (
     ChatLLMCompositionPlanes,
     composed_capabilities,
+    desired_effective_capabilities,
 )
 from my_pa.application.commands import (
     PROJECT_REPORTS_MEASURE_NAMES,
@@ -170,7 +171,7 @@ def test_the_five_are_declared_dispatched_built_and_published_as_reads() -> None
 
 
 def test_chatllm_classifies_the_five_conditional_on_project_reports() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v18"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v20"
     for capability in READS:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL
@@ -190,6 +191,44 @@ def test_chatllm_classifies_the_five_conditional_on_project_reports() -> None:
     # The communications plane alone composes none of them.
     other = composed_capabilities(everything, ChatLLMCompositionPlanes(**base, communications=True))
     assert not other & set(READS)
+
+
+@pytest.mark.parametrize(
+    ("schedule_p6", "others"), [(p6, o) for p6 in (True, False) for o in (True, False)]
+)
+def test_with_the_switch_off_v20_desires_exactly_the_v19_set(
+    schedule_p6: bool, others: bool
+) -> None:
+    """v20 is v19 plus the 5 reads: off desires exactly v19; on adds exactly the 5.
+
+    The P6 switch (v19's own flag, over the Schedule switch) and the other
+    plane flags are varied so the equality holds whatever v19 itself composes.
+    """
+    planes: dict[str, bool] = {
+        "managed_documents": others,
+        "relationship_intelligence": others,
+        "relationship_intelligence_writes": others,
+        "relationship_memory": others,
+        "constraints": True,
+        "knowledge_assertions": others,
+        "lineage": others,
+        "program_reporting": others,
+        "schedule": True,
+        "schedule_scenarios": others,
+        "files_workspace": others,
+        "communications": others,
+        "schedule_p6": schedule_p6,
+    }
+    implemented = frozenset(CHATLLM_CAPABILITY_POLICY)
+    off = desired_effective_capabilities(
+        composed_capabilities(implemented, ChatLLMCompositionPlanes(**planes))
+    )
+    on = desired_effective_capabilities(
+        composed_capabilities(implemented, ChatLLMCompositionPlanes(**planes, project_reports=True))
+    )
+    assert not off & PROJECT_REPORTS_DATA_NAMES
+    assert on - off == PROJECT_REPORTS_DATA_NAMES == set(READS)
+    assert off == on - PROJECT_REPORTS_DATA_NAMES
 
 
 def test_the_tool_schemas_publish_the_design_bounds() -> None:

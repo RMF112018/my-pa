@@ -112,7 +112,7 @@ class ChatLLMCompositionPlanes:
     #: P6 XER import S7-4a (chatllm-data-v19): `MY_PA_SCHEDULE_P6_ENABLED`, which
     #: stacks on the Schedule switch. Default off, as the switch is.
     schedule_p6: bool = False
-    #: Project-report reads WP4P-S4 (chatllm-data-v18):
+    #: Project-report reads WP4P-S4 (chatllm-data-v20):
     #: `MY_PA_PROJECT_REPORTS_ENABLED`. Default off, as the switch is; needs no
     #: other plane.
     project_reports: bool = False

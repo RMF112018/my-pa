@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import date
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -22,6 +23,7 @@ from my_pa.application.project_reports_reads import (
     MAX_FILTER_ITEMS,
     MAX_PROJECT_IDS,
     MAX_RECORD_IDS,
+    MAX_TERM_CHARACTERS,
     CatalogRequest,
     CompareRequest,
     IdentifierItem,
@@ -182,6 +184,56 @@ def test_the_other_reads_bound_their_requests(scene: ReadsScene) -> None:
         with pytest.raises(InvalidRequestError) as raised:
             call()
         assert raised.value.safe_details == (detail,), detail
+
+
+#: One character past the bound, and the bound itself (ruling R3-05).
+_LONG: Final = "x" * (MAX_TERM_CHARACTERS + 1)
+_LONGEST: Final = "x" * MAX_TERM_CHARACTERS
+
+
+def _term_requests(term: str) -> dict[str, Callable[[ReadsScene], object]]:
+    """Each read field the 512-character term bound protects, carrying `term`."""
+
+    def query(**fields: object) -> Callable[[ReadsScene], object]:
+        return lambda scene: service(scene).query(scene.principal, _query(**fields))
+
+    return {
+        "statuses": query(statuses=[term]),
+        "group_keys": query(group_keys=[term]),
+        "identifier": query(
+            project_id=OBS_PROJECT[1],
+            record_family="observations",
+            identifiers=[IdentifierItem("observation", term)],
+        ),
+        "identity_key": lambda scene: service(scene).record_history(
+            scene.principal,
+            RecordHistoryRequest(project_id=PROJECT, record_family="rfis", identity_key=term),
+        ),
+    }
+
+
+_DETAILS: Final = {
+    "statuses": SafeDetail.STATUSES,
+    "group_keys": SafeDetail.GROUP_KEYS,
+    "identifier": SafeDetail.IDENTIFIERS,
+    "identity_key": SafeDetail.IDENTITY_KEY,
+}
+
+
+@pytest.mark.parametrize("field", sorted(_DETAILS))
+def test_a_term_past_512_characters_is_invalid_and_512_is_not(
+    scene: ReadsScene, field: str
+) -> None:
+    """Ruling R3-05: normalization, not the schema, is the bound for HTTP and stdio.
+
+    Dropping the per-term bound in `_terms` (mutant M9) passed every other test.
+    """
+    with pytest.raises(InvalidRequestError) as raised:
+        _term_requests(_LONG)[field](scene)
+    assert raised.value.safe_details == (_DETAILS[field],)
+    # A key nobody holds answers not-found: past the bound check, which is all this proves.
+    with suppress(NotFoundError):
+        _term_requests(_LONGEST)[field](scene)
 
 
 def test_a_compare_of_a_one_version_series_is_not_comparable(scene: ReadsScene) -> None:

@@ -49,9 +49,11 @@ from my_pa.application.project_reports_reads import (
 )
 from my_pa.application.project_reports_rederive import ProjectReportsRederiver
 from my_pa.bootstrap.project_reports import PulseExportReader
+from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.project_reports.catalogue import MEASURES
-from my_pa.domain.project_reports.model import FamilyView, ReconciliationOutcome
+from my_pa.domain.project_reports.model import BindingReason, FamilyView, ReconciliationOutcome
 from my_pa.domain.project_reports.reconciliation import CrossReportCheck
+from my_pa.domain.source.registry import issue_identifier
 from tests.unit.project_report_reads_scene import (
     NOTE_PROJECT,
     OBS_PROJECT,
@@ -84,6 +86,8 @@ NOW: Final = datetime(2026, 12, 1, tzinfo=UTC)
 PAIR_PROJECT: Final = ("pair", "prj_synreads0004x", "SYN-0001")
 QUARANTINED_PROJECT: Final = ("quarantined", "prj_synreads0005x", "SYN-7105")
 NEVER_PROJECT: Final = ("never", "prj_synreads0006x", "SYN-7106")
+#: The Project the RFI source is re-bound to (the series-order case).
+MOVED_PROJECT: Final = ("moved", "prj_synreads0009x", "SYN-7109")
 UNKNOWN_PROJECT: Final = "prj_synreads0099x"
 #: Ruling B1 (amended): a reconciled reconciliation export, and one whose grand total mismatches.
 SOLO_PROJECT: Final = ("solo", "prj_synreads0007x", "SYN-7107")
@@ -876,6 +880,78 @@ def case_the_batched_facade_answers_as_the_per_project_methods(scene: ReadsScene
     assert raised.value.safe_details == (SafeDetail.PROJECT_IDS,)
 
 
+def _rebind(scene: ReadsScene, key: str, project: tuple[str, str, str]) -> None:
+    """Move a source's binding to another Project (a correction of the Project itself)."""
+    _key, project_id, number = project
+    with scene.unit() as unit:
+        repository = unit.project_reports
+        binding = repository.get_binding(scene.principal, scene.sources[key])
+        assert binding is not None
+        prior = repository.get_binding_revision(scene.principal, binding.binding_revision_id)
+        assert prior is not None
+        revision = dataclasses.replace(
+            prior,
+            binding_revision_id=issue_identifier(IdKind.PROJECT_REPORT_BINDING_REVISION),
+            project_id=project_id,
+            declared_project_number=number,
+            recorded_at=scene.clock(),
+            change_set_sha256="2" * 64,
+            reason_code=BindingReason.CORRECTION,
+            supersedes_revision_id=prior.binding_revision_id,
+        )
+        repository.insert_binding_revision(scene.principal, revision)
+        repository.move_binding(
+            scene.principal,
+            dataclasses.replace(
+                binding, binding_revision_id=revision.binding_revision_id, project_id=project_id
+            ),
+        )
+
+
+def case_the_batched_facade_keeps_each_projects_series_order_across_a_rebinding(
+    scene: ReadsScene,
+) -> None:
+    """WP5 D7: a series spanning two Projects sorts as each Project alone sorts it.
+
+    The RFI source is re-bound to a new Project, which then receives a new
+    series and, after it, a new version of `qxrfis`, before any re-derivation:
+    `qxrfis` has versions in both Projects. Alone, the new Project orders its
+    series by their first versions there (the new series first); over the
+    batch's versions `qxrfis` would sort by the RFI Project's earlier ones
+    (`_project_order`).
+    """
+    scene.add_project(scene.principal, MOVED_PROJECT[1], MOVED_PROJECT[2])
+    _rebind(scene, "rfis", MOVED_PROJECT)
+    scene.ingest(
+        "rfis",
+        "20261124-qxrfimoved.csv",
+        rfi_export((("GMP-181", "Synthetic kilo", "", "", "", "", ""),)),
+    )
+    scene.ingest(
+        "rfis", NEXT_RFI, rfi_export((("GMP-180", "Synthetic juliet", "", "", "", "", ""),))
+    )
+    reads = service(scene)
+    with scene.unit() as unit:
+        versions = unit.project_report_reads.list_report_versions(
+            scene.principal, project_ids=[RFI_PROJECT[1], MOVED_PROJECT[1]]
+        )
+    spanning = {v.series_id for v in versions if v.project_id == RFI_PROJECT[1]} & {
+        v.series_id for v in versions if v.project_id == MOVED_PROJECT[1]
+    }
+    assert spanning, "the world must hold a series in both Projects"
+    batch = [(RFI_PROJECT[1], ((None, 180),)), (MOVED_PROJECT[1], ((None, 180), (None, 181)))]
+    answered = reads.context_summaries(scene.principal, batch)
+    for one, (project_id, numbers) in zip(answered, batch, strict=True):
+        summary = reads.project_summary(scene.principal, project_id)
+        assert one.summary == summary
+        assert one.availability == reads.availability(scene.principal, project_id)
+        assert one.rfis == reads.match_rfis(scene.principal, project_id, numbers)
+    moved = answered[1].summary
+    assert [b.record.series_id in spanning for b in moved.versions] == [False, True]
+    assert len(moved.counts) == 2
+    assert {m.state for m in answered[1].rfis} == {"exact"}
+
+
 def case_coverage_carries_per_version_filter_semantics(scene: ReadsScene) -> None:
     payload = coverage_payload(
         service(scene).coverage(
@@ -1099,6 +1175,7 @@ CASES: Final = (
     case_not_found_is_indistinguishable_for_foreign_and_unknown,
     case_the_facade_answers_absent_unbound_and_quarantined_projects,
     case_the_batched_facade_answers_as_the_per_project_methods,
+    case_the_batched_facade_keeps_each_projects_series_order_across_a_rebinding,
     case_coverage_carries_per_version_filter_semantics,
     case_rows_carry_typed_fields_and_raw_text,
     case_filtered_measures_sum_only_the_selected_lines,

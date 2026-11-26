@@ -11,6 +11,13 @@ Every Meeting asks with every criterion, in the dense shape: 8 attendees, three
 identifiers, a Project number that occurs in the corpus, and title terms that
 are common words (nearly every message matches them).
 
+WP5-S4 adds the `pulse` shape: the synthetic project-report world
+(`build_world` and `extend_world`, through the real WP3P path) under the same
+Principal, and 10 more Meetings of the same shape spread over its 3 available
+Projects (each given a Project number that occurs in the corpus, since a number
+is unique per Principal), read at the defaults with
+`MY_PA_PROJECT_REPORTS_ENABLED` on.
+
 The p50 and p95 over `RUNS` runs are recorded (`record_property`, printed under
 `-s`). The assertion is the loose test ceiling of ruling D15 (3 s at p95); the
 D15 budget itself is evidence, and the Manager's real-corpus run its authority.
@@ -29,12 +36,25 @@ import pytest
 from sqlalchemy import update
 
 from my_pa.application.commands import CreateMeeting
-from my_pa.application.meeting_context import MeetingContextReads, MeetingContextRequest
+from my_pa.application.meeting_context import (
+    MeetingContextReads,
+    MeetingContextRequest,
+    PulseState,
+)
+from my_pa.bootstrap.project_reports import project_reports_unit_of_work
 from my_pa.infrastructure.persistence.tables import projects
 from tests.contract.test_meeting_mcp import _insert_partition
 from tests.database.communications_search_world import NOW, unit_of_work
 from tests.database.test_communications_search_latency import _seed
 from tests.database.test_task_record_events import Runtime
+from tests.unit.project_report_reads_scene import (
+    OBS_PROJECT,
+    RFI_PROJECT,
+    ReadsScene,
+    build_world,
+    database_scene,
+)
+from tests.unit.project_reports_reads_service_cases import PAIR_PROJECT, extend_world
 
 pytestmark = pytest.mark.database
 
@@ -42,6 +62,8 @@ RUNS: Final = 20
 CEILING_SECONDS: Final = 3.0
 #: A synthetic Project number that occurs in the seed's text (`RFI 174`).
 NUMBER: Final = "174"
+#: The 3 project-report Projects' numbers: unique per Principal, each in the seed (a subject).
+PULSE_NUMBERS: Final = ("175", "176", "177")
 
 
 def _timed(call: Callable[[], object]) -> tuple[float, float]:
@@ -72,23 +94,42 @@ def test_the_context_latency_on_the_wp4_seed(
         with runtime.work_engine.begin() as connection:
             for table in ("messages", "participants", "identifiers", "observations"):
                 connection.exec_driver_sql(f"ANALYZE knowledge.communication_{table}")
-        ids = []
-        for k in range(10):
+        # The project-report world under the same Principal (WP5-S4).
+        reports = ReadsScene(
+            unit=project_reports_unit_of_work(runtime.work_engine),
+            add_project=database_scene(runtime.work_engine).add_project,
+            principal_id=principal_id,
+        )
+        build_world(reports)
+        extend_world(reports)
+        pulse_projects = [RFI_PROJECT[1], OBS_PROJECT[1], PAIR_PROJECT[1]]
+        with runtime.work_engine.begin() as connection:
+            for project_id, number in zip(pulse_projects, PULSE_NUMBERS, strict=True):
+                connection.execute(
+                    update(projects)
+                    .where(projects.c.project_id == project_id)
+                    .values(project_number=number)
+                )
+
+        def meeting(k: int, key: str, project_id: str) -> str:
             created = runtime.ok(
                 CreateMeeting(
                     title=f"Concrete inspection crane {k}",
                     start_at=NOW - timedelta(hours=3),
                     timezone_name="UTC",
-                    idempotency_key=f"latency-{k}",
+                    idempotency_key=f"{key}-{k}",
                     attendees=tuple(
                         {"email": f"person{(k * 13 + j) % 600}@example.invalid"} for j in range(8)
                     ),
                     description=f"RFI {k * 7}, RFI {k * 7 + 1} and CO 3",
-                    project_id=partition.project_id,
+                    project_id=project_id,
                 ),
                 principal_id=principal_id,
             )
-            ids.append(str(created["meeting"]["meeting_id"]))
+            return str(created["meeting"]["meeting_id"])
+
+        ids = [meeting(k, "latency", partition.project_id) for k in range(10)]
+        linked = [meeting(k, "pulse", pulse_projects[k % 3]) for k in range(10)]
         service = MeetingContextReads(
             unit_of_work=unit_of_work(runtime.work_engine), clock=lambda: NOW
         )
@@ -107,11 +148,23 @@ def test_the_context_latency_on_the_wp4_seed(
             for section in sections
             for m in section.messages
         )
+        pulse_service = MeetingContextReads(
+            unit_of_work=unit_of_work(runtime.work_engine),
+            clock=lambda: NOW,
+            project_reports_enabled=True,
+        )
+        pulse_request = MeetingContextRequest(meeting_ids=linked)
+        pulsed = pulse_service.read(principal_id, pulse_request)
+        assert {context.pulse.state for context in pulsed.meetings} == {PulseState.AVAILABLE}
+        assert any(context.pulse.rfis for context in pulsed.meetings)
         shapes: dict[str, Callable[[], object]] = {
             "context_1_defaults": read(1),
             "context_10_defaults": read(10),
             "context_1_maximum": read(1, lookback_days=90, per_meeting_limit=50),
             "context_10_maximum": read(10, lookback_days=90, per_meeting_limit=50),
+            "context_10_defaults_pulse_3_projects": lambda: pulse_service.read(
+                principal_id, pulse_request
+            ),
         }
         figures = {}
         for name, call in shapes.items():

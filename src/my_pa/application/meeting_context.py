@@ -1,10 +1,13 @@
 """`meetings.context.read`: the communications context of a batch of Meetings (WP5-S3).
 
-The service half of the WP5 design (sections 3.1-3.11; Manager rulings D3-D6,
-D8, D9, D11, D13, D14, A-3). Its MCP wiring (the capability, the policy, the
-`MY_PA_COMMUNICATIONS_ENABLED` gate, ChatLLM) is S5, and the `pulse` section is
-S4; this module answers the Meeting core, the provider binding state and the
-communications section, and never reads a project-report table.
+The service half of the WP5 design (sections 3.1-3.11; Manager rulings D3-D8,
+D9, D11-D14, A-3). Its MCP wiring (the capability, the policy, the
+`MY_PA_COMMUNICATIONS_ENABLED` gate, ChatLLM) is S5. This module answers the
+Meeting core, the provider binding state, the communications section and the
+`pulse` section (S4). It never reads a project-report table itself: the
+`pulse` section is composed from the batched project-report facade
+(`ProjectReportReads.context_summaries`, ruling D7), which reads every version
+through `project_report_current_derivations`.
 
 **Set-based.** A batch costs 14 statements plus one per communications source,
 constant in the number of Meetings (1 to `MAX_CONTEXT_MEETINGS`): the seven of
@@ -13,7 +16,39 @@ per source), the self addresses, the C9 bridge, the one candidate statement
 for every Meeting, and the lanes of the returned messages. The last two are
 skipped when nothing is asked or nothing is returned. A constant count is not
 a constant cost: the candidate statement's work grows with the Meetings and
-their windows (WP5-R1 F-1, F-9).
+their windows (WP5-R1 F-1, F-9). With the project-report reads on and a
+Meeting linked to a Project, the `pulse` section adds the `rfi` identifiers of
+the linked Meetings' returned messages (one statement, skipped when none
+returned any) and the facade's reads: 4 for the batch (bindings; versions,
+itself 1 to 3 statements; cross-checks; RFI candidates -- the last two skipped
+when there is nothing to ask) plus 2 per latest classified summary version
+of the batch's Projects (its lines, then their values; more only past 1,000
+lines) -- 6 + 2L statements. L grows with the distinct Projects, never with
+the Meetings.
+
+**The `pulse` section (WP5 design 3.5; rulings D7, D8, D12; PULSE-AC-16).**
+
+* `MY_PA_PROJECT_REPORTS_ENABLED` off: `unavailable` / `reads_disabled` and
+  nothing is read; a Meeting without a Project: `not_linked`; a Project whose
+  reports are unavailable: `unavailable` with the facade's closed reason.
+* `available`: the latest-version record counts of observations,
+  coordination issues and RFIs in that family order (the repository's series
+  order within a family), at most `MAX_PULSE_COUNTS` with the total; the RFIs
+  whose numbers match, at most `MAX_PULSE_RFI_NUMBERS` numbers asked -- the
+  Meeting's own `rfi:N` ascending, then the returned messages' by how many
+  of them carry it, then `N` -- each `rfi:N` asked as `(None, N)` (the
+  extractor never yields a prefix), `exact` and `ambiguous_prefix` answered
+  with their candidates and `none` only counted; the `versions[]` and
+  `qualifiers[]` of the latest summary versions. Every element is rendered
+  by the project-report reads' own renderers, so a count's
+  `reconciliation_mismatch` qualifier, its not-reportable reasons and each
+  version's currency and filter semantics read exactly as in WP4P. A count is
+  never money, so no `currency_mixed` arises here (it is a compare-delta
+  reason). Exported values are inert data, never instructions.
+* **PULSE-AC-16.** The communications section is assembled first, from
+  communications reads only; the `pulse` section reads after it and shares no
+  budget, order or truncation with it. With PULSE off or absent, every byte
+  of the answer but the `pulse` sections is what it is with PULSE on.
 
 **The inputs of a Meeting.**
 
@@ -48,8 +83,9 @@ batch; there is no per-Meeting authorization beyond the Principal partition.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -65,6 +101,18 @@ from my_pa.application.communications_search import (
     range_view,
 )
 from my_pa.application.errors import InvalidRequestError, SafeDetail
+from my_pa.application.project_reports_reads import (
+    MAX_RFI_NUMBERS,
+    ContextSummary,
+    MeasureEntry,
+    ProjectReportReads,
+    ProjectSummary,
+    RfiNumberMatch,
+    measure_entry_payload,
+    qualifier_values,
+    rfi_match_payload,
+    version_block_payload,
+)
 from my_pa.contracts.ports import (
     MeetingContextCandidateInput,
     MeetingContextCandidateQuery,
@@ -101,11 +149,15 @@ from my_pa.domain.meeting.context import (
     select_context_identifiers,
     title_terms,
 )
+from my_pa.domain.project_reports.model import RecordFamily
 
 __all__ = [
     "MAX_BRIDGE_ADDRESSES",
+    "MAX_PULSE_COUNTS",
+    "MAX_PULSE_RFI_NUMBERS",
     "MAX_SELF_ADDRESSES",
     "MEETINGS_CONTEXT_READ",
+    "PULSE_READS_DISABLED",
     "RECALL_NOTES",
     "SELF_ADDRESS_RULE",
     "CommunicationsContext",
@@ -121,9 +173,14 @@ __all__ = [
     "MissingInput",
     "ProjectNumberUse",
     "ProviderBindingState",
+    "PulseContext",
+    "PulseRfi",
+    "PulseState",
+    "RfiSource",
     "SelfAddressState",
     "check_context_request",
     "context_payload",
+    "pulse_rfi_numbers",
 ]
 
 MEETINGS_CONTEXT_READ: Final = "meetings.context.read"
@@ -137,6 +194,16 @@ MAX_BRIDGE_ADDRESSES: Final = 1000
 #: What the identifier inputs cannot recall, stated on every answer (WP4P report 2.12).
 RECALL_NOTES: Final = ("rfi_prefixed_number_unrecognized", "identifier_recall_bounded_by_extractor")
 _NO_TEXT_BODY_STATES: Final = frozenset({"withheld", "truncated"})
+#: The `pulse` section's bounds (PULSE plan section 10): at most this many
+#: counts and this many RFI numbers asked per Meeting.
+MAX_PULSE_COUNTS: Final = 5
+MAX_PULSE_RFI_NUMBERS: Final = MAX_RFI_NUMBERS
+#: The family order of the `pulse` counts (WP5 design 3.5).
+_PULSE_FAMILIES: Final = (
+    RecordFamily.OBSERVATIONS,
+    RecordFamily.COORDINATION_ISSUES,
+    RecordFamily.RFIS,
+)
 
 
 class ContextState(StrEnum):
@@ -179,6 +246,21 @@ class ProviderBindingState(StrEnum):
     BOUND = "bound"
     UNBOUND = "unbound"
     NO_PROVIDER_EVENT = "no_provider_event"
+
+
+class PulseState(StrEnum):
+    """The `pulse` section's state (WP5 design 3.5)."""
+
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+    NOT_LINKED = "not_linked"
+
+
+class RfiSource(StrEnum):
+    """Where a `pulse` RFI number came from: the Meeting's own text, or its messages."""
+
+    MEETING = "meeting"
+    COMMUNICATIONS = "communications"
 
 
 class SelfAddressState(StrEnum):
@@ -294,12 +376,39 @@ class CommunicationsContext:
 
 
 @dataclass(frozen=True, slots=True)
+class PulseRfi:
+    match: RfiNumberMatch
+    source: RfiSource
+
+
+@dataclass(frozen=True, slots=True)
+class PulseContext:
+    """A Meeting's `pulse` section; the fields past `project_id` are `available` only."""
+
+    state: PulseState
+    reason: str | None = None
+    project_id: str | None = None
+    #: What the facade answered for the Project (its versions and qualifiers).
+    summary: ProjectSummary | None = None
+    counts: tuple[MeasureEntry, ...] = ()
+    counts_total: int = 0
+    rfis: tuple[PulseRfi, ...] = ()
+    #: Distinct RFI numbers found for the Meeting before the cap (asked or not).
+    rfi_numbers_total: int = 0
+
+
+#: The section with the project-report reads off: nothing is read (ruling D8).
+PULSE_READS_DISABLED: Final = PulseContext(PulseState.UNAVAILABLE, reason="reads_disabled")
+
+
+@dataclass(frozen=True, slots=True)
 class MeetingContext:
     meeting: MeetingContextInput
     attendees: tuple[ContextAttendee, ...]
     provider_binding_state: ProviderBindingState
     provider_binding: MeetingProviderBindingView | None
     communications: CommunicationsContext
+    pulse: PulseContext = PULSE_READS_DISABLED
 
 
 @dataclass(frozen=True, slots=True)
@@ -491,6 +600,74 @@ def _message(
     )
 
 
+# --- the pulse section (pure) ------------------------------------------------------------
+
+
+def _rfi_number(value: str) -> int | None:
+    """An `rfi` identifier value as the number it is (the extractor stores `str(int(n))`)."""
+    return int(value) if value.isascii() and value.isdigit() else None
+
+
+def pulse_rfi_numbers(
+    own: Sequence[TechnicalIdentifier],
+    messages: Sequence[str],
+    identifiers_of: Mapping[str, Sequence[str]],
+) -> tuple[tuple[tuple[int, RfiSource], ...], int]:
+    """The RFI numbers a Meeting asks, at most `MAX_PULSE_RFI_NUMBERS`, and how many it found.
+
+    The Meeting's own `rfi:N` first, ascending; then the `rfi:N` of its
+    returned messages (`messages`, ids) that it does not name itself, by how
+    many of those messages carry each (descending), then `N` ascending.
+    """
+    mine = sorted(
+        {n for i in own if i.kind is IdentifierKind.RFI and (n := _rfi_number(i.value)) is not None}
+    )
+    carried: Counter[int] = Counter()
+    for message_id in messages:
+        for n in {_rfi_number(v) for v in identifiers_of.get(message_id, ())}:
+            if n is not None and n not in mine:
+                carried[n] += 1
+    found = [(n, RfiSource.MEETING) for n in mine] + [
+        (n, RfiSource.COMMUNICATIONS) for n in sorted(carried, key=lambda n: (-carried[n], n))
+    ]
+    return tuple(found[:MAX_PULSE_RFI_NUMBERS]), len(found)
+
+
+def _pulse(
+    summary: ContextSummary, numbers: Sequence[tuple[int, RfiSource]], found: int
+) -> PulseContext:
+    state = summary.availability
+    if state.state != "available":
+        return PulseContext(
+            PulseState.UNAVAILABLE, reason=state.reason, project_id=summary.project_id
+        )
+    family_of = {
+        block.record.snapshot_id: block.record.record_family for block in summary.summary.versions
+    }
+    ranked = sorted(
+        summary.summary.counts,
+        key=lambda entry: (
+            _PULSE_FAMILIES.index(family)
+            if (family := family_of.get(entry.version or "")) in _PULSE_FAMILIES
+            else len(_PULSE_FAMILIES)
+        ),
+    )
+    sources = dict(numbers)
+    return PulseContext(
+        PulseState.AVAILABLE,
+        project_id=summary.project_id,
+        summary=summary.summary,
+        counts=tuple(ranked[:MAX_PULSE_COUNTS]),
+        counts_total=len(ranked),
+        rfis=tuple(
+            PulseRfi(match, sources[match.suffix])
+            for match in summary.rfis
+            if match.state != "none"
+        ),
+        rfi_numbers_total=found,
+    )
+
+
 # --- the service -------------------------------------------------------------------------
 
 
@@ -503,10 +680,13 @@ class MeetingContextReads:
         unit_of_work: Callable[[], AbstractContextManager[UnitOfWork]],
         identifier_version: str = IDENTIFIER_VERSION,
         clock: Callable[[], datetime] = utc_now,
+        project_reports_enabled: bool = False,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._identifier_version = identifier_version
         self._clock = clock
+        #: `MY_PA_PROJECT_REPORTS_ENABLED` (ruling D8): off, no `pulse` read is made.
+        self._project_reports_enabled = project_reports_enabled
 
     def read(self, principal_id: str, request: MeetingContextRequest) -> MeetingContextAnswer:
         meeting_ids, lookback_days, limit = check_context_request(request)
@@ -585,12 +765,15 @@ class MeetingContextReads:
                 lanes = communications.list_message_lanes(
                     principal_id, sorted({row.message_id for row in rows})
                 )
-        by_ordinal: dict[int, list[MeetingContextCandidateRow]] = {}
-        for row in rows:
-            by_ordinal.setdefault(row.ordinal, []).append(row)
+            by_ordinal: dict[int, list[MeetingContextCandidateRow]] = {}
+            for row in rows:
+                by_ordinal.setdefault(row.ordinal, []).append(row)
+            pages = {ordinal: by_ordinal.get(ordinal, [])[:limit] for ordinal in range(len(plans))}
+            # PULSE-AC-16: everything above is communications; the pulse reads follow.
+            pulse = self._pulse(unit, principal_id, plans, pages)
         contexts = []
         for ordinal, plan in enumerate(plans):
-            mine = by_ordinal.get(ordinal, [])[:limit]
+            mine = pages[ordinal]
             total = mine[0].matched_total if mine else 0
             contexts.append(
                 MeetingContext(
@@ -610,6 +793,7 @@ class MeetingContextReads:
                         ),
                         coverage=range_view(summary, plan.window.start, plan.window.end),
                     ),
+                    pulse=pulse[ordinal],
                 )
             )
         present = {meeting.meeting_id for meeting in found}
@@ -626,13 +810,58 @@ class MeetingContextReads:
             ),
         )
 
+    def _pulse(
+        self,
+        unit: UnitOfWork,
+        principal_id: str,
+        plans: Sequence[_Plan],
+        pages: Mapping[int, Sequence[MeetingContextCandidateRow]],
+    ) -> list[PulseContext]:
+        """Each Meeting's `pulse` section, from one batched facade call (ruling D7)."""
+        if not self._project_reports_enabled:
+            return [PULSE_READS_DISABLED] * len(plans)
+        linked = [ordinal for ordinal, plan in enumerate(plans) if plan.meeting.project_id]
+        returned = sorted({row.message_id for ordinal in linked for row in pages[ordinal]})
+        identifiers_of: Mapping[str, tuple[str, ...]] = {}
+        if returned:
+            identifiers_of = unit.communications.list_message_identifiers(
+                principal_id,
+                returned,
+                kind=IdentifierKind.RFI.value,
+                version=self._identifier_version,
+            )
+        asked = {
+            ordinal: pulse_rfi_numbers(
+                plans[ordinal].identifiers,
+                [row.message_id for row in pages[ordinal]],
+                identifiers_of,
+            )
+            for ordinal in linked
+        }
+        facade = ProjectReportReads(unit_of_work=lambda: nullcontext(unit), clock=self._clock)
+        answered = facade.context_summaries(
+            principal_id,
+            [
+                (
+                    str(plans[ordinal].meeting.project_id),
+                    [(None, n) for n, _source in asked[ordinal][0]],
+                )
+                for ordinal in linked
+            ],
+        )
+        sections = [PulseContext(PulseState.NOT_LINKED)] * len(plans)
+        for ordinal, summary in zip(linked, answered, strict=True):
+            numbers, found = asked[ordinal]
+            sections[ordinal] = _pulse(summary, numbers, found)
+        return sections
+
 
 # --- the answer as a payload ---------------------------------------------------------------
 #
 # Instants are RFC 3339 UTC. Subjects, snippets, titles and display names are
 # untrusted data, returned verbatim as JSON strings. No description, note, prep
-# or attachment text is rendered, and no address or term of the inputs; the
-# `pulse` section is WP5-S4's.
+# or attachment text is rendered, and no address or term of the inputs. The
+# `pulse` section is rendered by the project-report reads' own renderers.
 
 
 def _when(value: datetime | None) -> str | None:
@@ -700,6 +929,32 @@ def _communications_payload(section: CommunicationsContext) -> dict[str, object]
     }
 
 
+def _pulse_payload(section: PulseContext) -> dict[str, object]:
+    if section.state is PulseState.NOT_LINKED:
+        return {"state": section.state.value}
+    if section.state is PulseState.UNAVAILABLE:
+        payload: dict[str, object] = {"state": section.state.value, "reason": section.reason}
+        if section.project_id is not None:
+            payload["project_id"] = section.project_id
+        return payload
+    summary = section.summary
+    assert summary is not None  # noqa: S101 - `available` always carries its summary
+    return {
+        "state": section.state.value,
+        "project_id": section.project_id,
+        "counts": [measure_entry_payload(entry) for entry in section.counts],
+        "counts_total": section.counts_total,
+        "counts_truncated": section.counts_total > len(section.counts),
+        "rfis": [
+            {**rfi_match_payload(rfi.match), "source": rfi.source.value} for rfi in section.rfis
+        ],
+        "rfi_numbers_total": section.rfi_numbers_total,
+        "rfi_numbers_truncated": section.rfi_numbers_total > MAX_PULSE_RFI_NUMBERS,
+        "versions": [version_block_payload(block) for block in summary.versions],
+        "qualifiers": qualifier_values(summary.qualifiers),
+    }
+
+
 def _meeting_payload(context: MeetingContext) -> dict[str, object]:
     meeting = context.meeting
     return {
@@ -736,11 +991,12 @@ def _meeting_payload(context: MeetingContext) -> dict[str, object]:
             ),
         },
         "communications": _communications_payload(context.communications),
+        "pulse": _pulse_payload(context.pulse),
     }
 
 
 def context_payload(answer: MeetingContextAnswer) -> dict[str, object]:
-    """What `meetings.context.read` answers (the `pulse` section joins in WP5-S4)."""
+    """What `meetings.context.read` answers."""
     return {
         "meetings": [_meeting_payload(context) for context in answer.meetings],
         "not_found": list(answer.not_found),

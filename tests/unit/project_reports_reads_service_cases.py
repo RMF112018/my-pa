@@ -22,6 +22,7 @@ one whose grand total is planted `$1.00` off.
 from __future__ import annotations
 
 import dataclasses
+import itertools
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from typing import Any, Final
@@ -52,6 +53,8 @@ from my_pa.domain.project_reports.catalogue import MEASURES
 from my_pa.domain.project_reports.model import FamilyView, ReconciliationOutcome
 from my_pa.domain.project_reports.reconciliation import CrossReportCheck
 from tests.unit.project_report_reads_scene import (
+    NOTE_PROJECT,
+    OBS_PROJECT,
     RFI_PROJECT,
     ReadsScene,
     adapter,
@@ -810,6 +813,69 @@ def case_the_facade_answers_absent_unbound_and_quarantined_projects(scene: Reads
     }
 
 
+#: Every Project of the world with the RFI numbers a batch asks for it (WP5 ruling D7).
+_BATCH: Final = (
+    (RFI_PROJECT[1], ((None, 174), ("GMP", 174), (None, 1741), (None, 175), (None, 0))),
+    (OBS_PROJECT[1], ((None, 174),)),
+    (NOTE_PROJECT[1], ()),
+    (PAIR_PROJECT[1], ((None, 175), ("GMP", 201))),
+    (QUARANTINED_PROJECT[1], ((None, 201), (None, 203))),
+    (NEVER_PROJECT[1], ((None, 174),)),
+    (UNKNOWN_PROJECT, ((None, 174),)),
+)
+
+
+def case_the_batched_facade_answers_as_the_per_project_methods(scene: ReadsScene) -> None:
+    """WP5 D7: `context_summaries` is, per request, `availability`, `project_summary`, `match_rfis`.
+
+    The whole world in one batch, every Project alone, every adjacent pair, a
+    Project asked twice with other numbers, for the Principal and for another
+    one; then the switch off and the bounds.
+    """
+    reads = service(scene)
+    batches: list[list[tuple[str, tuple[tuple[str | None, int], ...]]]] = [list(_BATCH)]
+    batches += [[request] for request in _BATCH]
+    batches += [list(pair) for pair in itertools.pairwise(_BATCH)]
+    batches.append([_BATCH[0], _BATCH[1], (RFI_PROJECT[1], ((None, 201), (None, 174))), _BATCH[0]])
+    for principal in (scene.principal, OTHER_PRINCIPAL):
+        for batch in batches:
+            answered = reads.context_summaries(principal, batch)
+            assert len(answered) == len(batch)
+            for one, (project_id, numbers) in zip(answered, batch, strict=True):
+                assert one.project_id == project_id
+                assert one.availability == reads.availability(principal, project_id)
+                summary = reads.project_summary(principal, project_id)
+                assert one.summary == summary
+                assert project_summary_payload(one.summary) == project_summary_payload(summary)
+                assert one.rfis == reads.match_rfis(principal, project_id, numbers)
+    # The world is varied enough to mean something.
+    whole = reads.context_summaries(scene.principal, _BATCH)
+    assert {a.project_id: a.availability.reason for a in whole} == {
+        RFI_PROJECT[1]: None,
+        OBS_PROJECT[1]: None,
+        NOTE_PROJECT[1]: "all_quarantined",
+        PAIR_PROJECT[1]: None,
+        QUARANTINED_PROJECT[1]: "all_quarantined",
+        NEVER_PROJECT[1]: "never_ingested",
+        UNKNOWN_PROJECT: "unbound",
+    }
+    assert {m.state for m in whole[0].rfis} == {"exact", "ambiguous_prefix", "none"}
+    assert whole[0].summary.counts and whole[1].summary.counts
+    disabled = service(scene, reads_enabled=False)
+    off = disabled.context_summaries(scene.principal, _BATCH)
+    for one, (project_id, _numbers) in zip(off, _BATCH, strict=True):
+        assert one.availability == disabled.availability(scene.principal, project_id)
+        assert one.summary == disabled.project_summary(scene.principal, project_id)
+        assert one.rfis == ()
+    assert reads.context_summaries(scene.principal, ()) == ()
+    with pytest.raises(InvalidRequestError) as raised:
+        reads.context_summaries(scene.principal, [(RFI_PROJECT[1], [(None, n) for n in range(11)])])
+    assert raised.value.safe_details == (SafeDetail.IDENTIFIERS,)
+    with pytest.raises(InvalidRequestError) as raised:
+        reads.context_summaries(scene.principal, [(RFI_PROJECT[1], ())] * 51)
+    assert raised.value.safe_details == (SafeDetail.PROJECT_IDS,)
+
+
 def case_coverage_carries_per_version_filter_semantics(scene: ReadsScene) -> None:
     payload = coverage_payload(
         service(scene).coverage(
@@ -1032,6 +1098,7 @@ CASES: Final = (
     case_an_unidentified_commitment_line_is_never_keyed,
     case_not_found_is_indistinguishable_for_foreign_and_unknown,
     case_the_facade_answers_absent_unbound_and_quarantined_projects,
+    case_the_batched_facade_answers_as_the_per_project_methods,
     case_coverage_carries_per_version_filter_semantics,
     case_rows_carry_typed_fields_and_raw_text,
     case_filtered_measures_sum_only_the_selected_lines,

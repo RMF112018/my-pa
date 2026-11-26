@@ -1,0 +1,93 @@
+name: WP4 PostgreSQL 17 diagnostic
+
+on:
+  push:
+    branches:
+      - bf/wp4-pg17-diagnostic
+
+permissions:
+  contents: read
+
+jobs:
+  wp4-pg17-diagnostic:
+    if: github.repository == 'RMF112018/my-pa' && github.ref == 'refs/heads/bf/wp4-pg17-diagnostic' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: wp4_diagnostic
+          POSTGRES_DB: wp4_diagnostic_app
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - "127.0.0.1:5432:5432"
+        options: >-
+          --health-cmd "pg_isready --username wp4_diagnostic --dbname wp4_diagnostic_app"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out diagnostic driver
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: diagnostic
+          persist-credentials: false
+
+      - name: Check out exact main baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: f1136b2a09332b8ce939b5b56d71200a12ce3cf1
+          path: baseline
+          persist-credentials: false
+
+      - name: Check out exact WP5 candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: d63ad9fb062a8c5910f2c4b478e6351dcd40d903
+          path: candidate
+          persist-credentials: false
+
+      - name: Verify checkout identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C diagnostic rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C baseline rev-parse HEAD)" = f1136b2a09332b8ce939b5b56d71200a12ce3cf1
+          test "$(git -C baseline rev-parse 'HEAD^{tree}')" = 770f4fc5eaf97f9b00cfa6591e5617f3ff690ee9
+          test "$(git -C candidate rev-parse HEAD)" = d63ad9fb062a8c5910f2c4b478e6351dcd40d903
+          test "$(git -C candidate rev-parse 'HEAD^{tree}')" = 2b0d95b120b50423aaf7f0b6225519d943950ebf
+          cmp -s baseline/pyproject.toml candidate/pyproject.toml
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install existing development dependencies
+        working-directory: baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! python -m pip --disable-pip-version-check install -e '.[dev]' >/dev/null 2>&1; then
+            echo "::error title=WP4 PG17 diagnostic::Dependency setup failed"
+            exit 1
+          fi
+
+      - name: Run paired synthetic diagnostic
+        shell: bash
+        env:
+          DIAGNOSTIC_SERVICE_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          [[ "$DIAGNOSTIC_SERVICE_CONTAINER" =~ ^[a-f0-9]{64}$ ]]
+          SYSTEM_IDENTIFIER="$(
+            docker exec "$DIAGNOSTIC_SERVICE_CONTAINER" psql -X --no-password \
+              --username wp4_diagnostic --dbname wp4_diagnostic_app --tuples-only --no-align \
+              --set ON_ERROR_STOP=1 --command 'SELECT system_identifier::text FROM pg_control_system()'
+          )"
+          [[ "$SYSTEM_IDENTIFIER" =~ ^[0-9]{1,20}$ ]]
+          python diagnostic/.github/diagnostics/wp4_pg17_diagnostic.py \
+            --base baseline --candidate candidate --port 5432 \
+            --expected-system-identifier "$SYSTEM_IDENTIFIER"

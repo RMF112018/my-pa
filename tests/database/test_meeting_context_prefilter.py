@@ -12,8 +12,10 @@ The `database` tier, run on the C and the en_US.UTF-8 clusters alike.
 - The first test lowers the text and the lexeme under each ICU collation the
   server has, which is what `lower()` does in a database of that provider, and
   requires every lexeme of every exactly matching number to pass the
-  production pre-filter expressions. It also requires the bare form to miss
-  somewhere, so the hazard is really exercised.
+  production pre-filter predicate (`number_prefilter`, which translates only a
+  text holding a changed character) and the full identification alike. It
+  also requires the bare form to miss somewhere, so the hazard is really
+  exercised.
 - The second test needs no ICU: it feeds the ICU-lowered forms themselves, as
   literals, to the same expressions.
 
@@ -29,6 +31,7 @@ from sqlalchemy import Boolean, Engine, Text, column, func, literal, select, tab
 from sqlalchemy.dialects.postgresql import REGCONFIG, TSQUERY
 
 from my_pa.infrastructure.persistence.communications import (
+    number_prefilter,
     number_prefilter_haystack,
     number_prefilter_needle,
 )
@@ -102,9 +105,11 @@ def test_every_exact_number_match_passes_the_prefilter_under_icu_lowering(
         exact = func.to_tsvector(_simple("simple"), pairs.c.body).bool_op("@@")(
             func.plainto_tsquery(_simple("simple"), pairs.c.number, type_=TSQUERY)
         )
-        haystack = number_prefilter_haystack(pairs.c.body.collate(collation))
+        body = pairs.c.body.collate(collation)
         needle = number_prefilter_needle(lexeme.collate(collation))
-        passes = func.strpos(haystack, needle) > 0
+        # The production predicate, and the identification it short-cuts.
+        passes = number_prefilter(body, needle)
+        folded = func.strpos(number_prefilter_haystack(body), needle) > 0
         bare = func.strpos(func.lower(pairs.c.body.collate(collation)), lexeme) > 0
         rows = connection.execute(
             select(
@@ -112,6 +117,7 @@ def test_every_exact_number_match_passes_the_prefilter_under_icu_lowering(
                 pairs.c.body,
                 lexeme,
                 passes.label("passes"),
+                folded.label("folded"),
                 bare.label("bare"),
             )
             .select_from(pairs.join(lexemes, true()))
@@ -120,6 +126,7 @@ def test_every_exact_number_match_passes_the_prefilter_under_icu_lowering(
     assert len({(row.number, row.body) for row in rows}) >= len(NUMBERS) * 6
     misses = [(row.number, row.body, row.lexeme) for row in rows if not row.passes]
     assert misses == []
+    assert all(row.folded for row in rows)
     # The hazard is real under this collation: the bare form drops a true match.
     assert any(not row.bare for row in rows)
 
@@ -150,13 +157,9 @@ def test_the_identification_holds_the_icu_forms_directly(migrated_engine: Engine
         rows = connection.execute(
             select(
                 forms.c.lowered,
-                (
-                    func.strpos(
-                        number_prefilter_haystack(forms.c.lowered),
-                        number_prefilter_needle(forms.c.lexeme),
-                    )
-                    > 0
-                ).label("passes"),
+                number_prefilter(forms.c.lowered, number_prefilter_needle(forms.c.lexeme)).label(
+                    "passes"
+                ),
                 (func.strpos(forms.c.lowered, forms.c.lexeme) > 0).label("bare"),
             )
         ).all()

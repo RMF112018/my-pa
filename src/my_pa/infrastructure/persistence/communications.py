@@ -108,6 +108,7 @@ __all__ = [
     "SqlCommunicationsRepository",
     "communications_aggregate",
     "communications_fts_measurement",
+    "number_prefilter",
     "number_prefilter_haystack",
     "number_prefilter_needle",
 ]
@@ -1036,6 +1037,32 @@ def number_prefilter_haystack(text: ColumnElement[Any]) -> ColumnElement[Any]:
     return func.translate(func.lower(text), NUMBER_PREFILTER_FROM, NUMBER_PREFILTER_TO)
 
 
+#: Any character the identification changes (every one is non-ASCII and none is
+#: a regular-expression metacharacter inside a bracket expression).
+_NUMBER_PREFILTER_CLASS: Final = f"[{NUMBER_PREFILTER_FROM}]"
+
+
+def number_prefilter(text: ColumnElement[Any], needle: ColumnElement[Any]) -> ColumnElement[bool]:
+    """`strpos(number_prefilter_haystack(text), needle) > 0`, translating only when it can matter.
+
+    The needle (`number_prefilter_needle`) holds no character of
+    `NUMBER_PREFILTER_FROM`, so it occurs in the identified text exactly when it
+    occurs in the lowered text, or the lowered text holds one of those
+    characters and the identified text holds it. The bare `strpos` decides the
+    common case; `translate` runs only on a text the bracket expression finds a
+    changed character in -- the same answer at a seventh of the cost (WP5-D).
+    """
+    lowered = func.lower(text)
+    return case(
+        (func.strpos(lowered, needle) > 0, literal(True, Boolean)),
+        (
+            lowered.regexp_match(_NUMBER_PREFILTER_CLASS),
+            func.strpos(number_prefilter_haystack(text), needle) > 0,
+        ),
+        else_=literal(False, Boolean),
+    )
+
+
 def number_prefilter_needle(lexeme: ColumnElement[Any]) -> ColumnElement[Any]:
     """The number side: its `simple` lexeme lowered again by `lower()`, then identified.
 
@@ -1555,7 +1582,7 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
             # CASE fixes the order: the cheap `strpos` first, the tsvector only after it.
             case(
                 (
-                    func.strpos(number_prefilter_haystack(simple_text), numbers.c.needle) > 0,
+                    number_prefilter(simple_text, numbers.c.needle),
                     func.coalesce(
                         func.to_tsvector(_config("simple"), simple_text).bool_op("@@")(
                             number_query

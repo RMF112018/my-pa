@@ -1054,6 +1054,17 @@ already succeeded is therefore a new selection, not `conflict(idempotency_key)` 
 `schedule_scenarios.create` likewise (section 11.5, S7-4b). (5) `series_auto` for P6 keeps the
 S7-3 rule (its own intake Series, decision `needs_series`): extending the ADR-017 hook to
 `schedule_p6_activities` is not a cheap correct extension in this slice.
+(6) The S5 reads serve stored P6 publications under the Schedule switch alone (such data exists
+only if the P6 switch was on at import); the seven P6 names need the P6 switch (10.2). (7) Read
+shapes (10.5) carry these additive fields: calendar `exception_count` and
+`exceptions_truncated`; field value `publication_id`, `ordinal` and `code_path`; the `p6`
+block `source_format`, `capture_event_id`, `encoding` and `catalogue_version`. The default
+page size of the P6 reads is 25. (8) Residuals: the import budget and storage quota are
+checked then inserted without a lock, so concurrent imports of one Principal can overshoot by
+about the number in flight (single operator Principal: accepted); an import-only remote grant
+can tell whether a workspace path exists (`not_found` against `conflict(expected_version)`),
+inherent to the snapshot design (9.1.1 option A). (9) A P6 scenario origin and a P6 delta are
+untested at the plane level until S7-4b adds the scenario plane tests.
 
 ---
 

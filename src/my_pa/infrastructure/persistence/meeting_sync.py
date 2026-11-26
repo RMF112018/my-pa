@@ -3,7 +3,9 @@
 Five tables are reached here and nowhere else: `meeting_sync_publications`,
 `meeting_sync_events`, `meeting_provider_review_marks`,
 `meeting_provider_reconciliation_passes` and `meeting_provider_key_tombstones`
-(Manager rulings D1, D3, D4, D5 and D8; the WP3b revision `61fafdfd2986`).
+(Manager rulings D1, D3, D4, D5 and D8; the WP3b revision `61fafdfd2986`). The
+one exception is a read: the Meeting context batch (`persistence/meetings.py`,
+WP5) reads which of its Meetings carry a review mark, and writes none.
 
 **The partition is reached through the guard, never written by hand.** The
 `persistence/ingestion.py` idiom: every SELECT and UPDATE composes `_mine` (a

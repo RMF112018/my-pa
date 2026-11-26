@@ -54,9 +54,11 @@ from typing import Any, ClassVar, Final, Protocol
 
 from my_pa.contracts.v1.disclosure import Disclosure
 from my_pa.contracts.v1.meetings import (
+    MeetingAttendeeView,
     MeetingHistoryView,
     MeetingListEntry,
     MeetingNoteView,
+    MeetingProviderBindingView,
     MeetingSeriesHistoryView,
     MeetingSeriesView,
     MeetingView,
@@ -132,6 +134,7 @@ from my_pa.domain.lineage.vocabulary import (
     RelationType,
     SituationKind,
 )
+from my_pa.domain.meeting.context import ContextText
 from my_pa.domain.meeting.model import (
     MeetingListRequest,
     MeetingSearchRequest,
@@ -588,6 +591,7 @@ __all__ = [
     "ManagedWriteRequest",
     "MeetingAttachmentRecord",
     "MeetingAttendeeRecord",
+    "MeetingContextInput",
     "MeetingCursorAnchor",
     "MeetingEntityState",
     "MeetingListPage",
@@ -11519,6 +11523,41 @@ class CoveredProviderBinding:
     meeting_start_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class MeetingContextInput:
+    """What one Meeting contributes to `meetings.context.read` (communications intelligence WP5).
+
+    The core is `meetings.read`'s, less the location, the URL and the bodies:
+    the description, the current note head and the current prep head are
+    carried only as identifier-scan inputs, each capped at
+    `IDENTIFIER_SCAN_CHARACTERS` with `truncated` stating a longer field (ruling
+    D14), and `None` when the Meeting has none. `attendees` are the active
+    ones, in `meetings.read` order. `provider_binding` is the Meeting's binding
+    view (ruling D10: answered by the context read only) or `None`;
+    `review_marked` says a `no_provider_event` review mark exists.
+    `project_number` is the linked Project's number, `None` without a Project
+    or without a number.
+    """
+
+    meeting_id: str
+    meeting_series_id: str | None
+    series_title: str | None
+    title: str
+    status: MeetingStatus
+    start_at: datetime
+    end_at: datetime | None
+    timezone_name: str
+    project_id: str | None
+    version: int
+    attendees: tuple[MeetingAttendeeView, ...]
+    description: ContextText | None
+    note: ContextText | None
+    prep: ContextText | None
+    provider_binding: MeetingProviderBindingView | None
+    review_marked: bool
+    project_number: str | None
+
+
 class MeetingRepository(ABC):
     """The Meeting records tables, on the general unit of work's connection.
 
@@ -11763,6 +11802,18 @@ class MeetingRepository(ABC):
     @abstractmethod
     def read_meeting(self, principal_id: str, meeting_id: str) -> MeetingView | None:
         """The Meeting's full current view, or `None` when absent or foreign."""
+
+    @abstractmethod
+    def read_context_inputs(
+        self, principal_id: str, meeting_ids: Sequence[str]
+    ) -> tuple[MeetingContextInput, ...]:
+        """The context inputs of every named Meeting of this Principal, set-based (WP5).
+
+        In first-occurrence request order, duplicates dropped; an absent or
+        foreign id is simply missing from the answer. The statement count is
+        fixed (seven: core, attendees, note heads, prep heads, bindings, review
+        marks, Projects), whatever the number of Meetings.
+        """
 
     @abstractmethod
     def list_meetings(

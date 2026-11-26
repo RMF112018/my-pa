@@ -122,6 +122,7 @@ from my_pa.contracts.ports import (
     ManagedWriteRequest,
     MeetingAttachmentRecord,
     MeetingAttendeeRecord,
+    MeetingContextInput,
     MeetingCursorAnchor,
     MeetingEntityState,
     MeetingListPage,
@@ -335,6 +336,7 @@ from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.identity.secret_digests import digests_match
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
 from my_pa.domain.lineage.vocabulary import SituationKind
+from my_pa.domain.meeting.context import IDENTIFIER_SCAN_CHARACTERS, ContextText
 from my_pa.domain.meeting.model import (
     MeetingAttachmentAvailability,
     MeetingCursorError,
@@ -9704,6 +9706,59 @@ class _Meetings:
             ),
             notes=self.current_note(principal_id, meeting_id),
         )
+
+    def read_context_inputs(
+        self, principal_id: str, meeting_ids: Sequence[str]
+    ) -> tuple[MeetingContextInput, ...]:
+        """`SqlMeetingRepository.read_context_inputs` in shape: request order, partitioned."""
+        from my_pa.application.meetings import _binding_view
+
+        def scan(text: str | None) -> ContextText | None:
+            if text is None:
+                return None
+            return ContextText(
+                text=text[:IDENTIFIER_SCAN_CHARACTERS],
+                truncated=len(text) > IDENTIFIER_SCAN_CHARACTERS,
+            )
+
+        answers: list[MeetingContextInput] = []
+        for meeting_id in dict.fromkeys(meeting_ids):
+            view = self.read_meeting(principal_id, meeting_id)
+            if view is None:
+                continue
+            prep = self.read_prep_head(principal_id, meeting_id)
+            number = next(
+                (
+                    project.project_number
+                    for project in self._world.projects
+                    if project.project_id == view.project_id
+                    and project.principal_id == principal_id
+                ),
+                None,
+            )
+            answers.append(
+                MeetingContextInput(
+                    meeting_id=view.meeting_id,
+                    meeting_series_id=view.meeting_series_id,
+                    series_title=view.series_title,
+                    title=view.title,
+                    status=view.status,
+                    start_at=view.start_at,
+                    end_at=view.end_at,
+                    timezone_name=view.timezone_name,
+                    project_id=view.project_id,
+                    version=view.version,
+                    attendees=view.attendees,
+                    description=scan(view.description),
+                    note=scan(None if view.notes is None else view.notes.body_markdown),
+                    prep=scan(None if prep is None else prep.body),
+                    provider_binding=_binding_view(self, principal_id, meeting_id),  # type: ignore[arg-type]
+                    review_marked=(principal_id, meeting_id)
+                    in self._world.meeting_provider_review_marks,
+                    project_number=number,
+                )
+            )
+        return tuple(answers)
 
     def list_meetings(
         self, principal_id: str, request: MeetingListRequest, *, now: datetime

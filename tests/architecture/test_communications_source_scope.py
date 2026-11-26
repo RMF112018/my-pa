@@ -109,6 +109,9 @@ IMPORTERS = {
     # WP4-S4: the communications reads normalize identifier queries, parse the
     # quoted phrases, compute coverage and encode the grant-bound cursor.
     "application/communications_search.py",
+    # WP5-S2: the Meeting context inputs extract identifiers from a Meeting's
+    # own text with the versioned extractor (design section 3.4, ruling D4).
+    "domain/meeting/context.py",
 }
 
 

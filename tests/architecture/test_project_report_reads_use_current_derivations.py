@@ -39,8 +39,9 @@ still caught:
   unless it is a table method on a resolving receiver, a statement or
   SQLAlchemy call, a call of a module helper whose returns all resolve, or
   `<metadata>.tables[<constant>]`. A local or a parameter that rebinds the
-  view's name (or the alias it is imported as) is a violation. Functions, `async` functions, lambdas and module-level code are
-  all scanned, and a string names whatever table it spells;
+  view's name (or the alias it is imported as) is a violation. Functions,
+  `async` functions, lambdas and module-level code are all scanned, and a
+  string names whatever table it spells;
 * a helper that returns a bare child table (or a join, alias or selectable
   built on one) without the view is itself a violation, but one returning a
   child *column* or a predicate is not (ruling R2-06); any string that spells

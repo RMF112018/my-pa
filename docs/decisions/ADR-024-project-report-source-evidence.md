@@ -1,6 +1,6 @@
 # ADR-024: Project report source evidence (Procore PULSE exports)
 
-- **Status:** **Accepted** — accepted under operator delegation 2026-11-22 (the R-OP-1 pattern of [ADR-022](ADR-022-communications-intelligence.md)), effective on the merge of WP3P to `main`. Implemented on branch `feat/pulse-reports` (stacked on WP3b), not merged. Nothing is migrated, bound, enabled, granted or deployed: the migration, `bindings apply`, the backfill and the ingest switch belong to the one consolidated activation at the end of the goal (R-OP-7; communications contract section 20.6).
+- **Status:** **Accepted** — accepted under operator delegation 2026-11-22 (the R-OP-1 pattern of [ADR-022](ADR-022-communications-intelligence.md)), effective on the merge of WP3P to `main`. WP3P merged in #383; WP4P adds the reads (see Implementation status). Nothing is migrated, bound, enabled, granted or deployed: the migration, `bindings apply`, the backfill and the ingest switch belong to the one consolidated activation at the end of the goal (R-OP-7; communications contract section 20.6).
 - **Decision ID:** `MYPA-PULSE-D-024`
 - **Goal:** `MYPA-COMMS-MEETCTX-P1P3-20261121`, scope extension `MYPA-PULSE-INTELLIGENCE-EXTENSION-20261121`
 - **Repository:** `RMF112018/my-pa`

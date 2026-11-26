@@ -47,7 +47,7 @@ plans link here instead of restating them.
 |---|---|
 | Published tools with an accepted payload digest | 311 |
 | v1 view models with an accepted field digest | 40 |
-| Acceptance ledger entries | 7 |
+| Acceptance ledger entries | 10 |
 
 ## Test tiers and corpora
 
@@ -57,10 +57,10 @@ measurable at collection and is carried (`regen --measure --fast-skipped N`).
 
 | Tier or corpus | Selection | Collected | A green execution requires |
 | --- | --- | --- | --- |
-| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 55,731 | 55,593 passed, 138 skipped |
-| Architecture | `pytest tests/architecture` | 10,313 | 10,313 passed, 0 skipped |
-| Database | `pytest -m "database or recovery or e2e"` | 7,466 | 7,466 passed, 0 skipped |
+| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 55,856 | 55,718 passed, 138 skipped |
+| Architecture | `pytest tests/architecture` | 10,363 | 10,363 passed, 0 skipped |
+| Database | `pytest -m "database or recovery or e2e"` | 7,479 | 7,479 passed, 0 skipped |
 | Evaluation | `pytest -m "evaluation"` | 2 | 2 passed |
-| mypy corpus | `mypy` (`[tool.mypy] files`) | 800 files | no issues found |
-| Source modules | `find src/my_pa -name "*.py"` | 600 |  |
-| Test modules | `find tests -name "test_*.py"` | 1,086 |  |
+| mypy corpus | `mypy` (`[tool.mypy] files`) | 804 files | no issues found |
+| Source modules | `find src/my_pa -name "*.py"` | 604 |  |
+| Test modules | `find tests -name "test_*.py"` | 1,089 |  |

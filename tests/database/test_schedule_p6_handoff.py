@@ -26,6 +26,7 @@ from typing import Any, Final
 import pytest
 from sqlalchemy import Engine, text
 
+from my_pa.application import schedule_p6_snapshot
 from my_pa.application.commands import (
     ApproveScheduleBaseline,
     Command,
@@ -61,6 +62,7 @@ from my_pa.domain.schedule.scenario.canonical import (
     content_sha256,
 )
 from my_pa.domain.schedule.scenario.cpm import run_cpm
+from my_pa.domain.schedule.scenario.p6_snapshot import snapshot_from_p6
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.file_workspace.store import FilesystemFileWorkspaceStore
 from my_pa.infrastructure.jobs.schedule import process_schedule_publication
@@ -604,7 +606,12 @@ def test_parallel_relationships_persist_run_and_change_as_a_v3_content(w: World)
     model = _tasks_only(_std())
     model.table("TASKPRED").rows.append(xer.pred_row("4004", "3002", "3003", "PR_FF", "8"))
     publication = str(w.publish(model, "exports/ladder.xer")["publication_id"])
-    created = w.scenario(publication)
+    command = w.create(publication)
+    created = w.ok(command)
+    replayed = w.ok(command)
+    assert replayed["replayed"] is True
+    assert replayed["p6_snapshot_report"] == created["p6_snapshot_report"]
+    assert replayed["version_id"] == created["version_id"]
     counts = created["p6_snapshot_report"]["counts"]
     assert counts["relationships"] == 4
     assert counts["relationships_parallel_dropped"] == 0
@@ -664,6 +671,33 @@ def test_parallel_relationships_persist_run_and_change_as_a_v3_content(w: World)
         CreateScheduleCpmRun(version_id=str(appended["version_id"]), idempotency_key=_key("run"))
     )
     assert rerun["engine_version"] == "my-pa-cpm-v1"
+
+
+@pytest.mark.parametrize("lag", ["8", "17521"])
+def test_a_pre_s77_p6_snapshot_replays_its_original_report(
+    w: World, monkeypatch: pytest.MonkeyPatch, lag: str
+) -> None:
+    model = _tasks_only(_std())
+    model.table("TASKPRED").rows.append(xer.pred_row("4004", "3002", "3003", "PR_FF", lag))
+    publication = str(w.publish(model, "exports/legacy-ladder.xer")["publication_id"])
+    command = w.create(publication)
+    # Seed a first version and reservation using the pre-S7-7 relationship mapper.
+    with monkeypatch.context() as legacy:
+        legacy.setattr(
+            schedule_p6_snapshot,
+            "snapshot_from_p6",
+            functools.partial(snapshot_from_p6, legacy_relationships=True),
+        )
+        created = w.ok(command)
+    assert created["relationship_count"] == 3
+    counts = created["p6_snapshot_report"]["counts"]
+    assert counts["relationships"] == 3
+    assert counts["relationships_parallel_dropped"] == 1
+    replayed = w.ok(command)
+    assert replayed["replayed"] is True
+    assert replayed["version_id"] == created["version_id"]
+    assert replayed["content_sha256"] == created["content_sha256"]
+    assert replayed["p6_snapshot_report"] == created["p6_snapshot_report"]
 
 
 def test_rcal_project_is_a_fixed_lag_calendar_and_a_replay_reports_the_same(w: World) -> None:

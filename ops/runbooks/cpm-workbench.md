@@ -631,11 +631,13 @@ field is captured only with `include_personal: true` and served only to a holder
   does not model (`ss_lag_from_early_start`, `use_expected_finish`, `total_float_type`,
   `open_ends_critical`, `float_from_project_finish`, `critical_path_longest_path`,
   `multiple_float_paths`, `external_relationships`, `parallel_relationships`,
-  `in_progress_start_links`, `progress_actual_dates`). `parallel_relationships`: P6 allows a
-  second link between the same ordered pair (an SS and an FF); the Scenario keeps the first
-  (counted `relationships_parallel_dropped`). `in_progress_start_links`: the engine skips the
-  backward-pass bound of an SS or SF link whose predecessor is in progress, P6 applies it less
-  the work done since the actual start, so late dates and floats can differ. A difference
+  `in_progress_start_links`, `progress_actual_dates`). The Scenario keeps links of different
+  types between the same ordered pair, such as SS and FF. The oracle flags
+  `parallel_relationships` when links of the same type repeat for that pair. The Scenario
+  keeps the largest lag and counts the other links in `relationships_parallel_dropped`.
+  For `in_progress_start_links`, the engine skips the backward-pass bound of an SS or SF
+  link whose predecessor is in progress. P6 applies the bound after subtracting the work
+  done since the actual start, so late dates and floats can differ. A difference
   concentrated in progressed activities points at a P6 progress convention, not at an error.
 - **Acceptance (gate G-7).** For every nominated export: verdict not `fail`, the 4 counts
   equal, the delta counts between consecutive versions, and the oracle's shares with their

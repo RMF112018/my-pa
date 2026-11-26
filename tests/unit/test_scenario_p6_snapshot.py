@@ -101,6 +101,7 @@ def snap(
     activities: tuple[P6SnapshotActivity, ...] = (act("SYN-1010", 2), act("SYN-1020", 3)),
     relationships: tuple[P6SnapshotRelationship, ...] = (rel("SYN-1010", "SYN-1020"),),
     request: P6SnapshotRequest | None = None,
+    legacy_relationships: bool = False,
 ) -> P6Snapshot:
     return snapshot_from_p6(
         publication_id=PUBLICATION,
@@ -109,6 +110,7 @@ def snap(
         activities=activities,
         relationships=relationships,
         request=request,
+        legacy_relationships=legacy_relationships,
     )
 
 
@@ -605,6 +607,24 @@ def test_a_repeated_type_on_one_pair_keeps_the_largest_lag_in_any_order() -> Non
         ]
         assert content_schema(built.content) == CONTENT_SCHEMA
         assert counts(built)["relationships_parallel_dropped"] == 1
+
+
+@pytest.mark.parametrize(
+    ("first_lag", "second_lag"), [("8", "0.01"), ("8.001", "8"), ("8", "8.001")]
+)
+def test_matching_legacy_and_current_snapshots_count_only_the_winning_lag(
+    first_lag: str, second_lag: str
+) -> None:
+    rows = (
+        rel("SYN-1010", "SYN-1020", "PR_FS", first_lag),
+        rel("SYN-1010", "SYN-1020", "PR_FS", second_lag),
+    )
+    legacy = snap(relationships=rows, legacy_relationships=True)
+    current = snap(relationships=rows)
+    assert content_bytes(current.content) == content_bytes(legacy.content)
+    assert current.p6_report == legacy.p6_report
+    assert counts(current)["relationships_parallel_dropped"] == 1
+    assert counts(current)["lags_quantized"] == int(first_lag == "8.001")
 
 
 # ---- published reference and content schema -------------------------------------------

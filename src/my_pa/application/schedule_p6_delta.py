@@ -9,7 +9,9 @@ Nothing here writes: the delta is never stored.
 A publication's capture set (section 7.2) is the selection in force at its
 admission (its capture event's keys), or -- when it was admitted under the
 defaults -- the catalogue's default-captured keys plus every UDF and activity
-code key the run captured (the defaults capture those per file).
+code key the run captured (the defaults capture those per file). The capture
+sets are derived from the selection and the run's distinct keys, and only the
+values of the keys both sets hold (no personal key) are read (F1).
 """
 
 from __future__ import annotations
@@ -29,10 +31,16 @@ from my_pa.domain.schedule.p6_compare import (
     P6DeltaRelationship,
     P6DeltaSide,
 )
-from my_pa.domain.schedule.p6_reads import P6PublicationRef
+from my_pa.domain.schedule.p6_reads import P6PublicationRef, is_personal_key
 from my_pa.domain.schedule.scenario.model import MAX_ACTIVITIES, MAX_RELATIONSHIPS
 
-__all__ = ["load_p6_delta_side", "p6_change_shape"]
+__all__ = [
+    "load_p6_delta_pair",
+    "load_p6_delta_side",
+    "p6_change_shape",
+    "p6_comparable_keys",
+    "p6_delta_capture_keys",
+]
 
 #: Every stored calendar of one run (a P6 export holds far fewer).
 _CALENDAR_LIMIT: Final = 100_000
@@ -145,10 +153,40 @@ def _values_by_activity(
     }
 
 
-def load_p6_delta_side(
+def p6_delta_capture_keys(
     p6: ScheduleP6Repository, principal_id: str, publication: P6PublicationRef
+) -> frozenset[str]:
+    """One publication's capture set (section 7.2), from the selection and its keys only."""
+    run = publication.accepted_parser_run_id
+    if run is None:  # pragma: no cover - a complete publication has its accepted run
+        raise InternalError()
+    selection = p6.capture_selection(principal_id, publication.capture_event_id)
+    if selection is None:
+        return default_capture_keys() | p6.p6_activity_field_keys(principal_id, run)
+    return frozenset(selection)
+
+
+def p6_comparable_keys(from_keys: frozenset[str], to_keys: frozenset[str]) -> tuple[str, ...]:
+    """The keys whose values the delta compares: both capture sets, never a personal key.
+
+    A one-sided key is counted `fields_not_comparable` and a personal key
+    `fields_withheld`; neither needs a value, so neither is read (F1).
+    """
+    return tuple(sorted(key for key in from_keys & to_keys if not is_personal_key(key)))
+
+
+def load_p6_delta_side(
+    p6: ScheduleP6Repository,
+    principal_id: str,
+    publication: P6PublicationRef,
+    *,
+    capture_keys: frozenset[str],
+    field_keys: Sequence[str],
 ) -> P6DeltaSide:
-    """One complete P6 publication's accepted run as the delta reads it (one transaction)."""
+    """One complete P6 publication's accepted run as the delta reads it (one transaction).
+
+    Only the values of `field_keys` (the pair's comparable keys) are read.
+    """
     run = publication.accepted_parser_run_id
     if run is None:  # pragma: no cover - a complete publication has its accepted run
         raise InternalError()
@@ -162,13 +200,7 @@ def load_p6_delta_side(
     relationships = p6.p6_relationship_rows(
         principal_id, run, offset=0, limit=MAX_RELATIONSHIPS + 1
     )
-    values = p6.p6_activity_field_values(principal_id, run, None)
-    selection = p6.capture_selection(principal_id, publication.capture_event_id)
-    if selection is None:
-        keys = default_capture_keys() | {str(row["field_key"]) for row in values}
-    else:
-        keys = frozenset(selection)
-    by_activity = _values_by_activity(values)
+    by_activity = _values_by_activity(p6.p6_activity_field_values(principal_id, run, field_keys))
     data_date = project["data_date"]
     return P6DeltaSide(
         data_date=data_date if isinstance(data_date, datetime) else None,
@@ -178,8 +210,32 @@ def load_p6_delta_side(
             _activity(row, by_activity.get(str(row["activity_id"]), {})) for row in activities
         ),
         relationships=tuple(_relationship(row) for row in relationships),
-        capture_keys=frozenset(keys),
+        capture_keys=capture_keys,
     )
+
+
+def load_p6_delta_pair(
+    p6: ScheduleP6Repository,
+    principal_id: str,
+    from_publication: P6PublicationRef,
+    to_publication: P6PublicationRef,
+) -> tuple[P6DeltaSide, P6DeltaSide, frozenset[str]]:
+    """Both sides of the delta and the pair's personal captured keys (section 11.4).
+
+    The capture sets are read first; then each side reads the values of the
+    pair's comparable keys only (F1: never a personal or one-sided value).
+    """
+    from_keys = p6_delta_capture_keys(p6, principal_id, from_publication)
+    to_keys = p6_delta_capture_keys(p6, principal_id, to_publication)
+    comparable = p6_comparable_keys(from_keys, to_keys)
+    from_side = load_p6_delta_side(
+        p6, principal_id, from_publication, capture_keys=from_keys, field_keys=comparable
+    )
+    to_side = load_p6_delta_side(
+        p6, principal_id, to_publication, capture_keys=to_keys, field_keys=comparable
+    )
+    personal = frozenset(key for key in from_keys | to_keys if is_personal_key(key))
+    return from_side, to_side, personal
 
 
 def _subject(change: P6Change) -> dict[str, object]:

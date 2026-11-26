@@ -168,8 +168,7 @@ def _capture_keys(
     selection = p6.capture_selection(principal_id, publication.capture_event_id)
     if selection is not None:
         return frozenset(selection)
-    stored = p6.p6_activity_field_values(principal_id, run, None)
-    return default_capture_keys() | {str(row["field_key"]) for row in stored}
+    return default_capture_keys() | p6.p6_activity_field_keys(principal_id, run)
 
 
 def _extra_calendars(

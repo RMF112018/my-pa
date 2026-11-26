@@ -29,7 +29,9 @@ from sqlalchemy import (
     ColumnElement,
     Engine,
     Table,
+    Text,
     and_,
+    any_,
     func,
     insert,
     literal,
@@ -39,6 +41,7 @@ from sqlalchemy import (
     tuple_,
     update,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, RowMapping
 
@@ -1708,7 +1711,11 @@ class SqlScheduleP6Repository(SqlScheduleRepository, ScheduleP6Repository):
             values.c.entity_kind == EntityKind.ACTIVITY.value,
         )
         if field_keys is not None:
-            statement = statement.where(values.c.field_key.in_(list(field_keys)))
+            # One array parameter: the key filter is in the statement, so a value
+            # of a key not named is never read (F1: the delta's memory bound).
+            statement = statement.where(
+                values.c.field_key == any_(literal(sorted(set(field_keys)), ARRAY(Text)))
+            )
         found = self._connection.execute(
             statement.order_by(
                 values.c.activity_id.collate("C"),
@@ -1717,6 +1724,20 @@ class SqlScheduleP6Repository(SqlScheduleRepository, ScheduleP6Repository):
             )
         ).mappings()
         return tuple(dict(row) for row in found)
+
+    def p6_activity_field_keys(self, principal_id: str, parser_run_id: str) -> frozenset[str]:
+        """One run's distinct captured activity field keys (no value is read)."""
+        values = schedule_p6_field_values
+        found = self._connection.execute(
+            select(values.c.field_key)
+            .distinct()
+            .where(
+                _mine(values, principal_id),
+                values.c.parser_run_id == parser_run_id,
+                values.c.entity_kind == EntityKind.ACTIVITY.value,
+            )
+        ).scalars()
+        return frozenset(str(key) for key in found)
 
     def p6_prior_observations(
         self,

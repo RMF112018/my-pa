@@ -10470,6 +10470,10 @@ class ScheduleP6ReadRepository(ABC):
         """S7-4b: one run's activity values of `field_keys` (`None`: every key), by Activity ID."""
 
     @abstractmethod
+    def p6_activity_field_keys(self, principal_id: str, parser_run_id: str) -> frozenset[str]:
+        """S7-4b F1: one run's distinct captured activity field keys (no value is read)."""
+
+    @abstractmethod
     def capture_selection(
         self, principal_id: str, capture_event_id: str | None
     ) -> tuple[str, ...] | None:

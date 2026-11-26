@@ -50,7 +50,7 @@ from my_pa.application.errors import (
     UnsupportedError,
 )
 from my_pa.application.lineage_authority import attested_lineage_authority
-from my_pa.application.schedule_p6_delta import load_p6_delta_side, p6_change_shape
+from my_pa.application.schedule_p6_delta import load_p6_delta_pair, p6_change_shape
 from my_pa.contracts.ports import (
     ScheduleAdmissionRejectedError,
     ScheduleP6UnitOfWork,
@@ -120,7 +120,6 @@ from my_pa.domain.schedule.p6_compare import (
     compare_p6_publications,
     p6_unmatched_target_activity_ids,
 )
-from my_pa.domain.schedule.p6_reads import is_personal_key
 
 __all__ = [
     "P6_READ_TRUST_BASIS",
@@ -1177,8 +1176,7 @@ class ScheduleApplication:
             )
             if refs[0] is None or refs[1] is None:  # pragma: no cover - read just above
                 raise InternalError()
-            from_side = load_p6_delta_side(p6, principal_id, refs[0])
-            to_side = load_p6_delta_side(p6, principal_id, refs[1])
+            from_side, to_side, personal = load_p6_delta_pair(p6, principal_id, refs[0], refs[1])
             prior = p6.p6_prior_observations(
                 principal_id,
                 a.series_id,
@@ -1187,9 +1185,6 @@ class ScheduleApplication:
                     from_side.activities, to_side.activities
                 ),
             )
-        personal = frozenset(
-            key for key in from_side.capture_keys | to_side.capture_keys if is_personal_key(key)
-        )
         delta = compare_p6_publications(from_side, to_side, prior, personal_keys=personal)
         listed: Iterable[P6Change] = delta.changes
         if command.change_kind is not None:

@@ -64,7 +64,10 @@ from my_pa.infrastructure.persistence.schedule_cpm_lease import (
     compute_and_store_cpm_run,
     dispose_lease_engines,
 )
-from my_pa.infrastructure.persistence.schedule_p6 import SqlAlchemyScheduleP6UnitOfWork
+from my_pa.infrastructure.persistence.schedule_p6 import (
+    SqlAlchemyScheduleP6UnitOfWork,
+    SqlScheduleP6Repository,
+)
 from my_pa.infrastructure.persistence.schedule_scenarios import (
     SqlAlchemyScenarioUnitOfWork,
     new_scenario_output,
@@ -805,6 +808,73 @@ def test_a_personal_field_is_never_compared_nor_carried_into_a_scenario(w: World
         ["field_key"],
     )
     assert w.scenario(third, {"include_fields": [EST_WT]})["p6_snapshot_report"]
+
+
+def test_the_delta_reads_only_the_comparable_keys_values(
+    w: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F1: no personal nor one-sided captured value is read; the key filter is in SQL."""
+    admitted = w.publish(xer.base_model("full"), "exports/v1.xer")
+    first = str(admitted["publication_id"])
+    w.ok(
+        SetScheduleP6CapturedFields(
+            series_id=str(admitted["series_id"]),
+            field_keys=(CREATE_USER, EST_WT),
+            include_personal=True,
+            expected_sequence=0,
+            idempotency_key=_key("f1"),
+        )
+    )
+    second_model = xer.base_model("full")
+    _task(second_model, "SYN-1010").update(est_wt="2", create_user="Synthetic Person")
+    second = str(w.publish(second_model, "exports/v2.xer")["publication_id"])
+    third_model = xer.base_model("full")
+    _task(third_model, "SYN-1010").update(est_wt="3", create_user="Synthetic Other Person")
+    third = str(w.publish(third_model, "exports/v3.xer")["publication_id"])
+    asked: list[tuple[str, tuple[str, ...] | None, frozenset[str]]] = []
+    original = SqlScheduleP6Repository.p6_activity_field_values
+
+    def recorded(
+        self: SqlScheduleP6Repository,
+        principal_id: str,
+        parser_run_id: str,
+        field_keys: Any,  # noqa: ANN401
+    ) -> tuple[dict[str, object], ...]:
+        rows = original(self, principal_id, parser_run_id, field_keys)
+        keys = None if field_keys is None else tuple(field_keys)
+        asked.append((parser_run_id, keys, frozenset(str(row["field_key"]) for row in rows)))
+        return rows
+
+    monkeypatch.setattr(SqlScheduleP6Repository, "p6_activity_field_values", recorded)
+    # The defaults run against the selection: the default run stores values of
+    # many keys the selection does not hold, and the personal key is on both.
+    with w.engine.connect() as c:
+        stored = dict(
+            c.execute(
+                text(
+                    "SELECT p.publication_id, count(DISTINCT v.field_key) FROM "
+                    "knowledge.schedule_p6_field_values v JOIN knowledge.schedule_publications p "
+                    "ON p.accepted_parser_run_id = v.parser_run_id WHERE p.publication_id IN "
+                    "(:a, :b, :c) AND v.entity_kind = 'activity' GROUP BY p.publication_id"
+                ),
+                {"a": first, "b": second, "c": third},
+            ).all()
+        )
+    assert stored[first] > 2
+    assert stored[second] == stored[third] == 2
+    across = w.changes(first, third, page_size=100)
+    assert across["fields_not_comparable"] > 0
+    page = w.changes(second, third, page_size=100)
+    assert page["fields_withheld"] == 1
+    assert [c["field"] for c in page["changes"] if c["change_kind"] == "field_changed"] == [EST_WT]
+    assert len(asked) == 4
+    for _, keys, read in asked:
+        assert keys is not None
+        assert CREATE_USER not in keys
+        assert set(keys) <= {EST_WT}
+        # The filter is the statement's: no row of a key not asked for is read.
+        assert read <= set(keys)
+    assert [keys for _, keys, _ in asked[2:]] == [(EST_WT,), (EST_WT,)]
 
 
 def test_a_calendar_of_a_review_required_publication_is_refused(w: World) -> None:

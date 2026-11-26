@@ -1121,6 +1121,17 @@ never stored, algorithm version in every answer and cursor:
 - a captured field present in only one publication's capture set is counted
   `fields_not_comparable`, never reported as a change.
 
+**Memory.** The delta runs in the gateway request path and loads both accepted runs whole.
+Each capture set comes from the selection in force or the run's distinct captured keys, never
+from values, and only the values of keys in both capture sets that are not personal are read
+(`field_key = ANY(:keys)` in the statement, partitioned by Principal and run): a personal key
+(`fields_withheld`) or a key in 1 capture set only (`fields_not_comparable`) reads no value.
+At the bounds (25,000 activities and 100,000 relationships per side, every field changed) the
+measured peak RSS is about 0.6 GiB with no values and about 0.6 GiB with 3,000,000 values per
+side whose capture sets share 1 key, against about 3.4 GiB before. Residual: a pair whose
+capture sets share every comparable key still reads those values (about 3.4 GiB at the
+3,000,000-per-publication cap), and every page recomputes the whole delta.
+
 **N versions.** The delta stays pairwise; history across N publications is
 `schedule_activities.history` (per Stable Activity, indexed by Series and activity) plus the
 new captured-field history via `schedule_p6_field_values.list` with `schedule_activity_id`.
@@ -1447,7 +1458,9 @@ committed script from synthetic names (no real project, person, code, calendar o
 Residuals: CPU and memory per admission are bounded by caps and the child's rlimits (the
 Linux address-space cap remains CI-verified, S5 U2-12); a client with the grant can fill its
 Principal's quota (section 7.7 bounds it); a crafted file can make a schedule look plausible
-but false — the trust label says what it is: what that file published.
+but false — the trust label says what it is: what that file published. The P6 delta (11.4)
+reads only its comparable keys' values, so a pair whose capture sets overlap at the value cap
+still holds about 3.4 GiB in the gateway while it computes.
 
 ---
 

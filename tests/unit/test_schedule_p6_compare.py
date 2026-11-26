@@ -390,3 +390,141 @@ def test_one_activity_id_is_one_stable_activity() -> None:
     b = side(activities=(activity("SYN-1000", 9), activity("SYN-1010", 2)))
     with pytest.raises(ValueError, match="stable activity"):
         compare_p6_publications(side(), b, frozenset())
+
+
+# ---- F1: the delta reads only the comparable keys' values ---------------------------------
+
+SHARED: Final = "udf:TASK:Synthetic Shared"
+PERSONAL: Final = "xer:TASK.create_user"
+ONLY_A: Final = tuple(f"udf:TASK:Synthetic Only A {n:03d}" for n in range(40))
+ONLY_B: Final = tuple(f"udf:TASK:Synthetic Only B {n:03d}" for n in range(40))
+ROWS: Final = 250
+
+
+class _Recorder:
+    """A P6 repository over synthetic rows that records the value keys it is asked for."""
+
+    def __init__(self) -> None:
+        self.asked: list[tuple[str, tuple[str, ...] | None]] = []
+        self.rows_read = 0
+        stored_a = (SHARED, PERSONAL, *ONLY_A)
+        self.values = {
+            "run-a": self._values("run-a", stored_a),
+            "run-b": self._values("run-b", (SHARED, PERSONAL, *ONLY_B)),
+        }
+        self.selection = {"event-b": (SHARED, PERSONAL, *ONLY_B)}
+
+    @staticmethod
+    def _values(run: str, keys: tuple[str, ...]) -> tuple[dict[str, object], ...]:
+        return tuple(
+            {
+                "activity_id": f"SYN-{n:04d}",
+                "field_key": key,
+                "ordinal": 0,
+                "value_text": f"{run} {key} {n}",
+                "value_number": None,
+                "value_ts": None,
+                "value_flag": None,
+            }
+            for n in range(ROWS)
+            for key in sorted(keys)
+        )
+
+    def p6_project_block(self, principal_id: str, run: str) -> dict[str, object]:
+        return {"data_date": DATA_DATE, "run": run}
+
+    def p6_calendar_rows(self, *args: object, **kwargs: object) -> tuple[()]:
+        return ()
+
+    def p6_activity_rows(self, *args: object, **kwargs: object) -> tuple[dict[str, object], ...]:
+        base = activity("SYN-0000", 0)
+        return tuple(
+            {
+                "schedule_activity_id": f"sact_p6delta{n:04d}",
+                "activity_id": f"SYN-{n:04d}",
+                "activity_name": base.name,
+                "wbs_path": list(base.wbs_path),
+                "task_type": base.task_type,
+                "status_code": base.status,
+                "p6_calendar_id": None,
+                **base.numbers,
+                **{
+                    {"start": "start_at", "finish": "finish_at"}.get(name, name): value
+                    for name, value in base.dates.items()
+                },
+                "constraint_type": None,
+                "constraint_date": None,
+                "constraint2_type": None,
+                "constraint2_date": None,
+                "p6_guid": f"guid-{n}",
+            }
+            for n in range(ROWS)
+        )
+
+    def p6_relationship_rows(self, *args: object, **kwargs: object) -> tuple[()]:
+        return ()
+
+    def p6_activity_field_keys(self, principal_id: str, run: str) -> frozenset[str]:
+        return frozenset(str(row["field_key"]) for row in self.values[run])
+
+    def p6_activity_field_values(
+        self, principal_id: str, run: str, field_keys: tuple[str, ...] | None
+    ) -> tuple[dict[str, object], ...]:
+        self.asked.append((run, None if field_keys is None else tuple(field_keys)))
+        found = tuple(
+            row for row in self.values[run] if field_keys is None or row["field_key"] in field_keys
+        )
+        self.rows_read += len(found)
+        return found
+
+    def capture_selection(self, principal_id: str, event: str | None) -> tuple[str, ...] | None:
+        return None if event is None else self.selection[event]
+
+
+def _ref(run: str, event: str | None) -> Any:  # noqa: ANN401
+    from my_pa.domain.schedule.p6_reads import P6PublicationRef
+
+    return P6PublicationRef(
+        publication_id=f"pub-{run}",
+        series_id="series",
+        project_id="project",
+        source_format="p6_xer",
+        status="complete",
+        accepted_parser_run_id=run,
+        capture_event_id=event,
+        include_personal=True,
+        admitted_at=DATA_DATE,
+    )
+
+
+def test_the_delta_reads_no_personal_nor_one_sided_value() -> None:
+    """F1: a pair with many one-sided and personal values reads only the shared key's."""
+    from my_pa.application import schedule_p6_delta as reads
+    from my_pa.domain.schedule.p6_reads import is_personal_key
+
+    assert is_personal_key(PERSONAL)
+    repo = _Recorder()
+    a, b = _ref("run-a", None), _ref("run-b", "event-b")
+    from_side, to_side, personal = reads.load_p6_delta_pair(repo, "principal", a, b)  # type: ignore[arg-type]
+    assert repo.asked == [("run-a", (SHARED,)), ("run-b", (SHARED,))]
+    assert repo.rows_read == 2 * ROWS
+    assert personal == frozenset({PERSONAL})
+    delta = compare_p6_publications(from_side, to_side, frozenset(), personal_keys=personal)
+    # The same answer as a delta that read every value.
+    full = _Recorder()
+    every = tuple(
+        reads.load_p6_delta_side(
+            full,  # type: ignore[arg-type]
+            "principal",
+            ref,
+            capture_keys=reads.p6_delta_capture_keys(full, "principal", ref),  # type: ignore[arg-type]
+            field_keys=None,  # type: ignore[arg-type]
+        )
+        for ref in (a, b)
+    )
+    reference = compare_p6_publications(*every, frozenset(), personal_keys=personal)
+    assert delta == reference
+    assert [c.field for c in delta.changes] == [SHARED] * ROWS
+    assert delta.fields_withheld == 1
+    assert delta.fields_not_comparable == len(from_side.capture_keys ^ to_side.capture_keys)
+    assert delta.fields_not_comparable >= len(ONLY_A) + len(ONLY_B)

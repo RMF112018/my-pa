@@ -162,6 +162,21 @@ def test_calendar_week_minutes_and_exception_window() -> None:
     assert stored.week[5:] == ((), ())
     assert [item.day for item in stored.exceptions] == [date(2030, 1, 1), date(2030, 1, 12)]
     assert counts(built)["exceptions_out_of_range"] == 1
+    # Independent review S7-4b: both window ends are inclusive, the day after is out.
+    edges = snap(
+        calendars=(
+            cal(
+                exceptions=(
+                    (date(2000, 1, 1), ()),
+                    (date(2099, 12, 31), ()),
+                    (date(2100, 1, 1), ()),
+                )
+            ),
+        )
+    )
+    (edged,) = edges.content.calendars
+    assert [item.day for item in edged.exceptions] == [date(2000, 1, 1), date(2099, 12, 31)]
+    assert counts(edges)["exceptions_out_of_range"] == 1
 
 
 def test_default_every_used_calendar_and_no_unused_one() -> None:

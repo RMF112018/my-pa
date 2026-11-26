@@ -767,3 +767,81 @@ def test_an_approved_baseline_naming_a_p6_publication(w: World) -> None:
     )
     assert compared["algorithm_version"] == P6_DELTA
     assert compared["counts_by_kind"]["renumber_candidate"] == 1
+
+
+# ---- independent review S7-4b: guards the worker's suite left unproven --------------------
+
+CREATE_USER: Final = "xer:TASK.create_user"
+
+
+def test_a_personal_field_is_never_compared_nor_carried_into_a_scenario(w: World) -> None:
+    """10.4 / 11.4 / 11.5: a captured personal key is withheld by the delta and refused inert."""
+    first = w.publish(xer.base_model("full"), "exports/v1.xer")
+    w.ok(
+        SetScheduleP6CapturedFields(
+            series_id=str(first["series_id"]),
+            field_keys=(CREATE_USER, EST_WT),
+            include_personal=True,
+            expected_sequence=0,
+            idempotency_key=_key("personal"),
+        )
+    )
+    second_model = xer.base_model("full")
+    _task(second_model, "SYN-1010")["est_wt"] = "2.5"
+    second = str(w.publish(second_model, "exports/v2.xer")["publication_id"])
+    third_model = xer.base_model("full")
+    _task(third_model, "SYN-1010").update(est_wt="3", create_user="Synthetic Other Person")
+    third = str(w.publish(third_model, "exports/v3.xer")["publication_id"])
+    # The personal value really is captured and differs between the two.
+    values = w.ok(ListScheduleP6FieldValues(publication_id=third, fields=(CREATE_USER,)))
+    assert "Synthetic Other Person" in {v["value"] for v in values["values"]}
+    page = w.changes(second, third, page_size=100)
+    changed = [c for c in page["changes"] if c["change_kind"] == "field_changed"]
+    assert [c["field"] for c in changed] == [EST_WT]
+    assert page["fields_withheld"] == 1
+    assert "Synthetic Other Person" not in str(page)
+    assert w.refused(w.create(third, {"include_fields": [CREATE_USER]})) == (
+        "invalid_request",
+        ["field_key"],
+    )
+    assert w.scenario(third, {"include_fields": [EST_WT]})["p6_snapshot_report"]
+
+
+def test_a_calendar_of_a_review_required_publication_is_refused(w: World) -> None:
+    """11.5: only a complete P6 publication of the same Project lends a calendar."""
+    base = str(w.publish(_std(), "exports/base.xer")["publication_id"])
+    renamed = _std()
+    renamed.table("PROJECT").rows[0].update(
+        proj_short_name="SYN-OTHER", guid=xer.guid("SynOtherProject")
+    )
+    held = w.publish(renamed, "exports/renamed.xer")
+    held_id = str(held["publication_id"])
+    with w.engine.connect() as c:
+        status, run = c.execute(
+            text(
+                "SELECT status, accepted_parser_run_id FROM knowledge.schedule_publications "
+                "WHERE publication_id = :p"
+            ),
+            {"p": held_id},
+        ).one()
+    assert status == "review_required"
+    assert run is not None  # its calendars are stored: only the status check refuses it
+    assert w.refused(
+        w.create(base, {"calendars": [{"publication_id": held_id, "calendar_id": 501}]})
+    ) == ("invalid_request", ["calendar"])
+
+
+def test_the_standard_calendar_horizon_is_reported_by_the_snapshot_and_the_run(w: World) -> None:
+    """11.6 surfaced (S7-4b): a must-finish-by past the materialized years is reported."""
+    model = _std()
+    model.table("PROJECT").rows[0]["plan_end_date"] = "2060-01-07 17:00"
+    publication = str(w.publish(model, "exports/far.xer")["publication_id"])
+    created = w.scenario(publication, {"default_calendar": "my-pa-us-40h-v1"})
+    assert created["p6_snapshot_report"]["standard_calendar_horizon_exceeded"] == [
+        "my-pa-us-40h-v1"
+    ]
+    run = w.ok(
+        CreateScheduleCpmRun(version_id=str(created["version_id"]), idempotency_key=_key("run"))
+    )
+    read = w.ok(ReadScheduleCpmRun(cpm_run_id=str(run["cpm_run_id"])))
+    assert read["standard_calendar_horizon_exceeded"] == ["my-pa-us-40h-v1"]

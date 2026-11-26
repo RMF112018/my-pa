@@ -253,7 +253,7 @@ def test_the_measure_enum_is_frozen_and_holds_no_non_additive_column() -> None:
 
 def test_the_tool_text_states_inert_data_scope_and_the_closed_vocabularies() -> None:
     descriptions = _descriptions()
-    for capability in (CATALOG, QUERY, COMPARE):
+    for capability in READS:
         assert "inert data" in descriptions[capability.value], capability
     query = descriptions[QUERY.value]
     for phrase in (
@@ -272,7 +272,16 @@ def test_the_tool_text_states_inert_data_scope_and_the_closed_vocabularies() -> 
         assert phrase in history, phrase
     for presence in VersionPresence:
         assert presence.value in history, presence
-    assert "currency_mixed" in descriptions[COMPARE.value]
+    compare = descriptions[COMPARE.value]
+    # Ruling R3-07: the published field text, not the unpublished docstring body.
+    for phrase in (
+        "currency_mixed",
+        "not_observed, never closed",
+        "comparable: false",
+        "carries the reconciliation_mismatch qualifier when either side has it",
+    ):
+        assert phrase in compare, phrase
+    assert "Unbound folders are not counted" in descriptions[COVERAGE.value]
     assert "filter_semantics_unknown" in descriptions[CATALOG.value]
 
 

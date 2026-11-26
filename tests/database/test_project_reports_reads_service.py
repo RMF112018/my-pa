@@ -16,15 +16,23 @@ Every identifier, folder, number and text here is synthetic.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 import pytest
 from sqlalchemy import Engine
 
+from tests.database.project_report_reads_backstop import Backstop, current_derivations_backstop
 from tests.unit.project_report_reads_scene import ReadsScene, build_world, database_scene
 from tests.unit.project_reports_reads_service_cases import CASES, extend_world
 
 pytestmark = pytest.mark.database
+
+
+@pytest.fixture(autouse=True)
+def _current_derivations_backstop() -> Iterator[Backstop]:
+    """Ruling R2-02: every child-table statement the reads send joins the view."""
+    with current_derivations_backstop() as seen:
+        yield seen
 
 
 @pytest.fixture

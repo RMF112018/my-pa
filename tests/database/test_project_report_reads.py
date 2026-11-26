@@ -23,11 +23,13 @@ Every identifier, folder, number and text here is synthetic.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from pathlib import Path
 
 import pytest
 from sqlalchemy import Engine, text
 
+from tests.database.project_report_reads_backstop import Backstop, current_derivations_backstop
 from tests.unit.project_report_reads_cases import (
     CASES,
     case_a_superseded_derivation_is_never_answered_or_counted,
@@ -35,6 +37,13 @@ from tests.unit.project_report_reads_cases import (
 from tests.unit.project_report_reads_scene import ReadsScene, build_world, database_scene
 
 pytestmark = pytest.mark.database
+
+
+@pytest.fixture(autouse=True)
+def _current_derivations_backstop() -> Iterator[Backstop]:
+    """Ruling R2-02: every child-table statement the reads send joins the view."""
+    with current_derivations_backstop() as seen:
+        yield seen
 
 
 @pytest.fixture
@@ -70,3 +79,29 @@ def test_the_unit_of_work_exposes_the_reads(migrated_engine: Engine) -> None:
     with scene.unit() as unit:
         assert isinstance(unit.project_report_reads, SqlProjectReportReadsRepository)
         assert unit.project_report_reads.list_report_versions(scene.principal) == ()
+
+
+def test_the_runtime_backstop_catches_an_unjoined_child_read(migrated_engine: Engine) -> None:
+    """Ruling R2-02: a planted control for the listener the read suites install."""
+    from sqlalchemy import select
+
+    from my_pa.infrastructure.persistence.tables import (
+        project_report_current_derivations as view,
+    )
+    from my_pa.infrastructure.persistence.tables import project_report_lines as lines
+
+    here = (Path(__file__),)
+    joined = select(lines.c.row_ordinal).select_from(
+        lines.join(view, lines.c.derivation_id == view.c.derivation_id)
+    )
+    with current_derivations_backstop(here) as seen, migrated_engine.connect() as connection:
+        connection.execute(joined).all()
+    assert seen.checked == 1
+    # A child read that never reaches the view (the static guard's G1 shape at run time).
+    bare = select(lines.c.row_ordinal).where(lines.c.row_ordinal > 0)
+    with (
+        pytest.raises(AssertionError, match="without joining"),
+        current_derivations_backstop(here),
+        migrated_engine.connect() as connection,
+    ):
+        connection.execute(bare).all()

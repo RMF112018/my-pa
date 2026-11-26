@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import date
 from typing import Any, Final
 
@@ -38,6 +38,7 @@ from my_pa.contracts.ports import (
 )
 from my_pa.domain.project_reports.catalogue import searchable_text_fields
 from my_pa.domain.project_reports.model import RecordFamily, StatusClass
+from tests.database.project_report_reads_backstop import Backstop, current_derivations_backstop
 from tests.unit.project_report_reads_scene import (
     OBS_PROJECT,
     RFI_LATER,
@@ -57,6 +58,14 @@ from tests.unit.project_reports_reads_service_cases import (
 )
 
 pytestmark = pytest.mark.database
+
+
+@pytest.fixture(autouse=True)
+def _current_derivations_backstop() -> Iterator[Backstop]:
+    """Ruling R2-02: every child-table statement the reads send joins the view."""
+    with current_derivations_backstop() as seen:
+        yield seen
+
 
 OTHER_PRINCIPAL: Final = "prn_synotherreads01"
 #: The second Principal's Project: its own id, the first Principal's number.
@@ -340,8 +349,12 @@ def _rederive_the_buyout(scene: ReadsScene) -> None:
     assert sorted(c.outcome.value for c in checks) == ["match", "mismatch"]
 
 
-def test_the_fake_reads_what_the_database_reads(migrated_engine: Engine) -> None:
+def test_the_fake_reads_what_the_database_reads(
+    migrated_engine: Engine, _current_derivations_backstop: Backstop
+) -> None:
     fast, database = _both(migrated_engine, _rederive_the_buyout)
+    # The runtime backstop (R2-02) saw the reads' child-table statements.
+    assert _current_derivations_backstop.checked > 0
     _assert_equal(fast, database)
     # Only the current check is answered: the stale one names a superseded side.
     assert len(fast["checks"]) == 1

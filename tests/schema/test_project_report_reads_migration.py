@@ -13,8 +13,9 @@ or grant (WP4P-W1 design report section 3). This module proves:
   its at texts add exactly the new names;
 * **offline SQL** for both directions, without a server;
 * on a disposable database: the round trip restoring the previous catalog
-  exactly; the audit vocabulary admitting exactly the new names; and each
-  downgrade refusal alone.
+  exactly; the audit vocabulary admitting exactly the new names; each
+  downgrade refusal alone; and a downgrade over only unrelated audit rows
+  succeeding and keeping them (ruling R3-03).
 
 The file name routes every test here to migration-edge (`tests/db/fixtures.py`);
 the tests with no `database` marker also run in FAST. Every value is synthetic.
@@ -220,11 +221,11 @@ def _attempt(engine: Engine, statement: Callable[[Connection], Any]) -> DBAPIErr
     return None
 
 
-def _audit(capability: str, purpose: str) -> Callable[[Connection], Any]:
+def _audit(capability: str, purpose: str, number: int = 1) -> Callable[[Connection], Any]:
     return lambda connection: connection.execute(
         insert(audit_events).values(
-            audit_id="audit_prreadsmigaudit1",
-            correlation_id="corr_prreadsmigaudit1",
+            audit_id=f"audit_prreadsmigaudit{number}",
+            correlation_id=f"corr_prreadsmigaudit{number}",
             principal_id=P,
             capability=capability,
             purpose=purpose,
@@ -283,6 +284,45 @@ def test_a_downgrade_refuses_while_one_audit_event_names_the_new_vocabulary(
     assert f"refusing to downgrade {REVISION}" in str(refused.value)
     assert getattr(refused.value.orig, "sqlstate", None) == "23001"
     assert _version(engine) == REVISION
+
+
+#: Audit rows the previous vocabulary already admits (ruling R3-03).
+_UNRELATED: Final = (
+    ("communications.read", "communications_read"),
+    ("reports.read", "report_read"),
+)
+
+
+@pytest.mark.database
+def test_a_downgrade_with_only_unrelated_audit_rows_succeeds_and_keeps_them(
+    engine: Engine,
+) -> None:
+    """Ruling R3-03: the refusal names only the new vocabulary, never any audit row.
+
+    The `fa18ef3d9bc0` precedent: every other downgrade here runs over an
+    empty `audit_events`, so a refusal on any row at all (mutant M1) passed.
+    """
+    with engine.begin() as connection:
+        for number, (capability, purpose) in enumerate(_UNRELATED, start=1):
+            _audit(capability, purpose, number)(connection)
+    command.downgrade(_config(), PREVIOUS)
+    assert _version(engine) == PREVIOUS
+
+    def kept() -> list[tuple[str, str]]:
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT capability, purpose FROM knowledge.audit_events "
+                    "WHERE principal_id = :p ORDER BY audit_id"
+                ),
+                {"p": P},
+            )
+            return [(row.capability, row.purpose) for row in rows]
+
+    assert kept() == list(_UNRELATED)
+    command.upgrade(_config(), REVISION)
+    assert _version(engine) == REVISION
+    assert kept() == list(_UNRELATED)
 
 
 #: The catalog state the round trip must restore exactly: every CHECK and

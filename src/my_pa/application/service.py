@@ -18201,7 +18201,7 @@ class ApplicationService:
         transport dispatching straight through `_HANDLERS` meets the same
         refusal (the standard disabled refusal, not an empty answer). The reads
         run in this invocation's unit of work, scoped to the acting Principal;
-        the cursors bind to it and to its grants on the five names.
+        the cursors bind to it and to its grants on the 5 names.
         """
         if not self._project_reports_enabled:
             raise UnsupportedError()
@@ -18238,7 +18238,7 @@ class ApplicationService:
                 payload = project_reports_coverage_payload(
                     reads.coverage(principal_id, command.coverage_request())
                 )
-            else:  # pragma: no cover - bound to exactly the five names below
+            else:  # pragma: no cover - bound to exactly the 5 names below
                 raise UnsupportedError()
         return _Result(
             payload=payload,

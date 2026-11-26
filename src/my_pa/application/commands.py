@@ -14239,6 +14239,8 @@ class ProjectReportsCatalog:
     record_family: str | None = None
 
     def __post_init__(self) -> None:
+        if self.record_family is not None and not isinstance(self.record_family, str):
+            raise InvalidRequestError(SafeDetail.RECORD_FAMILY)
         check_project_reports_listing(self.project_ids, self.record_family)
 
     def catalog_request(self) -> ProjectReportsCatalogRequest:
@@ -14532,6 +14534,8 @@ class ProjectReportsCoverage:
     record_family: str | None = None
 
     def __post_init__(self) -> None:
+        if self.record_family is not None and not isinstance(self.record_family, str):
+            raise InvalidRequestError(SafeDetail.RECORD_FAMILY)
         check_project_reports_listing(self.project_ids, self.record_family)
 
     def coverage_request(self) -> ProjectReportsCoverageRequest:

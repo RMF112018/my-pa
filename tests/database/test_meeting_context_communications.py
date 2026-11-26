@@ -487,6 +487,111 @@ def test_the_simple_text_is_built_once_per_message_not_per_meeting(scene: Scene)
     assert 0 < evaluated <= 31, evaluated
 
 
+# ---- batch isolation (WP5-R1 F-2) ------------------------------------------------------
+
+#: Per Meeting of the batch: its attendee, identifier, title term and Project number.
+_ISOLATED: Final = (
+    ("p0.iso@example.test", ("rfi", "1001"), "girder", "SYN-1001"),
+    ("p1.iso@example.test", ("rfi", "2002"), "plinth", "SYN-2002"),
+    ("p2.iso@example.test", ("rfi", "3003"), "louver", "SYN-3003"),
+)
+
+
+def _isolated_input(ordinal: int, k: int, *, days: tuple[int, int]) -> MeetingContextCandidateInput:
+    address, identifier, term, number = _ISOLATED[k]
+    return MeetingContextCandidateInput(
+        ordinal=ordinal,
+        window_start=at(days[0]),
+        window_end=at(days[1]),
+        addresses=((address, address),),
+        identifiers=(identifier,),
+        title_terms=(term,),
+        project_number=number,
+    )
+
+
+def test_no_meeting_of_a_batch_reaches_another_meetings_matches(scene: Scene) -> None:
+    """Every criterion matches only its own Meeting's messages, in one batch.
+
+    Meetings 0-2 share a window, each with its own attendee, identifier, title
+    term and number, and every message matches exactly one criterion of
+    exactly one of them. Meeting 3 asks as Meeting 0 does, over an earlier,
+    disjoint window, which holds one message only it may see.
+    """
+    w = scene.mail
+    expected: dict[int, dict[str, list[str]]] = {0: {}, 1: {}, 2: {}, 3: {}}
+    n = 0
+    for k, (address, (_, value), term, number) in enumerate(_ISOLATED):
+        for reason, fields in (
+            ("participants", {"text": "Plain.", "participants": (("from", address),)}),
+            ("identifiers", {"text": f"Per RFI {value}."}),
+            ("title_terms", {"text": f"The {term} detail."}),
+            ("project_number", {"text": f"Job {number} invoice."}),
+        ):
+            n += 1
+            message = w.message(n, subject="Note", when=at(12 + k, n % 24), **fields)  # type: ignore[arg-type]
+            expected[k][message] = [reason]
+    early = w.message(
+        99,
+        subject="Note",
+        text="Per RFI 1001, the girder, job SYN-1001.",
+        when=at(3, 10),
+        participants=(("from", _ISOLATED[0][0]),),
+    )
+    expected[3][early] = ["participants", "identifiers", "project_number", "title_terms"]
+    query = MeetingContextCandidateQuery(
+        meetings=(
+            _isolated_input(0, 0, days=(7, 21)),
+            _isolated_input(1, 1, days=(7, 21)),
+            _isolated_input(2, 2, days=(7, 21)),
+            _isolated_input(3, 0, days=(1, 5)),
+        ),
+        identifier_version=IDENTIFIER_VERSION,
+        limit=15,
+    )
+    with scene.engine.connect() as connection:
+        repository = SqlCommunicationsRepository(connection)
+        rows = repository.context_candidates(scene.principal_id, query)
+        alone = {
+            meeting.ordinal: repository.context_candidates(
+                scene.principal_id,
+                MeetingContextCandidateQuery(
+                    meetings=(meeting,), identifier_version=IDENTIFIER_VERSION, limit=15
+                ),
+            )
+            for meeting in query.meetings
+        }
+    for ordinal, wanted in expected.items():
+        mine = [row for row in rows if row.ordinal == ordinal]
+        reasons = {
+            row.message_id: [
+                reason
+                for reason, hit in (
+                    ("participants", bool(row.matched_keys)),
+                    ("identifiers", bool(row.matched_identifiers)),
+                    ("project_number", row.project_number_hit),
+                    ("title_terms", row.title_hit),
+                )
+                if hit
+            ]
+            for row in mine
+        }
+        assert reasons == wanted, ordinal
+        assert {row.matched_total for row in mine} == {len(wanted)}, ordinal
+        # The batch answers each Meeting exactly as it is answered alone.
+        assert mine == list(alone[ordinal]), ordinal
+    # End to end: two Meetings with disjoint attendees and identifiers, in one batch.
+    first = scene.meeting("iso-a", emails=(_ISOLATED[0][0],), description="RFI 1001")
+    second = scene.meeting("iso-b", emails=(_ISOLATED[1][0],), description="RFI 2002")
+    a, b = scene.read([first, second]).meetings
+    assert set(_ids(a)) == {
+        m for m, r in expected[0].items() if r[0] in ("participants", "identifiers")
+    }
+    assert set(_ids(b)) == {
+        m for m, r in expected[1].items() if r[0] in ("participants", "identifiers")
+    }
+
+
 # ---- order, collapse, limit ------------------------------------------------------------
 
 

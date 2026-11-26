@@ -235,8 +235,6 @@ def _is_additive_measure(name: str) -> bool:
 def test_the_measure_enum_is_frozen_and_holds_no_non_additive_column() -> None:
     """PULSE-AC-08: a non-additive column (a count, a balance, a percent) is never a measure."""
     published = _tools()[QUERY.value]["properties"]["measures"]["items"]["enum"]
-    assert tuple(published) == FROZEN_MEASURES == PROJECT_REPORTS_MEASURE_NAMES
-    assert all(_is_additive_measure(name) for name in published)
     non_additive = {
         f"{view.value}.{entry.field_key}"
         for view, entries in VIEW_FIELDS.items()
@@ -245,6 +243,9 @@ def test_the_measure_enum_is_frozen_and_holds_no_non_additive_column() -> None:
     }
     assert non_additive, "the catalogue declares non-additive columns"
     assert not non_additive & set(published)
+    assert all(_is_additive_measure(name) for name in published)
+    # And the enum is the reviewed A1 set, so a new measure is a reviewed change.
+    assert tuple(published) == FROZEN_MEASURES == PROJECT_REPORTS_MEASURE_NAMES
 
 
 # ---- the tool text --------------------------------------------------------------------

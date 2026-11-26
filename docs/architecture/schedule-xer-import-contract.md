@@ -5,7 +5,7 @@ S7-2 (revision `d8383150cf72`) is merged (#387), S7-3 (the admission service `im
 and the `schedule` worker's P6 path, no migration, no capability) is merged (#389); its bounds-maximal synthetic measurement (25,000
 activities, 100,000 relationships, 25,000 WBS rows, 8,526,632 bytes) ran the handler in 50.7 s
 (the contained parse 6.1 s) against the 240 s budget on a local PostgreSQL 15 scratch cluster.
-S7-4a (the 7 P6 capabilities, the switch composition, policy, ChatLLM `chatllm-data-v19`, the field registry and selection chain, the P6 reads, the format-aware S5 reads and the section 7.7 quota and import budgets; no migration) is implemented on `feat/schedule-xer-surface`, not merged; S7-4b (the delta `cpm-workbench-p6-delta-v1` and the P6 scenario snapshot, acceptance D5 and D6) is not yet implemented.
+S7-4a (the 7 P6 capabilities, the switch composition, policy, ChatLLM `chatllm-data-v19`, the field registry and selection chain, the P6 reads, the format-aware S5 reads and the section 7.7 quota and import budgets; no migration) is merged (#391); S7-4b (the delta `cpm-workbench-p6-delta-v1` and the P6 scenario snapshot, acceptance D5 and D6; no migration, no new capability) is implemented on `feat/schedule-xer-handoff`, not merged (its corrections are the "As built in S7-4b" block after section 11.5).
 Nothing else in it is implemented, and nothing is migrated on a shared database, granted,
 switched on or deployed. The decision record is
 [`ADR-023`](../decisions/ADR-023-p6-xer-xml-schedule-import.md), which loosens
@@ -1150,7 +1150,7 @@ calendars (below); everything else is mapped:
 | constraints | `CS_MSOA` → SNET, `CS_MEOA` → FNET, `CS_MSOB` → SNLT, `CS_MEOB` → FNLT, `CS_MANDSTART` → MSO, `CS_MANDFIN` → MFO; `CS_MSO`, `CS_MEO`, `CS_ALAP` not representable: dropped and counted `constraints_unsupported`; a primary + secondary pair the engine's slot rule refuses keeps the primary and counts `constraints_dropped`. On a milestone the constraint is put on the milestone's own side (section 11.7): a finish-side constraint on a start milestone becomes its start-side twin (FNET → SNET, FNLT → SNLT, MFO → MSO) and vice versa, counted `milestone_constraints_converted`; the date is unchanged, so nothing is lost (a milestone has one date) |
 | progress | `actual_start`/`actual_finish`; a start milestone takes `actual_start` (its actual finish is the same instant), a finish milestone `actual_finish`; `TK_Complete` without the needed actual date is refused `invalid_request(ROWS)` |
 | relationships | every same-project relationship between included activities; `lag_minutes = lag_hours × 60`; external ones counted `external_relationships_dropped` |
-| `published_reference` | publication id, Activity ID, P6 early/late dates and floats, and the request's `include_fields` (≤ 50 captured keys) as `fields` |
+| `published_reference` | publication id, Activity ID, the published hours (original, remaining) and the derived start/finish dates, and the request's `include_fields` (≤ 50 captured keys) as `fields`; P6's own early/late dates and floats stay on the publication (`schedule_p6_activities.list`, by Activity ID): the S7-0 content schema has no field for them (corrected in S7-4b, below) |
 
 S7-4 obligations for this mapping: `published_reference.fields` is emitted as null (never
 `{}`) when the request captures nothing, and a non-integral P6 number in a captured field
@@ -1174,6 +1174,55 @@ of an unmodified P6 publication can be compared with P6's own numbers: that comp
 S7-5 oracle (section 14), never a claim of equivalence (P6 options the engine lacks —
 `sched_lag_early_start_flag`, expected finish, multiple float paths — are listed per
 publication as `unmodelled_settings`).
+
+**As built in S7-4b (decisions and corrections, proven while implementing; no migration, no new
+capability, purpose or `SafeDetail`):**
+(1) *Spec error, corrected in the table above:* the S7-0 content schema (v1 and v2, section 11.7)
+fixes `published_reference` to the publication id, the Activity ID, 2 duration cells, 2 date cells
+and (v2) `fields`; it has no early/late date or float, and adding them would be a third content
+schema. A P6 snapshot carries the published hours (a value not exact at 3 decimals is an
+`ambiguous` cell) and the derived start/finish dates; the oracle (S7-5) reads P6's dates and
+floats from the publication by Activity ID.
+(2) The P6 options travel in one additive object `p6` of `schedule_scenarios.create`
+(`calendars` as `{publication_id, calendar_id}` references, `default_calendar`, `calendar_map`,
+`include_fields`); a P6 origin requires it (`{}` for every default) and refuses the PDF fields,
+and a PDF origin refuses it, each `invalid_request(source_format)`. The lag calendar and progress
+policy are not create inputs: the client overrides them with `settings.set` on version 2. The
+tool's payload digest moves (accepted under ADR-023).
+(3) `invalid_request(CALENDARS)` is built as `invalid_request(calendar)` and `invalid_request(ROWS)`
+as the S6 rows refusal `conflict(from_publication_id)` (no new `SafeDetail`); an include key not in
+the origin's capture set, or personal, is `invalid_request(field_key)`.
+(4) A referenced calendar keyed `p6-<id>` substitutes the origin's calendar of that id, any other
+is added; both are in the content even when no activity uses them. `calendar_map` remaps an
+activity's calendar key after the missing-calendar default.
+(5) Persistence: the stored version keeps the six S6 snapshot columns (activities, milestones,
+durations quantized and out of range, original and remaining missing). Every 11.5 count, the
+`unmodelled_settings` (`ss_lag_from_early_start`, `use_expected_finish`) and
+`standard_calendar_horizon_exceeded` are the create answer's `p6_snapshot_report`, recomputed for
+a replay (immutable rows, same request). `default_calendar_standard` is not a column: it is that
+report's count for P6, the boolean `default_calendar_standard` of a PDF snapshot's create answer,
+and visible in the stored content (the default calendar is `my-pa-us-40h-v1`).
+(6) `standard_calendar_horizon_exceeded` is in the snapshot report (the latest of the published
+finish and late finish dates and `must_finish_by`) and in `schedule_cpm_runs.read` (the latest of
+the run's project finish and `must_finish_by`).
+(7) Mapping details the table leaves open: `TT_Rsrc` is a task (counted
+`resource_dependent_tasks`); an absent or unknown lag-calendar token is `predecessor` (P6's
+default); a constraint without a date or off the engine's axis is `constraints_unsupported`; a
+complete activity with remaining hours is given 0 (`complete_remaining_zeroed`); a WBS path over 32
+labels is null (`wbs_paths_dropped`); seconds are truncated (`instants_truncated`); a relationship
+to an excluded activity is `relationships_excluded`; a repeated (code) value travels by its first
+ordinal; a non-integral lag is rounded half-even (`lags_quantized`).
+(8) Delta: a publication's capture set is its admission's selection, or under the defaults the
+default-captured keys plus the UDF and code keys the run captured; a personal key is never
+compared (`fields_withheld`); relationships match by their Activity-ID pair and an external one is
+counted, not compared; calendars match by P6 id, else by a name unique among the unmatched
+(`calendars_unmatched`), and an activity's `calendar_changed` follows the calendar's content
+digest; `settings_changed` covers the settings of the `p6` block plus the ERMHDR
+`export_version`/`export_date` (11.2). The change-kind enum lists both algorithms' kinds; a kind
+the Series' algorithm does not report is `invalid_request(change_kind)` (the payload digests of
+`schedule_changes.list` and `schedule_baselines.compare` move, accepted under ADR-023). The cursor
+binds the algorithm, so one algorithm's cursor never continues the other's; a cross-format pair
+stays `unsupported(source_format)`.
 
 ### 11.6 MY-PA standard calendar `my-pa-us-40h-v1`
 

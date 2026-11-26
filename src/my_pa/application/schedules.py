@@ -50,6 +50,7 @@ from my_pa.application.errors import (
     UnsupportedError,
 )
 from my_pa.application.lineage_authority import attested_lineage_authority
+from my_pa.application.schedule_p6_delta import load_p6_delta_side, p6_change_shape
 from my_pa.contracts.ports import (
     ScheduleAdmissionRejectedError,
     ScheduleP6UnitOfWork,
@@ -96,6 +97,7 @@ from my_pa.domain.schedule.compare import (
     ScheduleChange,
     ScheduleChangeKind,
     ScheduleChangeSide,
+    ScheduleComparisonRow,
     ScheduleHierarchySide,
     compare_publications,
     unmatched_target_activity_ids,
@@ -111,6 +113,14 @@ from my_pa.domain.schedule.cursor import (
 )
 from my_pa.domain.schedule.p6.catalogue import CATALOGUE_VERSION
 from my_pa.domain.schedule.p6.model import PROFILE_ID as P6_PROFILE_ID
+from my_pa.domain.schedule.p6_compare import (
+    P6_DELTA_ALGORITHM_VERSION,
+    P6Change,
+    P6ChangeKind,
+    compare_p6_publications,
+    p6_unmatched_target_activity_ids,
+)
+from my_pa.domain.schedule.p6_reads import is_personal_key
 
 __all__ = [
     "P6_READ_TRUST_BASIS",
@@ -129,6 +139,9 @@ SCHEDULE_IMPORT_TRUST_BASIS: Final = ("schedule_admission",)
 #: P6 XER import contract section 10.4: a P6 read rests on the `p6_xer_v1`
 #: profile and the catalogue version that typed its fields.
 P6_READ_TRUST_BASIS: Final = (P6_PROFILE_ID, CATALOGUE_VERSION)
+#: S7-4b: the change kinds each delta algorithm reports (a filter names one of its own).
+_PDF_CHANGE_KINDS: Final = frozenset(kind.value for kind in ScheduleChangeKind)
+_P6_CHANGE_KINDS: Final = frozenset(kind.value for kind in P6ChangeKind)
 _TRUNCATION_REASON: Final = "page_size_reached"
 _NO_TRUNCATION: Final = Truncation()
 _SERVED: Final = frozenset({SchedulePublicationStatus.COMPLETE, SchedulePublicationStatus.PARTIAL})
@@ -580,6 +593,7 @@ def _paging(
     order: ScheduleCursorOrder,
     *,
     lenient: bool = False,
+    algorithm_version: str = DELTA_ALGORITHM_VERSION,
 ) -> _Paging:
     """Bind and decode before any database read, so a bad cursor never reaches one."""
     size = command.page_size or DEFAULT_SCHEDULE_PAGE_SIZE
@@ -590,6 +604,7 @@ def _paging(
         request=_request_of(command),
         page_size=size,
         order=order,
+        algorithm_version=algorithm_version,
     )
     position: SchedulePosition | None = None
     if command.cursor is not None:
@@ -1037,9 +1052,24 @@ class ScheduleApplication:
     def list_changes(
         self, authorization: Authorization, command: ListScheduleChanges
     ) -> ScheduleAnswer:
-        paging = _paging(authorization, command, ScheduleCursorOrder.CHANGES)
+        # P6 XER S7-4b (import contract section 11.4): the algorithm follows the
+        # Series' format, so the cursor is decoded against both bindings before
+        # any read; the one the format selects must be the one it was issued for.
+        pdf_paging = _paging(authorization, command, ScheduleCursorOrder.CHANGES, lenient=True)
+        p6_paging = _paging(
+            authorization,
+            command,
+            ScheduleCursorOrder.CHANGES,
+            lenient=True,
+            algorithm_version=P6_DELTA_ALGORITHM_VERSION,
+        )
+        if (
+            command.cursor is not None
+            and pdf_paging.position is None
+            and (p6_paging.position is None)
+        ):
+            raise ConflictError(SafeDetail.CURSOR)
         principal_id = authorization.principal.principal_id
-        offset = 0 if paging.position is None else _typed(paging.position[0], int)
         with self._unit_of_work() as work:
             schedules = work.schedules
             first = schedules.get_publication_detail(principal_id, command.from_publication_id)
@@ -1058,11 +1088,9 @@ class ScheduleApplication:
             if command.from_publication_id in intake:
                 raise InvalidRequestError(SafeDetail.FROM_PUBLICATION_ID)
             a, b = first.publication, second.publication
-            if SCHEDULE_PDF_FORMAT not in (a.source_format, b.source_format) or (
-                a.source_format != b.source_format
-            ):
-                # S7-4a: the P6 delta `cpm-workbench-p6-delta-v1` (contract
-                # section 11.4) is slice S7-4b; until then a P6 end is refused.
+            if a.source_format != b.source_format:
+                # Import contract section 0.2: no cross-format delta (a Series
+                # holds one format).
                 raise UnsupportedError(SafeDetail.SOURCE_FORMAT)
             if (a.project_id, a.series_id) != (b.project_id, b.series_id):
                 raise InvalidRequestError(SafeDetail.TO_PUBLICATION_ID)
@@ -1071,14 +1099,28 @@ class ScheduleApplication:
             before = _key(a)
             if not before < _key(b):
                 raise InvalidRequestError(SafeDetail.TO_PUBLICATION_ID)
-            from_rows = list(schedules.comparison_rows(principal_id, a.publication_id))
-            to_rows = list(schedules.comparison_rows(principal_id, b.publication_id))
-            prior = schedules.prior_observations(
-                principal_id,
-                a.series_id,
-                before=before,
-                schedule_activity_ids=unmatched_target_activity_ids(from_rows, to_rows),
-            )
+            p6_series = a.source_format != SCHEDULE_PDF_FORMAT
+            paging = p6_paging if p6_series else pdf_paging
+            if command.cursor is not None and paging.position is None:
+                raise ConflictError(SafeDetail.CURSOR)
+            kinds = _P6_CHANGE_KINDS if p6_series else _PDF_CHANGE_KINDS
+            if command.change_kind is not None and command.change_kind not in kinds:
+                raise InvalidRequestError(SafeDetail.CHANGE_KIND)
+            from_rows: list[ScheduleComparisonRow] = []
+            to_rows: list[ScheduleComparisonRow] = []
+            prior: frozenset[str] = frozenset()
+            if not p6_series:
+                from_rows = list(schedules.comparison_rows(principal_id, a.publication_id))
+                to_rows = list(schedules.comparison_rows(principal_id, b.publication_id))
+                prior = schedules.prior_observations(
+                    principal_id,
+                    a.series_id,
+                    before=before,
+                    schedule_activity_ids=unmatched_target_activity_ids(from_rows, to_rows),
+                )
+        if p6_series:
+            return self._p6_changes(authorization, command, paging, (first, second), before)
+        offset = 0 if paging.position is None else _typed(paging.position[0], int)
         delta = compare_publications(from_rows, to_rows, prior)
         listed: Iterable[ScheduleChange] = delta.changes
         if command.change_kind is not None:
@@ -1108,6 +1150,82 @@ class ScheduleApplication:
                 observed_at=authorization.at,
                 truncation=paging.truncation(end < len(selected), (end,)),
                 trust_basis=(*SCHEDULE_READ_TRUST_BASIS, DELTA_ALGORITHM_VERSION),
+            ),
+        )
+
+    def _p6_changes(
+        self,
+        authorization: Authorization,
+        command: ListScheduleChanges,
+        paging: _Paging,
+        ends: tuple[SchedulePublicationDetail, SchedulePublicationDetail],
+        before: tuple[date, datetime, str],
+    ) -> ScheduleAnswer:
+        """Section 11.4: the P6 delta `cpm-workbench-p6-delta-v1` (never stored)."""
+        factory = self._p6_unit_of_work
+        if factory is None:  # pragma: no cover - a P6 publication exists only with it
+            raise UnsupportedError(SafeDetail.SOURCE_FORMAT)
+        principal_id = authorization.principal.principal_id
+        first, second = ends
+        a, b = first.publication, second.publication
+        offset = 0 if paging.position is None else _typed(paging.position[0], int)
+        with factory() as work:
+            p6 = work.p6
+            refs = (
+                p6.p6_publication(principal_id, a.publication_id),
+                p6.p6_publication(principal_id, b.publication_id),
+            )
+            if refs[0] is None or refs[1] is None:  # pragma: no cover - read just above
+                raise InternalError()
+            from_side = load_p6_delta_side(p6, principal_id, refs[0])
+            to_side = load_p6_delta_side(p6, principal_id, refs[1])
+            prior = p6.p6_prior_observations(
+                principal_id,
+                a.series_id,
+                before=before,
+                schedule_activity_ids=p6_unmatched_target_activity_ids(
+                    from_side.activities, to_side.activities
+                ),
+            )
+        personal = frozenset(
+            key for key in from_side.capture_keys | to_side.capture_keys if is_personal_key(key)
+        )
+        delta = compare_p6_publications(from_side, to_side, prior, personal_keys=personal)
+        listed: Iterable[P6Change] = delta.changes
+        if command.change_kind is not None:
+            kind = P6ChangeKind(command.change_kind)
+            listed = [change for change in delta.changes if change.kind is kind]
+        selected = tuple(listed)
+        if offset > len(selected):
+            raise ConflictError(SafeDetail.CURSOR)
+        end = offset + paging.page_size
+        page = selected[offset:end]
+        return ScheduleAnswer(
+            payload={
+                "algorithm_version": P6_DELTA_ALGORITHM_VERSION,
+                "source_format": a.source_format,
+                "from": _end(a),
+                "to": _end(b),
+                "counts_by_kind": {
+                    kind.value: count for kind, count in delta.counts_by_kind.items()
+                },
+                "fields_not_comparable": delta.fields_not_comparable,
+                "fields_withheld": delta.fields_withheld,
+                "not_compared": {
+                    "external_relationships": delta.external_relationships,
+                    "calendars_unmatched": delta.calendars_unmatched,
+                },
+                "changes": [p6_change_shape(change) for change in page],
+                "page_size": paging.page_size,
+            },
+            disclosure=schedule_disclosure(
+                publications=[
+                    (first.source, first.effective_status),
+                    (second.source, second.effective_status),
+                ],
+                observed_at=authorization.at,
+                truncation=paging.truncation(end < len(selected), (end,)),
+                trust_basis=(*P6_READ_TRUST_BASIS, P6_DELTA_ALGORITHM_VERSION),
             ),
         )
 

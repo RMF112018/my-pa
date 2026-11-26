@@ -16302,7 +16302,13 @@ class ApplicationService:
         schedules = self._schedule_unit_of_work
         if factory is None or runner is None or records is None or schedules is None:
             raise UnsupportedError()  # pragma: no cover - `_scenario_plane` refused first
-        return ScheduleScenarioApplication(factory, runner, records, schedules)
+        return ScheduleScenarioApplication(
+            factory,
+            runner,
+            records,
+            schedules,
+            schedule_p6_unit_of_work=self._schedule_p6_unit_of_work,
+        )
 
     def _schedule_scenarios_create(
         self,

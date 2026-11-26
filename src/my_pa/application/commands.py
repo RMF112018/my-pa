@@ -497,6 +497,7 @@ from my_pa.domain.schedule import (
 from my_pa.domain.schedule.baselines import BaselineStatus, BaselineType
 from my_pa.domain.schedule.compare import ScheduleChangeKind
 from my_pa.domain.schedule.p6.catalogue import EntityKind
+from my_pa.domain.schedule.p6_compare import P6ChangeKind
 from my_pa.domain.schedule.p6_import import P6RequestError, P6SourceFormat, p6_import_request
 from my_pa.domain.schedule.p6_reads import (
     MAX_P6_CAPTURE_EVENTS,
@@ -17618,9 +17619,16 @@ MAX_SCHEDULE_HIERARCHY_PREFIX_LABELS: Final = 32
 MAX_SCHEDULE_HIERARCHY_LABEL_CHARACTERS: Final = 2_000
 #: The 11 `cpm-workbench-full-delta-v1` change kinds in rank order (contract
 #: section 3.10), read off `domain.schedule.compare.ScheduleChangeKind` so the
-#: command and the delta cannot name different vocabularies.
+#: command and the delta cannot name different vocabularies; then (P6 XER
+#: S7-4b, import contract section 11.4) the `cpm-workbench-p6-delta-v1` kinds
+#: the PDF delta does not have, read off `domain.schedule.p6_compare`. The
+#: handler refuses a kind the Series' algorithm does not report.
 SCHEDULE_CHANGE_KIND_VALUES: Final[tuple[str, ...]] = tuple(
     kind.value for kind in ScheduleChangeKind
+) + tuple(
+    kind.value
+    for kind in P6ChangeKind
+    if kind.value not in {member.value for member in ScheduleChangeKind}
 )
 _SCHEDULE_IDEMPOTENCY_KEY: Final = re.compile(r"[A-Za-z0-9_-]{8,128}")
 _SCHEDULE_ROW_TYPES: Final[tuple[ScheduleRowType, ...]] = (
@@ -18003,8 +18011,10 @@ class ReadScheduleActivityHistory:
 class ListScheduleChanges:
     """Compare two publications of one Series and list the exact per-activity changes from the first to the second.
 
-    `schedule_changes.list`: delta algorithm `cpm-workbench-full-delta-v1`,
-    computed on demand; the caller chooses both publications, of any roles.
+    `schedule_changes.list`: delta algorithm `cpm-workbench-full-delta-v1`
+    for a PDF Series and `cpm-workbench-p6-delta-v1` for a P6 Series (the
+    Series' format chooses), computed on demand and never stored; the caller
+    chooses both publications, of any roles.
     """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.SCHEDULE_CHANGES_LIST
@@ -18493,26 +18503,90 @@ def _scenario_instant(value: object, detail: SafeDetail) -> None:
         raise InvalidRequestError(detail)
 
 
-#: Section 15.5: the 5 field names that make a snapshot (absent on a fork).
+#: Section 15.5: the field names that make a snapshot (absent on a fork); P6
+#: XER S7-4b adds `p6`, the P6 snapshot's options (import contract 11.5).
 SCENARIO_SNAPSHOT_FIELDS: Final = (
     "minutes_per_source_unit",
     "calendars",
     "default_calendar",
     "data_date_time",
+    "p6",
 )
+#: P6 XER S7-4b (import contract section 11.5): the keys of the `p6` options.
+SCENARIO_P6_OPTION_KEYS: Final = frozenset(
+    {"calendars", "default_calendar", "calendar_map", "include_fields"}
+)
+#: Section 11.5: at most 50 captured fields travel inert (S7-0 `MAX_CAPTURED_FIELDS`).
+MAX_SCENARIO_P6_INCLUDE_FIELDS: Final = 50
+_SCENARIO_P6_CALENDAR_REF_KEYS: Final = frozenset({"publication_id", "calendar_id"})
+
+
+def _scenario_calendar_key(value: object) -> bool:
+    return isinstance(value, str) and 1 <= len(value) <= 32
+
+
+def _scenario_p6_options(value: object) -> None:
+    """The `p6` options' JSON types and bounds (resolution happens in the handler).
+
+    `calendars`: 1..32 `{publication_id, calendar_id}` references of the same
+    Project's P6 calendars; `default_calendar`: a calendar key;
+    `calendar_map`: up to 32 activity-calendar key remaps; `include_fields`:
+    1..50 distinct captured field keys.
+    """
+    if not isinstance(value, dict) or not set(value) <= SCENARIO_P6_OPTION_KEYS:
+        raise InvalidRequestError(SafeDetail.SOURCE_FORMAT)
+    calendars = value.get("calendars")
+    if calendars is not None:
+        if not isinstance(calendars, list) or not 1 <= len(calendars) <= MAX_SNAPSHOT_CALENDARS:
+            raise InvalidRequestError(SafeDetail.CALENDAR)
+        for item in calendars:
+            if not isinstance(item, dict) or set(item) != _SCENARIO_P6_CALENDAR_REF_KEYS:
+                raise InvalidRequestError(SafeDetail.CALENDAR)
+            reference = item["calendar_id"]
+            if type(reference) is not int or reference < 0:
+                raise InvalidRequestError(SafeDetail.CALENDAR)
+            _schedule_id(item["publication_id"], IdKind.SCHEDULE_PUBLICATION, SafeDetail.CALENDAR)
+    default = value.get("default_calendar")
+    if default is not None and not _scenario_calendar_key(default):
+        raise InvalidRequestError(SafeDetail.CALENDAR)
+    remap = value.get("calendar_map")
+    if remap is not None and (
+        not isinstance(remap, dict)
+        or not 1 <= len(remap) <= MAX_SNAPSHOT_CALENDARS
+        or not all(
+            _scenario_calendar_key(source) and _scenario_calendar_key(target)
+            for source, target in remap.items()
+        )
+    ):
+        raise InvalidRequestError(SafeDetail.CALENDAR)
+    include = value.get("include_fields")
+    if include is not None and (
+        not isinstance(include, list)
+        or not 1 <= len(include) <= MAX_SCENARIO_P6_INCLUDE_FIELDS
+        or not all(isinstance(key, str) and 1 <= len(key) <= 200 for key in include)
+        or len(set(include)) != len(include)
+    ):
+        raise InvalidRequestError(SafeDetail.FIELD_KEY)
 
 
 @dataclass(frozen=True, slots=True)
 class CreateScheduleScenario:
     """Create a Schedule Scenario whose version 1 is a snapshot of one eligible publication or approved baseline, or a copy of an existing scenario version.
 
-    `schedule_scenarios.create`: exactly one origin. From a publication or an
-    approved, effective baseline the snapshot needs `minutes_per_source_unit`,
-    either 1 to 32 `calendars` with their `default_calendar` or neither (then
-    the MY-PA standard calendar `my-pa-us-40h-v1` is the only calendar and the
-    default), and an optional `data_date_time` (`HH:MM`, default `00:00`); a
-    copy of a version takes none of them. Scenario data is client-authored,
-    non-authoritative and never reportable.
+    `schedule_scenarios.create`: exactly one origin. From a PDF publication or
+    an approved, effective baseline naming one, the snapshot needs
+    `minutes_per_source_unit`, either 1 to 32 `calendars` with their
+    `default_calendar` or neither (then the MY-PA standard calendar
+    `my-pa-us-40h-v1` is the only calendar and the default), and an optional
+    `data_date_time` (`HH:MM`, default `00:00`). From a P6 publication (or a
+    baseline naming one) the request carries `p6` instead (an object, `{}`
+    for every default): optional `calendars` (`{publication_id, calendar_id}`
+    references to any P6 calendar of the same Project, added or substituting
+    `p6-<calendar_id>`), `default_calendar`, `calendar_map` (activity calendar
+    remaps) and `include_fields` (up to 50 captured keys carried inert); the
+    durations, calendars, relationships, constraints and progress are mapped
+    from the export. A copy of a version takes none of them. Scenario data is
+    client-authored, non-authoritative and never reportable.
     """  # noqa: E501
 
     capability: ClassVar[Capability] = Capability.SCHEDULE_SCENARIOS_CREATE
@@ -18527,6 +18601,7 @@ class CreateScheduleScenario:
             },
             "label": {"type": "string", "enum": [member.value for member in VersionLabel]},
             "data_date_time": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"},
+            "p6": {"type": "object"},
         }
     )
 
@@ -18544,6 +18619,7 @@ class CreateScheduleScenario:
     note: str | None = None
     client_intent_id: str | None = None
     user_directed: bool = False
+    p6: object = None
 
     def __post_init__(self) -> None:
         origins = (self.from_publication_id, self.from_baseline_id, self.from_version_id)
@@ -18571,6 +18647,18 @@ class CreateScheduleScenario:
         _scenario_text(self.note, MAX_SCENARIO_TEXT_CHARACTERS, SafeDetail.NOTE, optional=True)
         if self.from_version_id is not None:
             # A fork copies the source version's content: no snapshot field.
+            if self.minutes_per_source_unit is not None:
+                raise InvalidRequestError(SafeDetail.MINUTES_PER_SOURCE_UNIT)
+            if self.calendars is not None or self.default_calendar is not None:
+                raise InvalidRequestError(SafeDetail.CALENDAR)
+            if self.data_date_time is not None:
+                raise InvalidRequestError(SafeDetail.DATA_DATE_TIME)
+            if self.p6 is not None:
+                raise InvalidRequestError(SafeDetail.SOURCE_FORMAT)
+        elif self.p6 is not None:
+            # P6 XER S7-4b (import contract section 11.5): the export carries
+            # its units, calendars and data date time; the PDF fields are absent.
+            _scenario_p6_options(self.p6)
             if self.minutes_per_source_unit is not None:
                 raise InvalidRequestError(SafeDetail.MINUTES_PER_SOURCE_UNIT)
             if self.calendars is not None or self.default_calendar is not None:

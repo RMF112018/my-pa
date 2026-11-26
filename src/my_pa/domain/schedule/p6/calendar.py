@@ -4,6 +4,8 @@ Contract `docs/architecture/schedule-xer-import-contract.md` section 3.4. The
 blob is a bracketed tree of nodes `(0||<name>(<attributes>)(<children>))`
 with spaces and `0x7F` bytes between nodes:
 
+* The root node is named `CalendarData` or has an empty name, read alike.
+
 * `DaysOfWeek` children are named `1` (Sunday) to `7` (Saturday); each holds
   interval nodes `s|HH:MM|f|HH:MM`. A day without an interval is non-working.
 * An interval end of `00:00` is minute 1,440 (the end of the day).
@@ -48,6 +50,9 @@ _ORDINAL: Final = re.compile(r"^[0-9]{1,9}$")
 #: Section 5.4: dates are years 1900-2199.
 _FIRST_YEAR: Final = 1900
 _LAST_YEAR: Final = 2199
+#: Section 3.4: the root node is named `CalendarData` or has an empty name; both
+#: are read the same way. Rendering always writes `CalendarData`.
+_ROOT_NAMES: Final = frozenset({"CalendarData", ""})
 
 type Intervals = tuple[tuple[int, int], ...]
 
@@ -208,7 +213,7 @@ def parse_calendar_data(
 ) -> CalendarData:
     """Parse a `clndr_data` blob; raises `CalendarDataError` or `CalendarBoundError`."""
     root = _Reader(text, max_depth=max_depth, max_nodes=max_nodes).document()
-    if root.name != "CalendarData":
+    if root.name not in _ROOT_NAMES:
         raise CalendarDataError("calendar root malformed")
     week: tuple[Intervals, ...] | None = None
     exceptions: tuple[tuple[date, Intervals], ...] = ()

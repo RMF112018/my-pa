@@ -68,11 +68,50 @@
       "section": "tools"
     },
     {
+      "date": "2026-11-25",
+      "kind": "added",
+      "names": [
+        "project_reports.catalog",
+        "project_reports.compare",
+        "project_reports.coverage",
+        "project_reports.query",
+        "project_reports.record_history"
+      ],
+      "section": "tools"
+    },
+    {
+      "date": "2026-11-25",
+      "from": "81192f6b7ef68f47200a882ed8aa9375da13c4cc94d55ceaa6021331d798afe8",
+      "kind": "changed",
+      "name": "project_reports.compare",
+      "reason": "WP4P-R3 R3-07 (ruling C-1, ADR-024): the compare, coverage and record_history field descriptions publish the tool text",
+      "section": "tools",
+      "to": "9af167b6128bd2d040317297e004b6339bd28884405251d2db7912d27771588c"
+    },
+    {
+      "date": "2026-11-25",
+      "from": "4b8a0e8044d6136b6639d5512513bd1099e94a52d6b473c0ddbaec79d950091c",
+      "kind": "changed",
+      "name": "project_reports.coverage",
+      "reason": "WP4P-R3 R3-07 (ruling C-1, ADR-024): the compare, coverage and record_history field descriptions publish the tool text",
+      "section": "tools",
+      "to": "5251ab29c5d3ad55c0e7b0dacf28a9bfc5743a5e8a413fbb1e6114dc8c208951"
+    },
+    {
+      "date": "2026-11-25",
+      "from": "61c3fb86e914853172d6a59454f5615505614e65297a27c991dcbc3a8e04bd40",
+      "kind": "changed",
+      "name": "project_reports.record_history",
+      "reason": "WP4P-R3 R3-07 (ruling C-1, ADR-024): the compare, coverage and record_history field descriptions publish the tool text",
+      "section": "tools",
+      "to": "73da67ebf86b626db86f0fa3a4c7bbd08ef4eca390c4736239ddabc4a8e325ac"
+    },
+    {
       "date": "2026-11-26",
       "from": "72f09234239a758a53bdcfaf7e3b588b6d482fabe3afb4fcaee9d30389a21065",
       "kind": "changed",
       "name": "schedule_baselines.compare",
-      "reason": "ADR-023 (S7-4b, import contract 11.4/11.5): additive p6 snapshot options; change_kind enum widened by the P6 delta kinds",
+      "reason": "ADR-023 (S7-4b: p6 create option, P6 change kinds)",
       "section": "tools",
       "to": "e477476d87effb302e5594224164a1bf94f4a3aa8e957e546aca80a81ef0ef01"
     },
@@ -81,7 +120,7 @@
       "from": "6903a7660e582b44d44b3865f1256dbaec9e77ceb642cd610fb53189c7127440",
       "kind": "changed",
       "name": "schedule_changes.list",
-      "reason": "ADR-023 (S7-4b, import contract 11.4/11.5): additive p6 snapshot options; change_kind enum widened by the P6 delta kinds",
+      "reason": "ADR-023 (S7-4b: p6 create option, P6 change kinds)",
       "section": "tools",
       "to": "51c6f6cfd79c8e509b77683c5d393bb094040ed4ff43334e79586fd0ebdd2e25"
     },
@@ -90,12 +129,12 @@
       "from": "b959110480ccc7f1730fa079c4522607ee5d73391277b488945202b87bdc252b",
       "kind": "changed",
       "name": "schedule_scenarios.create",
-      "reason": "ADR-023 (S7-4b, import contract 11.4/11.5): additive p6 snapshot options; change_kind enum widened by the P6 delta kinds",
+      "reason": "ADR-023 (S7-4b: p6 create option, P6 change kinds)",
       "section": "tools",
       "to": "767176274ac0aa50cf329a3ec1f76bbbf3bac0844e15bd1c865003a1969a8c81"
     }
   ],
-  "seal": "ddad6176a1a65168e962afccb4a16333730b73f0cb039ad2103093e610ef72ff",
+  "seal": "ef636bd1c45fe76a5f925362146f67e1a14600d52085cf954fae768de83ff193",
   "tools": {
     "canvas.workspace.get": "65876ad8f7197a4e8465b3a9019dd234b782f605dfda37d10c1026b660941fb3",
     "canvas.workspace.put": "985bbd6cd28bbaffe0520daa1883b0503a592f4369171a366ca14de8b43a5a8b",
@@ -302,6 +341,11 @@
     "programs.overview": "28a20ac098b923d152829f14e24f75d94014fe225cd04f84e9df80500b09f850",
     "project_controls.configure": "3a3c2ca1101aec02551e33f9a77685599984d32b134b0fa417d9fd157d590751",
     "project_controls.status": "bf7f9192978f1785b0939d890a89c3b562db9125d34cb44f988d990e2bbc509c",
+    "project_reports.catalog": "2d678389c451245076ddb69b6e1eaf59f717c4b0c060c6107272a9fda24f2564",
+    "project_reports.compare": "9af167b6128bd2d040317297e004b6339bd28884405251d2db7912d27771588c",
+    "project_reports.coverage": "5251ab29c5d3ad55c0e7b0dacf28a9bfc5743a5e8a413fbb1e6114dc8c208951",
+    "project_reports.query": "8beaa5bcf34786805697ba08ef7fbdd2c6dc7df628969b22759012ebb24c0dd5",
+    "project_reports.record_history": "73da67ebf86b626db86f0fa3a4c7bbd08ef4eca390c4736239ddabc4a8e325ac",
     "record_events.list": "1efe7e2fb210ad5cec490222b0c221377e2df62ca4bcaf0f05b9c791a896ced1",
     "record_events.provenance": "3f30d92e5aedac32468ebb2271dda8fd5742d4afbcdf20ef4b26a95997f9ff7c",
     "records.associations.assert": "539f2144d0157da5d87e912812de345d0af90774f6043c495cf21dc95eb7b149",

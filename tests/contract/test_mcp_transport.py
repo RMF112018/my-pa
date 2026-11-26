@@ -47,6 +47,9 @@ from tests.conftest import (
 )
 from tests.contract.test_transport_parity import a_permitted_purpose, document, payloads_for
 from tests.files_workspace_samples import FILES_WORKSPACE_CAPABILITIES
+from tests.project_reports_reads_samples import (
+    PROJECT_REPORTS_READ_CAPABILITIES,
+)
 from tests.schedule_p6_samples import SCHEDULE_P6_CAPABILITIES
 from tests.schedule_scenario_samples import SCHEDULE_SCENARIO_CAPABILITIES
 from tests.transports import McpTransport, mcp_transport
@@ -155,6 +158,7 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         and capability not in FILES_WORKSPACE_CAPABILITIES
         and capability not in COMMUNICATIONS_READ_CAPABILITIES
         and capability not in SCHEDULE_P6_CAPABILITIES
+        and capability not in PROJECT_REPORTS_READ_CAPABILITIES
     ]
     # WP05b: the 4 custody names are listed over stdio as the attested confirms
     # are; the handler denies them there (no operator surface). WP06: the 4
@@ -646,6 +650,8 @@ _COMPOSED_CAPABILITIES: Final = (
     # P6 XER import S7-4a: the 7 P6 names, composed only with
     # `MY_PA_SCHEDULE_P6_ENABLED` over the Schedule switch.
     | SCHEDULE_P6_CAPABILITIES
+    # Project-report reads WP4P-S4: the 5 reads, composed only with `MY_PA_PROJECT_REPORTS_ENABLED`.
+    | PROJECT_REPORTS_READ_CAPABILITIES
 )
 
 #: WP06 T14: the transfer uploads this module's in-memory world never composes.
@@ -779,6 +785,8 @@ def test_a_child_with_a_managed_root_publishes_every_locally_available_capabilit
         # P6 XER import S7-4a (contract section 10.2): the P6 switch, which
         # stacks on the Schedule switch above.
         MY_PA_SCHEDULE_P6_ENABLED="true",
+        # Project-report reads WP4P-S4: the read switch, no dependency.
+        MY_PA_PROJECT_REPORTS_ENABLED="true",
         # Reports Modernization WP06 T14: the report content root, which composes
         # the content store and the transfer staging the 4 uploads need.
         MY_PA_REPORT_CONTENT_ROOT=str(report_content),

@@ -70,6 +70,20 @@ CAPABILITY_ADMISSIONS: Final[Mapping[str, tuple[str, frozenset[str]]]] = Mapping
             "fa18ef3d9bc0",
             frozenset({"communications.coverage", "communications.read", "communications.search"}),
         ),
+        # Project-report reads WP4P-S4: the read vocabulary revision. The domain
+        # declares the names in the same change, so they are not ahead of it.
+        "project_reports_reads": (
+            "3b3373d8268e",
+            frozenset(
+                {
+                    "project_reports.catalog",
+                    "project_reports.compare",
+                    "project_reports.coverage",
+                    "project_reports.query",
+                    "project_reports.record_history",
+                }
+            ),
+        ),
     }
 )
 
@@ -85,6 +99,8 @@ PURPOSE_ADMISSIONS: Final[Mapping[str, tuple[str, frozenset[str]]]] = MappingPro
         ),
         # Communications intelligence WP4 (ADR-022): the communications search revision.
         "communications_read": ("fa18ef3d9bc0", frozenset({"communications_read"})),
+        # Project-report reads WP4P-S4: the read vocabulary revision.
+        "project_reports_read": ("3b3373d8268e", frozenset({"project_reports_read"})),
     }
 )
 

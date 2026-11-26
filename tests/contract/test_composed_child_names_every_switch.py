@@ -191,7 +191,7 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
     """
     variables = _switch_variables()
     assert variables, "no switch narrows the published surface, so this module proves nothing"
-    assert len(variables) == 13, (
+    assert len(variables) == 14, (
         "the published surface is narrowed by a different number of switches than "
         f"this guard knows about: {sorted(variables)}"
     )
@@ -217,6 +217,8 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
         "communications_enabled",
         # P6 XER import S7-4a (schedule XER import contract section 10.2).
         "schedule_p6_enabled",
+        # Project-report reads WP4P-S4 (design section 2.9): the read switch.
+        "project_reports_enabled",
     }
 
 

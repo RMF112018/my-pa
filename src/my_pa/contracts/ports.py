@@ -6562,6 +6562,11 @@ class UnitOfWork(ABC):
 
     @property
     @abstractmethod
+    def project_report_reads(self) -> ProjectReportReadsRepository:
+        """The project-report reads (WP4P), inside this transaction; read-only."""
+
+    @property
+    @abstractmethod
     def issues(self) -> IssueRepository:
         """The record lineage S1 Issue plane, inside this transaction.
 
@@ -16028,3 +16033,188 @@ class ProjectReportsRepository(ABC):
         self, principal_id: str, project_id: str
     ) -> tuple[ProjectReportCrossCheckRecord, ...]:
         """Every cross-check of one Project, ordered by kind, then left, then right."""
+
+
+# --- project-report reads (WP4P-S2) ---------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportVersionRecord:
+    """One ingested version of one report series, through its current derivation.
+
+    The labels come from the snapshot's earliest-first-seen path (ruling D4);
+    the path itself never leaves the repository. `filter_declared_at` is the
+    source's current active revision's declaration for the series' slug, or
+    `None`; its description never leaves the repository.
+    """
+
+    series_id: str
+    snapshot_id: str
+    derivation_id: str
+    ingest_source_id: str
+    project_id: str
+    binding_revision_id: str
+    state: report_model.DerivationState
+    quarantine_reason: report_model.QuarantineReason | None
+    record_family: report_model.RecordFamily | None
+    family_view: report_model.FamilyView | None
+    adapter_version: str | None
+    identity_version: str
+    status_map_version: str
+    completeness_class: report_model.CompletenessClass | None
+    reconciliation: Mapping[str, Any] | None
+    header_signature: str
+    first_seen_at: datetime
+    date_label: str | None
+    slug_label: str | None
+    currency: str
+    declared_project_number: str
+    filter_declared_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportRfiTerm:
+    """An RFI number to match: an exact numeric suffix and, when given, an exact prefix."""
+
+    prefix: str | None
+    suffix: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportIdentifierTerm:
+    """An identifier field's exact (whitespace-normalized) text."""
+
+    field_key: str
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportLineQuery:
+    """A filtered, keyset-paged read over the lines of the given current derivations.
+
+    `derivation_ids` are in the caller's order, which is the page order with
+    `row_ordinal` inside each; `after` is the last line answered, as
+    `(index into derivation_ids, row_ordinal)`. Every filter is optional; the
+    filters combine with AND, the members of one filter with OR.
+    """
+
+    derivation_ids: tuple[str, ...]
+    limit: int
+    after: tuple[int, int] | None = None
+    status_classes: tuple[report_model.StatusClass, ...] = ()
+    statuses: tuple[str, ...] = ()
+    date_field: str | None = None
+    date_from: date | None = None
+    date_to: date | None = None
+    rfi_terms: tuple[ProjectReportRfiTerm, ...] = ()
+    identifiers: tuple[ProjectReportIdentifierTerm, ...] = ()
+    group_keys: tuple[str, ...] = ()
+    text: str | None = None
+    #: The field keys `text` searches, each value on its own (never concatenated).
+    text_fields: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportReadLine:
+    """One detail line as a read answers it, with its record key and group context."""
+
+    derivation_id: str
+    snapshot_id: str
+    row_ordinal: int
+    record_family: report_model.RecordFamily
+    family_view: report_model.FamilyView
+    line_kind: report_model.LineKind
+    identity_state: report_model.IdentityState
+    observation_state: report_model.ObservationState
+    record_id: str | None
+    identity_key: str | None
+    degraded_reasons: tuple[report_model.RowReason, ...]
+    status_raw: str | None
+    status_class: report_model.StatusClass | None
+    identifier_prefix: str | None
+    identifier_numeric_suffix: int | None
+    #: `(level, key, header ordinal)` per inherited group header.
+    group_path: tuple[tuple[int, str, int], ...]
+    values: tuple[ProjectReportLineValueRecord, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectReportRfiCandidate:
+    derivation_id: str
+    row_ordinal: int
+    prefix: str | None
+    suffix: int
+    record_id: str | None
+
+
+class ProjectReportReadsRepository(ABC):
+    """The project-report reads (WP4P-S2), inside one transaction; nothing here writes.
+
+    Every derivation is reached through the view
+    `project_report_current_derivations`, never the derivations table, so a
+    superseded derivation is never answered or counted. Lines exist only on
+    detail rows (the database refuses any other), and the group context is
+    read from the detail row's own role. An identifier of another Principal
+    answers nothing, exactly as an unknown one. Every list is ordered.
+    """
+
+    @abstractmethod
+    def list_report_versions(
+        self,
+        principal_id: str,
+        *,
+        project_ids: Sequence[str] | None = None,
+        record_family: report_model.RecordFamily | None = None,
+    ) -> tuple[ProjectReportVersionRecord, ...]:
+        """Every ingested version with a current derivation, by series then version order.
+
+        Series in order of their first first-seen instant, then `series_id`;
+        versions within a series by the D10 order (`version_order_key`), latest last.
+        """
+
+    @abstractmethod
+    def query_lines(
+        self, principal_id: str, query: ProjectReportLineQuery
+    ) -> tuple[ProjectReportReadLine, ...]:
+        """At most `query.limit` lines of the current derivations named, in page order."""
+
+    @abstractmethod
+    def lines_of_records(
+        self, principal_id: str, record_ids: Sequence[str]
+    ) -> tuple[ProjectReportReadLine, ...]:
+        """Every current line of the records, by record, then snapshot, then row."""
+
+    @abstractmethod
+    def stated_totals_of(
+        self, principal_id: str, derivation_ids: Sequence[str]
+    ) -> tuple[ProjectReportStatedTotalRecord, ...]:
+        """The stated totals of the current derivations named, by derivation, row, column."""
+
+    @abstractmethod
+    def cross_checks_of(
+        self, principal_id: str, derivation_ids: Sequence[str]
+    ) -> tuple[ProjectReportCrossCheckRecord, ...]:
+        """The cross-checks naming a derivation named on either side, both sides current.
+
+        Ruling A4: a check whose other side is superseded is stale and is not
+        answered, so no mismatch is raised from it.
+        """
+
+    @abstractmethod
+    def rfi_candidates(
+        self, principal_id: str, derivation_ids: Sequence[str], suffixes: Sequence[int]
+    ) -> tuple[ProjectReportRfiCandidate, ...]:
+        """The RFI lines whose numeric suffix equals one given exactly, by derivation, row."""
+
+    @abstractmethod
+    def find_records(
+        self,
+        principal_id: str,
+        project_id: str,
+        record_family: report_model.RecordFamily,
+        identity_key: str,
+    ) -> tuple[ProjectReportRecordEntry, ...]:
+        """The record identities of one key in one Project and family (WP4P-S3).
+
+        One per identity version, ordered by identity version, then `record_id`.
+        """

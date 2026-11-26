@@ -162,6 +162,7 @@ from my_pa.application.commands import (
     Command,
     CommitIntelligenceArtifact,
     CommunicationsCoverage,
+    CompareProjectReports,
     CompareScheduleBaseline,
     CompleteGoodNotesPull,
     ConfigureProjectControls,
@@ -301,12 +302,16 @@ from my_pa.application.commands import (
     PreviewConstraintSync,
     PreviewEntityMerge,
     PreviewEntitySplit,
+    ProjectReportRecordHistory,
+    ProjectReportsCatalog,
+    ProjectReportsCoverage,
     ProposeRelationshipMemory,
     ProposeScheduleBaseline,
     PublishConstraint,
     PublishGeneralReport,
     PullGoodNotesWork,
     PutCanvasWorkspace,
+    QueryProjectReports,
     ReadCapture,
     ReadCommitment,
     ReadCommitmentV2,
@@ -686,6 +691,16 @@ from my_pa.application.program_membership import (
     resolve_program_members,
 )
 from my_pa.application.program_work import read_program_overview, recompute_program_reference
+from my_pa.application.project_reports_reads import (
+    ProjectReportReads,
+    catalog_payload,
+    compare_payload,
+    query_payload,
+    record_history_payload,
+)
+from my_pa.application.project_reports_reads import (
+    coverage_payload as project_reports_coverage_payload,
+)
 from my_pa.application.record_events import (
     MemoryDisclosure,
     list_record_events,
@@ -3562,6 +3577,9 @@ _MEETING_TRUST_BASIS: Final = ("principal_partition",)
 #: Communications intelligence WP4-S5: the reads answer derived rows of the
 #: acting Principal's own partition.
 _COMMUNICATIONS_TRUST_BASIS: Final = ("principal_partition",)
+#: Project-report reads WP4P-S4: the reads answer derived rows of the acting
+#: Principal's own partition.
+_PROJECT_REPORTS_TRUST_BASIS: Final = ("principal_partition",)
 
 
 @contextmanager
@@ -5100,6 +5118,7 @@ class ApplicationService:
         schedule_p6_enabled: bool = False,
         schedule_p6_unit_of_work: Callable[[], ScheduleP6UnitOfWork] | None = None,
         schedule_p6_limits: P6AdmissionLimits | None = None,
+        project_reports_enabled: bool = False,
     ) -> None:
         self._unit_of_work = unit_of_work
         #: P6 XER import S7-4a (schedule XER import contract section 10.2):
@@ -5113,6 +5132,11 @@ class ApplicationService:
         self._schedule_p6_enabled = schedule_p6_enabled
         self._schedule_p6_unit_of_work = schedule_p6_unit_of_work
         self._schedule_p6_limits = schedule_p6_limits
+        #: Project-report reads WP4P-S4 (design section 2.9):
+        #: `MY_PA_PROJECT_REPORTS_ENABLED`. Off -- the default -- withholds the 5
+        #: `project_reports.*` reads here and answers each `unsupported`
+        #: (`_project_reports`).
+        self._project_reports_enabled = project_reports_enabled
         #: Communications intelligence WP4-S5 (contract section 16, ruling D7):
         #: `MY_PA_COMMUNICATIONS_ENABLED`. Off -- the default -- withholds the 3
         #: `communications.*` reads here and answers each `unsupported`
@@ -5413,6 +5437,12 @@ class ApplicationService:
         # MCP tool list, the remote profile and the ChatLLM composition.
         if not self._communications_enabled:
             served -= _COMMUNICATIONS_CAPABILITIES
+        # Project-report reads WP4P-S4 (design section 2.9): the read switch
+        # withholds the 5 `project_reports.*` reads from `capabilities.get`,
+        # readiness, the MCP tool list, the remote profile and the ChatLLM
+        # composition.
+        if not self._project_reports_enabled:
+            served -= _PROJECT_REPORTS_CAPABILITIES
         if not self._relationship_intelligence_enabled:
             served -= _ENTITY_CAPABILITIES
         # The write half, narrowed separately. Subtracted after the line above
@@ -18345,6 +18375,68 @@ class ApplicationService:
             ),
         )
 
+    def _project_reports(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: Command
+    ) -> _Result:
+        """The 5 `project_reports.*` reads (WP4P-W1 design sections 2.1-2.9, WP4P-S4).
+
+        `unsupported` when `MY_PA_PROJECT_REPORTS_ENABLED` is off, before anything
+        is read: the names are withheld from `available_capabilities` then, and a
+        transport dispatching straight through `_HANDLERS` meets the same
+        refusal (the standard disabled refusal, not an empty answer). The reads
+        run in this invocation's unit of work, scoped to the acting Principal;
+        the cursors bind to it and to its grants on the 5 names.
+        """
+        if not self._project_reports_enabled:
+            raise UnsupportedError()
+        reads = ProjectReportReads(
+            unit_of_work=lambda: nullcontext(unit_of_work), clock=lambda: authorization.at
+        )
+        principal_id = authorization.principal.principal_id
+        held = authorization.capability_grants
+        grants = (
+            None
+            if held is None
+            else tuple(
+                (granted.value, None if purpose is None else purpose.value)
+                for granted, purpose in held
+            )
+        )
+        next_cursor: str | None = None
+        with _translated():
+            if isinstance(command, ProjectReportsCatalog):
+                payload = catalog_payload(reads.catalog(principal_id, command.catalog_request()))
+            elif isinstance(command, QueryProjectReports):
+                queried = reads.query(principal_id, command.query_request(), grants=grants)
+                payload = query_payload(queried)
+                next_cursor = queried.next_cursor
+            elif isinstance(command, ProjectReportRecordHistory):
+                payload = record_history_payload(
+                    reads.record_history(principal_id, command.record_history_request())
+                )
+            elif isinstance(command, CompareProjectReports):
+                compared = reads.compare(principal_id, command.compare_request(), grants=grants)
+                payload = compare_payload(compared)
+                next_cursor = compared.next_cursor
+            elif isinstance(command, ProjectReportsCoverage):
+                payload = project_reports_coverage_payload(
+                    reads.coverage(principal_id, command.coverage_request())
+                )
+            else:  # pragma: no cover - bound to exactly the 5 names below
+                raise UnsupportedError()
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_PROJECT_REPORTS_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=next_cursor is not None,
+                    reason="page_size_reached" if next_cursor is not None else None,
+                    next_cursor=next_cursor,
+                ),
+            ),
+        )
+
     def _reports_transfer_begin(
         self,
         unit_of_work: UnitOfWork,
@@ -20152,6 +20244,12 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.COMMUNICATIONS_SEARCH: ApplicationService._communications,
         Capability.COMMUNICATIONS_READ: ApplicationService._communications,
         Capability.COMMUNICATIONS_COVERAGE: ApplicationService._communications,
+        # Project-report reads WP4P-S4: one binding for the 5 reads.
+        Capability.PROJECT_REPORTS_CATALOG: ApplicationService._project_reports,
+        Capability.PROJECT_REPORTS_QUERY: ApplicationService._project_reports,
+        Capability.PROJECT_REPORTS_RECORD_HISTORY: ApplicationService._project_reports,
+        Capability.PROJECT_REPORTS_COMPARE: ApplicationService._project_reports,
+        Capability.PROJECT_REPORTS_COVERAGE: ApplicationService._project_reports,
         Capability.ISSUES_CREATE: ApplicationService._issues_create,
         Capability.ISSUES_READ: ApplicationService._issues_read,
         Capability.ISSUES_LIST: ApplicationService._issues_list,
@@ -20820,6 +20918,18 @@ _PROGRAM_REPORTING_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 #: factory (and `programs.overview` the Constraint plane).
 _PROGRAM_READ_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability for capability in Capability if capability.value in PROGRAM_READ_CAPABILITIES
+)
+
+#: Project-report reads WP4P-S4 (design section 2.9): the 5 reads, withheld
+#: unless `project_reports_enabled` is on.
+_PROJECT_REPORTS_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.PROJECT_REPORTS_CATALOG,
+        Capability.PROJECT_REPORTS_QUERY,
+        Capability.PROJECT_REPORTS_RECORD_HISTORY,
+        Capability.PROJECT_REPORTS_COMPARE,
+        Capability.PROJECT_REPORTS_COVERAGE,
+    }
 )
 
 #: Communications intelligence WP4-S5 (contract section 16, ruling D7): the 3

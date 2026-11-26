@@ -528,3 +528,8 @@ class Purpose(StrEnum):
     # `schedule_p6_fields.set_captured`. The 5 P6 reads reuse `schedule_read`.
     SCHEDULE_P6_IMPORT = "schedule_p6_import"
     SCHEDULE_P6_CONFIGURATION = "schedule_p6_configuration"
+    # Project-report reads WP4P-S4 (WP4P-W1 design section 2.1), on `D-91`:
+    # would reuse widen the grant? Every existing purpose would: none reads the
+    # Principal's ingested project reports. One purpose of its own, implied by
+    # no other, for exactly the 5 `project_reports.*` reads.
+    PROJECT_REPORTS_READ = "project_reports_read"

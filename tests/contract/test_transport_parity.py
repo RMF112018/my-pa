@@ -92,6 +92,10 @@ from tests.conftest import (
     staged_task,
 )
 from tests.files_workspace_samples import FILES_WORKSPACE_CAPABILITIES, files_payloads
+from tests.project_reports_reads_samples import (
+    PROJECT_REPORTS_READ_CAPABILITIES,
+    project_reports_payloads,
+)
 from tests.schedule_p6_samples import (
     SCHEDULE_P6_CAPABILITIES,
     schedule_p6_payloads,
@@ -2341,6 +2345,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         **files_payloads("parity"),
         **communications_payloads("parity"),
         **schedule_p6_payloads("parity"),
+        **project_reports_payloads("parity"),
     }
 
 
@@ -2894,6 +2899,8 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         *COMMUNICATIONS_READ_CAPABILITIES,
         # P6 XER import S7-4a: the 7 P6 names (scopeless, P6 switch off).
         *SCHEDULE_P6_CAPABILITIES,
+        # Project-report reads WP4P-S4: the 5 reads (scopeless, read switch off).
+        *PROJECT_REPORTS_READ_CAPABILITIES,
     }
 )
 

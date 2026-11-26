@@ -1807,6 +1807,11 @@ def build_gateway_runtime(
             # version (rulings D3, R10).
             communications_enabled=settings.communications_enabled and data_engine is None,
             communications_identifier_version=settings.communications_identifier_version,
+            # Project-report reads WP4P-S4 (design section 2.9): the read switch,
+            # never in a restricted composition -- an injected `data_engine` is a
+            # fixed MCP database role holding no privilege on the project-report
+            # tables (the WP3P revision grants it nothing).
+            project_reports_enabled=settings.project_reports_enabled and data_engine is None,
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, control_engine) if entra else None,

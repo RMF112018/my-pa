@@ -289,12 +289,22 @@ class NotReportableReason(StrEnum):
     #: WP3P-S1 addition (for a ruling): a detail cell of the measured column
     #: failed its type, so the sum would silently omit it.
     TYPE_ERROR_PRESENT = "type_error_present"
+    #: Answer-only (WP4P-R1 ruling R1-09): the two sides of a compare delta are
+    #: in different currencies, so no delta is given.
+    CURRENCY_MIXED = "currency_mixed"
+    #: Answer-only (WP4P-R1 ruling R1-10): a keyed measure has detail lines
+    #: without an identifier, which are never keyed, so no keyed total is given.
+    UNIDENTIFIED_KEY_PRESENT = "unidentified_key_present"
 
 
 class ReportQualifier(StrEnum):
     """Attached to an answer, never a refusal."""
 
     FILTER_SEMANTICS_UNKNOWN = "filter_semantics_unknown"
+    #: On a record or row count of a derivation whose stated totals mismatched
+    #: (WP4P ruling A2): a mismatch concerns reconciled amounts, not counts, so
+    #: the count is answered and qualified, never withheld.
+    RECONCILIATION_MISMATCH = "reconciliation_mismatch"
 
 
 class VersionPresence(StrEnum):
@@ -302,3 +312,6 @@ class VersionPresence(StrEnum):
 
     OBSERVED_IN_LATEST = "observed_in_latest"
     NOT_OBSERVED_IN_LATEST = "not_observed_in_latest"
+    #: The series' latest version is quarantined (WP4P-R1 ruling R1-01): it has
+    #: no lines, so whether the record is in it is unknown and nothing is inferred.
+    LATEST_UNREADABLE = "latest_unreadable"

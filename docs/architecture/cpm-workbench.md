@@ -57,7 +57,7 @@ service `import_p6` (`src/my_pa/application/schedule_p6.py`), its P6
 repository (`src/my_pa/infrastructure/persistence/schedule_p6.py`) and the `schedule` worker's P6
 path (`src/my_pa/infrastructure/jobs/schedule_p6.py`), behind `MY_PA_SCHEDULE_P6_ENABLED`
 (default off). Its fifth, S7-4a, is implemented on `feat/schedule-xer-surface`, not merged: the
-7 capabilities (`schedule_publications.import_p6` and the `schedule_p6_*` names,
+7 P6 capabilities (`schedule_publications.import_p6` and the `schedule_p6_*` names,
 `src/my_pa/application/schedule_p6_reads.py`), `chatllm-data-v19`, and the S5 reads serving P6
 publications. S7-4b (delta, scenario snapshot) onwards is design only.
 

@@ -18161,6 +18161,7 @@ class ImportScheduleP6Publication:
     supersedes_publication_id: str | None = None
 
     def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
         self.import_payload()
 
     def import_payload(self) -> dict[str, object]:
@@ -18217,7 +18218,7 @@ class ListScheduleP6AvailableFields:
 
 @dataclass(frozen=True, slots=True)
 class SetScheduleP6CapturedFields:
-    """Set the optional fields a P6 Series captures from its next import on (compare-and-swap on the selection chain).
+    """Set the optional fields a P6 Series records from its next import on (compare-and-swap on the selection chain).
 
     `schedule_p6_fields.set_captured`: up to 300 distinct field keys, each
     selectable for the Series (a catalogued optional field or a field observed
@@ -18250,6 +18251,7 @@ class SetScheduleP6CapturedFields:
     include_personal: bool = False
 
     def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
         _schedule_id(self.series_id, IdKind.SCHEDULE_SERIES, SafeDetail.SERIES_ID)
         self.selected_keys()
         sequence: object = self.expected_sequence

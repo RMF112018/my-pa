@@ -312,6 +312,12 @@ def test_the_s5_reads_serve_a_complete_p6_publication(w: World) -> None:
     read = w.ok(ReadSchedulePublication(publication_id=publication))
     assert read["status"] == "complete"
     assert read["enrollment_id"] is None
+    # The publication mapping (D8): the project's data date, the ERMHDR export
+    # date, the project name as the title (at most 300 characters).
+    assert read["data_date"] == "2030-01-07"
+    assert read["run_date"] == "2030-01-08"
+    assert read["published_schedule_title"]
+    assert read["p6"]["data_date"].startswith("2030-01-07")
     assert read["p6"]["project"]["short_name"] == "SYN-PRJ"
     assert read["p6"]["counts"]["activity"] == read["counts"]["activity"] > 0
     assert read["p6"]["export_version"]
@@ -336,7 +342,13 @@ def test_the_s5_reads_serve_a_complete_p6_publication(w: World) -> None:
         ListScheduleChanges(from_publication_id=publication, to_publication_id=publication)
     ) == ("unsupported", ["source_format"])
     for answer in (admitted, read, listed, series_list, activities, history):
-        assert "secret/dir" not in _flat(answer)
+        flat = _flat(answer)
+        # Never served (10.4): the workspace path, the ERMHDR user fields, and a
+        # personal field nobody selected.
+        assert "secret/dir" not in flat
+        assert "SYNUSER" not in flat
+        assert "Synthetic User" not in flat
+        assert "Synthetic Person" not in flat
 
 
 def test_a_p6_read_of_another_principals_publication_is_not_found(w: World) -> None:

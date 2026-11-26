@@ -5,7 +5,7 @@
   canonical frame and conformance script, no migration) is merged (#386); slice S7-2 (the one
   migration `d8383150cf72` and its table declarations) is merged (#387); slice S7-3 (the
   admission service and the worker's P6 path, no migration, no capability) is merged (#389);
-  slice S7-4a (the 7 capabilities, switch, policy, ChatLLM `chatllm-data-v19`, field registry,
+  slice S7-4a (the 7 P6 capabilities, switch, policy, ChatLLM `chatllm-data-v19`, field registry,
   reads and the format-aware S5 reads, no migration) is implemented on
   `feat/schedule-xer-surface`, not merged; S7-4b (delta and P6 scenario snapshot) is not yet
   implemented; nothing else is implemented, and nothing is migrated
@@ -223,7 +223,7 @@ sniff, replay, Series resolution, PDF-Series refusal, content idempotency, the s
 Principal), the switch `MY_PA_SCHEDULE_P6_ENABLED`, and the `schedule` worker's P6 path H1-H8 in
 the existing contained child (the parent never imports the parser; the frame is decoded by the
 catalogue, re-rendered and bound to the bytes).
-S7-4a implemented on `feat/schedule-xer-surface` (not merged; no migration): the 7 capabilities
+S7-4a implemented on `feat/schedule-xer-surface` (not merged; no migration): the 7 P6 capabilities
 of contract section 10.1 behind `MY_PA_SCHEDULE_P6_ENABLED` (on every closed surface; the 2
 writes idempotent and client-bound remotely), ChatLLM `chatllm-data-v19`, the field registry and
 the compare-and-swap capture chain, the P6 reads with the section 7.7 filter grammar, the S5

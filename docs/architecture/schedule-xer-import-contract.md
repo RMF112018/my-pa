@@ -5,7 +5,7 @@ S7-2 (revision `d8383150cf72`) is merged (#387), S7-3 (the admission service `im
 and the `schedule` worker's P6 path, no migration, no capability) is merged (#389); its bounds-maximal synthetic measurement (25,000
 activities, 100,000 relationships, 25,000 WBS rows, 8,526,632 bytes) ran the handler in 50.7 s
 (the contained parse 6.1 s) against the 240 s budget on a local PostgreSQL 15 scratch cluster.
-S7-4a (the 7 capabilities, the switch composition, policy, ChatLLM `chatllm-data-v19`, the field registry and selection chain, the P6 reads, the format-aware S5 reads and the section 7.7 quota and import budgets; no migration) is implemented on `feat/schedule-xer-surface`, not merged; S7-4b (the delta `cpm-workbench-p6-delta-v1` and the P6 scenario snapshot, acceptance D5 and D6) is not yet implemented.
+S7-4a (the 7 P6 capabilities, the switch composition, policy, ChatLLM `chatllm-data-v19`, the field registry and selection chain, the P6 reads, the format-aware S5 reads and the section 7.7 quota and import budgets; no migration) is implemented on `feat/schedule-xer-surface`, not merged; S7-4b (the delta `cpm-workbench-p6-delta-v1` and the P6 scenario snapshot, acceptance D5 and D6) is not yet implemented.
 Nothing else in it is implemented, and nothing is migrated on a shared database, granted,
 switched on or deployed. The decision record is
 [`ADR-023`](../decisions/ADR-023-p6-xer-xml-schedule-import.md), which loosens

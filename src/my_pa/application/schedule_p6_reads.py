@@ -101,7 +101,7 @@ _NO_TRUNCATION: Final = Truncation()
 _SELECTABLE: Final[Mapping[str, CatalogueField]] = {
     field.field_key: field for field in CATALOGUE if is_selectable_catalogued_key(field.field_key)
 }
-#: Section 7.2: the catalogue's default captures (O+), the defaults with no selection.
+#: Section 7.2: the catalogue's default-captured keys (O+), the defaults with no selection.
 _DEFAULT_KEYS: Final = frozenset(key for key, field in _SELECTABLE.items() if field.default_capture)
 _RELATIONSHIP_TYPE_PREFIX: Final = "PR_"
 

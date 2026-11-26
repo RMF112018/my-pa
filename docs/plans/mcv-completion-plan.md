@@ -470,7 +470,7 @@ exact current claim disagrees with the tree.
 
 Every capability name (the current count is generated into [`docs/generated/repository-state.md`](../generated/repository-state.md)) and their operator-only flags exist in
 `domain/identity/operation.py`, alongside 68 purposes in `domain/identity/purpose.py`. Of those
-names, 304 have application commands/handlers and no Run 01 name remains structurally
+names, 309 have application commands/handlers and no Run 01 name remains structurally
 unwired -- `PC-CM-RUN01-WP07` wired `constraints.create_published`, the last one. The v1 request,
 response, disclosure, and error shapes already exist and are contract-tested.
 

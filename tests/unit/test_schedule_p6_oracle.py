@@ -242,6 +242,60 @@ def test_unmodelled_settings_are_listed_in_order() -> None:
     ]
 
 
+def test_a_parallel_relationship_is_an_unmodelled_cause() -> None:
+    # An FF beside the FS between the same ordered pair: P6 honours both, the content keeps
+    # the first, so the oracle names the cause (counted by the snapshot).
+    preds = [*cases._exact_preds(), fx.pred_row("4004", "3001", "3002", "PR_FF")]
+    model = cases.model(cases._exact_tasks(), preds, threshold="24")
+    report = _report(_encoded(model))
+    assert report["status"] == "compared"
+    assert report["unmodelled_settings"] == ["parallel_relationships"]
+    assert _oracle("exact")["unmodelled_settings"] == []
+
+
+def _progress_with(kind: str, successor: dict[str, str] | None = None) -> fx.Model:
+    model = cases.CASES["progress"]()
+    for row in model.table("TASKPRED").rows:
+        if row["pred_task_id"] == "3002":
+            row["pred_type"] = kind
+    if successor is not None:
+        for row in model.table("TASK").rows:
+            if row["task_code"] == "SYN-5030":
+                row.update(successor)
+    return model
+
+
+def test_an_in_progress_start_link_is_an_unmodelled_cause() -> None:
+    # SYN-5020 is in progress; its SS/SF link to the not-started SYN-5030 is skipped by the
+    # engine's backward pass (S6 section 3.6) and applied by P6.
+    for kind in ("PR_SS", "PR_SF"):
+        report = _report(_encoded(_progress_with(kind)))
+        assert report["status"] == "compared", kind
+        assert report["unmodelled_settings"] == ["in_progress_start_links"], kind
+    # An FS or FF link from it is applied by both: no cause.
+    for kind in ("PR_FS", "PR_FF"):
+        assert _report(_encoded(_progress_with(kind)))["unmodelled_settings"] == [], kind
+    # A complete successor is not considered by the backward pass: no cause.
+    done = {
+        "status_code": "TK_Complete",
+        "remain_drtn_hr_cnt": "0",
+        "act_start_date": "2030-01-08 08:00",
+        "act_end_date": "2030-01-08 17:00",
+    }
+    report = _report(_encoded(_progress_with("PR_SS", done)))
+    assert report["status"] == "compared"
+    assert report["unmodelled_settings"] == []
+    # Under progress override an in-progress successor is not considered either.
+    started = {"status_code": "TK_Active", "act_start_date": "2030-01-08 13:00"}
+    model = _progress_with("PR_SS", started)
+    model.table("SCHEDOPTIONS").rows[0].update(
+        sched_retained_logic="N", sched_progress_override="Y"
+    )
+    assert "in_progress_start_links" not in _report(_encoded(model))["unmodelled_settings"]
+    model.table("SCHEDOPTIONS").rows[0].update(sched_progress_override="N")
+    assert "in_progress_start_links" in _report(_encoded(model))["unmodelled_settings"]
+
+
 def test_a_failed_parse_and_a_refused_snapshot_are_reported_not_compared() -> None:
     assert _report(fx.build("missing_required_field").data)["status"] == ("parse_failed")
     model = cases.CASES["exact"]()

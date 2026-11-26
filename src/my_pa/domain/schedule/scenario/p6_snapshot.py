@@ -276,6 +276,7 @@ REPORT_COUNTS: Final = (
     "relationships",
     "external_relationships_dropped",
     "relationships_excluded",
+    "relationships_parallel_dropped",
     "lags_quantized",
     "wbs_paths_dropped",
     "instants_truncated",
@@ -711,8 +712,13 @@ def snapshot_from_p6(
         pred = included.get(relationship.pred_activity_id or "")
         succ = included.get(relationship.succ_activity_id or "")
         rel_type = _RELATIONSHIP_TYPES.get(relationship.relationship_type)
-        if pred is None or succ is None or rel_type is None or (pred, succ) in pairs:
+        if pred is None or succ is None or rel_type is None:
             counts.add("relationships_excluded")
+            continue
+        if (pred, succ) in pairs:
+            # S6-D05: 1 relationship per ordered pair; P6 allows parallel links (an SS
+            # and an FF between the same 2 activities): the first in input order is kept.
+            counts.add("relationships_parallel_dropped")
             continue
         lag, quantized = _minutes(relationship.lag_hours or Decimal(0))
         if not -MAX_LAG_MINUTES <= lag <= MAX_LAG_MINUTES:

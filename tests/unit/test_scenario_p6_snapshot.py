@@ -546,6 +546,31 @@ def test_relationships_lags_and_external_ones() -> None:
     assert c["lags_quantized"] == 1
 
 
+def test_a_parallel_relationship_is_dropped_and_counted_apart() -> None:
+    # P6 allows an SS and an FF between the same 2 activities; the content keeps 1 per
+    # ordered pair (S6-D05): the first in input order, the second counted apart from the
+    # external and unknown-endpoint exclusions.
+    built = snap(
+        activities=(act("SYN-1010", 2), act("SYN-1020", 3)),
+        relationships=(
+            rel("SYN-1010", "SYN-1020", "PR_SS", "8"),
+            rel("SYN-1010", "SYN-1020", "PR_FF", "0"),
+            rel("SYN-1020", "SYN-1010", "PR_FS", "0"),
+            rel("SYN-1010", "SYN-9999"),
+        ),
+    )
+    links = {(r.pred, r.succ, r.type) for r in built.content.relationships}
+    assert links == {
+        ("sact_p6snap0002", "sact_p6snap0003", RelationshipType.SS),
+        ("sact_p6snap0003", "sact_p6snap0002", RelationshipType.FS),
+    }
+    c = counts(built)
+    assert c["relationships"] == 2
+    assert c["relationships_parallel_dropped"] == 1
+    assert c["relationships_excluded"] == 1
+    assert c["external_relationships_dropped"] == 0
+
+
 # ---- published reference and content schema -------------------------------------------
 
 

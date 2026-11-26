@@ -4,9 +4,16 @@ Usage, from the repository root:
 
     python ops/schedule/p6_evaluate.py <export.xer> [<export2.xer> ...]
 
+    python ops/schedule/p6_evaluate.py --assume-same-project <v1.xer> <v2.xer> ...
+
 Give consecutive versions of one Project in order (oldest first): each
 consecutive pair of exports of the same Project (section 11.1: same project
 short name or GUID) is compared `earlier -> later` with the pure P6 delta.
+P6 update files exported as separate project copies carry another project
+id, short name and GUID, so 11.1 calls them different projects:
+`--assume-same-project` compares every consecutive pair anyway. Each pair
+reports `same_project` (the 11.1 rule), so a `false` shows that importing the
+later file into the same Series needs `accept_project_identity_change`.
 
 Read-only: each file is opened for reading only, at most the section 5.4 file
 cap plus one byte is read, and nothing is written anywhere (no database, no
@@ -138,10 +145,12 @@ def _pairs(results: Sequence[P6ParseResult], *, assume_same: bool = False) -> li
         pair: dict[str, Any] = {"from": index, "to": index + 1}
         complete = all(item.outcome is P6Outcome.COMPLETE for item in (earlier, later))
         if not complete:
-            pairs.append({**pair, "delta": None, "status": "parse_failed"})
+            pairs.append({**pair, "delta": None, "same_project": None, "status": "parse_failed"})
             seen = set()
             continue
-        if not assume_same and not same_project(earlier, later):
+        # Whether 11.1 matches: false means an import needs `accept_project_identity_change`.
+        pair["same_project"] = same_project(earlier, later)
+        if not assume_same and not pair["same_project"]:
             pairs.append({**pair, "delta": None, "status": "different_project"})
             seen = set()
             continue

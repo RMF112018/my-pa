@@ -82,7 +82,14 @@ from my_pa.domain.schedule.scenario.cpm import (
     engine_version_for,
     run_cpm,
 )
-from my_pa.domain.schedule.scenario.model import parse_instant
+from my_pa.domain.schedule.scenario.model import (
+    ActivityState,
+    ProgressPolicy,
+    RelationshipType,
+    ScenarioContent,
+    activity_state,
+    parse_instant,
+)
 from my_pa.domain.schedule.scenario.p6_snapshot import (
     P6Snapshot,
     P6SnapshotActivity,
@@ -316,7 +323,9 @@ def unmodelled_settings(result: P6ParseResult, snapshot: P6Snapshot) -> tuple[st
     """Every P6 option this export sets that the engine does not model, in a fixed order.
 
     The snapshot's own (`ss_lag_from_early_start`, `use_expected_finish`) first,
-    then the further SCHEDOPTIONS and PROJECT options the parser exposes.
+    then the further SCHEDOPTIONS and PROJECT options the parser exposes, then the
+    causes the export's network carries: dropped external or parallel relationships
+    and an in-progress predecessor's SS/SF link (S6 section 3.6).
     """
     project = result.project
     assert project is not None  # noqa: S101 - a snapshot exists only for a complete parse
@@ -336,9 +345,36 @@ def unmodelled_settings(result: P6ParseResult, snapshot: P6Snapshot) -> tuple[st
     counts = snapshot.p6_report.counts
     if counts["external_relationships_dropped"]:
         found.append("external_relationships")
+    if counts["relationships_parallel_dropped"]:
+        found.append("parallel_relationships")
+    if _in_progress_start_links(snapshot.content):
+        found.append("in_progress_start_links")
     if counts["progress_policy_defaulted"]:
         found.append("progress_actual_dates")
     return tuple(found)
+
+
+_START_LINKS: Final = frozenset({RelationshipType.SS, RelationshipType.SF})
+
+
+def _in_progress_start_links(content: ScenarioContent) -> bool:
+    """Whether a considered SS/SF link leaves an in-progress predecessor (S6 section 3.6).
+
+    The engine skips that link's backward-pass bound on the predecessor; P6 applies it
+    (less the work done since the actual start), so late dates and floats can differ.
+    """
+    states = {activity.key: activity_state(activity) for activity in content.activities}
+    override = content.settings.progress_policy is ProgressPolicy.PROGRESS_OVERRIDE
+    for link in content.relationships:
+        if link.type not in _START_LINKS or states[link.pred] is not ActivityState.IN_PROGRESS:
+            continue
+        successor = states[link.succ]
+        if successor is ActivityState.COMPLETE or (
+            override and successor is ActivityState.IN_PROGRESS
+        ):
+            continue  # not considered by the backward pass
+        return True
+    return False
 
 
 def _p6_minutes(entity: P6Entity, quantity: str) -> tuple[str, int | None, bool]:

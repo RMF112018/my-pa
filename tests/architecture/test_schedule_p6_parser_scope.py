@@ -12,7 +12,8 @@ by AST over the `p6` package:
   is the S7-5 oracle `p6/oracle.py`, which also reaches the pure scenario
   package (`snapshot_from_p6`, the CPM engine) and the pure P6 delta
   (`my_pa.domain.schedule.p6_compare`), and which no other `p6` module imports
-  (so the parser front end and the worker parent never load the engine);
+  (so loading the `p6` package or its parser never loads the oracle; the worker
+  parent's closure test lists the oracle with the parser front end);
 * no clock, randomness, environment, IO, process or network module, and no
   XML library (the S5b-2 runtime guard stays unnarrowed until the XML slice);
 * no `now`/`today`/`utcnow`, `open`/`print`/`input`, `eval`/`exec`/`compile`

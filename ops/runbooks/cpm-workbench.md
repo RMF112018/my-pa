@@ -509,7 +509,19 @@ each name with `apps/cli/remote_mcp.py grant` as in
    ```
 
    Optional: `accept_project_identity_change` (default `false`) and
-   `supersedes_publication_id`. A file that moved after the stat answers
+   `supersedes_publication_id`.
+
+   **P6 update files exported as separate project copies.** Such a copy carries another P6
+   project id, project short name and project GUID than the earlier exports, so the contract
+   §11.1 identity rule finds no shared identity and the import becomes `review_required`
+   (`p6_project_identity_changed`). Every update import of such a copy into the same Series
+   therefore needs `"accept_project_identity_change": true` **on its first call**: the check
+   compares with the Series' earlier `complete` publications, and an accepted copy adds yet
+   another identity, so the next copy needs the flag again. The flag waives the only guard
+   against importing another project into the Series: confirm first with the evaluation
+   script (section 10.10, `--assume-same-project`: `same_project` `false` and a delta with
+   few `added` and `removed` activities). The very first import of a Series is never a
+   change. A file that moved after the stat answers
    `conflict(expected_version)`, other bytes `conflict(expected_sha256)`, a Series holding a PDF
    publication `conflict(series_format)`; the same bytes already in the Series answer
    `already_present: true` (also for a failed publication of those bytes: a retry needs a
@@ -522,7 +534,7 @@ each name with `apps/cli/remote_mcp.py grant` as in
 |---|---|
 | `queued`, `processing` | admitted; the worker has not finished |
 | `complete` | parsed; non-fatal issues are listed (at most 10,000) with their counts by code |
-| `review_required` | `p6_project_identity_changed`: no earlier complete P6 publication of the Series shares the project short name or the GUID (contract §11.1). Re-import with `accept_project_identity_change: true` if the project is the same, or use another Series |
+| `review_required` | `p6_project_identity_changed`: no earlier complete P6 publication of the Series shares the project short name or the GUID (contract §11.1); it is never served by the P6 reads and never becomes the identity reference. The same bytes cannot be imported again into that Series (content idempotency answers `already_present: true` with this publication), so set `accept_project_identity_change: true` on the first import of each update copy (section 10.5); after a `review_required`, re-export the file from P6 (new bytes) and import it with the flag and a new `idempotency_key`, or use another Series |
 | `failed` | a fatal issue of contract §5.5: `p6_encoding_invalid`, `p6_header_invalid`, `p6_structure_invalid`, `p6_record_width_mismatch`, `p6_bound_exceeded`, `p6_required_table_missing`, `p6_required_field_missing`, `p6_multiple_projects`, `p6_value_invalid` or `p6_unknown_enum_value` on an R field, `p6_duplicate_activity_id`, `p6_reference_dangling`, `p6_wbs_cycle` |
 
 `last_error_code` stays one of the 11 public codes; the `p6_*` codes are the publication's
@@ -593,6 +605,7 @@ field is captured only with `include_personal: true` and served only to a holder
 
   ```sh
   .venv/bin/python ops/schedule/p6_evaluate.py <v1.xer> <v2.xer> <v3.xer>
+  .venv/bin/python ops/schedule/p6_evaluate.py --assume-same-project <v1.xer> <v2.xer> <v3.xer>
   ```
 
   It prints 1 JSON object (`p6-evaluation-v1`). Per export: the profile verdict and issue
@@ -600,7 +613,10 @@ field is captured only with `include_personal: true` and served only to a holder
   the records of the file's own table; the contract §11.5 snapshot report (every count,
   `unmodelled_settings`, the number of outrun standard calendars, the content schema, or the
   refusal token); and the engine-vs-P6 oracle (`p6-engine-oracle-v1`). Per consecutive pair of
-  the same project (short name or GUID): the delta's counts by change kind, `earlier → later`,
+  the same project (short name or GUID), or every consecutive pair under
+  `--assume-same-project` (update files exported as separate project copies, section 10.5):
+  `same_project` (the §11.1 rule; `false` means the import needs
+  `accept_project_identity_change`) and the delta's counts by change kind, `earlier → later`,
   with `reintroduced` across the run. Exit 1 when any verdict is `fail` (the object is still
   printed) or on an unexpected error (its type only), 0 otherwise, 2 on usage.
 - **Reading the oracle.** It builds version 1 with every §11.5 default, runs the engine at
@@ -614,7 +630,12 @@ field is captured only with `include_personal: true` and served only to a holder
   equivalence**: `unmodelled_settings` names the P6 options the export sets that the engine
   does not model (`ss_lag_from_early_start`, `use_expected_finish`, `total_float_type`,
   `open_ends_critical`, `float_from_project_finish`, `critical_path_longest_path`,
-  `multiple_float_paths`, `external_relationships`, `progress_actual_dates`), and a difference
+  `multiple_float_paths`, `external_relationships`, `parallel_relationships`,
+  `in_progress_start_links`, `progress_actual_dates`). `parallel_relationships`: P6 allows a
+  second link between the same ordered pair (an SS and an FF); the Scenario keeps the first
+  (counted `relationships_parallel_dropped`). `in_progress_start_links`: the engine skips the
+  backward-pass bound of an SS or SF link whose predecessor is in progress, P6 applies it less
+  the work done since the actual start, so late dates and floats can differ. A difference
   concentrated in progressed activities points at a P6 progress convention, not at an error.
 - **Acceptance (gate G-7).** For every nominated export: verdict not `fail`, the 4 counts
   equal, the delta counts between consecutive versions, and the oracle's shares with their

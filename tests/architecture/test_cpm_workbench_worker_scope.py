@@ -65,6 +65,8 @@ _P6_PARSER: Final = (
     "my_pa.domain.schedule.p6.values",
     "my_pa.domain.schedule.p6.calendar",
     "my_pa.domain.schedule.p6.profile",
+    # S7-5: the engine-vs-P6 oracle reaches the parser; it is an operator-script module.
+    "my_pa.domain.schedule.p6.oracle",
 )
 
 

@@ -11,9 +11,11 @@ unexpected error, by type only), 0 and 2 (usage).
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import io
 import json
+import os
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import ModuleType
@@ -21,7 +23,9 @@ from typing import Any, Final
 
 import pytest
 
+from my_pa.domain.schedule.p6 import P6_LIMITS
 from my_pa.domain.schedule.p6.catalogue import ValueType, catalogue_field
+from my_pa.domain.schedule.p6_import import P6_IMPORT_FIELDS
 from tests.fixtures import schedule_p6_oracle as cases
 from tests.fixtures import schedule_p6_xer as fx
 
@@ -143,6 +147,7 @@ def test_the_output_shape_on_a_consecutive_pair(tmp_path: Path) -> None:
     assert document["exports"][1]["oracle"]["quantities"]["early_finish"]["equal"] == 3
     (pair,) = document["pairs"]
     assert (pair["from"], pair["to"], pair["status"]) == (1, 2, "compared")
+    assert pair["same_project"] is True
     # The planted early finish moved: early_finish and the derived finish.
     assert pair["delta"]["counts_by_kind"]["dates_changed"] == 2
     assert pair["delta"]["changes"] == 2
@@ -167,7 +172,13 @@ def test_exports_of_different_projects_are_not_compared(tmp_path: Path) -> None:
     code, printed, _ = _run(_files(tmp_path, cases.build("exact"), other))
     assert code == 0
     (pair,) = json.loads(printed)["pairs"]
-    assert pair == {"delta": None, "from": 1, "status": "different_project", "to": 2}
+    assert pair == {
+        "delta": None,
+        "from": 1,
+        "same_project": False,
+        "status": "different_project",
+        "to": 2,
+    }
 
 
 def test_assume_same_project_compares_a_renamed_copy(tmp_path: Path) -> None:
@@ -178,7 +189,8 @@ def test_assume_same_project_compares_a_renamed_copy(tmp_path: Path) -> None:
     assert code == 0
     (pair,) = json.loads(printed)["pairs"]
     assert pair["status"] == "compared"
-    assert pair["delta"] is not None
+    assert pair["same_project"] is False
+    assert pair["delta"]["changes"] == 0
 
 
 def test_a_fatal_export_exits_1_and_its_pair_is_not_compared(tmp_path: Path) -> None:
@@ -203,6 +215,35 @@ def test_usage_errors_exit_2(tmp_path: Path) -> None:
         assert module.main([str(tmp_path)]) == 2
 
 
+def test_a_special_file_is_refused_without_opening_it(tmp_path: Path) -> None:
+    fifo = tmp_path / "export.xer"
+    os.mkfifo(fifo)  # opening it for reading would block: the type is checked first
+    code, printed, errors = _run([fifo])
+    assert (code, printed) == (2, "")
+    assert errors.strip() == "p6_evaluate=refused not a readable regular file"
+
+
+def test_at_most_the_cap_plus_1_byte_is_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _script()
+    data = cases.build("exact")
+    monkeypatch.setattr(module, "P6_LIMITS", dataclasses.replace(P6_LIMITS, file_bytes=len(data)))
+    (path,) = _files(tmp_path, data)
+    assert module._read(path) == data
+    code, printed, _ = _run([path], module)
+    assert code == 0
+    assert json.loads(printed)["exports"][0]["oracle"]["status"] == "compared"
+    # 1 byte over the cap: cap + 1 bytes are read and the export fails as a bound.
+    path.write_bytes(data + b"\r\n")
+    assert module._read(path) == (data + b"\r\n")[: len(data) + 1]
+    code, printed, _ = _run([path], module)
+    assert code == 1
+    failed = json.loads(printed)["exports"][0]
+    assert failed["verdict"] == "fail"
+    assert failed["issue_counts"] == {"p6_bound_exceeded": 1}
+
+
 def test_an_unexpected_error_prints_its_type_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -216,3 +257,28 @@ def test_an_unexpected_error_prints_its_type_only(
     assert code == 1
     assert printed == ""
     assert errors.strip() == "p6_evaluate=error ValueError"
+
+
+RUNBOOK: Final = ROOT / "ops" / "runbooks" / "cpm-workbench.md"
+
+
+def test_the_runbook_import_example_is_a_valid_request_shape() -> None:
+    """Runbook section 10.5: the worked `import_p6` input names the request's fields."""
+    text = RUNBOOK.read_text(encoding="utf-8")
+    section = text[text.index("### 10.5 How a client imports") : text.index("### 10.6 Statuses")]
+    block = section.split("```json", 1)[1].split("```", 1)[0]
+    example = json.loads(block)
+    assert set(example) <= P6_IMPORT_FIELDS
+    assert set(example) >= {
+        "project_id",
+        "workspace_id",
+        "path",
+        "expected_version",
+        "expected_sha256",
+        "format",
+        "idempotency_key",
+    }
+    assert sum(key in example for key in ("series_id", "series_name", "series_auto")) == 1
+    assert example["format"] == "p6_xer"
+    assert '"include_sha256": true' in section
+    assert "`accept_project_identity_change`" in section

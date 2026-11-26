@@ -35,7 +35,11 @@ still caught:
   passed as an argument is still seen. A table position that resolves to no
   known table or statement local (a `self` attribute, a computed `getattr`,
   `metadata.tables[...]` with a computed key, an unknown global) **fails
-  closed**. Functions, `async` functions, lambdas and module-level code are
+  closed**; so does a Call or a Subscript in a table position (ruling R3-02),
+  unless it is a table method on a resolving receiver, a statement or
+  SQLAlchemy call, a call of a module helper whose returns all resolve, or
+  `<metadata>.tables[<constant>]`. A local or a parameter that rebinds the
+  view's name (or the alias it is imported as) is a violation. Functions, `async` functions, lambdas and module-level code are
   all scanned, and a string names whatever table it spells;
 * a helper that returns a bare child table (or a join, alias or selectable
   built on one) without the view is itself a violation, but one returning a
@@ -474,7 +478,12 @@ class _Module:
         if isinstance(func, ast.Attribute) and func.attr == "select_from":
             for argument in node.args:
                 self._table_position(argument, bound, facts)
-        elif isinstance(func, ast.Attribute) and func.attr in _JOINS and node.args:
+        elif (
+            isinstance(func, ast.Attribute)
+            and func.attr in _JOINS
+            and node.args
+            and not isinstance(func.value, ast.Constant)  # `", ".join(...)` is a string's
+        ):
             self._table_position(node.args[0], bound, facts)
         elif isinstance(func, ast.Name) and func.id in _JOINS:
             for argument in node.args[:2]:
@@ -556,7 +565,13 @@ class _Module:
     # --- table positions (ruling R2-02: fail closed) -----------------------------
 
     def _table_position(self, node: ast.AST, bound: _Bound, facts: _Facts) -> None:
-        """`node` is read as a table: it must resolve to a table or a statement local."""
+        """`node` is read as a table: it must resolve to a table or a statement local.
+
+        Ruling R3-02: a Call or a Subscript in a table position fails closed
+        too, unless it is a table method on a resolving receiver, a statement
+        or SQLAlchemy call, a call of a module helper whose returns all
+        resolve, or `<metadata>.tables[<constant>]`.
+        """
         if isinstance(node, ast.Name):
             if not self._resolves(node, bound, set()):
                 facts.unresolved.add(node.id)
@@ -565,6 +580,10 @@ class _Module:
             module = isinstance(node.value, ast.Name) and node.value.id in self.table_modules
             if not (known and module) and not self._resolves_value(node, bound, set()):
                 facts.unresolved.add(ast.unparse(node))
+        elif isinstance(node, ast.Call | ast.Subscript) and not self._resolves_value(
+            node, bound, set()
+        ):
+            facts.unresolved.add(ast.unparse(node))
 
     def _resolves(self, node: ast.Name, bound: _Bound, seen: set[int]) -> bool:
         if id(node) in seen:
@@ -603,14 +622,41 @@ class _Module:
             and value.value.id in self.table_modules
         ):
             return True
-        if (
-            isinstance(value, ast.Subscript)
-            and isinstance(value.value, ast.Attribute)
-            and value.value.attr == "tables"
-        ):
-            return _fold(value.slice) is not None
-        base = _base(value)
-        return isinstance(base, ast.Name) and self._resolves(base, bound, seen)
+        if isinstance(value, ast.Subscript):
+            # Only `<metadata>.tables[<constant>]` (ruling R3-02: `TABLES[k]`,
+            # `vars(tables)[k]` and any other lookup fail closed).
+            return (
+                isinstance(value.value, ast.Attribute)
+                and value.value.attr == "tables"
+                and _fold(value.slice) is not None
+            )
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+            return self._resolves_call(value.func.id, bound, seen)
+        if isinstance(value, ast.Call):
+            # A method on a receiver (`lines.join(...)`, `select(...).subquery()`).
+            return self._resolves_value(value.func, bound, seen)
+        if isinstance(value, ast.Attribute):
+            return self._resolves_value(value.value, bound, seen)
+        return isinstance(value, ast.Name) and self._resolves(value, bound, seen)
+
+    def _resolves_call(self, name: str, bound: _Bound, seen: set[int]) -> bool:
+        """A call of `name` yields a known table: SQLAlchemy, a statement, or a helper.
+
+        A module helper resolves only when every value it returns resolves
+        (ruling R3-02); an imported helper, a builtin (`next`, `vars`) or an
+        unknown name fails closed.
+        """
+        if name in self.sqlalchemy or name in self.statement_calls:
+            return True
+        functions = self.functions.get(name, [])
+        returns = [value for function in functions for value in _returns(function)]
+        if not returns:
+            return False
+        marker = id(functions[0])
+        if marker in seen:
+            return True
+        seen.add(marker)
+        return all(self._resolves_value(value, bound, seen) for value in returns)
 
 
 #: `(id(function), parameter)` -> the expressions a call binds it to.
@@ -929,6 +975,22 @@ def _unjoined_child_reads(source: str) -> list[str]:
         correlated = mine.linked(new, own.children | {VIEW})
         if mine.unresolved or (new and not (mine.joined or correlated)):
             found.append((node.lineno, module.name_of(node)))
+    # Ruling R3-02: a local (or a parameter) that rebinds the view's name, or an
+    # alias it is imported as, makes every join of "the view" a join of whatever
+    # it now holds.
+    for scope, bindings in module.locals.items():
+        for name, values in bindings.items():
+            if name == VIEW or module.aliases.get(name) == VIEW:
+                found += [
+                    (value.lineno, f"rebinds the view in {_scope_name(scope)}") for value in values
+                ]
+    for node in ast.walk(module.tree):
+        if isinstance(node, _Def):
+            found += [
+                (node.lineno, f"rebinds the view in {_scope_name(node)}")
+                for name in _parameters(node)
+                if name == VIEW or module.aliases.get(name) == VIEW
+            ]
     for name, functions in module.functions.items():
         for function in functions:
             for value in _returns(function):
@@ -946,6 +1008,12 @@ def _unjoined_child_reads(source: str) -> list[str]:
         if (spelled & CHILDREN and VIEW not in spelled) or _COMPUTED.search(node.value):
             found.append((node.lineno, f"string in {module.name_of(node)}"))
     return [f"{name}:{line}" for line, name in sorted(set(found))]
+
+
+def _scope_name(scope: ast.AST) -> str:
+    if isinstance(scope, ast.FunctionDef | ast.AsyncFunctionDef):
+        return scope.name
+    return "<lambda>" if isinstance(scope, ast.Lambda) else "<module>"
 
 
 def _is_docstring(module: _Module, node: ast.AST) -> bool:
@@ -1277,11 +1345,12 @@ _IN: Final = f"lines.c.derivation_id.in_(select({_CURRENT}.c.derivation_id))"
 )
 def test_an_outer_join_of_the_view_is_caught(joined: str) -> None:
     """Probe (a): a LEFT or FULL join keeps every line, superseded or not."""
-    assert _planted(_read(f"select(lines.c.x).select_from({joined})")) == ["read"]
+    head = "from sqlalchemy import join\n"
+    assert _planted(head + _read(f"select(lines.c.x).select_from({joined})")) == ["read"]
     inner = joined.replace("outerjoin", "join")
     for flag in (", isouter=True", ", full=True"):
         inner = inner.replace(flag, "")
-    assert _planted(_read(f"select(lines.c.x).select_from({inner})")) == []
+    assert _planted(head + _read(f"select(lines.c.x).select_from({inner})")) == []
 
 
 @pytest.mark.parametrize(
@@ -1361,3 +1430,82 @@ def test_a_semi_join_on_the_wrong_column_is_caught() -> None:
     assert _planted(helper + _read(joined)) == []
     wrong = helper.replace("child.c.derivation_id ==", "child.c.row_ordinal ==")
     assert _planted(wrong + _read(joined)) == ["read"]
+
+
+# --- ruling R3-02: table positions that failed open ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "position",
+    [
+        "somewhere()",
+        "child_table()",
+        "vars(tables)[k]",
+        "TABLES[k]",
+        "next(t for t in metadata.sorted_tables if t.name == k)",
+        "self._source()",
+    ],
+    ids=["unknown-call", "imported-helper", "vars-subscript", "global-subscript", "next", "method"],
+)
+def test_a_call_or_subscript_in_a_table_position_fails_closed(position: str) -> None:
+    """A Call or Subscript that resolves to no known table is a violation."""
+    head = (
+        "from my_pa.infrastructure.persistence import tables\n"
+        "from elsewhere import child_table\n"
+        "TABLES = {'l': lines}\n"
+    )
+    planted = _planted(head + f"def read(k):\n    return select({position}.c.x)\n")
+    assert planted == ["read"]
+
+
+def test_a_resolving_call_or_subscript_in_a_table_position_passes() -> None:
+    """The controls: a helper whose returns resolve, a table method, a constant lookup."""
+    helper = (
+        f"def _joined():\n    return {_JOINED}\ndef read():\n    return select(_joined().c.x)\n"
+    )
+    assert _planted(helper) == []
+    method = f"def read():\n    return select(lines.c.x).select_from({_JOINED}.alias('a'))\n"
+    assert _planted(method) == []
+    constant = (
+        "def read():\n"
+        "    t = metadata.tables['knowledge.project_report_current_derivations']\n"
+        "    return select(t.c.x)\n"
+    )
+    assert _planted(constant) == []
+    # A helper whose return does not resolve is itself unresolved.
+    unresolved = helper.replace(f"    return {_JOINED}\n", "    return somewhere()\n")
+    assert _planted(unresolved) == ["read"]
+
+
+@pytest.mark.parametrize(
+    "rebinding",
+    [
+        "    project_report_current_derivations = lines.alias('x')\n",
+        "    for project_report_current_derivations in (lines,):\n        pass\n",
+        "    current = lines\n",
+    ],
+    ids=["assign", "for-target", "alias-name"],
+)
+def test_a_local_that_rebinds_the_view_is_caught(rebinding: str) -> None:
+    """The static-only bypass: the view's name now holds a child table."""
+    head = (
+        "from my_pa.infrastructure.persistence.tables import "
+        "project_report_current_derivations as current\n"
+        if "current = " in rebinding
+        else ""
+    )
+    view = "current" if head else _CURRENT
+    joined = f"lines.join({view}, lines.c.derivation_id == {view}.c.derivation_id)"
+    planted = head + f"def read():\n{rebinding}    return select(lines.c.x).select_from({joined})\n"
+    assert "rebinds the view in read" in _planted(planted)
+    assert (
+        _planted(head + f"def read():\n    return select(lines.c.x).select_from({joined})\n") == []
+    )
+
+
+def test_a_parameter_that_rebinds_the_view_is_caught() -> None:
+    planted = (
+        "def read(project_report_current_derivations=lines):\n"
+        f"    return select(lines.c.x).select_from({_JOINED})\n"
+    )
+    assert "rebinds the view in read" in _planted(planted)

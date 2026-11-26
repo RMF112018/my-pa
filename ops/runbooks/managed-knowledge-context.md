@@ -61,7 +61,7 @@ returns a complete no-match or empty package and must not fabricate evidence.
 ChatLLM is a **full MY-PA application data manager**, not a system
 administrator. The machine-readable policy is
 `src/my_pa/domain/identity/chatllm_capability_policy.py` at profile version
-`chatllm-data-v20`. Do not grant every `Capability` enum member. v20 adds only the 5 `project_reports.*` reads (project-report reads WP4P-S4), `DATA_CONDITIONAL` on `MY_PA_PROJECT_REPORTS_ENABLED`, their grants to the operator profile only, purpose `project_reports_read`; v20 with that switch off desires exactly the v19 set. v19 adds only the 7 P6 names (P6 XER import S7-4a: `schedule_publications.import_p6` and `schedule_p6_fields.set_captured` as write grants and the 5 `schedule_p6_*` reads), `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_P6_ENABLED` over `MY_PA_SCHEDULE_ENABLED`; v19 with that switch off desires exactly the v17 set (`chatllm-data-v18` was never issued). v17 adds only the 3 `communications.*` reads (communications intelligence WP4-S5), `DATA_CONDITIONAL` on `MY_PA_COMMUNICATIONS_ENABLED`, their grants to the operator profile only, purpose `communications_read`; v17 with that switch off desires exactly the v16 set. v16 adds only `meetings.provider.review` and `meetings.provider.reconcile` (communications intelligence WP3b-S4), both `DATA_REQUIRED` on the core plane, the profile to activate at the consolidated goal deploy instead of v15 (Manager ruling D13), their grants to the operator profile only (R-OP-2). v15 adds only `meetings.provider.bind` (communications intelligence WP2-W3), `DATA_REQUIRED` on the core plane. v14 adds the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set; v13 with `MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires exactly the v12 set, so a pending Reports commissioning uses v15, a superset of v14, after this build.
+`chatllm-data-v21`. Do not grant every `Capability` enum member. v21 adds only `meetings.context.read` (meeting context WP5-S5), `DATA_CONDITIONAL` on `MY_PA_COMMUNICATIONS_ENABLED` (no switch of its own), its grant to the operator profile only, purpose `communications_read`; v21 with that switch off desires exactly the v20 set. v20 adds only the 5 `project_reports.*` reads (project-report reads WP4P-S4), `DATA_CONDITIONAL` on `MY_PA_PROJECT_REPORTS_ENABLED`, their grants to the operator profile only, purpose `project_reports_read`; v20 with that switch off desires exactly the v19 set. v19 adds only the 7 P6 names (P6 XER import S7-4a: `schedule_publications.import_p6` and `schedule_p6_fields.set_captured` as write grants and the 5 `schedule_p6_*` reads), `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_P6_ENABLED` over `MY_PA_SCHEDULE_ENABLED`; v19 with that switch off desires exactly the v17 set (`chatllm-data-v18` was never issued). v17 adds only the 3 `communications.*` reads (communications intelligence WP4-S5), `DATA_CONDITIONAL` on `MY_PA_COMMUNICATIONS_ENABLED`, their grants to the operator profile only, purpose `communications_read`; v17 with that switch off desires exactly the v16 set. v16 adds only `meetings.provider.review` and `meetings.provider.reconcile` (communications intelligence WP3b-S4), both `DATA_REQUIRED` on the core plane, the profile to activate at the consolidated goal deploy instead of v15 (Manager ruling D13), their grants to the operator profile only (R-OP-2). v15 adds only `meetings.provider.bind` (communications intelligence WP2-W3), `DATA_REQUIRED` on the core plane. v14 adds the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set; v13 with `MY_PA_SCHEDULE_SCENARIOS_ENABLED` off desires exactly the v12 set, so a pending Reports commissioning uses v15, a superset of v14, after this build.
 
 On the current head, the derived **effective** ChatLLM catalog is 175 names
 when documents, relationship intelligence (with writes), relationship memory,
@@ -117,14 +117,14 @@ Inspect and (operator-gated) reconcile with:
 ```bash
 python apps/cli/remote_mcp.py profile-diff \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v20
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v21
 python apps/cli/remote_mcp.py profile-plan \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v20
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v21
 # operator-gated; never run against production from this runbook alone
 python apps/cli/remote_mcp.py profile-apply \
   --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v20 \
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v21 \
   --apply
 ```
 
@@ -359,13 +359,13 @@ steps require a separate operator decision.
    ```bash
    python apps/cli/remote_mcp.py profile-diff \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v20
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v21
    python apps/cli/remote_mcp.py profile-plan \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v20
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v21
    python apps/cli/remote_mcp.py profile-apply \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v20 \
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v21 \
      --apply
    ```
 

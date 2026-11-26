@@ -89,6 +89,9 @@ from tests.contract.test_transport_parity import (
     payloads_for as transport_payloads_for,
 )
 from tests.files_workspace_samples import FILES_WORKSPACE_CAPABILITIES
+from tests.meeting_context_samples import (
+    MEETING_CONTEXT_CAPABILITIES,
+)
 from tests.project_reports_reads_samples import (
     PROJECT_REPORTS_READ_CAPABILITIES,
 )
@@ -655,6 +658,8 @@ SCOPED_CAPABILITIES = [
         *SCHEDULE_P6_CAPABILITIES,
         # Project-report reads WP4P-S4: the 5 reads (scopeless, read switch off).
         *PROJECT_REPORTS_READ_CAPABILITIES,
+        # Meeting context WP5-S5: the one read (scopeless, communications switch off).
+        *MEETING_CONTEXT_CAPABILITIES,
     }
 ]
 

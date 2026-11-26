@@ -816,6 +816,8 @@ _NONEXISTENT_NEXT_VERSION: Final = _PROFILE_VERSION_PREFIX + str(
         "chatllm-data-v18",
         # P6 XER import S7-4a; superseded by v20.
         "chatllm-data-v19",
+        # Project-report reads WP4P-S4; superseded by v21 (meeting context WP5-S5).
+        "chatllm-data-v20",
         _NONEXISTENT_NEXT_VERSION,
     ],
 )
@@ -939,8 +941,9 @@ def test_v17_profile_plan_adds_the_3_communications_grants_only_with_the_switch(
     """Communications WP4-S5 (ruling D7): v17 with the switch off desires exactly v16.
 
     A client converged with `MY_PA_COMMUNICATIONS_ENABLED` off stays healthy;
-    with it on, the plan adds exactly the 3 `communications.*` reads under
-    `communications_read`, none a write, none operator-only. Synthetic
+    with it on, the plan adds exactly the 3 `communications.*` reads -- and,
+    since meeting context WP5-S5 (v21, ruling D2), `meetings.context.read` --
+    under `communications_read`, none a write, none operator-only. Synthetic
     in-memory store only; nothing is granted outside it.
     """
     from my_pa.domain.identity.chatllm_capability_policy import COMMUNICATIONS_DATA_NAMES
@@ -953,9 +956,9 @@ def test_v17_profile_plan_adds_the_3_communications_grants_only_with_the_switch(
         assert code == 0
         code, off = _run(repository, "profile-diff", _FULL_PLANE_SETTINGS, capsys)
         assert code == 0 and off["healthy"] is True
-        # v17 introduced the 3 reads; P6 XER import S7-4a moved the profile to v19
-        # and project-report reads WP4P-S4 to v20.
-        assert off["profile_version"] == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v20"
+        # v17 introduced the 3 reads; P6 XER import S7-4a moved the profile to v19,
+        # project-report reads WP4P-S4 to v20 and meeting context WP5-S5 to v21.
+        assert off["profile_version"] == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v21"
         code, plan = _run(repository, "profile-plan", switched, capsys)
         assert code == 1
         actions = plan["actions"]
@@ -968,6 +971,7 @@ def test_v17_profile_plan_adds_the_3_communications_grants_only_with_the_switch(
             "communications.search": ("communications_read", False),
             "communications.read": ("communications_read", False),
             "communications.coverage": ("communications_read", False),
+            "meetings.context.read": ("communications_read", False),
         }
 
 
@@ -994,8 +998,9 @@ def test_v19_profile_plan_adds_the_7_p6_grants_only_with_both_switches(
         assert code == 0
         code, off = _run(repository, "profile-diff", schedule, capsys)
         assert code == 0 and off["healthy"] is True
-        # v19 introduced the 7; project-report reads WP4P-S4 moved the profile to v20.
-        assert off["profile_version"] == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v20"
+        # v19 introduced the 7; project-report reads WP4P-S4 moved the profile to v20
+        # and meeting context WP5-S5 to v21.
+        assert off["profile_version"] == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v21"
         code, alone = _run(repository, "profile-diff", p6_alone, capsys)
         assert alone["healthy"] is True
         code, plan = _run(repository, "profile-plan", both, capsys)
@@ -1037,7 +1042,8 @@ def test_v20_profile_plan_adds_the_5_project_report_grants_only_with_the_switch(
         assert code == 0
         code, off = _run(repository, "profile-diff", _FULL_PLANE_SETTINGS, capsys)
         assert code == 0 and off["healthy"] is True
-        assert off["profile_version"] == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v20"
+        # v20 introduced the 5; meeting context WP5-S5 moved the profile to v21.
+        assert off["profile_version"] == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v21"
         code, plan = _run(repository, "profile-plan", switched, capsys)
         assert code == 1
         actions = plan["actions"]
@@ -1053,3 +1059,66 @@ def test_v20_profile_plan_adds_the_5_project_report_grants_only_with_the_switch(
             "project_reports.compare": ("project_reports_read", False),
             "project_reports.coverage": ("project_reports_read", False),
         }
+
+
+def test_v21_profile_with_the_communications_switch_off_desires_exactly_v20(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Meeting context WP5-S5 (ruling D2): v21 = v20 + `meetings.context.read`.
+
+    The name is `DATA_CONDITIONAL` on the existing `COMMUNICATIONS` prerequisite,
+    so with `MY_PA_COMMUNICATIONS_ENABLED` off the v21 composition is exactly
+    the composition without it (v20's), a client converged with the switch off
+    stays healthy, and the project-report switch alone never adds it. With the
+    switch on, the plan adds it under `communications_read` with the 3
+    `communications.*` reads, a read and not operator-only. Synthetic in-memory
+    store only; nothing is granted outside it.
+    """
+    from my_pa.application.chatllm_data_profile import (
+        ChatLLMCompositionPlanes,
+        composed_capabilities,
+    )
+    from my_pa.domain.identity.chatllm_capability_policy import COMMUNICATIONS_DATA_NAMES
+    from my_pa.domain.identity.operation import Capability, is_operator_only
+
+    context = Capability.MEETINGS_CONTEXT_READ
+    assert context in COMMUNICATIONS_DATA_NAMES and not is_operator_only(context)
+    everything = frozenset(Capability)
+    for project_reports in (False, True):
+        off = ChatLLMCompositionPlanes(
+            managed_documents=True,
+            relationship_intelligence=True,
+            relationship_intelligence_writes=True,
+            relationship_memory=True,
+            constraints=True,
+            project_reports=project_reports,
+        )
+        assert composed_capabilities(everything, off) == composed_capabilities(
+            everything - {context}, off
+        )
+        assert context not in composed_capabilities(everything, off)
+
+    switched = SimpleNamespace(**{**vars(_FULL_PLANE_SETTINGS), "communications_enabled": True})
+    reports_only = SimpleNamespace(
+        **{**vars(_FULL_PLANE_SETTINGS), "project_reports_enabled": True}
+    )
+    with _repository() as (_, repository):
+        _grant_v2_catalog(repository)
+        code, _ = _run(repository, "profile-apply", _FULL_PLANE_SETTINGS, capsys)
+        assert code == 0
+        code, off_diff = _run(repository, "profile-diff", _FULL_PLANE_SETTINGS, capsys)
+        assert code == 0 and off_diff["healthy"] is True
+        assert off_diff["profile_version"] == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v21"
+        code, reports = _run(repository, "profile-plan", reports_only, capsys)
+        assert code == 1
+        assert "meetings.context.read" not in {
+            action["capability"] for action in reports["actions"]
+        }
+        code, plan = _run(repository, "profile-plan", switched, capsys)
+        assert code == 1
+        added = {
+            action["capability"]: (action["kind"], action["purpose"], action["write"])
+            for action in plan["actions"]
+        }
+        assert added["meetings.context.read"] == ("add", "communications_read", False)
+        assert set(added) == {capability.value for capability in COMMUNICATIONS_DATA_NAMES}

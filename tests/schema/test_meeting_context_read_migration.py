@@ -105,6 +105,16 @@ def test_revision_imports_no_domain_or_persistence_modules() -> None:
     assert "create_all" not in source
 
 
+def test_the_new_name_was_admitted_ahead_and_s5_declares_it() -> None:
+    """S1 admitted `meetings.context.read` ahead of the domain; WP5-S5 declares it."""
+    from tests.schema.vocabulary_admissions import admitted_ahead_of_the_domain
+
+    from my_pa.domain.identity.operation import Capability
+
+    assert admitted_ahead_of_the_domain("capability").isdisjoint(NEW_CAPABILITIES)
+    assert {member.value for member in Capability} >= NEW_CAPABILITIES
+
+
 def test_the_revision_is_vocabulary_only() -> None:
     """No table, column, index, view, trigger, grant or backfill (design section 3)."""
     code = _source().split('"""', 2)[2]

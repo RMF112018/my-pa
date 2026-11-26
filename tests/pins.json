@@ -146,31 +146,31 @@
     "revision_files": 138
   },
   "census": {
-    "architecture": 10481,
-    "database": 7580,
+    "architecture": 10482,
+    "database": 7582,
     "evaluation": 2,
-    "fast_collected": 56871,
+    "fast_collected": 56999,
     "fast_skipped": 138,
     "mypy_files": 810,
     "src_modules": 608,
-    "test_modules": 1109
+    "test_modules": 1111
   },
   "chatllm": {
     "classes": {
       "CHATLLM_COMPATIBILITY_ONLY": 2,
       "CHATLLM_CONTROL_PLANE_EXCLUDED": 33,
-      "CHATLLM_DATA_CONDITIONAL": 191,
+      "CHATLLM_DATA_CONDITIONAL": 192,
       "CHATLLM_DATA_REQUIRED": 88,
       "CHATLLM_OPERATOR_DECISION_REQUIRED": 2,
       "CHATLLM_RETIRED": 0
     },
-    "policy_sha256": "9375c20a3f6b632d6455fe5cb60f29da46ae606d76118f675ba1b930d4d7b0cd",
-    "version": "chatllm-data-v20"
+    "policy_sha256": "c3c82bee4af541c8ecff1ea56adfd763f6147cdf57f67f132256e4c5d37f301f",
+    "version": "chatllm-data-v21"
   },
   "counts": {
     "alembic_revisions": 138,
-    "capability": 316,
-    "chatllm_policy_entries": 316,
+    "capability": 317,
+    "chatllm_policy_entries": 317,
     "id_kind": 197,
     "purpose": 74,
     "safe_detail": 478
@@ -367,6 +367,7 @@
       "knowledge.read",
       "knowledge.reveal",
       "knowledge.search",
+      "meetings.context.read",
       "meetings.create",
       "meetings.list",
       "meetings.notes.read_version",

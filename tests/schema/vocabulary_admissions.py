@@ -112,8 +112,8 @@ PURPOSE_ADMISSIONS: Final[Mapping[str, tuple[str, frozenset[str]]]] = MappingPro
 #: yet. A test comparing the newest frozen audit vocabulary with the domain
 #: adds `admitted_ahead_of_the_domain(...)` instead of spelling the names.
 #: `schedule_p6` left this set in S7-4a, the change that declares its names.
-#: `meetings_context_read` leaves it in WP5-S5, the change that declares its name.
-AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset({"meetings_context_read"})
+#: `meetings_context_read` left it in WP5-S5, the change that declares its name.
+AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset()
 
 
 def capabilities_admitted_after(revision: str) -> frozenset[str]:

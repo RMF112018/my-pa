@@ -333,6 +333,7 @@ from my_pa.application.commands import (
     ReadManagedDocument,
     ReadManagedDocumentCommand,
     ReadMeeting,
+    ReadMeetingContext,
     ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
     ReadProgramOverview,
@@ -671,6 +672,8 @@ from my_pa.application.lineage_visibility import (
     withhold_client_ids,
 )
 from my_pa.application.managed_documents import ManagedDocumentService
+from my_pa.application.meeting_context import MeetingContextReads
+from my_pa.application.meeting_context import context_payload as meeting_context_payload
 from my_pa.application.meeting_provider_reconcile import (
     MeetingProviderReconciliation,
     ReconcileResult,
@@ -5433,8 +5436,9 @@ class ApplicationService:
         if self._file_workspace is None:
             served -= FILE_WORKSPACE_CAPABILITIES
         # Communications intelligence WP4-S5 (ruling D7): the read switch withholds
-        # the 3 `communications.*` reads from `capabilities.get`, readiness, the
-        # MCP tool list, the remote profile and the ChatLLM composition.
+        # the 3 `communications.*` reads -- and, WP5-S5 (ruling D2),
+        # `meetings.context.read` -- from `capabilities.get`, readiness, the MCP
+        # tool list, the remote profile and the ChatLLM composition.
         if not self._communications_enabled:
             served -= _COMMUNICATIONS_CAPABILITIES
         # Project-report reads WP4P-S4 (design section 2.9): the read switch
@@ -18369,6 +18373,55 @@ class ApplicationService:
             ),
         )
 
+    def _meetings_context(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: Command
+    ) -> _Result:
+        """`meetings.context.read` (WP5 design sections 3.1-3.7, 3.15; WP5-S5).
+
+        `unsupported` when `MY_PA_COMMUNICATIONS_ENABLED` is off, before anything
+        is read (ruling D2: no switch of its own): the name is withheld from
+        `available_capabilities` then, and a transport dispatching straight
+        through `_HANDLERS` meets the same refusal. `MY_PA_PROJECT_REPORTS_ENABLED`
+        is passed through to the `pulse` section, which answers `unavailable` /
+        `reads_disabled` without a read when it is off. An unknown or foreign
+        Meeting is listed in `not_found` and never fails the batch. No cursor:
+        a Meeting cut at `per_meeting_limit` says `truncated`, and so does the
+        disclosure.
+        """
+        if not self._communications_enabled:
+            raise UnsupportedError()
+        if not isinstance(command, ReadMeetingContext):  # pragma: no cover - one name
+            raise UnsupportedError()
+        version = self._communications_identifier_version
+        reads = (
+            MeetingContextReads(
+                unit_of_work=lambda: nullcontext(unit_of_work),
+                clock=lambda: authorization.at,
+                project_reports_enabled=self._project_reports_enabled,
+            )
+            if version is None
+            else MeetingContextReads(
+                unit_of_work=lambda: nullcontext(unit_of_work),
+                identifier_version=version,
+                clock=lambda: authorization.at,
+                project_reports_enabled=self._project_reports_enabled,
+            )
+        )
+        with _translated():
+            answer = reads.read(authorization.principal.principal_id, command.context_request())
+        truncated = any(context.communications.truncated for context in answer.meetings)
+        return _Result(
+            payload=meeting_context_payload(answer),
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_COMMUNICATIONS_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                ),
+            ),
+        )
+
     def _project_reports(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: Command
     ) -> _Result:
@@ -20244,6 +20297,8 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.PROJECT_REPORTS_RECORD_HISTORY: ApplicationService._project_reports,
         Capability.PROJECT_REPORTS_COMPARE: ApplicationService._project_reports,
         Capability.PROJECT_REPORTS_COVERAGE: ApplicationService._project_reports,
+        # Meeting context WP5-S5: served under the communications switch.
+        Capability.MEETINGS_CONTEXT_READ: ApplicationService._meetings_context,
         Capability.ISSUES_CREATE: ApplicationService._issues_create,
         Capability.ISSUES_READ: ApplicationService._issues_read,
         Capability.ISSUES_LIST: ApplicationService._issues_list,
@@ -20927,12 +20982,15 @@ _PROJECT_REPORTS_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 )
 
 #: Communications intelligence WP4-S5 (contract section 16, ruling D7): the 3
-#: reads, withheld unless `communications_enabled` is on.
+#: reads, withheld unless `communications_enabled` is on. Meeting context
+#: WP5-S5 (ruling D2): `meetings.context.read` has no switch of its own and is
+#: withheld with them.
 _COMMUNICATIONS_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.COMMUNICATIONS_SEARCH,
         Capability.COMMUNICATIONS_READ,
         Capability.COMMUNICATIONS_COVERAGE,
+        Capability.MEETINGS_CONTEXT_READ,
     }
 )
 

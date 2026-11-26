@@ -218,6 +218,8 @@ def test_non_lineage_tool_annotations_are_unchanged() -> None:
         - {name for name in _tools() if name.startswith("communications.")}
         # Project-report reads WP4P-S4: the five reads are new.
         - {name for name in _tools() if name.startswith("project_reports.")}
+        # Meeting context WP5-S5: `meetings.context.read` is new.
+        - {Capability.MEETINGS_CONTEXT_READ.value}
     )
     assert len(others) == 192
     for name in sorted(others):

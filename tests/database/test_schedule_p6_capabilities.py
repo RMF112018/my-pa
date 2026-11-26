@@ -423,6 +423,125 @@ def test_a_read_of_an_unfinished_publication_is_a_status_conflict(w: World) -> N
     )
 
 
+def test_a_review_required_publication_is_a_status_conflict_for_every_p6_read(w: World) -> None:
+    # Independent review S7-4a: a publication whose run was parsed but whose
+    # project identity changed is `review_required`, never served by a P6 read.
+    w.publish(xer.build("full_valid").data, path="exports/first.xer")
+    model = xer.base_model("full")
+    model.table("PROJECT").rows[0].update(
+        proj_short_name="SYN-OTHER", guid=xer.guid("SynOtherProject")
+    )
+    second = str(w.publish(_bytes(model), path="exports/other.xer")["publication_id"])
+    assert w.ok(ReadSchedulePublication(publication_id=second))["status"] == "review_required"
+    for command in (
+        ListScheduleP6Activities(publication_id=second),
+        ListScheduleP6Relationships(publication_id=second),
+        ListScheduleP6Calendars(publication_id=second),
+        ListScheduleP6FieldValues(publication_id=second),
+    ):
+        assert w.refused(command) == ("conflict", ["status"]), command.capability
+
+
+def test_a_p6_cursor_continues_only_its_own_request(w: World) -> None:
+    # Independent review S7-4a: the offset cursor is bound to the capability,
+    # the Principal and every request field but the cursor itself.
+    publication = str(w.publish(xer.build("full_valid").data)["publication_id"])
+    first = w.ok(ListScheduleP6Activities(publication_id=publication, page_size=1))
+    cursor = first["__disclosure__"]["truncation"]["next_cursor"]
+    assert cursor is not None
+    assert w.ok(ListScheduleP6Activities(publication_id=publication, page_size=1, cursor=cursor))
+    for other in (
+        ListScheduleP6Activities(
+            publication_id=publication, page_size=1, cursor=cursor, fields=("xer:TASK.est_wt",)
+        ),
+        ListScheduleP6Activities(
+            publication_id=publication,
+            page_size=1,
+            cursor=cursor,
+            sort={"field": "xer:TASK.est_wt", "direction": "desc"},
+        ),
+        ListScheduleP6Activities(publication_id=publication, page_size=2, cursor=cursor),
+        ListScheduleP6Relationships(publication_id=publication, page_size=1, cursor=cursor),
+    ):
+        assert w.refused(other) == ("conflict", ["cursor"]), other
+    assert w.refused(
+        ListScheduleP6Activities(publication_id=publication, page_size=1, cursor=cursor),
+        principal_id=Q,
+    ) == ("conflict", ["cursor"])
+
+
+def test_a_named_calendar_pages_its_exceptions_and_says_when_more_exist(w: World) -> None:
+    publication = str(w.publish(xer.build("full_valid").data)["publication_id"])
+    listed = w.ok(ListScheduleP6Calendars(publication_id=publication))["calendars"]
+    for calendar in listed:
+        assert calendar["exceptions_truncated"] is (
+            len(calendar["exceptions"]) < calendar["exception_count"]
+        )
+    (calendar,) = [item for item in listed if item["exception_count"] >= 2]
+    seen: list[dict[str, Any]] = []
+    cursor: str | None = None
+    while True:
+        page = w.ok(
+            ListScheduleP6Calendars(
+                publication_id=publication,
+                calendar_id=calendar["calendar_id"],
+                page_size=1,
+                cursor=cursor,
+            )
+        )
+        (one,) = page["calendars"]
+        seen.extend(one["exceptions"])
+        cursor = page["__disclosure__"]["truncation"]["next_cursor"]
+        assert one["exceptions_truncated"] is (cursor is not None)
+        if cursor is None:
+            break
+    assert seen == calendar["exceptions"]
+    assert len(seen) == calendar["exception_count"]
+
+
+def test_a_cross_version_value_read_of_another_principals_activity_is_not_found(
+    w: World,
+) -> None:
+    publication = str(w.publish(xer.build("full_valid").data)["publication_id"])
+    activity = w.ok(ListScheduleP6Activities(publication_id=publication, page_size=1))[
+        "activities"
+    ][0]["schedule_activity_id"]
+    assert w.ok(ListScheduleP6FieldValues(schedule_activity_id=activity))
+    assert w.refused(ListScheduleP6FieldValues(schedule_activity_id=activity), principal_id=Q) == (
+        "not_found",
+        ["schedule_activity_id"],
+    )
+
+
+def test_a_remote_call_without_the_names_grant_is_unsupported(w: World) -> None:
+    # Independent review S7-4a: `invoke` does not consult the grant set, so each
+    # P6 handler re-checks the remote grant on its own name (defence in depth).
+    admitted = w.publish(_bytes(_unknown_field_model()))
+    publication = str(admitted["publication_id"])
+    series = str(admitted["series_id"])
+    unrelated = frozenset({(Capability.SCHEDULE_PUBLICATIONS_LIST, Purpose.SCHEDULE_READ)})
+    for command in (
+        w.import_command(xer.build("minimal_valid").data, path="exports/remote.xer"),
+        ListScheduleP6AvailableFields(series_id=series),
+        SetScheduleP6CapturedFields(
+            series_id=series,
+            field_keys=(EXTRA_KEY,),
+            expected_sequence=0,
+            idempotency_key=_key("g"),
+        ),
+        ListScheduleP6Activities(publication_id=publication),
+        ListScheduleP6Relationships(publication_id=publication),
+        ListScheduleP6Calendars(publication_id=publication),
+        ListScheduleP6FieldValues(publication_id=publication),
+    ):
+        assert w.refused(command, remote_client=CLIENT_A, grants=unrelated) == (
+            "unsupported",
+            [],
+        ), command.capability
+    assert w.count("schedule_p6_capture_events") == 0
+    assert w.count("schedule_publications") == 1
+
+
 # ---- D2 / D3: the selection chain and the next import ---------------------------------
 
 
@@ -597,6 +716,38 @@ def test_a_personal_field_is_served_only_to_the_field_values_grant_and_when_sele
     ) == ("invalid_request", ["field_key"])
 
 
+def test_a_cross_version_value_read_withholds_personal_values_unless_every_version_opted_in(
+    w: World,
+) -> None:
+    # Independent review S7-4a: across a Stable Activity's versions a personal
+    # value is served only when every version's selection carried the opt-in.
+    first = w.publish(xer.build("full_valid").data, path="exports/full1.xer")
+    w.ok(
+        SetScheduleP6CapturedFields(
+            series_id=str(first["series_id"]),
+            field_keys=("xer:TASK.create_user", "xer:TASK.est_wt"),
+            include_personal=True,
+            expected_sequence=0,
+            idempotency_key=_key("personal"),
+        )
+    )
+    model = xer.base_model("full")
+    model.table("TASK").rows[0]["task_name"] = "Synthetic renamed activity"
+    second = str(w.publish(_bytes(model), path="exports/full2.xer")["publication_id"])
+    in_second = w.ok(
+        ListScheduleP6FieldValues(publication_id=second, entity_kind="activity", page_size=100)
+    )["values"]
+    assert any(row["field_key"] == "xer:TASK.create_user" for row in in_second)
+    activity = w.ok(ListScheduleP6Activities(publication_id=second, page_size=1))["activities"][0]
+    across = w.ok(
+        ListScheduleP6FieldValues(
+            schedule_activity_id=activity["schedule_activity_id"], page_size=100
+        )
+    )["values"]
+    assert across
+    assert all(row["field_key"] != "xer:TASK.create_user" for row in across)
+
+
 # ---- D4: filters and sort over captured fields --------------------------------------------
 
 
@@ -651,6 +802,40 @@ def test_each_filter_operator_and_the_sort_over_captured_values(w: World) -> Non
     assert typed[count] == "number"
     assert typed[note] == "text"
     assert typed["udf:TASK:Synthetic Start"] == "ts"
+
+
+def test_the_sort_direction_orders_the_captured_values(w: World) -> None:
+    # Independent review S7-4a: `desc` reverses `asc` over a key every activity has.
+    series = str(w.publish(_bytes(_unknown_field_model()), path="exports/v1.xer")["series_id"])
+    w.ok(
+        SetScheduleP6CapturedFields(
+            series_id=series,
+            field_keys=(EXTRA_KEY,),
+            expected_sequence=0,
+            idempotency_key=_key("sort"),
+        )
+    )
+    publication = str(
+        w.publish(_bytes(_unknown_field_model("Second export")), path="exports/v2.xer")[
+            "publication_id"
+        ]
+    )
+
+    def ordered(direction: str) -> list[str]:
+        rows = w.ok(
+            ListScheduleP6Activities(
+                publication_id=publication,
+                fields=(EXTRA_KEY,),
+                sort={"field": EXTRA_KEY, "direction": direction},
+                page_size=100,
+            )
+        )["activities"]
+        return [str(row["fields"][EXTRA_KEY]) for row in rows]
+
+    ascending = ordered("asc")
+    assert len(set(ascending)) >= 3
+    assert ascending == sorted(ascending)
+    assert ordered("desc") == list(reversed(ascending))
 
 
 @pytest.mark.parametrize(

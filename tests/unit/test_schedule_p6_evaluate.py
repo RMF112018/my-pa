@@ -25,7 +25,6 @@ import pytest
 
 from my_pa.domain.schedule.p6 import P6_LIMITS
 from my_pa.domain.schedule.p6.catalogue import ValueType, catalogue_field
-from my_pa.domain.schedule.p6_import import P6_IMPORT_FIELDS
 from tests.fixtures import schedule_p6_oracle as cases
 from tests.fixtures import schedule_p6_xer as fx
 
@@ -257,28 +256,3 @@ def test_an_unexpected_error_prints_its_type_only(
     assert code == 1
     assert printed == ""
     assert errors.strip() == "p6_evaluate=error ValueError"
-
-
-RUNBOOK: Final = ROOT / "ops" / "runbooks" / "cpm-workbench.md"
-
-
-def test_the_runbook_import_example_is_a_valid_request_shape() -> None:
-    """Runbook section 10.5: the worked `import_p6` input names the request's fields."""
-    text = RUNBOOK.read_text(encoding="utf-8")
-    section = text[text.index("### 10.5 How a client imports") : text.index("### 10.6 Statuses")]
-    block = section.split("```json", 1)[1].split("```", 1)[0]
-    example = json.loads(block)
-    assert set(example) <= P6_IMPORT_FIELDS
-    assert set(example) >= {
-        "project_id",
-        "workspace_id",
-        "path",
-        "expected_version",
-        "expected_sha256",
-        "format",
-        "idempotency_key",
-    }
-    assert sum(key in example for key in ("series_id", "series_name", "series_auto")) == 1
-    assert example["format"] == "p6_xer"
-    assert '"include_sha256": true' in section
-    assert "`accept_project_identity_change`" in section

@@ -103,9 +103,13 @@ __all__ = [
     "FTS_COUNT_KEYS",
     "FTS_MATERIAL_SHARE",
     "FTS_PROBE_CLASSES",
+    "NUMBER_PREFILTER_FROM",
+    "NUMBER_PREFILTER_TO",
     "SqlCommunicationsRepository",
     "communications_aggregate",
     "communications_fts_measurement",
+    "number_prefilter_haystack",
+    "number_prefilter_needle",
 ]
 
 
@@ -1007,6 +1011,41 @@ def _fold(expression: ColumnElement[Any]) -> ColumnElement[Any]:
     return func.regexp_replace(func.lower(expression), _FOLD_PATTERN, " ", "g")
 
 
+#: WP5-R2 R2-1: the Project-number pre-filter compares both sides under this
+#: identification, so it stays a superset of the exact `simple` match whatever
+#: lowering the server's `lower()` applies. A `simple` lexeme is its token
+#: lowered one character at a time by the C library; `lower()` is that same
+#: lowering on a libc database, but ICU's is context-sensitive and, in places,
+#: tailored or multi-character. Each pair below is a character two lowerings can
+#: give for one source character: Greek final sigma (ICU, context), dotless i, U+0131
+#: (ICU `tr`), `i` with a combining dot or accent (ICU `İ` and the `lt` rules),
+#: and the two Greek tonos letters a C library maps off by one (macOS, also not
+#: idempotent there). The combining marks are dropped. A per-character map applied
+#: to both sides keeps every substring a substring, so the filter only widens;
+#: the exact match after it is unchanged. Proven over every code point in seven
+#: contexts on libc C and en_US.UTF-8 and on ICU `und`, `tr`, `lt` and `und` with
+#: a C ctype: 0 misses (`tests/database/test_meeting_context_prefilter.py`).
+NUMBER_PREFILTER_FROM: Final = (
+    "\u03c2\u0131\u00ec\u00ed\u0129\u03cd\u03cf\u03d7\u0307\u0300\u0301\u0303"
+)
+NUMBER_PREFILTER_TO: Final = "\u03c3iiii\u03ce\u03ce\u03ce"
+
+
+def number_prefilter_haystack(text: ColumnElement[Any]) -> ColumnElement[Any]:
+    """The text side of the Project-number pre-filter: lowered, then identified."""
+    return func.translate(func.lower(text), NUMBER_PREFILTER_FROM, NUMBER_PREFILTER_TO)
+
+
+def number_prefilter_needle(lexeme: ColumnElement[Any]) -> ColumnElement[Any]:
+    """The number side: its `simple` lexeme lowered again by `lower()`, then identified.
+
+    Lowering the lexeme again makes the two sides one lowering where the server's
+    `lower()` is not the C library's (ICU, or an ICU database with a C ctype,
+    whose lexemes are lowered in ASCII only).
+    """
+    return func.translate(func.lower(lexeme), NUMBER_PREFILTER_FROM, NUMBER_PREFILTER_TO)
+
+
 def _simple_document() -> ColumnElement[Any]:
     """D4-final: the `simple` tsvector of subject and text, computed on the fly."""
     messages = communication_messages
@@ -1466,10 +1505,11 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
     # its Meetings' windows), never per (Meeting, message), and only for a message
     # whose lowered text holds the number's longest lexeme. That is a superset
     # of the exact match, which it then confirms: `plainto_tsquery` ANDs every
-    # lexeme of the number, and a `simple` lexeme is its token's text lowered by
-    # the same `lower`, so a matching text holds each of them. (The whole
-    # lowered number is not: `Q 77` matches "77 q".) A Meeting without a number
-    # asks nothing.
+    # lexeme of the number, and a `simple` lexeme is its token's text lowered
+    # character by character, so a matching text holds each of them -- under
+    # the identification of `NUMBER_PREFILTER_FROM` on both sides, which holds
+    # it under any server lowering (WP5-R2 R2-1). (The whole lowered number is
+    # not: `Q 77` matches "77 q".) A Meeting without a number asks nothing.
     spans = (
         select(
             inputs.c.number,
@@ -1482,7 +1522,7 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
     )
     lexeme = column("lexeme", Text)
     needle = (
-        select(lexeme)
+        select(number_prefilter_needle(lexeme))
         .select_from(
             func.unnest(func.tsvector_to_array(func.to_tsvector(_config("simple"), spans.c.number)))
             .table_valued(lexeme)
@@ -1515,7 +1555,7 @@ def _context_statement(principal_id: str, query: MeetingContextCandidateQuery) -
             # CASE fixes the order: the cheap `strpos` first, the tsvector only after it.
             case(
                 (
-                    func.strpos(func.lower(simple_text), numbers.c.needle) > 0,
+                    func.strpos(number_prefilter_haystack(simple_text), numbers.c.needle) > 0,
                     func.coalesce(
                         func.to_tsvector(_config("simple"), simple_text).bool_op("@@")(
                             number_query

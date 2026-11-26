@@ -291,6 +291,9 @@ def test_the_remote_key_binds_the_client_for_open_writes_only() -> None:
         Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD.value,
         Capability.SCHEDULE_BASELINES_PROPOSE.value,
         Capability.SCHEDULE_BASELINES_WITHDRAW.value,
+        # P6 XER import S7-4a (contract section 10.7): the 2 P6 writes.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6.value,
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED.value,
     }
     end = {
         "link_id": "irl_lineages31parta01",

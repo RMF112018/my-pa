@@ -40,6 +40,7 @@ from my_pa.application.service import (
     _PROJECT_REPORTS_CAPABILITIES,
     _REPORT_TRANSFER_UPLOAD_CAPABILITIES,
     _SCHEDULE_CAPABILITIES,
+    _SCHEDULE_P6_CAPABILITIES,
     _SCHEDULE_SCENARIO_CAPABILITIES,
 )
 from my_pa.bootstrap.gateway import build_gateway_runtime
@@ -410,6 +411,9 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
         # Communications intelligence WP4-S5: the 3 `communications.*` reads,
         # behind `MY_PA_COMMUNICATIONS_ENABLED` (default off).
         or capability in _COMMUNICATIONS_CAPABILITIES
+        # P6 XER import S7-4a: the 7 P6 names, behind `MY_PA_SCHEDULE_P6_ENABLED`
+        # on top of the Schedule switch (default off).
+        or capability in _SCHEDULE_P6_CAPABILITIES
         # Project-report reads WP4P-S4: the 5 `project_reports.*` reads, behind
         # `MY_PA_PROJECT_REPORTS_ENABLED` (default off).
         or capability in _PROJECT_REPORTS_CAPABILITIES
@@ -417,7 +421,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
     assert implemented == total
-    assert len(withheld_families) == 182
+    assert len(withheld_families) == 189
     assert unwired == set()
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
@@ -491,10 +495,13 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # Communications intelligence WP4-S5's three `communications.*` reads are a
     # tenth withheld family (default-off switch): the default is unchanged and
     # the withheld figure grows by three.
-    # Project-report reads WP4P-S4's five `project_reports.*` reads are an
-    # eleventh withheld family (default-off switch): the default is unchanged
+    # P6 XER import S7-4a's 7 P6 names are an eleventh withheld family
+    # (default-off switch): the default is unchanged and the withheld figure
+    # grows by seven.
+    # Project-report reads WP4P-S4's five `project_reports.*` reads are a
+    # twelfth withheld family (default-off switch): the default is unchanged
     # and the withheld figure grows by five.
-    assert default == 127 and withheld == 182
+    assert default == 127 and withheld == 189
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured

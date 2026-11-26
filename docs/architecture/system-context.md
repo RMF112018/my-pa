@@ -74,7 +74,7 @@ hash.
 The repository is an executable local candidate, not a documentation scaffold.
 The `my_pa` application defines the capabilities counted in
 [`docs/generated/repository-state.md`](../generated/repository-state.md) and
-wires 309 through HTTP, MCP, and CLI composition, with PostgreSQL Principal
+wires 316 through HTTP, MCP, and CLI composition, with PostgreSQL Principal
 partitioning and two worker
 planes. **A default composition exposes 127 of them.** The six
 `documents.` names require `MY_PA_MANAGED_DOCUMENT_ROOT`, the

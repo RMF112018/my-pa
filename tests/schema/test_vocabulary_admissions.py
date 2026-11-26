@@ -122,8 +122,9 @@ def test_the_ahead_families_are_exactly_the_rows_the_domain_does_not_declare() -
             else:
                 assert names <= declared[kind], (kind, family)
         assert admitted_ahead_of_the_domain(kind).isdisjoint(declared[kind])
-    assert len(admitted_ahead_of_the_domain("capability")) == 7
-    assert len(admitted_ahead_of_the_domain("purpose")) == 2
+    # P6 XER import S7-4a declared the `schedule_p6` family, the last ahead.
+    assert len(admitted_ahead_of_the_domain("capability")) == 0
+    assert len(admitted_ahead_of_the_domain("purpose")) == 0
 
 
 def test_each_purpose_row_is_admitted_after_since_by_the_revision_it_names() -> None:

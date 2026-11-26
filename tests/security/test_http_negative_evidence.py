@@ -88,6 +88,10 @@ from tests.project_reports_reads_samples import (
     PROJECT_REPORTS_READ_CAPABILITIES,
     project_reports_payloads,
 )
+from tests.schedule_p6_samples import (
+    SCHEDULE_P6_CAPABILITIES,
+    schedule_p6_payloads,
+)
 from tests.schedule_scenario_samples import SCHEDULE_SCENARIO_CAPABILITIES, scenario_payloads
 from tests.wire import Reply, Wire, serve
 
@@ -361,6 +365,8 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         *FILES_WORKSPACE_CAPABILITIES,
         # Communications intelligence WP4-S5: the 3 reads (scopeless, read switch off).
         *COMMUNICATIONS_READ_CAPABILITIES,
+        # P6 XER import S7-4a: the 7 P6 names (P6 switch off).
+        *SCHEDULE_P6_CAPABILITIES,
         # Project-report reads WP4P-S4: the 5 reads (scopeless, read switch off).
         *PROJECT_REPORTS_READ_CAPABILITIES,
     }
@@ -1779,6 +1785,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         # Files workspace WP5: synthetic plane samples.
         **files_payloads("wire"),
         **communications_payloads("wire"),
+        **schedule_p6_payloads("wire"),
         **project_reports_payloads("wire"),
     }
 
@@ -2542,6 +2549,8 @@ SCOPED_CAPABILITIES = [
         *FILES_WORKSPACE_CAPABILITIES,
         # Communications intelligence WP4-S5: the 3 reads (scopeless, read switch off).
         *COMMUNICATIONS_READ_CAPABILITIES,
+        # P6 XER import S7-4a: the 7 P6 names (P6 switch off).
+        *SCHEDULE_P6_CAPABILITIES,
         # Project-report reads WP4P-S4: the 5 reads (scopeless, read switch off).
         *PROJECT_REPORTS_READ_CAPABILITIES,
     }

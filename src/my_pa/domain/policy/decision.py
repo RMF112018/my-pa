@@ -497,6 +497,17 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.COMMUNICATIONS_SEARCH,
         Capability.COMMUNICATIONS_READ,
         Capability.COMMUNICATIONS_COVERAGE,
+        # P6 XER import S7-4a (contract section 10.1): the 7 P6 names take no
+        # `source_id`; ownership is the Principal partition plus the Project,
+        # Series and publication checks (the S6-3 plane's rule). The import names
+        # a files-workspace alias and path, never an enrollment.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6,
+        Capability.SCHEDULE_P6_FIELDS_AVAILABLE,
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED,
+        Capability.SCHEDULE_P6_ACTIVITIES_LIST,
+        Capability.SCHEDULE_P6_RELATIONSHIPS_LIST,
+        Capability.SCHEDULE_P6_CALENDARS_LIST,
+        Capability.SCHEDULE_P6_FIELD_VALUES_LIST,
         # Project-report reads WP4P-S4 (design section 2.1): the five reads name
         # the caller's own project-report rows (a Project, a series, a version or
         # a record of the caller's own partition), never a configured source or

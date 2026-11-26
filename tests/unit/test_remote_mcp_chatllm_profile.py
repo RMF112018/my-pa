@@ -232,6 +232,8 @@ _FULL_PLANE_SETTINGS = SimpleNamespace(
     # Communications intelligence WP4-S5 (chatllm-data-v17): the read switch off,
     # its default.
     communications_enabled=False,
+    # P6 XER import S7-4a (chatllm-data-v19): the P6 switch off, its default.
+    schedule_p6_enabled=False,
     # Project-report reads WP4P-S4 (chatllm-data-v18): the read switch off, its default.
     project_reports_enabled=False,
     # KLP-WP-04: no client is Knowledge-bound, so the ChatLLM profile tooling runs.
@@ -809,6 +811,9 @@ _NONEXISTENT_NEXT_VERSION: Final = _PROFILE_VERSION_PREFIX + str(
         "chatllm-data-v14",
         "chatllm-data-v15",
         "chatllm-data-v16",
+        "chatllm-data-v17",
+        # Held for communications WP4P S4; never this build's version.
+        "chatllm-data-v18",
         _NONEXISTENT_NEXT_VERSION,
     ],
 )
@@ -946,7 +951,8 @@ def test_v17_profile_plan_adds_the_3_communications_grants_only_with_the_switch(
         assert code == 0
         code, off = _run(repository, "profile-diff", _FULL_PLANE_SETTINGS, capsys)
         assert code == 0 and off["healthy"] is True
-        assert off["profile_version"] == CHATLLM_DATA_PROFILE_VERSION
+        # v17 introduced the 3 reads; P6 XER import S7-4a moved the profile to v19.
+        assert off["profile_version"] == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v19"
         code, plan = _run(repository, "profile-plan", switched, capsys)
         assert code == 1
         actions = plan["actions"]
@@ -959,6 +965,51 @@ def test_v17_profile_plan_adds_the_3_communications_grants_only_with_the_switch(
             "communications.search": ("communications_read", False),
             "communications.read": ("communications_read", False),
             "communications.coverage": ("communications_read", False),
+        }
+
+
+def test_v19_profile_plan_adds_the_7_p6_grants_only_with_both_switches(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """P6 XER import S7-4a (contract section 10.7): v19 with the switch off desires exactly v17.
+
+    A client converged with `MY_PA_SCHEDULE_P6_ENABLED` off stays healthy, and
+    the P6 switch widens nothing without the Schedule switch; with both on, the
+    plan adds exactly the 7 P6 names, the 2 writes as write grants under their own
+    purposes and the 5 reads under `schedule_read`, none operator-only.
+    Synthetic in-memory store only; nothing is granted outside it.
+    """
+    from my_pa.domain.identity.chatllm_capability_policy import SCHEDULE_P6_DATA_NAMES
+    from my_pa.domain.identity.operation import is_operator_only
+
+    schedule = SimpleNamespace(**{**vars(_FULL_PLANE_SETTINGS), "schedule_enabled": True})
+    p6_alone = SimpleNamespace(**{**vars(_FULL_PLANE_SETTINGS), "schedule_p6_enabled": True})
+    both = SimpleNamespace(**{**vars(schedule), "schedule_p6_enabled": True})
+    with _repository() as (_, repository):
+        _grant_v2_catalog(repository)
+        code, _ = _run(repository, "profile-apply", schedule, capsys)
+        assert code == 0
+        code, off = _run(repository, "profile-diff", schedule, capsys)
+        assert code == 0 and off["healthy"] is True
+        assert off["profile_version"] == CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v19"
+        code, alone = _run(repository, "profile-diff", p6_alone, capsys)
+        assert alone["healthy"] is True
+        code, plan = _run(repository, "profile-plan", both, capsys)
+        assert code == 1
+        actions = plan["actions"]
+        assert isinstance(actions, list)
+        assert all(action["kind"] == "add" for action in actions)
+        assert all(not is_operator_only(capability) for capability in SCHEDULE_P6_DATA_NAMES)
+        assert {
+            action["capability"]: (action["purpose"], action["write"]) for action in actions
+        } == {
+            "schedule_publications.import_p6": ("schedule_p6_import", True),
+            "schedule_p6_fields.set_captured": ("schedule_p6_configuration", True),
+            "schedule_p6_fields.available": ("schedule_read", False),
+            "schedule_p6_activities.list": ("schedule_read", False),
+            "schedule_p6_relationships.list": ("schedule_read", False),
+            "schedule_p6_calendars.list": ("schedule_read", False),
+            "schedule_p6_field_values.list": ("schedule_read", False),
         }
 
 

@@ -341,7 +341,20 @@ from my_pa.domain.schedule.baselines import (
 )
 from my_pa.domain.schedule.compare import ScheduleComparisonRow
 from my_pa.domain.schedule.currency import CurrencyPublication
-from my_pa.domain.schedule.p6_import import P6Admission, P6ImportRequest, P6Snapshot
+from my_pa.domain.schedule.p6_import import (
+    P6Admission,
+    P6AdmissionLimits,
+    P6ImportRequest,
+    P6Snapshot,
+)
+from my_pa.domain.schedule.p6_reads import (
+    P6CaptureEvent,
+    P6FieldObservation,
+    P6FieldPredicate,
+    P6PublicationRef,
+    P6SeriesState,
+    P6Sort,
+)
 from my_pa.domain.schedule.plane import PlaneProvenance, PlaneResultKind
 from my_pa.domain.schedule.scenario.cpm import CpmResult, CpmStatus
 from my_pa.domain.schedule.scenario.model import ScenarioContent, VersionLabel
@@ -642,6 +655,8 @@ __all__ = [
     "ScheduleIntegrityError",
     "ScheduleLeaseLostError",
     "ScheduleP6AdmissionRepository",
+    "ScheduleP6ReadRepository",
+    "ScheduleP6Repository",
     "ScheduleP6UnitOfWork",
     "ScheduleRepository",
     "ScheduleUnitOfWork",
@@ -10151,6 +10166,10 @@ class ScheduleRepository(ABC):
         """The stored status, read as `FAILED` once the job is exhausted (R2 10.6)."""
 
     @abstractmethod
+    def source_format(self, principal_id: str, publication_id: str) -> str | None:
+        """S7-3/S7-4a: the publication's `source_format` (`pdf`, `p6_xer`, ...), or `None`."""
+
+    @abstractmethod
     def get_parser_runs(
         self, principal_id: str, publication_id: str
     ) -> tuple[ScheduleParserRun, ...]:
@@ -10310,11 +10329,145 @@ class ScheduleP6AdmissionRepository(ABC):
         request: P6ImportRequest,
         request_digest: str,
         snapshot: P6Snapshot,
+        limits: P6AdmissionLimits | None = None,
     ) -> P6Admission:
         """Replay, Project, Series, format, content idempotency, snapshot, publication, job.
 
-        Raises `P6AdmissionRejectedError` with a closed reason; writes nothing then.
+        S7-4a: with `limits`, the section 7.7 import budgets and snapshot quota
+        are checked after every answer that writes nothing. Raises
+        `P6AdmissionRejectedError` with a closed reason; writes nothing then.
         """
+
+
+class ScheduleP6ReadRepository(ABC):
+    """S7-4a (contract sections 7, 10): the P6 reads and the capture chain.
+
+    Every method takes the authenticated `principal_id` first; another
+    Principal's Series, publication or row reads as absent. Rows are served as
+    plain mappings of the stored columns; the application renders the 10.5
+    shapes and never serves the workspace path, raw bytes or `clndr_data`
+    (none of which these methods read).
+    """
+
+    @abstractmethod
+    def p6_series_state(
+        self, principal_id: str, series_id: str, *, for_update: bool = False
+    ) -> P6SeriesState | None:
+        """The Series, whether it holds a PDF publication, and its last capture event."""
+
+    @abstractmethod
+    def p6_capture_event(
+        self, principal_id: str, series_id: str, sequence: int
+    ) -> P6CaptureEvent | None:
+        """One event of the Series' capture chain by sequence."""
+
+    @abstractmethod
+    def append_p6_capture_event(
+        self,
+        principal_id: str,
+        series: P6SeriesState,
+        *,
+        sequence: int,
+        field_keys: Sequence[str],
+        include_personal: bool,
+        provenance: Mapping[str, object],
+    ) -> P6CaptureEvent | None:
+        """Append event `sequence`; `None` when a concurrent writer took that sequence."""
+
+    @abstractmethod
+    def p6_publication(self, principal_id: str, publication_id: str) -> P6PublicationRef | None:
+        """A P6 publication of the caller's, or `None` (absent, foreign or PDF)."""
+
+    @abstractmethod
+    def p6_series_publications(
+        self, principal_id: str, series_id: str
+    ) -> tuple[P6PublicationRef, ...]:
+        """The Series' P6 publications, newest admission first."""
+
+    @abstractmethod
+    def p6_field_observations(
+        self, principal_id: str, series_id: str
+    ) -> tuple[P6FieldObservation, ...]:
+        """Observation statistics per field key over the Series' complete P6 imports."""
+
+    @abstractmethod
+    def p6_project_block(self, principal_id: str, parser_run_id: str) -> dict[str, object] | None:
+        """The run's PROJECT/SCHEDOPTIONS row and its per-table counts."""
+
+    @abstractmethod
+    def p6_activity_rows(
+        self,
+        principal_id: str,
+        parser_run_id: str,
+        *,
+        predicates: Sequence[P6FieldPredicate] = (),
+        sort: P6Sort | None = None,
+        kinds: Sequence[str] | None = None,
+        wbs_prefix: Sequence[str] | None = None,
+        start_range: tuple[date | None, date | None] = (None, None),
+        finish_range: tuple[date | None, date | None] = (None, None),
+        offset: int,
+        limit: int,
+    ) -> tuple[dict[str, object], ...]:
+        """One run's activities, filtered and ordered (section 7.7)."""
+
+    @abstractmethod
+    def p6_relationship_rows(
+        self, principal_id: str, parser_run_id: str, *, offset: int, limit: int
+    ) -> tuple[dict[str, object], ...]:
+        """One run's relationships."""
+
+    @abstractmethod
+    def p6_calendar_rows(
+        self,
+        principal_id: str,
+        parser_run_id: str,
+        *,
+        calendar_id: int | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[dict[str, object], ...]:
+        """One run's calendars."""
+
+    @abstractmethod
+    def p6_entity_values(
+        self,
+        principal_id: str,
+        parser_run_id: str,
+        entity_kind: str,
+        entity_ids: Sequence[int],
+        field_keys: Sequence[str],
+    ) -> tuple[dict[str, object], ...]:
+        """The captured values of `field_keys` for the named entities of one run."""
+
+    @abstractmethod
+    def p6_value_rows(
+        self,
+        principal_id: str,
+        *,
+        parser_run_ids: Sequence[str],
+        schedule_activity_id: str | None,
+        entity_kind: str | None,
+        field_keys: Sequence[str] | None,
+        withheld_keys: Sequence[str],
+        predicates: Sequence[P6FieldPredicate] = (),
+        sort: P6Sort | None = None,
+        offset: int,
+        limit: int,
+    ) -> tuple[dict[str, object], ...]:
+        """Captured values of the named runs, optionally of one Stable Activity."""
+
+    @abstractmethod
+    def p6_stable_activity_runs(
+        self, principal_id: str, schedule_activity_id: str
+    ) -> tuple[P6PublicationRef, ...]:
+        """The complete P6 publications whose accepted run links this Stable Activity."""
+
+
+class ScheduleP6Repository(
+    ScheduleRepository, ScheduleP6AdmissionRepository, ScheduleP6ReadRepository
+):
+    """S7-4a: the S5 Schedule repository with the P6 admission and reads, on one connection."""
 
 
 class ScheduleP6UnitOfWork(ABC):
@@ -10335,8 +10488,8 @@ class ScheduleP6UnitOfWork(ABC):
 
     @property
     @abstractmethod
-    def p6(self) -> ScheduleP6AdmissionRepository:
-        """The P6 admission repository, inside this transaction."""
+    def p6(self) -> ScheduleP6Repository:
+        """The P6 repository (S5 reads, P6 admission and reads), inside this transaction."""
 
 
 # --- Schedule Scenarios S6-2 plane ports -----------------------------------------

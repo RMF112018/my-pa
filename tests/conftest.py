@@ -207,6 +207,7 @@ from my_pa.contracts.ports import (
     RepositoryFailureError,
     ReviewDecisionRequest,
     ReviewRepository,
+    ScheduleP6UnitOfWork,
     ScheduleUnitOfWork,
     SearchOutcome,
     SituationRepository,
@@ -13510,6 +13511,11 @@ def _unopened_schedule() -> ScheduleUnitOfWork:
     raise AssertionError("a FAST test opened a Schedule unit of work; prove it against a server")
 
 
+def _unopened_schedule_p6() -> ScheduleP6UnitOfWork:
+    """P6 XER import S7-4a: a composed P6 factory that FAST never opens."""
+    raise AssertionError("a FAST test opened a P6 unit of work; prove it against a server")
+
+
 def build_service(
     world: World,
     providers: FakeProviders,
@@ -13525,6 +13531,7 @@ def build_service(
     lineage_backfill_enabled: bool = False,
     program_reporting_enabled: bool = False,
     schedule_enabled: bool = False,
+    schedule_p6_enabled: bool = False,
     constraint_management_unit_of_work: (
         Callable[[], ConstraintManagementUnitOfWork] | None
     ) = _COMPOSE_CONSTRAINTS,
@@ -13651,6 +13658,11 @@ def build_service(
         # stand-in no FAST test opens (the plane is proved against a real server).
         schedule_enabled=schedule_enabled,
         schedule_unit_of_work=(_unopened_schedule if schedule_enabled else None),
+        # P6 XER import S7-4a (contract section 10.2): the P6 switch, off unless a
+        # test about it turns it on; the P6 factory is composed with the Schedule
+        # one, as the gateway composes it, as a stand-in no FAST test opens.
+        schedule_p6_enabled=schedule_p6_enabled,
+        schedule_p6_unit_of_work=(_unopened_schedule_p6 if schedule_enabled else None),
         gsqs_b0_ports=WorkflowPorts(
             session_factory=lambda rasters: DiskContentSession(rasters),
             case_count=2,

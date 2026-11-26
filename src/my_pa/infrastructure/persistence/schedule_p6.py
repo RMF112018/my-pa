@@ -25,14 +25,26 @@ from datetime import date, datetime
 from types import TracebackType
 from typing import Any, Final
 
-from sqlalchemy import Engine, Table, and_, func, insert, select, update
+from sqlalchemy import (
+    ColumnElement,
+    Engine,
+    Table,
+    and_,
+    func,
+    insert,
+    or_,
+    select,
+    text,
+    tuple_,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, RowMapping
 
 from my_pa.contracts.ports import (
     ScheduleAdmissionRejectedError,
     ScheduleIntegrityError,
-    ScheduleP6AdmissionRepository,
+    ScheduleP6Repository,
     ScheduleP6UnitOfWork,
     ScheduleRepository,
 )
@@ -60,6 +72,7 @@ from my_pa.domain.schedule.p6_import import (
     P6_PARSER_NAME,
     P6ActivityIdentity,
     P6Admission,
+    P6AdmissionLimits,
     P6AdmissionOutcome,
     P6AdmissionRefusal,
     P6AdmissionRejectedError,
@@ -67,6 +80,17 @@ from my_pa.domain.schedule.p6_import import (
     P6ProjectIdentity,
     P6Snapshot,
     p6_import_request_digest,
+)
+from my_pa.domain.schedule.p6_reads import (
+    P6CaptureEvent,
+    P6FieldObservation,
+    P6FieldPredicate,
+    P6FilterOperator,
+    P6PublicationRef,
+    P6SeriesState,
+    P6Sort,
+    P6SortDirection,
+    P6ValueType,
 )
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.jobs import SCHEDULE_JOBS, enqueue_job
@@ -90,6 +114,7 @@ from my_pa.infrastructure.persistence.tables import (
     schedule_p6_wbs,
     schedule_parser_runs,
     schedule_publications,
+    schedule_series,
 )
 
 __all__ = [
@@ -154,7 +179,7 @@ def _entity_values(entity: P6Entity) -> dict[str, object]:
     return {name: _sql_value(value) for name, value in entity.columns}
 
 
-class SqlScheduleP6Repository(SqlScheduleRepository, ScheduleP6AdmissionRepository):
+class SqlScheduleP6Repository(SqlScheduleRepository, ScheduleP6Repository):
     """The P6 transactions on one connection; never commits."""
 
     @classmethod
@@ -172,6 +197,7 @@ class SqlScheduleP6Repository(SqlScheduleRepository, ScheduleP6AdmissionReposito
         request: P6ImportRequest,
         request_digest: str,
         snapshot: P6Snapshot,
+        limits: P6AdmissionLimits | None = None,
     ) -> P6Admission:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if request_digest != p6_import_request_digest(principal_id, request):
@@ -206,6 +232,10 @@ class SqlScheduleP6Repository(SqlScheduleRepository, ScheduleP6AdmissionReposito
                 None if series is None else series.series_id,
                 request.supersedes_publication_id,
             )
+        # S7-4a (section 7.7): the import budgets and the snapshot quota, after
+        # every answer that writes nothing and before the first write.
+        if limits is not None:
+            self._check_admission_limits(principal_id, snapshot, limits)
         # (4) the writes: snapshot (once per Principal), Series, publication, job.
         snapshot_id = self._store_snapshot(principal_id, snapshot)
         series_created = False
@@ -1089,6 +1119,579 @@ class SqlScheduleP6Repository(SqlScheduleRepository, ScheduleP6AdmissionReposito
         ).all()
         return tuple(P6ActivityIdentity(str(row.activity_id), row.p6_guid) for row in rows)
 
+    # ---- S7-4a: quota and import budgets (section 7.7) ----------------------------------
+
+    def _check_admission_limits(
+        self, principal_id: str, snapshot: P6Snapshot, limits: P6AdmissionLimits
+    ) -> None:
+        """Section 7.7: the import budgets, then the snapshot quota (bytes held count once)."""
+        pubs, snaps = schedule_publications, schedule_p6_snapshots
+        counted = (
+            self._connection.execute(
+                select(
+                    func.count()
+                    .filter(pubs.c.admitted_at > func.now() - text("interval '1 hour'"))
+                    .label("hour"),
+                    func.count()
+                    .filter(pubs.c.admitted_at > func.now() - text("interval '1 day'"))
+                    .label("day"),
+                ).where(_mine(pubs, principal_id), pubs.c.source_format != _PDF)
+            )
+            .mappings()
+            .one()
+        )
+        if int(counted["hour"]) >= limits.imports_per_hour or (
+            int(counted["day"]) >= limits.imports_per_day
+        ):
+            raise P6AdmissionRejectedError(P6AdmissionRefusal.IMPORT_RATE)
+        held = self._connection.execute(
+            select(snaps.c.snapshot_id).where(
+                _mine(snaps, principal_id), snaps.c.sha256 == snapshot.sha256
+            )
+        ).first()
+        if held is not None:
+            return
+        stored = self._connection.execute(
+            select(func.coalesce(func.sum(snaps.c.size_bytes), 0)).where(_mine(snaps, principal_id))
+        ).scalar_one()
+        if int(stored) + snapshot.size_bytes > limits.snapshot_quota_bytes:
+            raise P6AdmissionRejectedError(P6AdmissionRefusal.STORAGE_QUOTA)
+
+    # ---- S7-4a: the Series and its capture chain (sections 7.2, 10.3) -------------------
+
+    def p6_series_state(
+        self, principal_id: str, series_id: str, *, for_update: bool = False
+    ) -> P6SeriesState | None:
+        """The Series (locked when `for_update`), whether it holds PDF, its last event."""
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        series = self._series_row(principal_id, series_id)
+        if series is None:
+            return None
+        if for_update:
+            # The compare-and-swap's serialization point: one selection at a time per Series.
+            self._connection.execute(
+                select(schedule_series.c.series_id)
+                .where(
+                    _mine(schedule_series, principal_id),
+                    schedule_series.c.series_id == series_id,
+                )
+                .with_for_update()
+            )
+        events = schedule_p6_capture_events
+        last = (
+            self._connection.execute(
+                select(events)
+                .where(_mine(events, principal_id), events.c.series_id == series_id)
+                .order_by(events.c.sequence.desc())
+                .limit(1)
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return P6SeriesState(
+            series_id=series_id,
+            project_id=str(series["project_id"]),
+            holds_pdf=self._series_holds_pdf(principal_id, series_id),
+            last_event=None if last is None else _capture_event(last),
+        )
+
+    def p6_capture_event(
+        self, principal_id: str, series_id: str, sequence: int
+    ) -> P6CaptureEvent | None:
+        """One event of the Series' chain by sequence (a replay's lookup)."""
+        events = schedule_p6_capture_events
+        found = (
+            self._connection.execute(
+                select(events).where(
+                    _mine(events, principal_id),
+                    events.c.series_id == series_id,
+                    events.c.sequence == sequence,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if found is None else _capture_event(found)
+
+    def append_p6_capture_event(
+        self,
+        principal_id: str,
+        series: P6SeriesState,
+        *,
+        sequence: int,
+        field_keys: Sequence[str],
+        include_personal: bool,
+        provenance: Mapping[str, object],
+    ) -> P6CaptureEvent | None:
+        """Section 7.2: append event `sequence`; `None` when another writer took it."""
+        events = schedule_p6_capture_events
+        inserted = (
+            self._connection.execute(
+                pg_insert(events)
+                .values(
+                    _bound(
+                        events,
+                        principal_id,
+                        {
+                            "event_id": issue_identifier(IdKind.SCHEDULE_P6_CAPTURE_EVENT),
+                            "project_id": series.project_id,
+                            "series_id": series.series_id,
+                            "sequence": sequence,
+                            "field_keys": list(field_keys),
+                            "include_personal": include_personal,
+                            "catalogue_version": CATALOGUE_VERSION,
+                            **provenance,
+                        },
+                    )
+                )
+                .on_conflict_do_nothing(index_elements=[events.c.series_id, events.c.sequence])
+                .returning(*events.c)
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if inserted is None else _capture_event(inserted)
+
+    # ---- S7-4a: P6 publications and the field registry (sections 7.1, 7.4, 10.5) --------
+
+    def _p6_ref(self, principal_id: str, row: RowMapping) -> P6PublicationRef:
+        include_personal = False
+        event_id = row["p6_capture_event_id"]
+        if event_id is not None:
+            events = schedule_p6_capture_events
+            flag = self._connection.execute(
+                select(events.c.include_personal).where(
+                    _mine(events, principal_id), events.c.event_id == event_id
+                )
+            ).scalar_one_or_none()
+            include_personal = bool(flag)
+        return P6PublicationRef(
+            publication_id=row["publication_id"],
+            series_id=row["series_id"],
+            project_id=row["project_id"],
+            source_format=row["source_format"],
+            status=self._effective(principal_id, row).value,
+            accepted_parser_run_id=row["accepted_parser_run_id"],
+            capture_event_id=event_id,
+            include_personal=include_personal,
+            admitted_at=row["admitted_at"],
+        )
+
+    def p6_publication(self, principal_id: str, publication_id: str) -> P6PublicationRef | None:
+        """A P6 publication of the caller's, or `None` (absent, foreign or PDF read alike)."""
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        row = self._publication(principal_id, publication_id)
+        if row is None or row["source_format"] == _PDF:
+            return None
+        return self._p6_ref(principal_id, row)
+
+    def p6_series_publications(
+        self, principal_id: str, series_id: str
+    ) -> tuple[P6PublicationRef, ...]:
+        """The Series' P6 publications, newest admission first (the registry's inputs)."""
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        pubs = schedule_publications
+        found = self._connection.execute(
+            select(pubs)
+            .where(
+                _mine(pubs, principal_id),
+                pubs.c.series_id == series_id,
+                pubs.c.source_format != _PDF,
+            )
+            .order_by(pubs.c.admitted_at.desc(), pubs.c.publication_id.desc())
+        ).mappings()
+        return tuple(self._p6_ref(principal_id, row) for row in found)
+
+    def p6_field_observations(
+        self, principal_id: str, series_id: str
+    ) -> tuple[P6FieldObservation, ...]:
+        """Section 7.4 over the Series' complete P6 publications: stats, never a value.
+
+        Observed fields with a key (a field named within the 5.2 pattern), and the
+        UDF and code keys present in the captured values, each with the imports
+        it was seen in and its newest publication.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        pubs, observed, values = (
+            schedule_publications,
+            schedule_p6_observed_fields,
+            schedule_p6_field_values,
+        )
+        accepted = and_(
+            _mine(pubs, principal_id),
+            pubs.c.series_id == series_id,
+            pubs.c.source_format != _PDF,
+            pubs.c.status == _COMPLETE,
+        )
+        observations: dict[str, P6FieldObservation] = {}
+        rows = self._connection.execute(
+            select(
+                observed.c.field_key,
+                observed.c.source_table,
+                observed.c.catalogued,
+                observed.c.tier,
+                observed.c.record_count,
+                observed.c.nonempty_count,
+                pubs.c.publication_id,
+                pubs.c.admitted_at,
+            )
+            .select_from(
+                pubs.join(
+                    observed,
+                    and_(
+                        matching_partition_criterion(observed, pubs),
+                        observed.c.parser_run_id == pubs.c.accepted_parser_run_id,
+                    ),
+                )
+            )
+            .where(accepted, _mine(observed, principal_id), observed.c.field_key.is_not(None))
+            .order_by(pubs.c.admitted_at, pubs.c.publication_id)
+        ).mappings()
+        seen: dict[str, set[str]] = {}
+        for row in rows:
+            key = str(row["field_key"])
+            seen.setdefault(key, set()).add(str(row["publication_id"]))
+            before = observations.get(key)
+            observations[key] = P6FieldObservation(
+                field_key=key,
+                source_table=row["source_table"],
+                catalogued=bool(row["catalogued"]),
+                tier=row["tier"],
+                imports_seen=len(seen[key]),
+                last_seen_publication_id=str(row["publication_id"]),
+                records=int(row["record_count"]) + (0 if before is None else before.records),
+                nonempty=int(row["nonempty_count"]) + (0 if before is None else before.nonempty),
+                entity_kind=None,
+                value_type=None,
+            )
+        keyed = self._connection.execute(
+            select(
+                values.c.field_key,
+                func.min(values.c.entity_kind).label("entity_kind"),
+                pubs.c.publication_id,
+                pubs.c.admitted_at,
+                func.bool_or(values.c.value_number.is_not(None)).label("number"),
+                func.bool_or(values.c.value_ts.is_not(None)).label("ts"),
+                func.bool_or(values.c.value_flag.is_not(None)).label("flag"),
+            )
+            .select_from(
+                pubs.join(
+                    values,
+                    and_(
+                        matching_partition_criterion(values, pubs),
+                        values.c.parser_run_id == pubs.c.accepted_parser_run_id,
+                    ),
+                )
+            )
+            .where(
+                accepted,
+                _mine(values, principal_id),
+                or_(values.c.field_key.like("udf:%"), values.c.field_key.like("code:%")),
+            )
+            .group_by(values.c.field_key, pubs.c.publication_id, pubs.c.admitted_at)
+            .order_by(pubs.c.admitted_at, pubs.c.publication_id)
+        ).mappings()
+        typed_seen: dict[str, str] = {}
+        for row in keyed:
+            key = str(row["field_key"])
+            seen.setdefault(key, set()).add(str(row["publication_id"]))
+            typed = (
+                "number"
+                if row["number"]
+                else "ts"
+                if row["ts"]
+                else "flag"
+                if row["flag"]
+                else typed_seen.get(key, "text")
+            )
+            typed_seen[key] = typed
+            observations[key] = P6FieldObservation(
+                field_key=key,
+                source_table="UDFVALUE" if key.startswith("udf:") else "TASKACTV",
+                catalogued=False,
+                tier=None,
+                imports_seen=len(seen[key]),
+                last_seen_publication_id=str(row["publication_id"]),
+                records=0,
+                nonempty=0,
+                entity_kind=str(row["entity_kind"]),
+                value_type=typed,
+            )
+        return tuple(observations[key] for key in sorted(observations))
+
+    def p6_project_block(self, principal_id: str, parser_run_id: str) -> dict[str, object] | None:
+        """Section 10.1: the `p6` block of `schedule_publications.read` (no ERMHDR user)."""
+        projects = schedule_p6_projects
+        found = (
+            self._connection.execute(
+                select(projects).where(
+                    _mine(projects, principal_id), projects.c.parser_run_id == parser_run_id
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if found is None:
+            return None
+        counts: dict[str, int] = {}
+        for name, table in (
+            ("wbs", schedule_p6_wbs),
+            ("activity", schedule_p6_activities),
+            ("relationship", schedule_p6_relationships),
+            ("calendar", schedule_p6_calendars),
+            ("field_value", schedule_p6_field_values),
+            ("observed_field", schedule_p6_observed_fields),
+        ):
+            counts[name] = int(
+                self._connection.execute(
+                    select(func.count())
+                    .select_from(table)
+                    .where(_mine(table, principal_id), table.c.parser_run_id == parser_run_id)
+                ).scalar_one()
+            )
+        return {**dict(found), "counts": counts}
+
+    # ---- S7-4a: per-run rows (section 10.5) ------------------------------------------------
+
+    def p6_activity_rows(
+        self,
+        principal_id: str,
+        parser_run_id: str,
+        *,
+        predicates: Sequence[P6FieldPredicate] = (),
+        sort: P6Sort | None = None,
+        kinds: Sequence[str] | None = None,
+        wbs_prefix: Sequence[str] | None = None,
+        start_range: tuple[date | None, date | None] = (None, None),
+        finish_range: tuple[date | None, date | None] = (None, None),
+        offset: int,
+        limit: int,
+    ) -> tuple[dict[str, object], ...]:
+        """One run's activities: captured-field predicates (AND), one sort, Activity ID order."""
+        acts = schedule_p6_activities
+        statement = select(acts).where(
+            _mine(acts, principal_id), acts.c.parser_run_id == parser_run_id
+        )
+        for predicate in predicates:
+            statement = statement.where(
+                _value_exists(
+                    principal_id,
+                    acts.c.parser_run_id,
+                    EntityKind.ACTIVITY.value,
+                    acts.c.p6_task_id,
+                    predicate,
+                )
+            )
+        if kinds is not None:
+            statement = statement.where(acts.c.kind.in_(list(kinds)))
+        if wbs_prefix is not None:
+            statement = statement.where(acts.c.wbs_path[1 : len(wbs_prefix)] == list(wbs_prefix))
+        for column, (low, high) in (
+            (acts.c.start_at, start_range),
+            (acts.c.finish_at, finish_range),
+        ):
+            if low is not None:
+                statement = statement.where(func.date(column) >= low)
+            if high is not None:
+                statement = statement.where(func.date(column) <= high)
+        order: list[Any] = []
+        if sort is not None:
+            order += _sort_columns(
+                principal_id,
+                acts.c.parser_run_id,
+                EntityKind.ACTIVITY.value,
+                acts.c.p6_task_id,
+                sort,
+            )
+        order.append(acts.c.activity_id.collate("C"))
+        found = self._connection.execute(
+            statement.order_by(*order).offset(offset).limit(limit)
+        ).mappings()
+        return tuple(dict(row) for row in found)
+
+    def p6_relationship_rows(
+        self, principal_id: str, parser_run_id: str, *, offset: int, limit: int
+    ) -> tuple[dict[str, object], ...]:
+        """One run's relationships, by predecessor then successor Activity ID, then P6 id."""
+        rels = schedule_p6_relationships
+        found = self._connection.execute(
+            select(rels)
+            .where(_mine(rels, principal_id), rels.c.parser_run_id == parser_run_id)
+            .order_by(
+                rels.c.pred_activity_id.collate("C").nulls_last(),
+                rels.c.succ_activity_id.collate("C").nulls_last(),
+                rels.c.p6_relationship_id,
+            )
+            .offset(offset)
+            .limit(limit)
+        ).mappings()
+        return tuple(dict(row) for row in found)
+
+    def p6_calendar_rows(
+        self,
+        principal_id: str,
+        parser_run_id: str,
+        *,
+        calendar_id: int | None,
+        offset: int,
+        limit: int,
+    ) -> tuple[dict[str, object], ...]:
+        """One run's calendars by P6 id (the stored parse only; never `clndr_data`)."""
+        cals = schedule_p6_calendars
+        statement = select(*(column for column in cals.c if column.name != "created_at")).where(
+            _mine(cals, principal_id), cals.c.parser_run_id == parser_run_id
+        )
+        if calendar_id is not None:
+            statement = statement.where(cals.c.p6_calendar_id == calendar_id)
+        found = self._connection.execute(
+            statement.order_by(cals.c.p6_calendar_id).offset(offset).limit(limit)
+        ).mappings()
+        return tuple(dict(row) for row in found)
+
+    def p6_entity_values(
+        self,
+        principal_id: str,
+        parser_run_id: str,
+        entity_kind: str,
+        entity_ids: Sequence[int],
+        field_keys: Sequence[str],
+    ) -> tuple[dict[str, object], ...]:
+        """The captured values of `field_keys` for the named entities of one run."""
+        if not entity_ids or not field_keys:
+            return ()
+        values = schedule_p6_field_values
+        found = self._connection.execute(
+            select(*_VALUE_COLUMNS)
+            .where(
+                _mine(values, principal_id),
+                values.c.parser_run_id == parser_run_id,
+                values.c.entity_kind == entity_kind,
+                values.c.entity_p6_id.in_(list(entity_ids)),
+                values.c.field_key.in_(list(field_keys)),
+            )
+            .order_by(values.c.entity_p6_id, values.c.field_key, values.c.ordinal)
+        ).mappings()
+        return tuple(dict(row) for row in found)
+
+    def p6_value_rows(
+        self,
+        principal_id: str,
+        *,
+        parser_run_ids: Sequence[str],
+        schedule_activity_id: str | None,
+        entity_kind: str | None,
+        field_keys: Sequence[str] | None,
+        withheld_keys: Sequence[str],
+        predicates: Sequence[P6FieldPredicate] = (),
+        sort: P6Sort | None = None,
+        offset: int,
+        limit: int,
+    ) -> tuple[dict[str, object], ...]:
+        """Captured values of the named runs (and Stable Activity), predicates per entity."""
+        values = schedule_p6_field_values
+        if not parser_run_ids:
+            return ()
+        statement = (
+            select(*_VALUE_COLUMNS, values.c.publication_id)
+            .select_from(values)
+            .where(_mine(values, principal_id), values.c.parser_run_id.in_(list(parser_run_ids)))
+        )
+        if schedule_activity_id is not None:
+            statement = statement.where(values.c.schedule_activity_id == schedule_activity_id)
+        if entity_kind is not None:
+            statement = statement.where(values.c.entity_kind == entity_kind)
+        if field_keys is not None:
+            statement = statement.where(values.c.field_key.in_(list(field_keys)))
+        if withheld_keys:
+            statement = statement.where(values.c.field_key.not_in(list(withheld_keys)))
+        for predicate in predicates:
+            matching = (
+                select(values.c.parser_run_id, values.c.entity_kind, values.c.entity_p6_id)
+                .where(
+                    _mine(values, principal_id),
+                    values.c.parser_run_id.in_(list(parser_run_ids)),
+                    values.c.field_key == predicate.field_key,
+                    _value_condition(values, predicate),
+                )
+                .correlate(None)
+            )
+            statement = statement.where(
+                tuple_(values.c.parser_run_id, values.c.entity_kind, values.c.entity_p6_id).in_(
+                    matching
+                )
+            )
+        order: list[Any] = []
+        if sort is not None:
+            keyed = (
+                select(
+                    values.c.parser_run_id,
+                    values.c.entity_kind,
+                    values.c.entity_p6_id,
+                    values.c.value_number,
+                    values.c.value_ts,
+                    values.c.value_flag,
+                    values.c.value_text,
+                )
+                .where(
+                    _mine(values, principal_id),
+                    values.c.parser_run_id.in_(list(parser_run_ids)),
+                    values.c.field_key == sort.field_key,
+                    values.c.ordinal == 0,
+                )
+                .correlate(None)
+                .subquery()
+            )
+            statement = statement.outerjoin(
+                keyed,
+                and_(
+                    keyed.c.parser_run_id == values.c.parser_run_id,
+                    keyed.c.entity_kind == values.c.entity_kind,
+                    keyed.c.entity_p6_id == values.c.entity_p6_id,
+                ),
+            )
+            order += _directed(
+                (keyed.c.value_number, keyed.c.value_ts, keyed.c.value_flag, keyed.c.value_text),
+                sort.direction,
+            )
+        order += [
+            values.c.parser_run_id,
+            values.c.entity_kind,
+            values.c.entity_p6_id,
+            values.c.field_key.collate("C"),
+            values.c.ordinal,
+        ]
+        found = self._connection.execute(
+            statement.order_by(*order).offset(offset).limit(limit)
+        ).mappings()
+        return tuple(dict(row) for row in found)
+
+    def p6_stable_activity_runs(
+        self, principal_id: str, schedule_activity_id: str
+    ) -> tuple[P6PublicationRef, ...]:
+        """The complete P6 publications whose accepted run links this Stable Activity."""
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        pubs, acts = schedule_publications, schedule_p6_activities
+        found = self._connection.execute(
+            select(pubs)
+            .select_from(
+                pubs.join(
+                    acts,
+                    and_(
+                        matching_partition_criterion(acts, pubs),
+                        acts.c.parser_run_id == pubs.c.accepted_parser_run_id,
+                    ),
+                )
+            )
+            .where(
+                _mine(pubs, principal_id),
+                _mine(acts, principal_id),
+                pubs.c.status == _COMPLETE,
+                acts.c.schedule_activity_id == schedule_activity_id,
+            )
+            .order_by(pubs.c.data_date, pubs.c.admitted_at, pubs.c.publication_id)
+        ).mappings()
+        return tuple(self._p6_ref(principal_id, row) for row in found)
+
 
 #: Section 7.3: the value column each captured value type fills.
 _VALUE_COLUMN: Final = {
@@ -1144,3 +1747,124 @@ class SqlAlchemyScheduleP6UnitOfWork(ScheduleP6UnitOfWork):
         if connection is None:
             raise RuntimeError("this unit of work is not inside a transaction")
         return SqlScheduleP6Repository(connection)
+
+
+#: Section 10.5 field value columns a read may serve (never `description` or the line).
+_VALUE_COLUMNS: Final = (
+    schedule_p6_field_values.c.entity_kind,
+    schedule_p6_field_values.c.entity_p6_id,
+    schedule_p6_field_values.c.activity_id,
+    schedule_p6_field_values.c.schedule_activity_id,
+    schedule_p6_field_values.c.field_key,
+    schedule_p6_field_values.c.ordinal,
+    schedule_p6_field_values.c.value_text,
+    schedule_p6_field_values.c.value_number,
+    schedule_p6_field_values.c.value_ts,
+    schedule_p6_field_values.c.value_flag,
+    schedule_p6_field_values.c.code_path,
+    schedule_p6_field_values.c.parser_run_id,
+)
+_TYPED_VALUE: Final = {
+    P6ValueType.TEXT: "value_text",
+    P6ValueType.NUMBER: "value_number",
+    P6ValueType.TS: "value_ts",
+    P6ValueType.FLAG: "value_flag",
+}
+
+
+def _capture_event(row: RowMapping) -> P6CaptureEvent:
+    return P6CaptureEvent(
+        event_id=str(row["event_id"]),
+        sequence=int(row["sequence"]),
+        field_keys=tuple(str(key) for key in row["field_keys"]),
+        include_personal=bool(row["include_personal"]),
+        catalogue_version=str(row["catalogue_version"]),
+        decision_channel=str(row["decision_channel"]),
+        asserting_client_id=row["asserting_client_id"],
+        created_at=row["created_at"],
+    )
+
+
+def _value_condition(values: Table, predicate: P6FieldPredicate) -> ColumnElement[bool]:
+    """Section 7.7: one closed operator over the predicate's typed value column."""
+    column = values.c[_TYPED_VALUE[predicate.value_type]]
+    operator = predicate.operator
+    operands = list(predicate.values)
+    if operator is P6FilterOperator.EQ:
+        return column == operands[0]
+    if operator is P6FilterOperator.IN:
+        return column.in_(operands)
+    if operator is P6FilterOperator.LT:
+        return column < operands[0]
+    if operator is P6FilterOperator.LE:
+        return column <= operands[0]
+    if operator is P6FilterOperator.GT:
+        return column > operands[0]
+    if operator is P6FilterOperator.GE:
+        return column >= operands[0]
+    prefix = str(operands[0])
+    # The text index keys the first 256 characters; a prefix is at most 100.
+    return func.left(column, len(prefix)) == prefix
+
+
+def _value_exists(
+    principal_id: str,
+    run: ColumnElement[Any],
+    entity_kind: str,
+    entity_id: ColumnElement[Any],
+    predicate: P6FieldPredicate,
+) -> ColumnElement[bool]:
+    values = schedule_p6_field_values
+    return (
+        select(values.c.ordinal)
+        .where(
+            _mine(values, principal_id),
+            values.c.parser_run_id == run,
+            values.c.entity_kind == entity_kind,
+            values.c.entity_p6_id == entity_id,
+            values.c.field_key == predicate.field_key,
+            _value_condition(values, predicate),
+        )
+        .exists()
+    )
+
+
+def _directed(columns: Sequence[Any], direction: P6SortDirection) -> list[Any]:
+    if direction is P6SortDirection.DESC:
+        return [column.desc().nulls_last() for column in columns]
+    return [column.asc().nulls_last() for column in columns]
+
+
+def _sort_columns(
+    principal_id: str,
+    run: ColumnElement[Any],
+    entity_kind: str,
+    entity_id: ColumnElement[Any],
+    sort: P6Sort,
+) -> list[Any]:
+    """Section 7.7: one sort key -- the entity's first value, by number, time, flag, text."""
+    values = schedule_p6_field_values
+
+    def scalar(column: Any) -> Any:  # noqa: ANN401 - a SQLAlchemy column
+        return (
+            select(column)
+            .where(
+                _mine(values, principal_id),
+                values.c.parser_run_id == run,
+                values.c.entity_kind == entity_kind,
+                values.c.entity_p6_id == entity_id,
+                values.c.field_key == sort.field_key,
+                values.c.ordinal == 0,
+            )
+            .scalar_subquery()
+        )
+
+    return _directed(
+        [
+            scalar(values.c.value_number),
+            scalar(values.c.value_ts),
+            scalar(values.c.value_flag),
+            scalar(values.c.value_text),
+        ],
+        sort.direction,
+    )

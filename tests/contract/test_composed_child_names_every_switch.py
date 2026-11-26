@@ -79,6 +79,9 @@ _COMPOSED_DEPENDENCY_ATTRIBUTES: Final[frozenset[str]] = frozenset(
         # the store `bootstrap/gateway.py` composes from `MY_PA_FILES_WORKSPACE_ROOT`
         # (a root, not a switch).
         "_file_workspace",
+        # P6 XER import S7-4a (schedule XER import contract section 10.2): the P6
+        # factory, composed by `bootstrap/gateway.py` with the Schedule factory.
+        "_schedule_p6_unit_of_work",
     }
 )
 
@@ -188,7 +191,7 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
     """
     variables = _switch_variables()
     assert variables, "no switch narrows the published surface, so this module proves nothing"
-    assert len(variables) == 13, (
+    assert len(variables) == 14, (
         "the published surface is narrowed by a different number of switches than "
         f"this guard knows about: {sorted(variables)}"
     )
@@ -212,6 +215,8 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
         "schedule_scenarios_enabled",
         # Communications intelligence WP4-S5 (contract section 16): the read switch.
         "communications_enabled",
+        # P6 XER import S7-4a (schedule XER import contract section 10.2).
+        "schedule_p6_enabled",
         # Project-report reads WP4P-S4 (design section 2.9): the read switch.
         "project_reports_enabled",
     }

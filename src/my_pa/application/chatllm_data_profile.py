@@ -109,6 +109,9 @@ class ChatLLMCompositionPlanes:
     #: `MY_PA_COMMUNICATIONS_ENABLED`. Default off, as the switch is; needs no
     #: other plane.
     communications: bool = False
+    #: P6 XER import S7-4a (chatllm-data-v19): `MY_PA_SCHEDULE_P6_ENABLED`, which
+    #: stacks on the Schedule switch. Default off, as the switch is.
+    schedule_p6: bool = False
     #: Project-report reads WP4P-S4 (chatllm-data-v18):
     #: `MY_PA_PROJECT_REPORTS_ENABLED`. Default off, as the switch is; needs no
     #: other plane.
@@ -248,6 +251,10 @@ def _prerequisite_holds(
         # The service's own condition: the read switch (communications contract
         # section 16; `ApplicationService.available_capabilities`).
         return planes.communications
+    if prerequisite is ChatLLMCompositionPrerequisite.SCHEDULE_P6:
+        # The service's own condition: the P6 switch on top of the Schedule
+        # plane (`ApplicationService._schedule_p6_is_composed`).
+        return planes.schedule and planes.schedule_p6
     if prerequisite is ChatLLMCompositionPrerequisite.PROJECT_REPORTS:
         # The service's own condition: the read switch (WP4P-W1 design section
         # 2.9; `ApplicationService.available_capabilities`).

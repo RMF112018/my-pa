@@ -1,10 +1,12 @@
-"""P6 XER S7-3: the admission service `import_p6` (no capability or MCP tool yet).
+"""P6 XER S7-3/S7-4a: the admission service `import_p6`.
 
 Contract `docs/architecture/schedule-xer-import-contract.md` sections 9.1
 (admission), 10.2 (switch), 10.3 (strict inputs) and 10.6 (errors) under
-ADR-023. S7-4 wraps `ScheduleP6Application.import_p6` in
-`schedule_publications.import_p6` (policy, audit, ChatLLM, remote); this
-module holds the behaviour the capability will serve:
+ADR-023. S7-4a wraps `ScheduleP6Application.import_p6` in
+`schedule_publications.import_p6` (policy, audit, ChatLLM, remote) and adds
+the section 7.7 import budgets and snapshot quota (`rate_limited`, checked in
+the admission transaction after every answer that writes nothing); this
+module holds the behaviour the capability serves:
 
 1. the switch (read at every call): off answers `unsupported` before anything
    is read; then strict input (an unknown, missing or mistyped key is
@@ -38,6 +40,7 @@ from my_pa.application.errors import (
     ConflictError,
     InvalidRequestError,
     NotFoundError,
+    RateLimitedError,
     SafeDetail,
     UnavailableError,
     UnsupportedError,
@@ -53,6 +56,7 @@ from my_pa.domain.files.vocabulary import FilesReason
 from my_pa.domain.schedule.p6_import import (
     MAX_P6_SNAPSHOT_BYTES,
     P6Admission,
+    P6AdmissionLimits,
     P6AdmissionOutcome,
     P6AdmissionRefusal,
     P6AdmissionRejectedError,
@@ -84,7 +88,7 @@ _FIELD_DETAILS: Final[Mapping[str, SafeDetail]] = {
 }
 
 #: Section 9.1 step 4: each typed refusal and its public answer.
-_REFUSALS: Final[Mapping[P6AdmissionRefusal, tuple[type[ApplicationError], SafeDetail]]] = {
+_REFUSALS: Final[Mapping[P6AdmissionRefusal, tuple[type[ApplicationError], SafeDetail | None]]] = {
     P6AdmissionRefusal.PROJECT_NOT_FOUND: (NotFoundError, SafeDetail.PROJECT_ID),
     P6AdmissionRefusal.SERIES_NOT_FOUND: (NotFoundError, SafeDetail.SERIES_ID),
     P6AdmissionRefusal.SERIES_FORMAT: (ConflictError, SafeDetail.SERIES_FORMAT),
@@ -101,6 +105,10 @@ _REFUSALS: Final[Mapping[P6AdmissionRefusal, tuple[type[ApplicationError], SafeD
         ConflictError,
         SafeDetail.SUPERSEDES_PUBLICATION_ID,
     ),
+    # S7-4a (section 7.7): the quota names its limit; the import budget is the
+    # bare bounded-retry answer.
+    P6AdmissionRefusal.STORAGE_QUOTA: (RateLimitedError, SafeDetail.STORAGE_QUOTA),
+    P6AdmissionRefusal.IMPORT_RATE: (RateLimitedError, None),
 }
 
 
@@ -183,11 +191,14 @@ class ScheduleP6Application:
         workspaces: Callable[[str], FileWorkspaceStore | None],
         *,
         enabled: Callable[[], bool],
+        limits: P6AdmissionLimits | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._workspaces = workspaces
         #: Section 10.2: read at every admission, never cached.
         self._enabled = enabled
+        #: S7-4a (section 7.7): the budgets and quota; `None` checks neither.
+        self._limits = limits
 
     def import_p6(
         self,
@@ -221,11 +232,13 @@ class ScheduleP6Application:
         refusal: P6AdmissionRefusal | None = None
         try:
             with self._unit_of_work() as work:
-                admission = work.p6.admit_p6_publication(principal_id, request, digest, snapshot)
+                admission = work.p6.admit_p6_publication(
+                    principal_id, request, digest, snapshot, self._limits
+                )
         except P6AdmissionRejectedError as error:
             refusal = error.reason
         if refusal is not None:
             # Raised outside the handler so the refusal is not left in `__context__`.
             error_type, detail = _REFUSALS[refusal]
-            raise error_type(detail)
+            raise error_type() if detail is None else error_type(detail)
         return p6_admission_answer(admission)

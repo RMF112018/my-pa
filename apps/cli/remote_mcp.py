@@ -167,6 +167,9 @@ def _planes_from_settings(settings: Settings) -> ChatLLMCompositionPlanes:
         # Communications intelligence WP4-S5 (chatllm-data-v17): the 3
         # `communications.*` reads, composed exactly when the read switch is on.
         communications=settings.communications_enabled,
+        # P6 XER import S7-4a (chatllm-data-v19): the 7 P6 names, composed only
+        # with the P6 switch on top of the Schedule switch.
+        schedule_p6=settings.schedule_p6_enabled,
         # Project-report reads WP4P-S4 (chatllm-data-v18): the 5
         # `project_reports.*` reads, composed exactly when the read switch is on.
         project_reports=settings.project_reports_enabled,

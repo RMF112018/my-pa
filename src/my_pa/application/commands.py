@@ -556,6 +556,23 @@ from my_pa.domain.schedule import (
 )
 from my_pa.domain.schedule.baselines import BaselineStatus, BaselineType
 from my_pa.domain.schedule.compare import ScheduleChangeKind
+from my_pa.domain.schedule.p6.catalogue import EntityKind
+from my_pa.domain.schedule.p6_import import P6RequestError, P6SourceFormat, p6_import_request
+from my_pa.domain.schedule.p6_reads import (
+    MAX_P6_CAPTURE_EVENTS,
+    MAX_P6_CAPTURED_FIELDS,
+    MAX_P6_FIELD_PREDICATES,
+    MAX_P6_INCLUDED_FIELDS,
+    MAX_P6_PAGE_SIZE,
+    P6FilterOperator,
+    P6ReadRequestError,
+    P6SortDirection,
+    entity_kind_of,
+    p6_field_keys,
+    p6_included_fields,
+    p6_predicates,
+    p6_sort,
+)
 from my_pa.domain.schedule.plane import is_intake_name_key
 from my_pa.domain.schedule.scenario.model import MAX_CHANGE_SET_OPS, VersionLabel
 from my_pa.domain.schedule.scenario.snapshot import MAX_MINUTES_PER_SOURCE_UNIT
@@ -18509,6 +18526,393 @@ class ListScheduleChanges:
         _schedule_cursor(self.cursor)
 
 
+# P6 XER import S7-4a (schedule XER import contract sections 7.7, 10.3). Every
+# command is a frozen dataclass built by `_BUILDERS` as `Command(**payload)`; an
+# unknown or missing key is `invalid_request` with no detail. `__post_init__`
+# runs the pure strict-input checks of `domain.schedule.p6_import` and
+# `domain.schedule.p6_reads` over the command's own fields (each checks the
+# JSON type before the content) and names the field, never its value.
+
+_P6_REQUEST_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "project_id": SafeDetail.PROJECT_ID,
+        "series_id": SafeDetail.SERIES_ID,
+        "series_name": SafeDetail.SERIES_NAME,
+        "series_auto": SafeDetail.SERIES_AUTO,
+        "workspace_id": SafeDetail.WORKSPACE_ID,
+        "path": SafeDetail.PATH,
+        "expected_version": SafeDetail.EXPECTED_VERSION,
+        "expected_sha256": SafeDetail.EXPECTED_SHA256,
+        "format": SafeDetail.FORMAT,
+        "accept_project_identity_change": SafeDetail.ACCEPT_PROJECT_IDENTITY_CHANGE,
+        "supersedes_publication_id": SafeDetail.SUPERSEDES_PUBLICATION_ID,
+        "idempotency_key": SafeDetail.IDEMPOTENCY_KEY,
+        "field_keys": SafeDetail.FIELD_KEY,
+        "fields": SafeDetail.FIELD_KEY,
+        "filter": SafeDetail.FIELD_FILTER,
+        "sort": SafeDetail.FIELD_FILTER,
+        "entity_kind": SafeDetail.ENTITY_KIND,
+    }
+)
+_P6_FILTER_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": MAX_P6_FIELD_PREDICATES,
+        "items": {
+            "type": "object",
+            "properties": {
+                "field": {"type": "string", "minLength": 1},
+                "op": {"type": "string", "enum": [member.value for member in P6FilterOperator]},
+                "value": {},
+            },
+            "required": ["field", "op", "value"],
+            "additionalProperties": False,
+        },
+    }
+)
+_P6_SORT_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "object",
+        "properties": {
+            "field": {"type": "string", "minLength": 1},
+            "direction": {"type": "string", "enum": [member.value for member in P6SortDirection]},
+        },
+        "required": ["field"],
+        "additionalProperties": False,
+    }
+)
+_P6_FIELDS_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": MAX_P6_INCLUDED_FIELDS,
+        "items": {"type": "string", "minLength": 1},
+    }
+)
+
+
+def _p6_refusal(field_name: str) -> InvalidRequestError:
+    detail = _P6_REQUEST_DETAILS.get(field_name)
+    return InvalidRequestError() if detail is None else InvalidRequestError(detail)
+
+
+def _p6_page_size(page_size: object) -> None:
+    if page_size is not None and (
+        type(page_size) is not int or not 1 <= page_size <= MAX_P6_PAGE_SIZE
+    ):
+        raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+
+
+def _p6_read_shape(fields: object, filters: object, sort: object) -> None:
+    """`fields?`, `filter?` and `sort?` of a P6 read (section 7.7), by type then content."""
+    refused: str | None = None
+    try:
+        p6_included_fields(fields)
+        p6_predicates(filters)
+        p6_sort(sort)
+    except P6ReadRequestError as error:
+        refused = error.field
+    if refused is not None:
+        raise _p6_refusal(refused)
+
+
+@dataclass(frozen=True, slots=True)
+class ImportScheduleP6Publication:
+    """Admit one P6 XER export from a files-workspace file as a publication of a Schedule Series and queue its parse.
+
+    `schedule_publications.import_p6`: names the Project, the Series (exactly
+    one of `series_id`, `series_name` or `series_auto`), the workspace alias
+    and path, the file's current `expected_version` and its `expected_sha256`
+    (both required: the bytes read must be exactly the bytes named), and
+    `format` `p6_xer` (`p6_xml` is not supported yet). The same bytes already in
+    the Series answer `already_present`. The workspace path is stored for
+    provenance and never served back; the parse runs on the `schedule` worker.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "format": {"type": "string", "enum": [member.value for member in P6SourceFormat]},
+            "expected_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "expected_version": {"type": "string", "pattern": "^fv1_[0-9a-f]{64}$"},
+        }
+    )
+
+    project_id: str
+    workspace_id: str
+    path: str
+    expected_version: str
+    expected_sha256: str
+    format: str
+    idempotency_key: str
+    series_id: str | None = None
+    series_name: str | None = None
+    series_auto: bool = False
+    accept_project_identity_change: bool = False
+    supersedes_publication_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        self.import_payload()
+
+    def import_payload(self) -> dict[str, object]:
+        """The section 10.3 request document, checked strictly (S7-3 `p6_import_request`)."""
+        payload: dict[str, object] = {
+            field.name: getattr(self, field.name)
+            for field in dataclasses.fields(self)
+            if getattr(self, field.name) is not None or field.name in _P6_REQUIRED_IMPORT_FIELDS
+        }
+        refused: str | None = None
+        try:
+            p6_import_request(payload)
+        except P6RequestError as error:
+            refused = error.field
+        if refused is not None:
+            raise _p6_refusal(refused)
+        return payload
+
+
+_P6_REQUIRED_IMPORT_FIELDS: Final = frozenset(
+    {
+        "project_id",
+        "workspace_id",
+        "path",
+        "expected_version",
+        "expected_sha256",
+        "format",
+        "idempotency_key",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleP6AvailableFields:
+    """List a P6 Series' available optional fields: the catalogue's selectable fields and every field observed in its imports, with capture status.
+
+    `schedule_p6_fields.available`: one page, by field key, each with its
+    entity kind, value type, unit, tier, whether it is catalogued, captured by
+    default, captured now and `personal`, and observation statistics across
+    the Series' complete imports (never a value).
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_P6_FIELDS_AVAILABLE
+
+    series_id: str
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.series_id, IdKind.SCHEDULE_SERIES, SafeDetail.SERIES_ID)
+        _p6_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class SetScheduleP6CapturedFields:
+    """Set the optional fields a P6 Series records from its next import on (compare-and-swap on the selection chain).
+
+    `schedule_p6_fields.set_captured`: up to 300 distinct field keys, each
+    selectable for the Series (a catalogued optional field or a field observed
+    in its imports); `expected_sequence` is the Series' current selection
+    sequence (0 before any selection). A `personal` field needs
+    `include_personal`. Earlier imports are unchanged.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "field_keys": {
+                "type": "array",
+                "maxItems": MAX_P6_CAPTURED_FIELDS,
+                "items": {"type": "string", "minLength": 1},
+            },
+            "expected_sequence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": MAX_P6_CAPTURE_EVENTS,
+            },
+        }
+    )
+
+    series_id: str
+    field_keys: tuple[str, ...]
+    expected_sequence: int
+    idempotency_key: str
+    include_personal: bool = False
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        _schedule_id(self.series_id, IdKind.SCHEDULE_SERIES, SafeDetail.SERIES_ID)
+        self.selected_keys()
+        sequence: object = self.expected_sequence
+        if type(sequence) is not int or not 0 <= sequence <= MAX_P6_CAPTURE_EVENTS:
+            raise InvalidRequestError(SafeDetail.SEQUENCE)
+        personal: object = self.include_personal
+        if type(personal) is not bool:
+            raise InvalidRequestError(SafeDetail.INCLUDE_PERSONAL)
+        key: object = self.idempotency_key
+        if not isinstance(key, str) or _SCHEDULE_IDEMPOTENCY_KEY.fullmatch(key) is None:
+            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+
+    def selected_keys(self) -> tuple[str, ...]:
+        """The keys, sorted by code point; malformed, too many or repeated is refused."""
+        keys: object = self.field_keys
+        if not isinstance(keys, tuple):
+            raise InvalidRequestError(SafeDetail.FIELD_KEY)
+        refused = False
+        found: tuple[str, ...] = ()
+        try:
+            found = p6_field_keys(keys)
+        except P6ReadRequestError:
+            refused = True
+        if refused:
+            raise InvalidRequestError(SafeDetail.FIELD_KEY)
+        return found
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleP6Activities:
+    """List one complete P6 publication's typed activities with selected captured fields, filtered and sorted on captured fields.
+
+    `schedule_p6_activities.list`: Activity ID order unless `sort` names one
+    captured field; `filter` is at most 3 predicates (`eq`, `in`, `lt`, `le`,
+    `gt`, `ge`, `prefix`) on captured fields, all of which must hold; `fields`
+    names at most 50 captured keys to include.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_P6_ACTIVITIES_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"fields": _P6_FIELDS_SCHEMA, "filter": _P6_FILTER_SCHEMA, "sort": _P6_SORT_SCHEMA}
+    )
+
+    publication_id: str
+    fields: tuple[str, ...] | None = None
+    filter: tuple[dict[str, object], ...] | None = None
+    sort: dict[str, object] | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.publication_id, IdKind.SCHEDULE_PUBLICATION, SafeDetail.PUBLICATION_ID)
+        _p6_read_shape(self.fields, self.filter, self.sort)
+        _p6_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleP6Relationships:
+    """List one complete P6 publication's relationships: predecessor and successor Activity IDs, type, lag and whether external.
+
+    `schedule_p6_relationships.list`: by predecessor, then successor Activity
+    ID; `fields` names at most 50 captured relationship keys to include.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_P6_RELATIONSHIPS_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"fields": _P6_FIELDS_SCHEMA}
+    )
+
+    publication_id: str
+    fields: tuple[str, ...] | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.publication_id, IdKind.SCHEDULE_PUBLICATION, SafeDetail.PUBLICATION_ID)
+        _p6_read_shape(self.fields, None, None)
+        _p6_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleP6Calendars:
+    """List one complete P6 publication's calendars: the parsed work week and dated exceptions as HH:MM intervals.
+
+    `schedule_p6_calendars.list`: a page of calendars by P6 calendar id, each
+    with at most 100 exceptions (`exceptions_truncated` says more exist);
+    naming `calendar_id` pages that one calendar's exceptions instead.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_P6_CALENDARS_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"fields": _P6_FIELDS_SCHEMA, "calendar_id": {"type": "integer", "minimum": 0}}
+    )
+
+    publication_id: str
+    calendar_id: int | None = None
+    fields: tuple[str, ...] | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _schedule_id(self.publication_id, IdKind.SCHEDULE_PUBLICATION, SafeDetail.PUBLICATION_ID)
+        calendar: object = self.calendar_id
+        if calendar is not None and (type(calendar) is not int or calendar < 0):
+            raise InvalidRequestError(SafeDetail.CALENDAR_ID)
+        _p6_read_shape(self.fields, None, None)
+        _p6_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ListScheduleP6FieldValues:
+    """List captured P6 field values of any entity kind: of one complete publication, or of one Stable Activity across its Series' versions.
+
+    `schedule_p6_field_values.list`: exactly one of `publication_id` or
+    `schedule_activity_id`; optionally one `entity_kind` and at most 50 field
+    keys; `filter` and `sort` as `schedule_p6_activities.list`. A `personal`
+    field is served only to a holder of this capability's grant and only when
+    its selection included personal fields.
+    """  # noqa: E501
+
+    capability: ClassVar[Capability] = Capability.SCHEDULE_P6_FIELD_VALUES_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "fields": _P6_FIELDS_SCHEMA,
+            "filter": _P6_FILTER_SCHEMA,
+            "sort": _P6_SORT_SCHEMA,
+            "entity_kind": {"type": "string", "enum": [member.value for member in EntityKind]},
+        }
+    )
+
+    publication_id: str | None = None
+    schedule_activity_id: str | None = None
+    entity_kind: str | None = None
+    fields: tuple[str, ...] | None = None
+    filter: tuple[dict[str, object], ...] | None = None
+    sort: dict[str, object] | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.publication_id is None) == (self.schedule_activity_id is None):
+            raise InvalidRequestError(SafeDetail.PUBLICATION_ID)
+        _optional_schedule_id(
+            self.publication_id, IdKind.SCHEDULE_PUBLICATION, SafeDetail.PUBLICATION_ID
+        )
+        _optional_schedule_id(
+            self.schedule_activity_id, IdKind.SCHEDULE_ACTIVITY, SafeDetail.SCHEDULE_ACTIVITY_ID
+        )
+        _schedule_text(self.entity_kind, SafeDetail.ENTITY_KIND)
+        refused = False
+        try:
+            entity_kind_of(self.entity_kind)
+        except P6ReadRequestError:
+            refused = True
+        if refused:
+            raise InvalidRequestError(SafeDetail.ENTITY_KIND)
+        _p6_read_shape(self.fields, self.filter, self.sort)
+        _p6_page_size(self.page_size)
+        _schedule_cursor(self.cursor)
+
+
 # Schedule Scenarios S6-3 (schedule-scenarios contract sections 6.1, 15.5). Every
 # command is a frozen dataclass built by `_BUILDERS` as `Command(**payload)`; an
 # unknown or missing key is `invalid_request` with no detail. `__post_init__`
@@ -20184,6 +20588,13 @@ type Command = (
     | ListScheduleActivities
     | ReadScheduleActivityHistory
     | ListScheduleChanges
+    | ImportScheduleP6Publication
+    | ListScheduleP6AvailableFields
+    | SetScheduleP6CapturedFields
+    | ListScheduleP6Activities
+    | ListScheduleP6Relationships
+    | ListScheduleP6Calendars
+    | ListScheduleP6FieldValues
     | CreateScheduleScenario
     | CreateScheduleScenarioVersion
     | CreateScheduleCpmRun

@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v18"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v19"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -53,6 +53,10 @@ class ChatLLMCompositionPrerequisite(StrEnum):
     #: contract section 16, ruling D7): `MY_PA_COMMUNICATIONS_ENABLED`; needs no
     #: other plane.
     COMMUNICATIONS = "COMMUNICATIONS"
+    #: P6 XER import S7-4a (chatllm-data-v19; schedule XER import contract
+    #: section 10.7): `MY_PA_SCHEDULE_P6_ENABLED`, which stacks on the Schedule
+    #: switch.
+    SCHEDULE_P6 = "SCHEDULE_P6"
     #: Project-report reads WP4P-S4 (chatllm-data-v18; WP4P-W1 design section
     #: 2.10): `MY_PA_PROJECT_REPORTS_ENABLED`; needs no other plane.
     PROJECT_REPORTS = "PROJECT_REPORTS"
@@ -406,6 +410,17 @@ _DATA_CONDITIONAL: Final[frozenset[Capability]] = frozenset(
         Capability.COMMUNICATIONS_SEARCH,
         Capability.COMMUNICATIONS_READ,
         Capability.COMMUNICATIONS_COVERAGE,
+        # P6 XER import S7-4a (chatllm-data-v19; contract section 10.7): the 7 P6
+        # names (2 writes, 5 reads), conditional on the P6 switch by explicit
+        # name (`SCHEDULE_P6_DATA_NAMES`). None is operator-only; the 2 writes
+        # are write grants (`--write`).
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6,
+        Capability.SCHEDULE_P6_FIELDS_AVAILABLE,
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED,
+        Capability.SCHEDULE_P6_ACTIVITIES_LIST,
+        Capability.SCHEDULE_P6_RELATIONSHIPS_LIST,
+        Capability.SCHEDULE_P6_CALENDARS_LIST,
+        Capability.SCHEDULE_P6_FIELD_VALUES_LIST,
         # Project-report reads WP4P-S4 (chatllm-data-v18): the 5
         # `project_reports.*` reads, conditional on `MY_PA_PROJECT_REPORTS_ENABLED`
         # by explicit name (`PROJECT_REPORTS_DATA_NAMES`).
@@ -655,6 +670,22 @@ COMMUNICATIONS_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
+#: P6 XER import S7-4a (chatllm-data-v19; schedule XER import contract section
+#: 10.7): the 7 P6 names, composed only when `MY_PA_SCHEDULE_ENABLED` and
+#: `MY_PA_SCHEDULE_P6_ENABLED` are both on. Explicit names, matched before any
+#: prefix rule. Equals the service's `_SCHEDULE_P6_CAPABILITIES`.
+SCHEDULE_P6_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6,
+        Capability.SCHEDULE_P6_FIELDS_AVAILABLE,
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED,
+        Capability.SCHEDULE_P6_ACTIVITIES_LIST,
+        Capability.SCHEDULE_P6_RELATIONSHIPS_LIST,
+        Capability.SCHEDULE_P6_CALENDARS_LIST,
+        Capability.SCHEDULE_P6_FIELD_VALUES_LIST,
+    }
+)
+
 #: Project-report reads WP4P-S4 (chatllm-data-v18; WP4P-W1 design section 2.10):
 #: the 5 `project_reports.*` reads, composed only when
 #: `MY_PA_PROJECT_REPORTS_ENABLED` is on. None is operator-only.
@@ -804,6 +835,8 @@ def _prerequisite_of(
         return ChatLLMCompositionPrerequisite.FILES_WORKSPACE
     if capability in COMMUNICATIONS_DATA_NAMES:
         return ChatLLMCompositionPrerequisite.COMMUNICATIONS
+    if capability in SCHEDULE_P6_DATA_NAMES:
+        return ChatLLMCompositionPrerequisite.SCHEDULE_P6
     if capability in PROJECT_REPORTS_DATA_NAMES:
         return ChatLLMCompositionPrerequisite.PROJECT_REPORTS
     value = capability.value

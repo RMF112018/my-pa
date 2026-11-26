@@ -52,11 +52,14 @@ merged (#387): the one P6 revision `d8383150cf72`
 (snapshots, the typed per-run P6 tables, the generic field store, observed fields, the capture
 chain, the additive publication, parser-run and issue columns and the audit vocabulary admitted
 ahead of the domain), its `tables.py` declarations and the `sp6n`/`sp6e` identifier kinds.
-Its fourth slice, S7-3, is implemented on `feat/schedule-xer-worker`, not merged: the admission
-service `import_p6` (`src/my_pa/application/schedule_p6.py`, no capability yet), its P6
+Its fourth slice, S7-3, is merged (#389): the admission
+service `import_p6` (`src/my_pa/application/schedule_p6.py`), its P6
 repository (`src/my_pa/infrastructure/persistence/schedule_p6.py`) and the `schedule` worker's P6
 path (`src/my_pa/infrastructure/jobs/schedule_p6.py`), behind `MY_PA_SCHEDULE_P6_ENABLED`
-(default off). The rest of the import (capabilities, S7-4 onwards) is design only.
+(default off). Its fifth, S7-4a, is implemented on `feat/schedule-xer-surface`, not merged: the
+7 P6 capabilities (`schedule_publications.import_p6` and the `schedule_p6_*` names,
+`src/my_pa/application/schedule_p6_reads.py`), `chatllm-data-v19`, and the S5 reads serving P6
+publications. S7-4b (delta, scenario snapshot) onwards is design only.
 
 ## 1. What it is
 

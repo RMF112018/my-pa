@@ -145,34 +145,34 @@
     "revision_files": 137
   },
   "census": {
-    "architecture": 10409,
-    "database": 7486,
+    "architecture": 10313,
+    "database": 7466,
     "evaluation": 2,
-    "fast_collected": 55448,
+    "fast_collected": 55731,
     "fast_skipped": 138,
-    "mypy_files": 804,
-    "src_modules": 603,
-    "test_modules": 1094
+    "mypy_files": 800,
+    "src_modules": 600,
+    "test_modules": 1086
   },
   "chatllm": {
     "classes": {
       "CHATLLM_COMPATIBILITY_ONLY": 2,
       "CHATLLM_CONTROL_PLANE_EXCLUDED": 33,
-      "CHATLLM_DATA_CONDITIONAL": 184,
+      "CHATLLM_DATA_CONDITIONAL": 186,
       "CHATLLM_DATA_REQUIRED": 88,
       "CHATLLM_OPERATOR_DECISION_REQUIRED": 2,
       "CHATLLM_RETIRED": 0
     },
-    "policy_sha256": "d1d78779ad83b1897b5adffa9c8335c797934f8475e71746aaa70727d803ba03",
-    "version": "chatllm-data-v18"
+    "policy_sha256": "b8b470e42cc3ca7817ad34ba0c737bd0745b936113842dbae7d68d898046357f",
+    "version": "chatllm-data-v19"
   },
   "counts": {
-    "alembic_revisions": 137,
-    "capability": 309,
-    "chatllm_policy_entries": 309,
+    "alembic_revisions": 136,
+    "capability": 311,
+    "chatllm_policy_entries": 311,
     "id_kind": 197,
-    "purpose": 72,
-    "safe_detail": 470
+    "purpose": 73,
+    "safe_detail": 461
   },
   "vocabulary": {
     "capability": [
@@ -452,7 +452,14 @@
       "schedule_cpm_runs.activities",
       "schedule_cpm_runs.create",
       "schedule_cpm_runs.read",
+      "schedule_p6_activities.list",
+      "schedule_p6_calendars.list",
+      "schedule_p6_field_values.list",
+      "schedule_p6_fields.available",
+      "schedule_p6_fields.set_captured",
+      "schedule_p6_relationships.list",
       "schedule_publications.import",
+      "schedule_publications.import_p6",
       "schedule_publications.list",
       "schedule_publications.read",
       "schedule_scenario_outputs.list",
@@ -752,6 +759,8 @@
       "schedule_analysis_read",
       "schedule_baseline_approval",
       "schedule_import",
+      "schedule_p6_configuration",
+      "schedule_p6_import",
       "schedule_read",
       "security_validation",
       "source_inspection",
@@ -803,6 +812,7 @@
       "bulk_operation_id",
       "byte_count",
       "calendar",
+      "calendar_id",
       "calendar_ref",
       "campaign_class",
       "candidate_tags",
@@ -919,6 +929,7 @@
       "enrollment_id",
       "entity_address_id",
       "entity_id",
+      "entity_kind",
       "entity_name_id",
       "entity_type",
       "entries",
@@ -944,6 +955,8 @@
       "expected_version",
       "expected_version_number",
       "external_change_detected",
+      "field_filter",
+      "field_key",
       "file_handle_refused",
       "file_handle_unsupported",
       "focus_area_id",
@@ -976,7 +989,7 @@
       "include_body",
       "include_manifest",
       "include_manifests",
-      "include_rows",
+      "include_personal",
       "include_sha256",
       "include_statement",
       "include_text",

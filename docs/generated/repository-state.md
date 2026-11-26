@@ -28,15 +28,15 @@ plans link here instead of restating them.
 
 | Figure | Current |
 |---|---|
-| Capabilities | 309 |
-| Purposes | 72 |
+| Capabilities | 311 |
+| Purposes | 73 |
 | IdKinds | 197 |
-| SafeDetails | 470 |
-| ChatLLM data profile version | `chatllm-data-v18` |
-| ChatLLM policy entries | 309 |
+| SafeDetails | 461 |
+| ChatLLM data profile version | `chatllm-data-v19` |
+| ChatLLM policy entries | 311 |
 | ChatLLM `CHATLLM_COMPATIBILITY_ONLY` entries | 2 |
 | ChatLLM `CHATLLM_CONTROL_PLANE_EXCLUDED` entries | 33 |
-| ChatLLM `CHATLLM_DATA_CONDITIONAL` entries | 184 |
+| ChatLLM `CHATLLM_DATA_CONDITIONAL` entries | 186 |
 | ChatLLM `CHATLLM_DATA_REQUIRED` entries | 88 |
 | ChatLLM `CHATLLM_OPERATOR_DECISION_REQUIRED` entries | 2 |
 | ChatLLM `CHATLLM_RETIRED` entries | 0 |
@@ -45,9 +45,9 @@ plans link here instead of restating them.
 
 | Figure | Current |
 |---|---|
-| Published tools with an accepted payload digest | 309 |
+| Published tools with an accepted payload digest | 311 |
 | v1 view models with an accepted field digest | 40 |
-| Acceptance ledger entries | 10 |
+| Acceptance ledger entries | 7 |
 
 ## Test tiers and corpora
 
@@ -57,10 +57,10 @@ measurable at collection and is carried (`regen --measure --fast-skipped N`).
 
 | Tier or corpus | Selection | Collected | A green execution requires |
 | --- | --- | --- | --- |
-| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 55,448 | 55,310 passed, 138 skipped |
-| Architecture | `pytest tests/architecture` | 10,409 | 10,409 passed, 0 skipped |
-| Database | `pytest -m "database or recovery or e2e"` | 7,486 | 7,486 passed, 0 skipped |
+| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 55,731 | 55,593 passed, 138 skipped |
+| Architecture | `pytest tests/architecture` | 10,313 | 10,313 passed, 0 skipped |
+| Database | `pytest -m "database or recovery or e2e"` | 7,466 | 7,466 passed, 0 skipped |
 | Evaluation | `pytest -m "evaluation"` | 2 | 2 passed |
-| mypy corpus | `mypy` (`[tool.mypy] files`) | 804 files | no issues found |
-| Source modules | `find src/my_pa -name "*.py"` | 603 |  |
-| Test modules | `find tests -name "test_*.py"` | 1,094 |  |
+| mypy corpus | `mypy` (`[tool.mypy] files`) | 800 files | no issues found |
+| Source modules | `find src/my_pa -name "*.py"` | 600 |  |
+| Test modules | `find tests -name "test_*.py"` | 1,086 |  |

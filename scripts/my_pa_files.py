@@ -291,115 +291,130 @@ def upload(
     backoff: float = 1.0,
 ) -> dict[str, object]:
     """Send `local` to the upload route; the finalize result."""
-    if not 1 <= chunk_bytes <= MAX_CHUNK_BYTES:
-        raise ClientError(EXIT_LOCAL, f"--chunk-bytes must be 1..{MAX_CHUNK_BYTES}")
     try:
         handle = local.open("rb")
     except OSError:
         raise ClientError(EXIT_LOCAL, "the local file could not be opened") from None
     with handle:
-        sha256, size = file_sha256(handle)
-        completion = f"sha256={sha256}, length={size}"
-        auth = {"Authorization": f"Bearer {token}"}
-        state = {"completing": False, "unconfirmed": False}
-        sent = [0]  # the highest offset the server has acknowledged
+        return upload_handle(
+            handle, target, token, chunk_bytes=chunk_bytes, retries=retries, backoff=backoff
+        )
 
-        def unauthorized() -> ClientError:
-            if state["unconfirmed"]:
-                return ClientError(
-                    EXIT_UNKNOWN,
-                    "outcome unknown: the completing request lost its response and the "
-                    "ticket is now closed; verify with files.stat before retrying",
-                )
-            return ClientError(EXIT_REFUSED, "upload refused: HTTP 401 denied/ticket_invalid")
 
-        def head() -> int:
-            with _send(target, "HEAD", auth) as response:
+def upload_handle(
+    handle: BinaryIO,
+    target: Target,
+    token: str,
+    *,
+    chunk_bytes: int = MAX_CHUNK_BYTES,
+    retries: int = 5,
+    backoff: float = 1.0,
+) -> dict[str, object]:
+    """Send an already-open handle. The caller owns its descriptor lifetime."""
+    if not 1 <= chunk_bytes <= MAX_CHUNK_BYTES:
+        raise ClientError(EXIT_LOCAL, f"--chunk-bytes must be 1..{MAX_CHUNK_BYTES}")
+    sha256, size = file_sha256(handle)
+    completion = f"sha256={sha256}, length={size}"
+    auth = {"Authorization": f"Bearer {token}"}
+    state = {"completing": False, "unconfirmed": False}
+    sent = [0]  # the highest offset the server has acknowledged
+
+    def unauthorized() -> ClientError:
+        if state["unconfirmed"]:
+            return ClientError(
+                EXIT_UNKNOWN,
+                "outcome unknown: the completing request lost its response and the "
+                "ticket is now closed; verify with files.stat before retrying",
+            )
+        return ClientError(EXIT_REFUSED, "upload refused: HTTP 401 denied/ticket_invalid")
+
+    def head() -> int:
+        with _send(target, "HEAD", auth) as response:
+            response.read()
+            if response.status == 204:
+                offset = _header_int(response, "Upload-Offset")
+                if offset is None or offset > size:
+                    raise ClientError(EXIT_REFUSED, "the server reported an impossible offset")
+                sent[0] = max(sent[0], offset)
+                return offset
+            if response.status == 401:
+                raise unauthorized()
+            if response.status in (408, 503):
+                raise _Retry(_retry_after(response))
+            raise ClientError(EXIT_REFUSED, f"upload refused: HTTP {response.status}")
+
+    def patch(offset: int) -> tuple[int, dict[str, object] | None]:
+        length = min(chunk_bytes, size - offset)
+        last = offset + length == size
+        headers = {
+            **auth,
+            "Upload-Offset": str(offset),
+            "Content-Length": str(length),
+            "Content-Type": "application/offset+octet-stream",
+        }
+        if last:
+            headers["Upload-Complete"] = completion
+
+        def body(connection: http.client.HTTPConnection) -> None:
+            handle.seek(offset)
+            left = length
+            while left:
+                block = handle.read(min(BLOCK_BYTES, left))
+                if not block:
+                    raise ClientError(EXIT_LOCAL, "the local file shrank while uploading")
+                connection.send(block)
+                left -= len(block)
+
+        state["completing"] = last
+        with _send(target, "PATCH", headers, body) as response:
+            status = response.status
+            if status == 204:
                 response.read()
-                if response.status == 204:
-                    offset = _header_int(response, "Upload-Offset")
-                    if offset is None or offset > size:
-                        raise ClientError(EXIT_REFUSED, "the server reported an impossible offset")
-                    sent[0] = max(sent[0], offset)
-                    return offset
-                if response.status == 401:
-                    raise unauthorized()
-                if response.status in (408, 503):
-                    raise _Retry(_retry_after(response))
-                raise ClientError(EXIT_REFUSED, f"upload refused: HTTP {response.status}")
-
-        def patch(offset: int) -> tuple[int, dict[str, object] | None]:
-            length = min(chunk_bytes, size - offset)
-            last = offset + length == size
-            headers = {
-                **auth,
-                "Upload-Offset": str(offset),
-                "Content-Length": str(length),
-                "Content-Type": "application/offset+octet-stream",
-            }
-            if last:
-                headers["Upload-Complete"] = completion
-
-            def body(connection: http.client.HTTPConnection) -> None:
-                handle.seek(offset)
-                left = length
-                while left:
-                    block = handle.read(min(BLOCK_BYTES, left))
-                    if not block:
-                        raise ClientError(EXIT_LOCAL, "the local file shrank while uploading")
-                    connection.send(block)
-                    left -= len(block)
-
-            state["completing"] = last
-            with _send(target, "PATCH", headers, body) as response:
-                status = response.status
-                if status == 204:
-                    response.read()
-                    moved = _header_int(response, "Upload-Offset")
-                    if moved != offset + length or last:
-                        raise _Retry(0.0)
-                    sent[0] = max(sent[0], moved)
-                    return moved, None
-                if status == 200 and last:
-                    try:
-                        result = json.loads(response.read())
-                    except ValueError:
-                        result = None
-                    if not isinstance(result, dict):
-                        raise ClientError(
-                            EXIT_UNKNOWN,
-                            "the finalize answered 200 with an unreadable result; "
-                            "verify with files.stat",
-                        )
-                    return size, result
-                if status == 401:
-                    response.read(MAX_ERROR_BODY)
-                    raise unauthorized()
-                if status in (408, 503):
-                    delay = _retry_after(response)
-                    response.read(MAX_ERROR_BODY)
-                    raise _Retry(delay)
-                message = _refusal(response)
-                if status == 409 and message.endswith("/offset_mismatch"):
+                moved = _header_int(response, "Upload-Offset")
+                if moved != offset + length or last:
                     raise _Retry(0.0)
-                raise ClientError(EXIT_REFUSED, f"upload refused: {message}")
+                sent[0] = max(sent[0], moved)
+                return moved, None
+            if status == 200 and last:
+                try:
+                    result = json.loads(response.read())
+                except ValueError:
+                    result = None
+                if not isinstance(result, dict):
+                    raise ClientError(
+                        EXIT_UNKNOWN,
+                        "the finalize answered 200 with an unreadable result; "
+                        "verify with files.stat",
+                    )
+                return size, result
+            if status == 401:
+                response.read(MAX_ERROR_BODY)
+                raise unauthorized()
+            if status in (408, 503):
+                delay = _retry_after(response)
+                response.read(MAX_ERROR_BODY)
+                raise _Retry(delay)
+            message = _refusal(response)
+            if status == 409 and message.endswith("/offset_mismatch"):
+                raise _Retry(0.0)
+            raise ClientError(EXIT_REFUSED, f"upload refused: {message}")
 
-        result: dict[str, object] = {}
+    result: dict[str, object] = {}
 
-        def step() -> int:
-            offset = head()
-            while True:
-                offset, finished = patch(offset)
-                if finished is not None:
-                    result.update(finished)
-                    return EXIT_OK
+    def step() -> int:
+        offset = head()
+        while True:
+            offset, finished = patch(offset)
+            if finished is not None:
+                result.update(finished)
+                return EXIT_OK
 
-        def lost() -> None:
-            if state["completing"]:
-                state["unconfirmed"] = True
+    def lost() -> None:
+        if state["completing"]:
+            state["unconfirmed"] = True
 
-        _attempts(retries, backoff, step, lost, lambda: sent[0])
-        return result
+    _attempts(retries, backoff, step, lost, lambda: sent[0])
+    return result
 
 
 # ---- download -----------------------------------------------------------------

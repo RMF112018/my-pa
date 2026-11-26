@@ -24,7 +24,13 @@ import pytest
 from my_pa.domain.schedule.p6 import P6_LIMITS, frame_bytes, frame_sha256, parse_xer
 from my_pa.domain.schedule.p6.catalogue import catalogue_field
 from my_pa.domain.schedule.p6.frame import frame_object, render_decimal
-from my_pa.domain.schedule.p6.model import Bound, P6IssueCode, P6Outcome, P6ParseResult
+from my_pa.domain.schedule.p6.model import (
+    Bound,
+    CalendarStatus,
+    P6IssueCode,
+    P6Outcome,
+    P6ParseResult,
+)
 from my_pa.domain.schedule.p6.profile import verdict
 from my_pa.domain.schedule.p6.reader import RawTable
 from my_pa.domain.schedule.p6.values import ReadingStatus, read_value
@@ -106,6 +112,18 @@ def test_crlf_and_lf_give_identical_frames() -> None:
     _, lf = _parse("lf_line_ends")
     _, trailing = _parse("trailing_blank_lines")
     assert frame_bytes(crlf) == frame_bytes(lf) == frame_bytes(trailing)
+
+
+def test_an_unnamed_calendar_root_reads_like_a_named_one() -> None:
+    case, unnamed = _parse("calendar_root_unnamed")
+    assert case.data.count(b"(0||()(") == 2
+    named = parse_xer(case.data.replace(b"(0||()(", b"(0||CalendarData()("), capture=case.capture)
+    assert len(unnamed.calendars) == 2
+    assert [calendar.status for calendar in unnamed.calendars] == [CalendarStatus.PARSED] * 2
+    assert [(c.p6_id, c.status, c.used, c.week, c.exceptions) for c in unnamed.calendars] == [
+        (c.p6_id, c.status, c.used, c.week, c.exceptions) for c in named.calendars
+    ]
+    assert all(calendar.week for calendar in unnamed.calendars)
 
 
 # --- A5 caps ----------------------------------------------------------------------------------

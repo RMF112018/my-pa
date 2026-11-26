@@ -10471,6 +10471,33 @@ class ScheduleP6ReadRepository(ABC):
     ) -> tuple[P6PublicationRef, ...]:
         """The complete P6 publications whose accepted run links this Stable Activity."""
 
+    @abstractmethod
+    def p6_activity_field_values(
+        self, principal_id: str, parser_run_id: str, field_keys: Sequence[str] | None
+    ) -> tuple[dict[str, object], ...]:
+        """S7-4b: one run's activity values of `field_keys` (`None`: every key), by Activity ID."""
+
+    @abstractmethod
+    def p6_activity_field_keys(self, principal_id: str, parser_run_id: str) -> frozenset[str]:
+        """S7-4b F1: one run's distinct captured activity field keys (no value is read)."""
+
+    @abstractmethod
+    def capture_selection(
+        self, principal_id: str, capture_event_id: str | None
+    ) -> tuple[str, ...] | None:
+        """Section 7.2: the selection a publication was admitted under (`None`: the defaults)."""
+
+    @abstractmethod
+    def p6_prior_observations(
+        self,
+        principal_id: str,
+        series_id: str,
+        *,
+        before: tuple[date, datetime, str],
+        schedule_activity_ids: frozenset[str],
+    ) -> frozenset[str]:
+        """S7-4b: which of the Stable Activities an earlier complete P6 publication carried."""
+
 
 class ScheduleP6Repository(
     ScheduleRepository, ScheduleP6AdmissionRepository, ScheduleP6ReadRepository

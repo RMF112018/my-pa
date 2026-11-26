@@ -74,6 +74,13 @@
    "outcome": "complete",
    "verdict": "pass"
   },
+  "calendar_root_unnamed": {
+   "frame_sha256": "1898a88401e90112c46b8e2ff5a9b5ae1292a26936a85af1cf484637e6131e13",
+   "input_sha256": "bc9d94fe53b262fbe64e66020c8a66b4bfdc684cfcccabb77e34c76e94fe6d19",
+   "issues": [],
+   "outcome": "complete",
+   "verdict": "pass"
+  },
   "calendar_unparseable": {
    "frame_sha256": "50ad502a6d2f56cc81067b6387819dee3214c56acfb814a1071bf809cafde9a7",
    "input_sha256": "6ed49f148a236466a6a6315b53c3981ac7745dfd742d54e4c532f539b7185c74",

@@ -497,6 +497,17 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.COMMUNICATIONS_SEARCH,
         Capability.COMMUNICATIONS_READ,
         Capability.COMMUNICATIONS_COVERAGE,
+        # P6 XER import S7-4a (contract section 10.1): the 7 P6 names take no
+        # `source_id`; ownership is the Principal partition plus the Project,
+        # Series and publication checks (the S6-3 plane's rule). The import names
+        # a files-workspace alias and path, never an enrollment.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6,
+        Capability.SCHEDULE_P6_FIELDS_AVAILABLE,
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED,
+        Capability.SCHEDULE_P6_ACTIVITIES_LIST,
+        Capability.SCHEDULE_P6_RELATIONSHIPS_LIST,
+        Capability.SCHEDULE_P6_CALENDARS_LIST,
+        Capability.SCHEDULE_P6_FIELD_VALUES_LIST,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

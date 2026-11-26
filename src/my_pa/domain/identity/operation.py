@@ -1216,6 +1216,38 @@ class Capability(StrEnum):
     #: WP4-S5 (sections 9, 16): the coverage of a range over the Principal's own
     #: communications sources. Same purpose, scope and switch as the search.
     COMMUNICATIONS_COVERAGE = "communications.coverage"
+    #: P6 XER import S7-4a (schedule XER import contract section 10.1, ADR-023):
+    #: admit one P6 XER export from a files-workspace file (version- and
+    #: SHA-256-bound) as a publication of a Schedule Series and queue its parse.
+    #: A client-usable additive write under `Purpose.SCHEDULE_P6_IMPORT`;
+    #: scopeless (a workspace file, never a configured source or an enrollment);
+    #: idempotent and client-bound remotely; withheld unless the P6 switch is
+    #: effective (`MY_PA_SCHEDULE_P6_ENABLED` on `MY_PA_SCHEDULE_ENABLED`).
+    SCHEDULE_PUBLICATIONS_IMPORT_P6 = "schedule_publications.import_p6"
+    #: S7-4a (sections 7.1, 7.4, 10.5): a P6 Series' available-field registry --
+    #: the catalogue's selectable fields and every field observed in its imports,
+    #: with capture status and observation statistics (never a value). A read
+    #: under `Purpose.SCHEDULE_READ`; same scope and switch as the import.
+    SCHEDULE_P6_FIELDS_AVAILABLE = "schedule_p6_fields.available"
+    #: S7-4a (sections 7.2, 10.3): append one capture-selection event to a P6
+    #: Series' chain (compare-and-swap on `expected_sequence`); applies from the
+    #: Series' next import. An additive write under
+    #: `Purpose.SCHEDULE_P6_CONFIGURATION`; idempotent and client-bound remotely.
+    SCHEDULE_P6_FIELDS_SET_CAPTURED = "schedule_p6_fields.set_captured"
+    #: S7-4a (sections 7.5, 10.5): one complete P6 publication's typed activities
+    #: with the selected captured fields; filter and sort on captured fields
+    #: (section 7.7). A read under `Purpose.SCHEDULE_READ`.
+    SCHEDULE_P6_ACTIVITIES_LIST = "schedule_p6_activities.list"
+    #: S7-4a (section 10.5): one complete P6 publication's relationships.
+    SCHEDULE_P6_RELATIONSHIPS_LIST = "schedule_p6_relationships.list"
+    #: S7-4a (section 10.5): one complete P6 publication's calendars -- parsed
+    #: week and dated exception intervals, never `clndr_data` or exception text.
+    SCHEDULE_P6_CALENDARS_LIST = "schedule_p6_calendars.list"
+    #: S7-4a (sections 7.3, 7.5, 10.4, 10.5): captured values of any entity kind,
+    #: of one publication or of one Stable Activity across a Series' versions; a
+    #: `personal` field only to a holder of this name's grant and only when its
+    #: selection carried `include_personal`.
+    SCHEDULE_P6_FIELD_VALUES_LIST = "schedule_p6_field_values.list"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1954,6 +1986,16 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.COMMUNICATIONS_SEARCH: frozenset({Purpose.COMMUNICATIONS_READ}),
         Capability.COMMUNICATIONS_READ: frozenset({Purpose.COMMUNICATIONS_READ}),
         Capability.COMMUNICATIONS_COVERAGE: frozenset({Purpose.COMMUNICATIONS_READ}),
+        # P6 XER import S7-4a (contract section 10.1): the import and the
+        # selection each to a write purpose of its own; the 5 reads to the
+        # Schedule read purpose, as the S5 reads they sit beside.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6: frozenset({Purpose.SCHEDULE_P6_IMPORT}),
+        Capability.SCHEDULE_P6_FIELDS_AVAILABLE: frozenset({Purpose.SCHEDULE_READ}),
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED: frozenset({Purpose.SCHEDULE_P6_CONFIGURATION}),
+        Capability.SCHEDULE_P6_ACTIVITIES_LIST: frozenset({Purpose.SCHEDULE_READ}),
+        Capability.SCHEDULE_P6_RELATIONSHIPS_LIST: frozenset({Purpose.SCHEDULE_READ}),
+        Capability.SCHEDULE_P6_CALENDARS_LIST: frozenset({Purpose.SCHEDULE_READ}),
+        Capability.SCHEDULE_P6_FIELD_VALUES_LIST: frozenset({Purpose.SCHEDULE_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -2196,6 +2238,10 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.FILES_RESTORE,
         Capability.FILES_UPLOAD_FINALIZE,
         Capability.FILES_WRITE_TEXT,
+        # P6 XER import S7-4a (contract section 10.1): the import inserts a
+        # publication and queues its job; the selection appends one event.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6,
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED,
     }
 )
 
@@ -2345,6 +2391,12 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.FILES_COPY,
         Capability.FILES_UPLOAD_BEGIN,
         Capability.FILES_UPLOAD_ABORT,
+        # P6 XER import S7-4a (contract section 10.1): the import inserts a
+        # publication (and at most a Series and a snapshot) and one job and
+        # never rewrites one; the selection appends one immutable event to the
+        # Series' chain and changes nothing already captured.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6,
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED,
     }
 )
 

@@ -120,7 +120,13 @@ def test_no_public_migration_capability_exists() -> None:
     # Schedule evidence (worker and capabilities contract section 3.5). It is not
     # Constraint legacy-import or migration tooling, it is operator-only and
     # attested to the local operator surface, and no Constraint name may join it.
-    assert named == [Capability.SCHEDULE_PUBLICATIONS_IMPORT]
+    # P6 XER import S7-4a's `schedule_publications.import_p6` is the second:
+    # Schedule evidence from a files-workspace P6 export (schedule XER import
+    # contract section 9.1), likewise not Constraint tooling.
+    assert named == [
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT,
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6,
+    ]
 
 
 # ---- T07-02: the purpose mapping --------------------------------------------

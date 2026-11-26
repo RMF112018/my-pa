@@ -77,13 +77,15 @@ def is_remote_idempotent(capability: Capability) -> bool:
     writes, and every lineage write (`LINEAGE_WRITE_CAPABILITIES`), whose
     server-derived key a remote caller's identical retry reuses. Schedule
     Scenarios S6-3 (S6-3-D06): the 6 client-usable plane writes too, whose
-    client-bound stamped key replays a client's identical retry. Every other
-    keyed write keeps its unchanged annotation (a pre-existing residual).
+    client-bound stamped key replays a client's identical retry. P6 XER import
+    S7-4a: the 2 P6 writes likewise. Every other keyed write keeps its unchanged
+    annotation (a pre-existing residual).
     """
     return (
         capability in _SERVER_REPLAY_REMOTE_CAPABILITIES
         or capability.value in LINEAGE_WRITE_CAPABILITIES
         or capability in _CLIENT_BOUND_SCENARIO_WRITES
+        or capability in _CLIENT_BOUND_P6_WRITES
     )
 
 
@@ -427,6 +429,13 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.SCHEDULE_SCENARIO_OUTPUTS_RECORD,
         Capability.SCHEDULE_BASELINES_PROPOSE,
         Capability.SCHEDULE_BASELINES_WITHDRAW,
+        # P6 XER import S7-4a (contract section 10.7): the 2 P6 writes require
+        # the key their own arbitration reads -- the import's
+        # `(principal_id, idempotency_key)` publication unique, the selection's
+        # compare-and-swap chain -- so the server stamps it. Also client-bound
+        # (`_CLIENT_BOUND_P6_WRITES`).
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6,
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED,
         # **No keyless proposal or identity-correction write is here, and the reason is this set's
         # mechanism rather than a judgement about how replayable they are.**
         # Membership makes `compose_remote_arguments` derive a key and *insert it
@@ -533,12 +542,25 @@ _FRESH_KEY_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.FILES_WRITE_TEXT,
     }
 )
+#: P6 XER import S7-4a (contract section 10.7): the 2 P6 writes. Every remote
+#: client acts for the one operator Principal, so an unbound key would let
+#: client B's identical import or selection replay client A's receipt; binding
+#: the client makes B's identical import reach content idempotency on its own key
+#: (`already_present`) and B's identical selection reach the compare-and-swap,
+#: while one client's own retry replays.
+_CLIENT_BOUND_P6_WRITES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6,
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED,
+    }
+)
 _CLIENT_BOUND_KEY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability
     for capability in _IDEMPOTENT_REMOTE_CAPABILITIES
     if capability.value in OPEN_LINEAGE_WRITE_CAPABILITIES
     or capability in _CLIENT_BOUND_REPORT_WRITES
     or capability in _CLIENT_BOUND_SCENARIO_WRITES
+    or capability in _CLIENT_BOUND_P6_WRITES
 )
 
 #: When more than one permitted purpose remains after grant intersection, the

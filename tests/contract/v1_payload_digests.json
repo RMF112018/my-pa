@@ -52,9 +52,23 @@
       "reason": "WP4-R2 G6: the communications cursor schema publishes maxLength 2048 (contract section 16)",
       "section": "tools",
       "to": "c77a238a49c8a937551c853821d4c0eebe7d88a152defb9ad295fd6f2f0c9f0e"
+    },
+    {
+      "date": "2026-11-25",
+      "kind": "added",
+      "names": [
+        "schedule_p6_activities.list",
+        "schedule_p6_calendars.list",
+        "schedule_p6_field_values.list",
+        "schedule_p6_fields.available",
+        "schedule_p6_fields.set_captured",
+        "schedule_p6_relationships.list",
+        "schedule_publications.import_p6"
+      ],
+      "section": "tools"
     }
   ],
-  "seal": "c5029461532e440a0212a88c1f4c59a3b54094222fe331078e1aba2f1bccf890",
+  "seal": "26edaf4174f342bef3ce389055d02ce549ed7415a2b7d79d60476a47be3b459c",
   "tools": {
     "canvas.workspace.get": "65876ad8f7197a4e8465b3a9019dd234b782f605dfda37d10c1026b660941fb3",
     "canvas.workspace.put": "985bbd6cd28bbaffe0520daa1883b0503a592f4369171a366ca14de8b43a5a8b",
@@ -327,7 +341,14 @@
     "schedule_cpm_runs.activities": "76f15e8c092dac34713e19646cffb6bb3e0d46c125b45711ee87f0e8f6922fd4",
     "schedule_cpm_runs.create": "d8516505e03f07aaf291f343be71e4fbba02194e940f031a438ede56941a1699",
     "schedule_cpm_runs.read": "1d860a54722de9bc496bc24a16d1fe8a647a42423a3dc5181532bba9ea067f35",
+    "schedule_p6_activities.list": "11ad53f00c2e69414090ab7b99d17bbef601d6d49831786fc92e270f4edeb619",
+    "schedule_p6_calendars.list": "fd830c3992204c340122db3fbb47c6870dfd1d432a5af4789d36b9765791eb00",
+    "schedule_p6_field_values.list": "c171c0202edaa6de9c14e7eed2b5a8a63d89423ce5721232b23bec699283f9b8",
+    "schedule_p6_fields.available": "fffcf4b7085098172a688569773177e143540a59887831ba2f92051fc59eddeb",
+    "schedule_p6_fields.set_captured": "d32bd47c15dfcf0b6ca396e24148078fc4d861e9f65c16beb7bd9f54ed51183b",
+    "schedule_p6_relationships.list": "545b44ab602e84a1b763ce41e446a6bc557264d9248d084bfe0dc5f0ebe04230",
     "schedule_publications.import": "9b5ea929d8ffd044df76b4aa728ca6306deff16a79b08822067e5d65e2b32fff",
+    "schedule_publications.import_p6": "515fa0ae93c5ba743b24071212afb7055613be0ef2365321c27c1d04ed7fb5e0",
     "schedule_publications.list": "cf62882d83c5df05798ef0ab8fbf97e8576a6b11aa7f9aaa0dab77f52b646035",
     "schedule_publications.read": "0ec191e2675a1b289b155ef613312a6e30003327d9339222e328cee2c74d944f",
     "schedule_scenario_outputs.list": "ab220c5411db068e2b2ef7779f0312376fcf93bcda523de473420413ab975794",

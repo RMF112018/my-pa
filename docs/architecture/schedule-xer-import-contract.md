@@ -1,11 +1,11 @@
 # P6 XER/XML schedule import — whole-slice contract (S7-0 to S7-6)
 
 **Status:** proposed implementation contract. S7-0 is merged (#384), S7-1 is merged (#386),
-S7-2 (revision `d8383150cf72`) is merged (#387), and S7-3 (the admission service `import_p6`
-and the `schedule` worker's P6 path, no migration, no capability) is implemented on
-`feat/schedule-xer-worker`, not merged; its bounds-maximal synthetic measurement (25,000
+S7-2 (revision `d8383150cf72`) is merged (#387), S7-3 (the admission service `import_p6`
+and the `schedule` worker's P6 path, no migration, no capability) is merged (#389); its bounds-maximal synthetic measurement (25,000
 activities, 100,000 relationships, 25,000 WBS rows, 8,526,632 bytes) ran the handler in 50.7 s
 (the contained parse 6.1 s) against the 240 s budget on a local PostgreSQL 15 scratch cluster.
+S7-4a (the 7 P6 capabilities, the switch composition, policy, ChatLLM `chatllm-data-v19`, the field registry and selection chain, the P6 reads, the format-aware S5 reads and the section 7.7 quota and import budgets; no migration) is implemented on `feat/schedule-xer-surface`, not merged; S7-4b (the delta `cpm-workbench-p6-delta-v1` and the P6 scenario snapshot, acceptance D5 and D6) is not yet implemented.
 Nothing else in it is implemented, and nothing is migrated on a shared database, granted,
 switched on or deployed. The decision record is
 [`ADR-023`](../decisions/ADR-023-p6-xer-xml-schedule-import.md), which loosens
@@ -1033,6 +1033,38 @@ issue codes are the `p6_*` codes of section 5.5 (new `ScheduleIssueCode` members
   publication id, SHA-256 and size (no path); `set_captured` carries the field-key count and
   `include_personal`.
 - No restricted MCP database role gains a privilege.
+
+**As built in S7-4a (corrections to this section and to 10.3/10.6, proven while implementing):**
+(1) the audit event (`domain.audit.events.AuditEvent`) is closed by design: identifiers,
+closed enums and bounded counts, no free-form field, and `audit_events` has no column for a
+publication id, a digest or a size, so carrying them would need a migration this slice may
+not make. Every P6 call is audited exactly as every other call (capability, purpose, outcome,
+policy version; never the path). The publication id, SHA-256 and size are in the import's
+answer and on the publication row; the selection's key count and `include_personal` are in
+its answer and on the capture-event row, with its provenance pair. (2) `set_captured`'s
+`idempotency_key` is required (and stamped client-bound remotely) but arbitrated by the
+capture chain itself, since no request ledger admits the P6 names without a migration: a
+retry of the same request by the same writer finds the event it appended at
+`expected_sequence + 1` and replays it (`created: false`); any other request meets the
+compare-and-swap (`conflict(sequence)`). A different request reusing a key whose request
+already succeeded is therefore a new selection, not `conflict(idempotency_key)` (residual).
+(3) The request field is `path`, so its `SafeDetail` is the existing `PATH`; there is no
+`WORKSPACE_PATH`. (4) `schedule_changes.list` between P6 publications is the delta of section
+11.4 (S7-4b) and answers `unsupported(source_format)` until then; a P6 origin of
+`schedule_scenarios.create` likewise (section 11.5, S7-4b). (5) `series_auto` for P6 keeps the
+S7-3 rule (its own intake Series, decision `needs_series`): extending the ADR-017 hook to
+`schedule_p6_activities` is not a cheap correct extension in this slice.
+(6) The S5 reads serve stored P6 publications under the Schedule switch alone (such data exists
+only if the P6 switch was on at import); the seven P6 names need the P6 switch (10.2). (7) Read
+shapes (10.5) carry these additive fields: calendar `exception_count` and
+`exceptions_truncated`; field value `publication_id`, `ordinal` and `code_path`; the `p6`
+block `source_format`, `capture_event_id`, `encoding` and `catalogue_version`. The default
+page size of the P6 reads is 25. (8) Residuals: the import budget and storage quota are
+checked then inserted without a lock, so concurrent imports of one Principal can overshoot by
+about the number in flight (single operator Principal: accepted); an import-only remote grant
+can tell whether a workspace path exists (`not_found` against `conflict(expected_version)`),
+inherent to the snapshot design (9.1.1 option A). (9) A P6 scenario origin and a P6 delta are
+untested at the plane level until S7-4b adds the scenario plane tests.
 
 ---
 

@@ -39,6 +39,7 @@ __all__ = [
     "P6ActivityIdentity",
     "P6ActivityMatching",
     "P6Admission",
+    "P6AdmissionLimits",
     "P6AdmissionOutcome",
     "P6AdmissionRefusal",
     "P6AdmissionRejectedError",
@@ -115,6 +116,10 @@ class P6AdmissionRefusal(StrEnum):
     SUPERSEDED_PUBLICATION_NOT_FOUND = "superseded_publication_not_found"
     SUPERSEDED_PUBLICATION_NOT_TERMINAL = "superseded_publication_not_terminal"
     SUPERSEDED_PUBLICATION_HAS_SUCCESSOR = "superseded_publication_has_successor"
+    #: S7-4a (section 7.7): the new snapshot would pass the Principal's quota.
+    STORAGE_QUOTA = "storage_quota"
+    #: S7-4a (section 7.7): the Principal's hourly or daily import budget is spent.
+    IMPORT_RATE = "import_rate"
 
 
 class P6AdmissionRejectedError(Exception):
@@ -131,6 +136,28 @@ class P6AdmissionOutcome(StrEnum):
     CREATED = "created"
     REPLAYED = "replayed"
     ALREADY_PRESENT = "already_present"
+
+
+@dataclass(frozen=True, slots=True)
+class P6AdmissionLimits:
+    """Section 7.7 (S7-4a): the snapshot quota and the import budgets of one Principal.
+
+    Checked inside the admission transaction after the key replay and content
+    idempotency (which write nothing and so spend nothing): a new snapshot
+    must fit `snapshot_quota_bytes` beside the Principal's retained snapshots
+    (bytes already held are never counted twice), and fewer than
+    `imports_per_hour` / `imports_per_day` P6 publications may have been
+    admitted in the trailing hour / day.
+    """
+
+    snapshot_quota_bytes: int
+    imports_per_hour: int
+    imports_per_day: int
+
+    def __post_init__(self) -> None:
+        for value in (self.snapshot_quota_bytes, self.imports_per_hour, self.imports_per_day):
+            if type(value) is not int or value < 1:
+                raise ValueError("an admission limit is a positive integer")
 
 
 @dataclass(frozen=True, slots=True)

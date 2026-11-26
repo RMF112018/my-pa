@@ -238,7 +238,8 @@ def test_v10_never_desires_a_withheld_lineage_name_in_any_composition() -> None:
     # Schedule Scenarios S6-3 (chatllm-data-v13): `schedule_scenarios`, 512 -> 1,024.
     # Files workspace WP5 (chatllm-data-v14): `files_workspace`, 1,024 -> 2,048.
     # Communications WP4-S5 (chatllm-data-v17): `communications`, 2,048 -> 4,096.
-    assert len(compositions) == 4096
+    # P6 XER import S7-4a: the 13th plane flag (`schedule_p6`) doubles the space.
+    assert len(compositions) == 8192
     for planes in compositions:
         for knowledge_manager in (False, True):
             assert not _desired(planes, knowledge_manager=knowledge_manager) & WITHHELD, planes

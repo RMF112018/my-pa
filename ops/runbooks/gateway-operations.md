@@ -48,8 +48,8 @@ request does too, because `1a4c9e77b2d5` creates the capture tables and widens
 `apps/gateway.py` routes every public capability (the count is generated into
 [`docs/generated/repository-state.md`](../../docs/generated/repository-state.md)) over HTTP on
 loopback. Every one has an application handler. A default process serves
-one hundred and twenty-seven: one hundred and seventy-seven handler-implemented capabilities are composition-withheld, and none
-is structurally unwired, so 177 of 304 total capabilities are unavailable or unwired.
+one hundred and twenty-seven: one hundred and eighty-four handler-implemented capabilities are composition-withheld, and none
+is structurally unwired, so 184 of 311 total capabilities are unavailable or unwired.
 One request is one call to `ApplicationService.invoke`, and the response body is
 the envelope that call produced — the transport maps and does not decide.
 
@@ -107,7 +107,7 @@ the 7 S4 reads), and `issues.close`, `issues.reopen`, the 3 `confirm` names and 
 production environment block, switch matrix, grant and companion tables, read-only recon
 and residual risks are in
 [`remote-mcp-cloudflare.md`, "Record lineage client exposure (P1)"](remote-mcp-cloudflare.md#record-lineage-client-exposure-p1).
-The current profile is `chatllm-data-v17` (communications intelligence WP4-S5: v16 plus the 3 `communications.*` reads, `DATA_CONDITIONAL` on `MY_PA_COMMUNICATIONS_ENABLED`, their grants to the operator profile only, purpose `communications_read`; v17 with that switch off desires exactly the v16 set; v16, WP3b-S4: v15 plus `meetings.provider.review` and `meetings.provider.reconcile`, both `DATA_REQUIRED` on the core plane, the profile to activate at the consolidated goal deploy instead of v15 (Manager ruling D13), their grants to the operator profile only (R-OP-2); v15, WP2-W3: v14 plus `meetings.provider.bind`, `DATA_REQUIRED` on the core plane; v14, files workspace WP5: the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set). `chatllm-data-v13` (Schedule Scenarios S6-3) adds the 22 client-usable Schedule
+The current profile is `chatllm-data-v19` (P6 XER import S7-4a: v17 plus the 7 P6 names, `schedule_publications.import_p6` and `schedule_p6_fields.set_captured` as write grants and the 5 `schedule_p6_*` reads, all `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_P6_ENABLED` over `MY_PA_SCHEDULE_ENABLED`; v19 with that switch off desires exactly the v17 set; `chatllm-data-v18` is held for communications WP4P S4; v17, communications intelligence WP4-S5: v16 plus the 3 `communications.*` reads, `DATA_CONDITIONAL` on `MY_PA_COMMUNICATIONS_ENABLED`, their grants to the operator profile only, purpose `communications_read`; v17 with that switch off desires exactly the v16 set; v16, WP3b-S4: v15 plus `meetings.provider.review` and `meetings.provider.reconcile`, both `DATA_REQUIRED` on the core plane, the profile to activate at the consolidated goal deploy instead of v15 (Manager ruling D13), their grants to the operator profile only (R-OP-2); v15, WP2-W3: v14 plus `meetings.provider.bind`, `DATA_REQUIRED` on the core plane; v14, files workspace WP5: the 17 `files.*` names, `DATA_CONDITIONAL` on `MY_PA_FILES_WORKSPACE_ROOT`; v14 with that root unset desires exactly the v13 set). `chatllm-data-v13` (Schedule Scenarios S6-3) adds the 22 client-usable Schedule
 Scenarios names (6 writes under `schedule_analysis_authoring`, 16 reads under
 `schedule_analysis_read`) as `DATA_CONDITIONAL` on `MY_PA_SCHEDULE_ENABLED` and
 `MY_PA_SCHEDULE_SCENARIOS_ENABLED` together, and keeps the 4 operator baseline decisions
@@ -177,7 +177,7 @@ reaches the handler, which refuses with `unsupported` and the transport maps tha
 to **`501`**. This section already discloses the source-root gate below in the
 same detail; it said nothing about these two, which is the omission being
 corrected. `capabilities.get` on such a process reports readiness `degraded` and
-`177 of 304 total capabilities are unavailable or unwired.` rather than `ready`.
+`184 of 311 total capabilities are unavailable or unwired.` rather than `ready`.
 
 **It is bound to `127.0.0.1` and there is no option to bind elsewhere.** That is
 `D-30` and `AGENTS.md` §5: `P00-OD-010` — which authentication mechanism this

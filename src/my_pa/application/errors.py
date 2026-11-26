@@ -901,6 +901,19 @@ class SafeDetail(StrEnum):
     MESSAGE_IDS = "message_ids"
     INCLUDE_TEXT = "include_text"
     SOURCE = "source"
+    #: P6 XER import S7-4a (schedule XER import contract sections 7.7, 10.3 and
+    #: 10.6): a captured-field key outside the 7.7 grammar, not selectable or
+    #: not served to this caller (`field_keys`, `fields`); a filter or sort
+    #: outside the closed 7.7 grammar; the `personal` opt-in; the field-value
+    #: entity kind; and the one calendar whose exceptions a read pages.
+    #: `SEQUENCE` (the compare-and-swap on the capture chain), `STORAGE_QUOTA`,
+    #: `PATH` (the request field `path`, the contract's `WORKSPACE_PATH`) and the
+    #: S7-3 tokens are reused.
+    FIELD_KEY = "field_key"
+    FIELD_FILTER = "field_filter"
+    INCLUDE_PERSONAL = "include_personal"
+    ENTITY_KIND = "entity_kind"
+    CALENDAR_ID = "calendar_id"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

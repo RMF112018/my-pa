@@ -184,6 +184,7 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
+    ImportScheduleP6Publication,
     ImportSchedulePublication,
     ListCaptures,
     ListCommitments,
@@ -221,6 +222,11 @@ from my_pa.application.commands import (
     ListScheduleBaselines,
     ListScheduleChanges,
     ListScheduleCpmRunActivities,
+    ListScheduleP6Activities,
+    ListScheduleP6AvailableFields,
+    ListScheduleP6Calendars,
+    ListScheduleP6FieldValues,
+    ListScheduleP6Relationships,
     ListSchedulePublications,
     ListScheduleScenarioActivities,
     ListScheduleScenarioChanges,
@@ -351,6 +357,7 @@ from my_pa.application.commands import (
     SearchTasks,
     SetGoverningScheduleBaseline,
     SetReportRetention,
+    SetScheduleP6CapturedFields,
     SplitEntity,
     StartGsqsB0,
     StatFile,
@@ -1078,6 +1085,21 @@ def _schedule_activities_request(payload: Mapping[str, Any]) -> dict[str, Any]:
         converted["hierarchy_prefix"] = _strings(
             converted["hierarchy_prefix"], SafeDetail.HIERARCHY_PREFIX
         )
+    return converted
+
+
+def _p6_request(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """P6 XER import S7-4a: arrays become tuples (`field_keys`, `fields`, `filter`).
+
+    Only the container converts; the command checks every item's type and the
+    section 7.7 grammar, so a non-list value reaches it unchanged and is refused
+    there naming its field.
+    """
+    converted = dict(payload)
+    for name in ("field_keys", "fields", "filter"):
+        supplied = converted.get(name)
+        if isinstance(supplied, list):
+            converted[name] = tuple(supplied)
     return converted
 
 
@@ -3289,6 +3311,29 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
             **payload
         ),
         Capability.SCHEDULE_CHANGES_LIST: lambda payload: ListScheduleChanges(**payload),
+        # P6 XER import S7-4a (contract section 10.3): every field as sent, the
+        # arrays as tuples; the commands check the strict inputs.
+        Capability.SCHEDULE_PUBLICATIONS_IMPORT_P6: lambda payload: ImportScheduleP6Publication(
+            **payload
+        ),
+        Capability.SCHEDULE_P6_FIELDS_AVAILABLE: lambda payload: ListScheduleP6AvailableFields(
+            **payload
+        ),
+        Capability.SCHEDULE_P6_FIELDS_SET_CAPTURED: lambda payload: SetScheduleP6CapturedFields(
+            **_p6_request(payload)
+        ),
+        Capability.SCHEDULE_P6_ACTIVITIES_LIST: lambda payload: ListScheduleP6Activities(
+            **_p6_request(payload)
+        ),
+        Capability.SCHEDULE_P6_RELATIONSHIPS_LIST: lambda payload: ListScheduleP6Relationships(
+            **_p6_request(payload)
+        ),
+        Capability.SCHEDULE_P6_CALENDARS_LIST: lambda payload: ListScheduleP6Calendars(
+            **_p6_request(payload)
+        ),
+        Capability.SCHEDULE_P6_FIELD_VALUES_LIST: lambda payload: ListScheduleP6FieldValues(
+            **_p6_request(payload)
+        ),
         # Schedule Scenarios S6-3 (contract section 15.5): every field as sent;
         # the heavy documents stay opaque JSON until the handler.
         Capability.SCHEDULE_SCENARIOS_CREATE: lambda payload: CreateScheduleScenario(**payload),

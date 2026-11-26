@@ -286,6 +286,8 @@ def test_profile_apply_installs_the_create_grant_with_its_purpose(
         # Communications intelligence WP4-S5 (chatllm-data-v17): the read switch
         # off, its default.
         communications_enabled=False,
+        # P6 XER import S7-4a (chatllm-data-v19): the P6 switch off, its default.
+        schedule_p6_enabled=False,
         knowledge_discovery_oauth_client_id_set=frozenset,
         knowledge_operator_review_oauth_client_id_set=frozenset,
         chatllm_gateway_oauth_client_id_set=frozenset,

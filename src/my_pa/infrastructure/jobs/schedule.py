@@ -45,6 +45,13 @@ fails the publication with `processing_budget_exceeded`. The parse wall is
 (`apps/worker.py`) exceeds the budget by 60 s, so a provider call that returns
 after the lease expired is caught by the next `hold_lease`.
 
+**P6 XER (S7-3)**, schedule XER import contract sections 9.3 and 10.2: the
+handler first reads the publication's `source_format` and dispatches a `p6_*`
+publication to `schedule_p6.process_p6_publication` (same lease, budget,
+failure classes and hook). With the P6 switch off (`p6_enabled`, the
+worker's `MY_PA_SCHEDULE_ENABLED` and `MY_PA_SCHEDULE_P6_ENABLED`) such a job
+fails closed as a transient `unavailable` before any write or parse.
+
 The module never imports PDFium or the parser package, and it neither logs nor
 prints: every outcome is a stored state or an error code.
 """
@@ -98,7 +105,10 @@ from my_pa.infrastructure.jobs.schedule_parser_process import (
 )
 from my_pa.infrastructure.jobs.worker import JobExecutionError, LeaseLostError
 from my_pa.infrastructure.persistence.jobs import LeasedJob
-from my_pa.infrastructure.persistence.schedule import SqlAlchemyScheduleUnitOfWork
+from my_pa.infrastructure.persistence.schedule import (
+    SqlAlchemyScheduleUnitOfWork,
+    SqlScheduleRepository,
+)
 from my_pa.infrastructure.persistence.schedule_scenarios import SqlAlchemyScenarioUnitOfWork
 from my_pa.infrastructure.providers.registered import RegisteredSourceProviders
 
@@ -125,6 +135,9 @@ SCHEDULE_MIN_LEASE_SECONDS: Final = 300
 #: are read.
 _READ_PHASE_ISOLATION: Final = "AUTOCOMMIT"
 _PDF_MAGIC: Final = b"%PDF-"
+#: Section 8.2 `source_format` values the handler dispatches on.
+_PDF_FORMAT: Final = "pdf"
+_P6_XER_FORMAT: Final = "p6_xer"
 
 #: The clock the budget reads; a module seam so tests can drive it.
 _clock: Callable[[], float] = time.monotonic
@@ -201,6 +214,25 @@ class _Job:
     def spent(self, label: str) -> bool:
         return _checkpoint(self.budget, label)
 
+    def parse_wall(self) -> float | None:
+        """The parse wall for the time left, or `None` below the 15 s floor (contract 3.3)."""
+        wall = min(
+            SCHEDULE_PARSE_MAX_WALL_SECONDS,
+            self.budget.remaining() - SCHEDULE_PARSE_RESERVE_SECONDS,
+        )
+        return None if wall < SCHEDULE_PARSE_MIN_WALL_SECONDS else wall
+
+    def source_format(self) -> str:
+        """The publication's `source_format`, read under the Principal (the dispatch)."""
+        with SqlAlchemyScheduleUnitOfWork(self.engine) as uow:
+            schedules = uow.schedules
+            if not isinstance(schedules, SqlScheduleRepository):  # pragma: no cover
+                raise ScheduleIntegrityError("schedule_repository")
+            found = schedules.source_format(self.principal, self.publication_id)
+        if found is None:
+            raise ScheduleIntegrityError("publication_not_found")
+        return found
+
     def fail(self, code: ScheduleIssueCode) -> None:
         """HF: one error issue, the publication `failed`, the running run with it."""
         run_id = self.running_run_id
@@ -212,16 +244,32 @@ class _Job:
 
 
 def process_schedule_publication(
-    engine: Engine, job: LeasedJob, owner: str, *, scenario_plane_effective: bool = False
+    engine: Engine,
+    job: LeasedJob,
+    owner: str,
+    *,
+    scenario_plane_effective: bool = False,
+    p6_enabled: bool = False,
 ) -> None:
     """Drive one schedule publication through R2 section 24 (contract 3.3).
 
     `scenario_plane_effective` is the series-match hook's effective-plane bit
     (schedule scenarios contract section 14.8.7, S6-2-D12); it defaults off.
+    `p6_enabled` is the P6 switch (schedule XER import contract 10.2); it
+    defaults off, and a `p6_*` publication's job then fails closed transient.
     """
     attempt = _Job(engine, job, owner, plane_effective=scenario_plane_effective)
     try:
-        _process(attempt)
+        source_format = attempt.source_format()
+        if source_format == _PDF_FORMAT:
+            _process(attempt)
+        elif not p6_enabled or source_format != _P6_XER_FORMAT:
+            # Section 10.2: off, nothing is written and nothing parses.
+            raise JobExecutionError(ErrorCode.UNAVAILABLE)
+        else:
+            from my_pa.infrastructure.jobs.schedule_p6 import process_p6_publication
+
+            process_p6_publication(attempt, parse_wall=attempt.parse_wall)
     except ScheduleLeaseLostError:
         raise LeaseLostError(job.operation_id) from None
     except ScheduleIntegrityError:

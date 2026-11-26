@@ -3,9 +3,10 @@
 - **Status:** Proposed — operator decisions of 2026-11-23 (below). Slice S7-0 (the scenario
   engine amendment, no migration) is merged (#384); slice S7-1 (the pure XER parser, catalogue,
   canonical frame and conformance script, no migration) is merged (#386); slice S7-2 (the one
-  migration `d8383150cf72` and its table declarations) is implemented on
-  `feat/schedule-xer-storage`, not merged; nothing else is implemented, and nothing is migrated
-  on any shared database, granted, switched on or deployed. Every other slice (S7-3 to S7-6),
+  migration `d8383150cf72` and its table declarations) is merged (#387); slice S7-3 (the
+  admission service and the worker's P6 path, no migration, no capability) is implemented on
+  `feat/schedule-xer-worker`, not merged; nothing else is implemented, and nothing is migrated
+  on any shared database, granted, switched on or deployed. Every other slice (S7-4 to S7-6),
   gate G-1 and every other operator gate in the contract stays open. The operator answered the contract's open
   questions on 2026-11-23 (recorded below and in contract section 17); only S7-6 stays
   undecided.
@@ -206,12 +207,19 @@ mapping and issue model of profile `p6_xer_v1`, the section 5.4 caps, and the ca
 `cpm-workbench-p6-frame-v1`), the synthetic fixture generator
 `tests/fixtures/schedule_p6_xer.py` with pinned golden frame digests, and the read-only
 stats-only conformance script `ops/schedule/p6_export_profile.py` (contract section 12).
-S7-2 implemented on `feat/schedule-xer-storage` (not merged; no capability, no repository, no
+S7-2 merged (#387; no capability, no repository, no
 worker): the one additive revision `d8383150cf72` of contract section 8.3 (the snapshot and
 capture-event tables, the seven per-run P6 tables, the additive `schedule_publications`,
 `schedule_parser_runs` and `schedule_import_issues` columns and CHECKs, the guards, F3/F6/F9
 restated for P6 rows with every PDF path unchanged, and the S7-4 audit names admitted ahead of
 the domain), its `tables.py` declarations and the identifier kinds `sp6n` and `sp6e`.
-Gate G-1 (the script on the operator's sample) is not run. S7-3 to S7-5 (and the optional
+S7-3 implemented on `feat/schedule-xer-worker` (not merged; no migration, no capability, no MCP
+tool): the admission service `ScheduleP6Application.import_p6` (switch, strict inputs, the
+files-workspace contained read with version, size, SHA-256 and fingerprint re-check, the byte
+sniff, replay, Series resolution, PDF-Series refusal, content idempotency, the snapshot once per
+Principal), the switch `MY_PA_SCHEDULE_P6_ENABLED`, and the `schedule` worker's P6 path H1-H8 in
+the existing contained child (the parent never imports the parser; the frame is decoded by the
+catalogue, re-rendered and bound to the bytes).
+Gate G-1 (the script on the operator's sample) is not run. S7-4 and S7-5 (and the optional
 S7-6) are not implemented; the contract defines their acceptance tests, the prove-red plan and
 the operator gates.

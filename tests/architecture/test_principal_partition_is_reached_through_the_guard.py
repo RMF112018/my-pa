@@ -232,6 +232,14 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # exact pair the request names. No raw SQL and no hand-written partition
         # comparison.
         "infrastructure/persistence/schedule.py",
+        # P6 XER S7-3 (schedule XER import contract sections 9.1 and 9.3): the
+        # S5 repository's subclass. Every SELECT/UPDATE composes the S5 `_mine`
+        # over `partition_criterion`, every INSERT (the `ON CONFLICT` snapshot
+        # and Stable Activity inserts included) the S5 `_bound` over
+        # `principal_bound_values`, and every join of two partitioned tables
+        # (publication/snapshot, publication/project, publication/activity)
+        # composes `matching_partition_criterion`. No raw SQL.
+        "infrastructure/persistence/schedule_p6.py",
         # Schedule Scenarios S6-2 (contract section 14.8): the plane repository.
         # Every SELECT/UPDATE scopes each plane and S5 table through `_mine` over
         # `partition_criterion`, every INSERT is stamped through `_bound` over
@@ -649,6 +657,13 @@ PER_MODULE_ONLY: Final = {
         "`principal_bound_values`, the canonicalization link joins its two "
         "partitioned tables with `matching_partition_criterion`; not yet in a "
         "dedicated statement-level scanner."
+    ),
+    "infrastructure/persistence/schedule_p6.py": (
+        "P6 XER S7-3: every SELECT/UPDATE composes the S5 `_mine` over "
+        "`partition_criterion`, every INSERT the S5 `_bound` over "
+        "`principal_bound_values`, every join of two partitioned tables "
+        "`matching_partition_criterion`; not yet in a dedicated statement-level "
+        "scanner."
     ),
     "infrastructure/persistence/schedule_scenarios.py": (
         "Schedule Scenarios S6-2: every SELECT/UPDATE composes `_mine` over "

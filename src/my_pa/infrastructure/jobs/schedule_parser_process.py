@@ -18,6 +18,14 @@ binding, not the truth of its rows (residual U2-10).
 
 This module never imports PDFium or the parser package: the parent process
 stays free of PDFium state (S5a U-12 resolved by construction).
+
+**P6 XER (S7-3)**, schedule XER import contract sections 9.3 H4 and 13.2:
+`run_isolated_p6_parse` runs the same child in its `p6_xer` mode with the
+capture selection. The exit classification is shared; the frame is decoded by
+`my_pa.domain.schedule.p6_frame_codec` (catalogue-typed, never the parser),
+re-rendered canonically and compared byte for byte with what the child wrote,
+and bound to the bytes sent by their SHA-256 and size: a frame forged for
+other bytes, or not canonical, is refused (transient, as the PDF frame).
 """
 
 from __future__ import annotations
@@ -46,6 +54,9 @@ from my_pa.domain.schedule import (
     ScheduleParseResult,
     parse_result_from_object,
 )
+from my_pa.domain.schedule.p6.frame import frame_object, frame_sha256
+from my_pa.domain.schedule.p6.model import P6ParseResult
+from my_pa.domain.schedule.p6_frame_codec import P6FrameDecodeError, decode_p6_frame
 from my_pa.infrastructure.jobs.schedule_parser_child import (
     EXIT_CONTAINMENT,
     EXIT_INPUT,
@@ -54,6 +65,8 @@ from my_pa.infrastructure.jobs.schedule_parser_child import (
     FRAME_MAGIC,
     FRAME_SCHEMA,
     MAX_CHILD_OUTPUT_BYTES,
+    P6_FRAME_MAGIC,
+    P6_MODE,
     PRODUCTION_CHILD_LIMITS,
     ChildLimits,
 )
@@ -74,10 +87,14 @@ __all__ = [
     "ChildExchange",
     "ChildLimits",
     "DeterministicFailure",
+    "IsolatedP6Parse",
     "IsolatedParse",
+    "ParsedP6Result",
     "ParsedResult",
     "TransientFailure",
     "classify_exchange",
+    "classify_p6_exchange",
+    "run_isolated_p6_parse",
     "run_isolated_parse",
 ]
 
@@ -140,6 +157,21 @@ class TransientFailure:
 
 
 type IsolatedParse = ParsedResult | DeterministicFailure | TransientFailure
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedP6Result:
+    """S7-3: the child returned a P6 parse (of any outcome) for exactly the bytes sent.
+
+    `frame_sha256` is the domain-separated digest of the canonical frame
+    (`frame_sha256`), the run's `parse_result_sha256`.
+    """
+
+    result: P6ParseResult
+    frame_sha256: str
+
+
+type IsolatedP6Parse = ParsedP6Result | DeterministicFailure | TransientFailure
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,8 +371,8 @@ def _page_dimensions(value: object) -> dict[int, tuple[int, int]] | None:
     return pages
 
 
-def classify_exchange(exchange: ChildExchange, data: bytes) -> IsolatedParse:
-    """Contract 3.4.6: every child outcome to parsed, deterministic or transient."""
+def _classify_exit(exchange: ChildExchange) -> DeterministicFailure | TransientFailure | None:
+    """Contract 3.4.6 for everything but a clean exit (`None`: decode the frame)."""
     transient = TransientFailure(ErrorCode.INTERNAL_ERROR)
     if exchange.overflowed:
         return DeterministicFailure(ScheduleIssueCode.BOUNDS_EXCEEDED)
@@ -366,8 +398,67 @@ def classify_exchange(exchange: ChildExchange, data: bytes) -> IsolatedParse:
         # EXIT_USAGE (a parent programming error), EXIT_CONTAINMENT (the Linux
         # memory cap could not be set) and any other exit code.
         return transient
+    return None
+
+
+def classify_exchange(exchange: ChildExchange, data: bytes) -> IsolatedParse:
+    """Contract 3.4.6: every child outcome to parsed, deterministic or transient."""
+    failure = _classify_exit(exchange)
+    if failure is not None:
+        return failure
     result = _decode_frame(exchange.output, data)
-    return transient if result is None else ParsedResult(result)
+    return TransientFailure(ErrorCode.INTERNAL_ERROR) if result is None else ParsedResult(result)
+
+
+def _canonical(value: object) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
+    ).encode("ascii")
+
+
+_P6_ENVELOPE_KEYS: Final = frozenset({"document_sha256", "document_size_bytes", "frame"})
+
+
+def _decode_p6_frame(output: bytes, data: bytes) -> ParsedP6Result | None:
+    """S7-3: the P6 frame's result, canonical and bound to `data`, or `None`.
+
+    The frame is decoded by the catalogue alone, rendered again and compared
+    byte for byte with the child's output, so a non-canonical or lossy frame
+    is refused as well as one naming other bytes.
+    """
+    if not output.startswith(P6_FRAME_MAGIC):
+        return None
+    try:
+        envelope = json.loads(output[len(P6_FRAME_MAGIC) :], parse_constant=_refuse_constant)
+        if not isinstance(envelope, dict) or set(envelope) != _P6_ENVELOPE_KEYS:
+            return None
+        if (envelope["document_sha256"], envelope["document_size_bytes"]) != (
+            hashlib.sha256(data).hexdigest(),
+            len(data),
+        ) or type(envelope["document_size_bytes"]) is not int:
+            return None
+        result = decode_p6_frame(envelope["frame"])
+        rendered = P6_FRAME_MAGIC + _canonical(
+            {
+                "document_sha256": envelope["document_sha256"],
+                "document_size_bytes": envelope["document_size_bytes"],
+                "frame": frame_object(result),
+            }
+        )
+    except (ValueError, TypeError, RecursionError, P6FrameDecodeError):
+        return None
+    if rendered != output:
+        return None
+    return ParsedP6Result(result=result, frame_sha256=frame_sha256(result))
+
+
+def classify_p6_exchange(exchange: ChildExchange, data: bytes) -> IsolatedP6Parse:
+    """S7-3: the shared exit classification, then the P6 frame (contract 3.4.6)."""
+    failure = _classify_exit(exchange)
+    if failure is not None:
+        return failure
+    parsed = _decode_p6_frame(exchange.output, data)
+    return TransientFailure(ErrorCode.INTERNAL_ERROR) if parsed is None else parsed
 
 
 def run_isolated_parse(
@@ -395,3 +486,48 @@ def run_isolated_parse(
     )
     exchange = _exchange(data, argv, wall_seconds=wall_seconds, output_cap=limits.output_bytes)
     return classify_exchange(exchange, data)
+
+
+def _p6_argv(
+    command: Sequence[str],
+    *,
+    capture: Sequence[str] | None,
+    wall_seconds: float,
+    limits: ChildLimits,
+) -> list[str]:
+    return [
+        *command,
+        _source_root(),
+        P6_MODE,
+        "-" if capture is None else _canonical(list(capture)).decode("ascii"),
+        str(round(wall_seconds * 1000)),
+        str(limits.address_space),
+        str(limits.open_files),
+        str(limits.output_bytes),
+    ]
+
+
+def run_isolated_p6_parse(
+    data: bytes,
+    *,
+    capture: Sequence[str] | None,
+    wall_seconds: float,
+    limits: ChildLimits = PRODUCTION_CHILD_LIMITS,
+    command: Sequence[str] = CHILD_COMMAND,
+) -> IsolatedP6Parse:
+    """S7-3: parse XER `data` in the contained child under `capture` (None = defaults).
+
+    The same child, containment, wall and output cap as `run_isolated_parse`;
+    `limits` and `command` are injectable for tests only.
+    """
+    if not isinstance(data, bytes):
+        raise TypeError("an isolated parse takes the admitted bytes")
+    if not isinstance(limits, ChildLimits):
+        raise TypeError("an isolated parse takes ChildLimits")
+    if not MIN_TEST_WALL_SECONDS <= wall_seconds <= _MAX_WALL_SECONDS:
+        raise ValueError("an isolated parse wall is 1 to 150 seconds")
+    if capture is not None and not all(isinstance(key, str) for key in capture):
+        raise TypeError("a capture selection is a sequence of field keys")
+    argv = _p6_argv(command, capture=capture, wall_seconds=wall_seconds, limits=limits)
+    exchange = _exchange(data, argv, wall_seconds=wall_seconds, output_cap=limits.output_bytes)
+    return classify_p6_exchange(exchange, data)

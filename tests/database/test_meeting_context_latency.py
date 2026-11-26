@@ -16,7 +16,8 @@ WP5-S4 adds the `pulse` shape: the synthetic project-report world
 Principal, and 10 more Meetings of the same shape spread over its 3 available
 Projects (each given a Project number that occurs in the corpus, since a number
 is unique per Principal), read at the defaults with
-`MY_PA_PROJECT_REPORTS_ENABLED` on.
+`MY_PA_PROJECT_REPORTS_ENABLED` on, as a batch of 10 and of 1 (WP5-S6: every
+shape is measured with PULSE off and on).
 
 The p50 and p95 over `RUNS` runs are recorded (`record_property`, printed under
 `-s`). The assertion is the loose test ceiling of ruling D15 (3 s at p95); the
@@ -154,6 +155,7 @@ def test_the_context_latency_on_the_wp4_seed(
             project_reports_enabled=True,
         )
         pulse_request = MeetingContextRequest(meeting_ids=linked)
+        pulse_one = MeetingContextRequest(meeting_ids=linked[:1])
         pulsed = pulse_service.read(principal_id, pulse_request)
         assert {context.pulse.state for context in pulsed.meetings} == {PulseState.AVAILABLE}
         assert any(context.pulse.rfis for context in pulsed.meetings)
@@ -162,6 +164,7 @@ def test_the_context_latency_on_the_wp4_seed(
             "context_10_defaults": read(10),
             "context_1_maximum": read(1, lookback_days=90, per_meeting_limit=50),
             "context_10_maximum": read(10, lookback_days=90, per_meeting_limit=50),
+            "context_1_defaults_pulse": lambda: pulse_service.read(principal_id, pulse_one),
             "context_10_defaults_pulse_3_projects": lambda: pulse_service.read(
                 principal_id, pulse_request
             ),

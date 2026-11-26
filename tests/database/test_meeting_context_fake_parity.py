@@ -2,7 +2,7 @@
 
 `tests/unit/test_meeting_context_assembly.py` runs `MeetingContextReads` over
 the conftest Meeting fake (`read_context_inputs`) and `FakeCommunications`
-(`context_self_addresses`, `non_ascii_participant_addresses`,
+(`context_self_addresses`, `bridge_participant_addresses`,
 `list_message_identifiers`; the candidate statement is canned there). Here the
 same inputs go to both and the answers are compared:
 
@@ -102,7 +102,12 @@ def test_the_communications_context_reads_answer_alike(
             subject="Plain",
             text="x",
             when=at(17, 12),
-            participants=(("from", "ꭰꭱ@example.test"), ("cc", "οδος@example.test")),
+            participants=(
+                ("from", "ꭰꭱ@example.test"),
+                ("cc", "οδος@example.test"),
+                # Needs no bridge (its casefold is itself): read by neither (F-4).
+                ("cc", "café@example.test"),
+            ),
         ),
         mail.message(
             4,
@@ -127,8 +132,8 @@ def test_the_communications_context_reads_answer_alike(
             assert fake.context_self_addresses(principal, limit=limit) == (
                 sql.context_self_addresses(principal, limit=limit)
             )
-            assert fake.non_ascii_participant_addresses(principal, limit=limit) == (
-                sql.non_ascii_participant_addresses(principal, limit=limit)
+            assert fake.bridge_participant_addresses(principal, limit=limit) == (
+                sql.bridge_participant_addresses(principal, limit=limit)
             )
         # Ruling B-3: a verified sent lane exists, so only its sender is the owner.
         owner = sql.context_self_addresses(principal, limit=20)
@@ -136,6 +141,11 @@ def test_the_communications_context_reads_answer_alike(
             ("owner.b@example.test",),
             1,
             True,
+        )
+        assert sql.bridge_participant_addresses(principal, limit=20) == (
+            "straße@example.test",
+            "οδος@example.test",
+            "ꭰꭱ@example.test",
         )
         for kind in ("rfi", "co", "gmp"):
             assert dict(

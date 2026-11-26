@@ -8,6 +8,7 @@ not, and the match key bridges all fifteen. Every address is synthetic.
 
 from __future__ import annotations
 
+import re
 from typing import Final
 
 import pytest
@@ -16,7 +17,10 @@ from my_pa.domain.communications.addresses import (
     ADDRESS_RULE,
     address_match_key,
     bridge_addresses,
+    bridge_characters,
+    bridge_pattern,
     is_ascii_address,
+    needs_bridge,
 )
 from my_pa.domain.meeting.model import normalize_attendee_email
 
@@ -114,3 +118,26 @@ def test_the_bridge_is_sorted_and_deterministic() -> None:
     assert first == bridge_addresses(list(reversed(stored)), {key})
     assert len(first[key]) == 2
     assert list(first[key]) == sorted(first[key])
+
+
+def test_only_an_address_whose_casefold_differs_needs_a_bridge() -> None:
+    """WP5-R1 F-4: the bridge statement reads only these; the cap binds only on them."""
+    for raw in DIFFERENT.values():
+        assert needs_bridge(_communications_form(raw)), raw
+    for raw in EQUAL.values():
+        assert not needs_bridge(_communications_form(raw)), raw
+    assert not needs_bridge("café@example.test")
+    assert not needs_bridge("οδοσ@example.test")  # a medial sigma
+    assert {chr(c) for c in (0xDF, 0x3C2, 0xFB01, 0xAB70, 0x17F)} <= bridge_characters()
+    assert not {chr(c) for c in (0xE9, 0x3C3, 0x61, 0x40)} & bridge_characters()
+
+
+def test_the_bridge_pattern_is_the_bridge_characters_as_ranges() -> None:
+    pattern = bridge_pattern()
+    assert pattern.startswith("[") and pattern.endswith("]")
+    covered: set[int] = set()
+    for match in re.finditer(r"\\U([0-9a-f]{8})(?:-\\U([0-9a-f]{8}))?", pattern):
+        low = int(match.group(1), 16)
+        high = int(match.group(2) or match.group(1), 16)
+        covered.update(range(low, high + 1))
+    assert covered == {ord(character) for character in bridge_characters()}

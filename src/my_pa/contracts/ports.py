@@ -15380,8 +15380,13 @@ class CommunicationsRepository(ABC):
         """The owner's addresses under `self_from_sent_lane_v2`, at most `limit` (one statement)."""
 
     @abstractmethod
-    def non_ascii_participant_addresses(self, principal_id: str, *, limit: int) -> tuple[str, ...]:
-        """The distinct non-ASCII participant addresses, sorted, at most `limit` (the C9 bridge)."""
+    def bridge_participant_addresses(self, principal_id: str, *, limit: int) -> tuple[str, ...]:
+        """The distinct participant addresses that need a bridge, sorted, at most `limit`.
+
+        The C9 bridge (ruling D11; WP5-R1 F-4): only an address holding one of
+        `bridge_characters()` (its casefold differs from it), sorted by code
+        point.
+        """
 
     @abstractmethod
     def context_candidates(

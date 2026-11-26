@@ -45,6 +45,7 @@ from sqlalchemy.engine import Connection
 
 from my_pa.application.commands import Command, CreateMeeting
 from my_pa.application.meeting_context import (
+    MAX_BRIDGE_ADDRESSES,
     MeetingContext,
     MeetingContextAnswer,
     MeetingContextReads,
@@ -52,6 +53,7 @@ from my_pa.application.meeting_context import (
     context_payload,
 )
 from my_pa.contracts.ports import MeetingContextCandidateInput, MeetingContextCandidateQuery
+from my_pa.domain.communications.addresses import bridge_characters, bridge_pattern
 from my_pa.domain.communications.identifiers import IDENTIFIER_VERSION
 from my_pa.infrastructure.persistence.communications import SqlCommunicationsRepository
 from my_pa.infrastructure.persistence.tables import projects
@@ -365,10 +367,81 @@ def test_the_bridge_matches_a_lower_spelling_to_its_casefold_key(scene: Scene, r
         context.attendees[0].attendee_id,
     )
     with scene.engine.connect() as connection:
-        bridged = SqlCommunicationsRepository(connection).non_ascii_participant_addresses(
+        bridged = SqlCommunicationsRepository(connection).bridge_participant_addresses(
             scene.principal_id, limit=1000
         )
     assert bridged == (stored,)
+
+
+def test_the_bridge_pattern_matches_exactly_the_bridge_characters(scene: Scene) -> None:
+    """WP5-R1 F-4: PostgreSQL's reading of the class is Python's set (C and en_US alike)."""
+    wanted = bridge_characters()
+    probes = sorted(wanted | {chr(point) for point in range(0x80, 0x3000)})
+    probes += ["a", "z", "@", ".", "0", "\U0001f600", "\U00010400", "\U00010428"]
+    with scene.engine.connect() as connection:
+        matched = connection.execute(
+            text("SELECT c FROM unnest(CAST(:probes AS text[])) AS c WHERE c ~ :pattern"),
+            {"probes": probes, "pattern": bridge_pattern()},
+        ).scalars()
+        assert set(matched) == {c for c in probes if c in wanted}
+
+
+def test_the_bridge_reads_only_addresses_that_need_it_and_states_its_cap(scene: Scene) -> None:
+    """At the cap the bridge is complete; one more is `bridge_truncated` on every Meeting."""
+    sharp = tuple(
+        ("to", f"stra\u00dfe{n:04d}.cap@example.test") for n in range(MAX_BRIDGE_ADDRESSES)
+    )
+    scene.mail.message(
+        1, subject="Cap", text="x", when=at(17, 10), participants=(("from", A), *sharp)
+    )
+    # Non-ASCII addresses whose casefold is themselves are never read by the bridge.
+    scene.mail.message(
+        2,
+        subject="Accents",
+        text="x",
+        when=at(17, 11),
+        participants=tuple(
+            ("from" if n == 0 else "to", f"caf\u00e9{n}.cap@example.test") for n in range(30)
+        ),
+    )
+    meetings = [scene.meeting("cap-a", emails=(A,)), scene.meeting("cap-b", emails=(B,))]
+    with scene.engine.connect() as connection:
+        repository = SqlCommunicationsRepository(connection)
+        found = repository.bridge_participant_addresses(
+            scene.principal_id, limit=MAX_BRIDGE_ADDRESSES + 1
+        )
+    assert len(found) == MAX_BRIDGE_ADDRESSES and all("caf" not in a for a in found)
+    answer = scene.read(meetings)
+    assert [c.communications.inputs.bridge_truncated for c in answer.meetings] == [False, False]
+    # The last spelling in code-point order is bridged while the bridge is complete.
+    last = sharp[-1][1]
+    late = scene.mail.message(
+        3, subject="Late", text="x", when=at(17, 12), participants=(("from", last),)
+    )
+    (context,) = scene.read([scene.meeting("cap-late", emails=(last,))]).meetings
+    assert late in _ids(context) and not context.communications.inputs.bridge_truncated
+    scene.mail.message(
+        4,
+        subject="Over",
+        text="x",
+        when=at(17, 13),
+        participants=(("from", "\u00dfover.cap@example.test"),),
+    )
+    with scene.engine.connect() as connection:
+        repository = SqlCommunicationsRepository(connection)
+        for limit in (MAX_BRIDGE_ADDRESSES, MAX_BRIDGE_ADDRESSES + 1):
+            assert len(
+                repository.bridge_participant_addresses(scene.principal_id, limit=limit)
+            ) == (limit)
+    over = scene.meeting("cap-over", emails=("\u00dfover.cap@example.test",))
+    answer = scene.read([*meetings, over])
+    assert [c.communications.inputs.bridge_truncated for c in answer.meetings] == [True] * 3
+    # The spelling past the cap is the one the bridge does not read: stated, not silent.
+    assert _ids(answer.meetings[2]) == []
+    payload = context_payload(answer)
+    entries = payload["meetings"]
+    assert isinstance(entries, list)
+    assert entries[0]["communications"]["inputs"]["bridge_truncated"] is True
 
 
 # ---- identifiers, the Project number, title terms ----------------------------------

@@ -21,9 +21,10 @@ nothing is asked or nothing is returned.
   when there is none, with an `unverified_lane_claim` one -- then
   `self_addresses.state` is `derived_unverified` and every Meeting says
   `self_unverified`; at most `MAX_SELF_ADDRESSES`); each key matched under
-  its own spelling and under every stored non-ASCII spelling whose casefold it
-  is (ruling D11, the bridge, at most `MAX_BRIDGE_ADDRESSES` addresses per
-  batch);
+  its own spelling and under every stored spelling whose casefold it is and
+  differs from it (ruling D11, the bridge: at most `MAX_BRIDGE_ADDRESSES` such
+  addresses of the partition, in code-point order; past the cap every
+  Meeting's `inputs.bridge_truncated` is true, WP5-R1 F-4);
 * identifiers: the title, prep, notes and description, each scanned to 20,000
   characters, `gmp`/`fpl` excluded, at most 20 (rulings D4, D14);
 * the Project number as one exact `simple` term (ruling D6);
@@ -128,7 +129,7 @@ MEETINGS_CONTEXT_READ: Final = "meetings.context.read"
 #: sent lanes first, at most this many.
 SELF_ADDRESS_RULE: Final = "self_from_sent_lane_v2"
 MAX_SELF_ADDRESSES: Final = 20
-#: Ruling D11: the bridge reads at most this many non-ASCII stored addresses per batch.
+#: Ruling D11: the bridge reads at most this many stored addresses that need it.
 MAX_BRIDGE_ADDRESSES: Final = 1000
 #: What the identifier inputs cannot recall, stated on every answer (WP4P report 2.12).
 RECALL_NOTES: Final = ("rfi_prefixed_number_unrecognized", "identifier_recall_bounded_by_extractor")
@@ -249,6 +250,8 @@ class ContextInputs:
     self_attendees: int
     identifiers: tuple[ContextIdentifierInput, ...]
     identifier_scan_truncated: bool
+    #: The bridge statement found more than `MAX_BRIDGE_ADDRESSES` addresses (F-4).
+    bridge_truncated: bool
     title_terms: int
     project_number: ProjectNumberUse
 
@@ -350,6 +353,7 @@ def _plan(
     now: datetime,
     self_keys: frozenset[str],
     self_state: SelfAddressState,
+    bridge_truncated: bool,
     identifier_version: str,
 ) -> _Plan:
     attendees = tuple(
@@ -417,6 +421,7 @@ def _plan(
                 for found in selected.identifiers
             ),
             identifier_scan_truncated=selected.scan_truncated,
+            bridge_truncated=bridge_truncated,
             title_terms=len(terms),
             project_number=number_use,
         ),
@@ -525,6 +530,11 @@ class MeetingContextReads:
                 self_state = SelfAddressState.DERIVED
             else:
                 self_state = SelfAddressState.DERIVED_UNVERIFIED
+            # One more than the cap, so that a truncation is stated, never silent.
+            stored = communications.bridge_participant_addresses(
+                principal_id, limit=MAX_BRIDGE_ADDRESSES + 1
+            )
+            bridge_truncated = len(stored) > MAX_BRIDGE_ADDRESSES
             plans = [
                 _plan(
                     meeting,
@@ -532,15 +542,13 @@ class MeetingContextReads:
                     now=now,
                     self_keys=self_keys,
                     self_state=self_state,
+                    bridge_truncated=bridge_truncated,
                     identifier_version=self._identifier_version,
                 )
                 for meeting in found
             ]
             bridged = bridge_addresses(
-                communications.non_ascii_participant_addresses(
-                    principal_id, limit=MAX_BRIDGE_ADDRESSES
-                ),
-                {key for plan in plans for key in plan.keys},
+                stored[:MAX_BRIDGE_ADDRESSES], {key for plan in plans for key in plan.keys}
             )
             asked = [
                 MeetingContextCandidateInput(
@@ -646,6 +654,7 @@ def _communications_payload(section: CommunicationsContext) -> dict[str, object]
                 for found in inputs.identifiers
             ],
             "identifier_scan_truncated": inputs.identifier_scan_truncated,
+            "bridge_truncated": inputs.bridge_truncated,
             "title_terms": inputs.title_terms,
             "project_number": inputs.project_number.value,
         },

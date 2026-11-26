@@ -60,6 +60,7 @@ from my_pa.contracts.ports import (
     RepositoryFailureError,
     UnitOfWork,
 )
+from my_pa.domain.communications.addresses import needs_bridge
 from my_pa.domain.files.errors import FilesRefusal
 from my_pa.domain.files.versions import EntryKind
 from my_pa.domain.files.vocabulary import FilesReason
@@ -750,11 +751,11 @@ class FakeCommunications(CommunicationsRepository):
             addresses=tuple(owners[:limit]), total=len(owners), verified=any_verified
         )
 
-    def non_ascii_participant_addresses(self, principal_id: str, *, limit: int) -> tuple[str, ...]:
+    def bridge_participant_addresses(self, principal_id: str, *, limit: int) -> tuple[str, ...]:
         found = {
             p.address
             for p in self.w.mine(principal_id, self.w.participants)
-            if not p.address.isascii()
+            if needs_bridge(p.address)
         }
         return tuple(sorted(found)[:limit])
 

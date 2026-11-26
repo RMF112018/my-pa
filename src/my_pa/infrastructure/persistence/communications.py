@@ -83,6 +83,7 @@ from my_pa.contracts.ports import (
     MeetingContextCandidateRow,
     RepositoryFailureError,
 )
+from my_pa.domain.communications.addresses import bridge_pattern
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     matching_partition_criterion,
@@ -898,14 +899,14 @@ class SqlCommunicationsRepository(CommunicationsRepository):
             verified=bool(rows[0].any_verified) if rows else False,
         )
 
-    def non_ascii_participant_addresses(self, principal_id: str, *, limit: int) -> tuple[str, ...]:
-        """The C9 bridge statement: a scan of the partition's participants, capped."""
+    def bridge_participant_addresses(self, principal_id: str, *, limit: int) -> tuple[str, ...]:
+        """The C9 bridge statement: the partition's addresses that need a bridge, capped."""
         participants = communication_participants
         rows = self._connection.execute(
             select(participants.c.address)
             .where(
                 _mine(participants, principal_id),
-                participants.c.address.regexp_match(_NON_ASCII_PATTERN),
+                participants.c.address.regexp_match(bridge_pattern()),
             )
             .group_by(participants.c.address)
             .order_by(participants.c.address.collate("C"))
@@ -1273,9 +1274,6 @@ def _snippet(
 
 
 # --- the Meeting context statement (WP5 design sections 3.10 and 3.11; rulings D5, D6, D8)
-
-#: A character outside ASCII (the C9 bridge reads only such addresses).
-_NON_ASCII_PATTERN: Final = "[^\\x01-\\x7f]"
 
 
 def _array(values: Sequence[object], item: Any) -> ColumnElement[Any]:  # noqa: ANN401

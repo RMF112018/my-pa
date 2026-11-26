@@ -360,6 +360,7 @@ Cursors are opaque, grant-bound and keyed on a total order (`publication_date_la
 - **No OAC-to-Meeting matching.** An OAC meeting number is not joined to a my-pa Meeting by date or title (contract section 12.2's principle). A later explicit binding may be designed.
 - **PULSE absent.** When PULSE is off, unbound, never ingested or failing, the section is `pulse: {state: "unavailable", reason}` and communications are unaffected; a WP5 test pins communications-only answers byte-identical with and without the PULSE tables empty.
 - **Identifier vocabulary.** Communications' `rfi:<n>` (contract section 7) and PULSE's `rfi` keys meet only through the section 6.3 matching rule; R5's open WP4 defect (extractor recall) limits WP5's RFI join and is stated in its answers' versions block.
+- **As built (WP5, branch `feat/meeting-context`, not merged).** `meetings.context.read` answers a `pulse` section per Meeting from the batched facade `ProjectReportReads.context_summaries` (WP5 ruling D7): `unavailable` / `reads_disabled` with `MY_PA_PROJECT_REPORTS_ENABLED` off (nothing read), `not_linked` without a Project, `unavailable` with the facade's reason, or `available` with at most 5 latest-version counts (observations, coordination issues, RFIs) and the RFIs of at most 10 numbers, the Meeting's own first, then its messages' (`ambiguous_prefix` as candidates), with the versions and qualifiers read. A PULSE read error fails the request (ruling D-7). The record is [contract section 15](../architecture/communications-intelligence-contract.md#15-meeting-context-assembly-wp5).
 
 ## 11. Worker/NAS changes
 
@@ -452,7 +453,7 @@ PULSE needs a decision record before WP3P merges: a new ADR (next free number af
 | PULSE-AC-13 | The byte-identical file in 2 project folders is 2 snapshots | DB tier |
 | PULSE-AC-14 | RFI matching is exact on suffix and prefix; `ambiguous_prefix` flagged | FAST |
 | PULSE-AC-15 | The 5 names are registered with purpose `project_reports_read`, default off, read-only, policy-closed; no client write | policy tests |
-| PULSE-AC-16 | Meeting context returns communications unchanged when PULSE is absent, with `pulse.state = unavailable` | WP5 tests |
+| PULSE-AC-16 | Meeting context returns communications unchanged when PULSE is absent, with `pulse.state = unavailable` | WP5 tests: **met on branch `feat/meeting-context`** -- database `tests/database/test_meeting_context_pulse.py` (communications byte-identical with the switch off, the tables empty and populated) |
 | PULSE-AC-17 | The Manager's aggregate run reproduces the evidence figures (section 12.3) | aggregate CLI output |
 | PULSE-AC-18 | No committed file holds a project display name, a crosswalk entry, a real `prj_`/`ent_`/`prn_` identifier, or a real amount | leak scan + fixture guard |
 

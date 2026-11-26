@@ -202,8 +202,12 @@ def calendar_blob(
     exceptions: Sequence[tuple[date, Sequence[tuple[str, str]]]] = (),
     *,
     extra: str = "",
+    root: str = "CalendarData",
 ) -> str:
-    """P6 `clndr_data` text: days 1 = Sunday ... 7 = Saturday, `0x7F` pairs between nodes."""
+    """P6 `clndr_data` text: days 1 = Sunday ... 7 = Saturday, `0x7F` pairs between nodes.
+
+    `root` is the root node's name: `CalendarData`, or empty (section 3.4).
+    """
 
     def intervals(pairs: Sequence[tuple[str, str]]) -> str:
         return "".join(
@@ -211,7 +215,7 @@ def calendar_blob(
             for index, (start, finish) in enumerate(pairs)
         )
 
-    parts = ["(0||CalendarData()("]
+    parts = [f"(0||{root}()("]
     if week is not None:
         parts.append("\x7f\x7f  (0||DaysOfWeek()(")
         for number in range(1, 8):
@@ -1159,6 +1163,13 @@ def _calendar_midnight_end() -> FixtureCase:
     return _case("calendar_midnight_end", model)
 
 
+def _calendar_root_unnamed() -> FixtureCase:
+    model = _std()
+    _with(model, "CALENDAR", 0, clndr_data=calendar_blob(FIVE_DAY_WEEK, root=""))
+    _with(model, "CALENDAR", 1, clndr_data=calendar_blob(FIVE_DAY_WEEK, BASE_EXCEPTIONS, root=""))
+    return _case("calendar_root_unnamed", model)
+
+
 def _calendar_without_week() -> FixtureCase:
     model = _with(_std(), "CALENDAR", 1, clndr_data=calendar_blob(None, BASE_EXCEPTIONS))
     return _case(
@@ -1463,6 +1474,7 @@ CASES: Mapping[str, Callable[[], FixtureCase]] = {
     "duplicate_field": _duplicate_field,
     "width_mismatch": _width_mismatch,
     "calendar_midnight_end": _calendar_midnight_end,
+    "calendar_root_unnamed": _calendar_root_unnamed,
     "calendar_without_days_of_week": _calendar_without_week,
     "activity_missing_calendar": _activity_missing_calendar,
     "calendar_unparseable": _calendar_unparseable,

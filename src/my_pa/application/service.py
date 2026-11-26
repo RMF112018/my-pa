@@ -20722,8 +20722,6 @@ _PROGRAM_READ_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     capability for capability in Capability if capability.value in PROGRAM_READ_CAPABILITIES
 )
 
-#: Communications intelligence WP4-S5 (contract section 16, ruling D7): the 3
-#: reads, withheld unless `communications_enabled` is on.
 #: Project-report reads WP4P-S4 (design section 2.9): the 5 reads, withheld
 #: unless `project_reports_enabled` is on.
 _PROJECT_REPORTS_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
@@ -20736,6 +20734,8 @@ _PROJECT_REPORTS_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
+#: Communications intelligence WP4-S5 (contract section 16, ruling D7): the 3
+#: reads, withheld unless `communications_enabled` is on.
 _COMMUNICATIONS_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.COMMUNICATIONS_SEARCH,

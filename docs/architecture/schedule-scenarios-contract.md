@@ -8,7 +8,8 @@ guidance) implementers code against. S6-1 (the pure domain and engine) is implem
 merged (#348, section 9.1.1); S6-2 (schema, revision A `2a90f91dd786`, persistence, worker
 hook; section 14) is implemented and merged (#349); S6-3 (section 15) was implemented by
 packages I10-A, I10-B and I10-C (section 15.19) and is merged (#354). Merging grants no
-capability and deploys nothing; deployment status is recorded in the runbooks. It authorizes
+capability and deploys nothing; deployment follows `ops/runbooks/cpm-workbench.md` and is an operator
+action. It authorizes
 **no** production migration, grant, `profile-apply`, OAuth change or deployment, and its
 switch `MY_PA_SCHEDULE_SCENARIOS_ENABLED` (added by S6-3) is **off by default** and stacks on
 `MY_PA_SCHEDULE_ENABLED` (off by default). The governing
@@ -110,8 +111,9 @@ written `MM-DD HH:MM` in 2027 unless the month is 12 (then 2026).
 Directive-selected design, not ratified for production. S6-1 (the pure domain and the
 CPM engine, section 9.1) is implemented and merged (#348); S6-2 is implemented and merged
 (#349, section 14); S6-3 is designed in section 15 and implemented and merged (#354). The plane's
-switch exists (S6-3 added it, default off), and a capability is served only where the operator has
-granted it. The server verifies
+switch exists (S6-3 added it, default off), and a plane capability is served only where both
+`MY_PA_SCHEDULE_ENABLED` and `MY_PA_SCHEDULE_SCENARIOS_ENABLED` are on and the operator has granted
+it. The server verifies
 shapes, bounds, ownership, references, idempotency, compare-and-swap and its own
 computation; it cannot verify that any client-authored logic, duration, distribution, Monte
 Carlo result or baseline proposal is true, nor who composed a client call, and it never says

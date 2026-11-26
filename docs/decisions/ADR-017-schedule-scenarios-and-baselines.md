@@ -129,7 +129,7 @@ S6-1 (the pure domain and the CPM engine, contract section 9.1) is implemented a
 (#348; contract section 9.1.1 records what was executed). S6-2 (persistence) is implemented and
 merged (#349; contract section 14), and S6-3 (capabilities, switch, policy, lineage, façade and
 ChatLLM) is implemented and merged (#354; contract section 15). Merging authorizes no migration,
-grant or deployment: those remain operator actions recorded in the runbooks.
+grant or deployment: those remain operator actions under `ops/runbooks/cpm-workbench.md`.
 
 ## Amended by ADR-023 (2026-11-23)
 

@@ -467,6 +467,54 @@ def test_the_project_number_is_one_exact_term(scene: Scene) -> None:
     assert section.inputs.project_number.value == "used"
 
 
+def _candidate_ids(scene: Scene, **criteria: Any) -> list[str]:  # noqa: ANN401
+    """The statement's message ids for one Meeting over days 7-21 with `criteria`."""
+    values: dict[str, Any] = {"addresses": (), "identifiers": (), "title_terms": ()}
+    values["project_number"] = None
+    values.update(criteria)
+    with scene.engine.connect() as connection:
+        rows = SqlCommunicationsRepository(connection).context_candidates(
+            scene.principal_id,
+            MeetingContextCandidateQuery(
+                meetings=(
+                    MeetingContextCandidateInput(
+                        ordinal=0, window_start=at(7), window_end=at(21), **values
+                    ),
+                ),
+                identifier_version=IDENTIFIER_VERSION,
+                limit=15,
+            ),
+        )
+    return [row.message_id for row in rows]
+
+
+def test_the_project_number_is_matched_by_simple_never_by_english(scene: Scene) -> None:
+    """WP5-R1 F-7 (M16): `english` would stem `TOWERS` to `tower`; `simple` does not."""
+    exact = scene.mail.message(1, subject="Job", text="Job TOWERS invoice.", when=at(17, 10))
+    scene.mail.message(2, subject="Job", text="The tower crane.", when=at(17, 11))
+    scene.mail.message(3, subject="Job", text="Two towered blocks.", when=at(17, 12))
+    # Past the `strpos` pre-filter (it holds "towers"), yet no `simple` lexeme `towers`.
+    scene.mail.message(4, subject="Job", text="Skytowers beside the tower crane.", when=at(17, 13))
+    assert _candidate_ids(scene, project_number="TOWERS") == [exact]
+
+
+def test_an_identifier_of_another_extractor_version_never_matches(scene: Scene) -> None:
+    """WP5-R1 F-8 (M19): only identifiers of the read version are criteria."""
+    current = scene.mail.message(1, subject="RFI 61", text="RFI 61 answered.", when=at(17, 10))
+    scene.mail.message(
+        2,
+        subject="Plain",
+        text="Nothing current.",
+        when=at(17, 11),
+        extra_identifiers=(
+            ("rfi", "61", "comms_identifiers_v1"),
+            ("rfi", "62", "comms_identifiers_v1"),
+        ),
+    )
+    assert _candidate_ids(scene, identifiers=(("rfi", "61"),)) == [current]
+    assert _candidate_ids(scene, identifiers=(("rfi", "62"),)) == []
+
+
 def test_english_stems_each_title_term(scene: Scene) -> None:
     """Ruling A-3: `meetings` matches `meeting`, at the statement and end to end."""
     singular = scene.mail.message(1, subject="Notes", text="After the meeting.", when=at(17, 10))

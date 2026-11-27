@@ -47,6 +47,18 @@ never reach:
 Each snap is one counted calendar call. `milestone` keeps its v1 meaning on
 both engines, so a content without any v2 feature computes the same activity
 results on either path (only `engine_version` differs).
+
+S7-7 (section 11.7): a `schedule-scenario-content-v3` content (parallel
+relationships: 2 or more between one ordered pair) runs on the engine its other
+content requires: `my-pa-cpm-v2` iff it uses a v2 feature, else `my-pa-cpm-v1`.
+The maths was always per relationship (every bound, slack and count is indexed
+by relationship position), so nothing about it changes. Two things are keyed
+by activity pair and are made exact for parallel relationships, each a no-op
+when every pair holds one relationship: a critical-path edge is recorded once
+per activity pair (two zero-slack links between the same two critical
+activities are one step of a path, not two paths), and the result document
+names each relationship's `type` only when the result holds parallel
+relationships (so every v1 and v2 result stays byte-identical).
 """
 
 from __future__ import annotations
@@ -237,6 +249,8 @@ class CpmRelationshipResult:
     considered: bool
     slack_minutes: int | None
     driving: bool
+    #: S7-7: the identity of a relationship is `(pred, succ, type)`.
+    type: RelationshipType
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,9 +276,29 @@ def _instant_or_none(value: int | None) -> str | None:
     return None if value is None else format_instant(value)
 
 
+def _relationship_row(item: CpmRelationshipResult, *, typed: bool) -> dict[str, object]:
+    row: dict[str, object] = {
+        "pred": item.pred,
+        "succ": item.succ,
+        "considered": item.considered,
+        "slack_minutes": item.slack_minutes,
+        "driving": item.driving,
+    }
+    if typed:
+        row["type"] = item.type.value
+    return row
+
+
 def result_document(result: CpmResult) -> dict[str, object]:
-    """The canonical `schedule-cpm-result-v1` object of a run."""
+    """The canonical `schedule-cpm-result-v1` object of a run.
+
+    S7-7: when 2 or more relationship rows share one ordered pair (a v3 content),
+    every row also carries `type`, so each row is named by `(pred, succ, type)`;
+    otherwise the rows are exactly the S6 rows.
+    """
     summary = result.summary
+    pairs = [(item.pred, item.succ) for item in result.relationships]
+    typed = len(set(pairs)) != len(pairs)
     return {
         "schema": RESULT_SCHEMA,
         "engine_version": result.engine_version,
@@ -316,16 +350,7 @@ def result_document(result: CpmResult) -> dict[str, object]:
             }
             for item in result.activities
         ],
-        "relationships": [
-            {
-                "pred": item.pred,
-                "succ": item.succ,
-                "considered": item.considered,
-                "slack_minutes": item.slack_minutes,
-                "driving": item.driving,
-            }
-            for item in result.relationships
-        ],
+        "relationships": [_relationship_row(item, typed=typed) for item in result.relationships],
     }
 
 
@@ -353,7 +378,8 @@ _BUDGET_ISSUE: Final = CpmIssue(CpmIssueCode.OPERATION_BUDGET_EXCEEDED)
 
 
 def engine_version_for(content: ScenarioContent) -> str:
-    """Section 11.7: the content schema chooses the engine (v1 -> v1, v2 -> v2)."""
+    """Section 11.7: the content chooses the engine (v1 -> v1, v2 -> v2); a v3
+    content (S7-7) runs on v2 iff it uses a v2 feature, else on v1."""
     return ENGINE_VERSION_V2 if uses_v2_features(content) else ENGINE_VERSION
 
 
@@ -465,7 +491,7 @@ class _Engine:
         self.types = [item.type for item in relationships]
         self.lags = [item.lag_minutes for item in relationships]
         count = len(activities)
-        # Relationships are sorted by (pred, succ), so each outgoing list is in
+        # Relationships are sorted by (pred, succ, type), so each outgoing list is in
         # successor key order; incoming lists are sorted by predecessor key.
         self.outgoing: list[list[int]] = [[] for _ in range(count)]
         self.incoming: list[list[int]] = [[] for _ in range(count)]
@@ -849,7 +875,14 @@ class _Engine:
         has_incoming = [False] * count
         for r in range(len(self.preds)):
             i, k = self.preds[r], self.succs[r]
-            if critical[i] and critical[k] and self.relationship_slack[r] == 0:
+            # S7-7: parallel relationships are adjacent (sorted by pred, succ, type), so
+            # a second zero-slack link to the same successor is the same path step.
+            if (
+                critical[i]
+                and critical[k]
+                and self.relationship_slack[r] == 0
+                and (not edges[i] or edges[i][-1] != k)
+            ):
                 edges[i].append(k)
                 has_incoming[k] = True
         starts = [j for j in range(count) if critical[j] and not has_incoming[j]]
@@ -959,6 +992,7 @@ class _Engine:
                 considered=self.considered(r),
                 slack_minutes=self.relationship_slack[r],
                 driving=self.relationship_slack[r] == 0,
+                type=self.types[r],
             )
             for r in range(len(self.preds))
         )

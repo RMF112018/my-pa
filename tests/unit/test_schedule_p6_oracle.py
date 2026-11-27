@@ -242,15 +242,43 @@ def test_unmodelled_settings_are_listed_in_order() -> None:
     ]
 
 
-def test_a_parallel_relationship_is_an_unmodelled_cause() -> None:
-    # An FF beside the FS between the same ordered pair: P6 honours both, the content keeps
-    # the first, so the oracle names the cause (counted by the snapshot).
+def test_a_parallel_relationship_is_kept_and_no_longer_an_unmodelled_cause() -> None:
+    # S7-7: an FF beside the FS between the same ordered pair is kept (content v3), so
+    # P6's numbers still agree in full and the oracle names no cause. (Before, the
+    # content kept the first and the oracle reported `parallel_relationships`.)
     preds = [*cases._exact_preds(), fx.pred_row("4004", "3001", "3002", "PR_FF")]
     model = cases.model(cases._exact_tasks(), preds, threshold="24")
     report = _report(_encoded(model))
-    assert report["status"] == "compared"
-    assert report["unmodelled_settings"] == ["parallel_relationships"]
+    _all_equal(report, 4)
+    assert report["content_schema"] == "schedule-scenario-content-v3"
+    assert report["unmodelled_settings"] == []
     assert _oracle("exact")["unmodelled_settings"] == []
+
+
+def test_a_repeated_relationship_type_is_still_an_unmodelled_cause() -> None:
+    # Only a repeated (pred, succ, type), which P6 does not write, is still dropped.
+    preds = [*cases._exact_preds(), fx.pred_row("4004", "3001", "3002")]
+    model = cases.model(cases._exact_tasks(), preds, threshold="24")
+    report = _report(_encoded(model))
+    assert report["unmodelled_settings"] == ["parallel_relationships"]
+
+
+def test_a_ladder_agrees_with_p6_in_full_in_either_file_order() -> None:
+    # The `ladder` case: an SS (8 h) and an FF (16 h) between one pair, P6 numbers by
+    # hand. Dropping either link moves the successor, so 100% needs both.
+    report = _oracle("ladder")
+    _all_equal(report, 2)
+    assert report["content_schema"] == "schedule-scenario-content-v3"
+    assert report["engine_version"] == "my-pa-cpm-v1"
+    assert report["unmodelled_settings"] == []
+    reordered = cases.CASES["ladder"]()
+    rows = reordered.table("TASKPRED").rows
+    rows[:] = rows[::-1]
+    assert _report(_encoded(reordered)) == report
+    # What the snapshot kept before S7-7 (the first row, the SS): P6 is not matched.
+    first_only = cases.model(cases.ladder_tasks(), cases.ladder_preds()[:1])
+    before = _report(_encoded(first_only))
+    assert before["quantities"]["early_start"]["equal_share"] != "1.0000"
 
 
 def _progress_with(kind: str, successor: dict[str, str] | None = None) -> fx.Model:

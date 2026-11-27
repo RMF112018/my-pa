@@ -18,6 +18,13 @@ Every decision a source does not make for itself is counted in
 captured field. A content using none of the S7-0 additions (no edged
 milestone, no `calendar:` lag calendar, no captured fields) is a byte-identical
 `schedule-scenario-content-v1` document; any one of them makes it `-v2`.
+
+S7-7: every relationship between two included activities is kept, so a P6
+ladder (an SS and an FF between the same 2 activities) is whole and the content
+does not depend on the export's row order; a content holding such a pair is
+`-v3`. Only a repeated `(pred, succ, type)` (which P6 does not write) is still
+counted `relationships_parallel_dropped`: the one with the largest lag is kept,
+which binds every date exactly as both would.
 """
 
 from __future__ import annotations
@@ -599,8 +606,12 @@ def snapshot_from_p6(
     activities: Sequence[P6SnapshotActivity],
     relationships: Sequence[P6SnapshotRelationship],
     request: P6SnapshotRequest | None = None,
+    legacy_relationships: bool = False,
 ) -> P6Snapshot:
-    """Build version 1 from one P6 publication's accepted run (section 11.5)."""
+    """Build version 1 from one P6 publication's accepted run (section 11.5).
+
+    `legacy_relationships` reconstructs a pre-S7-7 snapshot for idempotent replay.
+    """
     request = request or P6SnapshotRequest()
     if len(request.include_fields) > MAX_CAPTURED_FIELDS or len(set(request.include_fields)) != len(
         request.include_fields
@@ -703,8 +714,7 @@ def snapshot_from_p6(
             raise P6SnapshotRefusalError(P6SnapshotRefusal.ROWS) from None
         included[activity.activity_id] = activity.schedule_activity_id
 
-    links: list[ScenarioRelationship] = []
-    pairs: set[tuple[str, str]] = set()
+    links: dict[tuple[str, str, RelationshipType | None], tuple[ScenarioRelationship, bool]] = {}
     for relationship in relationships:
         if relationship.is_external:
             counts.add("external_relationships_dropped")
@@ -715,22 +725,29 @@ def snapshot_from_p6(
         if pred is None or succ is None or rel_type is None:
             counts.add("relationships_excluded")
             continue
-        if (pred, succ) in pairs:
-            # S6-D05: 1 relationship per ordered pair; P6 allows parallel links (an SS
-            # and an FF between the same 2 activities): the first in input order is kept.
+        link = (pred, succ, None if legacy_relationships else rel_type)
+        kept = links.get(link)
+        if kept is not None:
             counts.add("relationships_parallel_dropped")
-            continue
+            # The first-per-pair mapper did not validate or count lags of later rows.
+            if legacy_relationships:
+                continue
         lag, quantized = _minutes(relationship.lag_hours or Decimal(0))
         if not -MAX_LAG_MINUTES <= lag <= MAX_LAG_MINUTES:
             raise P6SnapshotRefusalError(P6SnapshotRefusal.ROWS)
-        if quantized:
-            counts.add("lags_quantized")
-        pairs.add((pred, succ))
-        links.append(ScenarioRelationship(pred=pred, succ=succ, type=rel_type, lag_minutes=lag))
+        # A repeated type retains the largest lag, the binding one in both passes.
+        # Keep the first on a tie so equal legacy and current content has the same report.
+        if kept is not None and kept[0].lag_minutes >= lag:
+            continue
+        links[link] = (
+            ScenarioRelationship(pred=pred, succ=succ, type=rel_type, lag_minutes=lag),
+            quantized,
+        )
 
     # At most 32 calendars (section 11.5): `content_problem` below is the one guard.
     counts.add("activities", len(built))
     counts.add("relationships", len(links))
+    counts.add("lags_quantized", sum(quantized for _, quantized in links.values()))
     counts.add("calendars", len(pool.used))
     try:
         content = ScenarioContent(
@@ -744,7 +761,7 @@ def snapshot_from_p6(
             ),
             calendars=tuple(pool.used.values()),
             activities=tuple(built),
-            relationships=tuple(links),
+            relationships=tuple(relationship for relationship, _ in links.values()),
         )
     except ValueError:
         raise P6SnapshotRefusalError(P6SnapshotRefusal.CALENDAR) from None

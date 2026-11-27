@@ -26,12 +26,14 @@ from typing import Any, Final
 import pytest
 from sqlalchemy import Engine, text
 
+from my_pa.application import schedule_p6_snapshot
 from my_pa.application.commands import (
     ApproveScheduleBaseline,
     Command,
     CompareScheduleBaseline,
     CreateScheduleCpmRun,
     CreateScheduleScenario,
+    CreateScheduleScenarioVersion,
     ImportScheduleP6Publication,
     ListScheduleChanges,
     ListScheduleP6FieldValues,
@@ -53,7 +55,14 @@ from my_pa.domain.identity.operation import permitted_purposes
 from my_pa.domain.identity.operator_surface import OperatorSurface
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.schedule.p6_import import P6AdmissionLimits
+from my_pa.domain.schedule.scenario.canonical import (
+    CONTENT_SCHEMA,
+    CONTENT_SCHEMA_V3,
+    content_schema,
+    content_sha256,
+)
 from my_pa.domain.schedule.scenario.cpm import run_cpm
+from my_pa.domain.schedule.scenario.p6_snapshot import snapshot_from_p6
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.file_workspace.store import FilesystemFileWorkspaceStore
 from my_pa.infrastructure.jobs.schedule import process_schedule_publication
@@ -580,6 +589,115 @@ def test_a_task_only_snapshot_is_a_v1_content_and_runs_on_v1(w: World) -> None:
     )
     assert run["engine_version"] == "my-pa-cpm-v1"
     assert created["p6_snapshot_report"]["counts"]["start_milestones"] == 0
+
+
+def _tasks_only(model: xer.Model) -> xer.Model:
+    for code in ("SYN-1000", "SYN-1030"):
+        _task(model, code).update(
+            task_type="TT_Task", remain_drtn_hr_cnt="8", target_drtn_hr_cnt="8"
+        )
+    return model
+
+
+def test_parallel_relationships_persist_run_and_change_as_a_v3_content(w: World) -> None:
+    # S7-7: an FF beside the FS between SYN-1010 and SYN-1020 is kept (content v3, run
+    # on my-pa-cpm-v1); the stored content round-trips under its v3 digest, the reads
+    # list both relationships, and a change set names one of them by type.
+    model = _tasks_only(_std())
+    model.table("TASKPRED").rows.append(xer.pred_row("4004", "3002", "3003", "PR_FF", "8"))
+    publication = str(w.publish(model, "exports/ladder.xer")["publication_id"])
+    command = w.create(publication)
+    created = w.ok(command)
+    replayed = w.ok(command)
+    assert replayed["replayed"] is True
+    assert replayed["p6_snapshot_report"] == created["p6_snapshot_report"]
+    assert replayed["version_id"] == created["version_id"]
+    counts = created["p6_snapshot_report"]["counts"]
+    assert counts["relationships"] == 4
+    assert counts["relationships_parallel_dropped"] == 0
+    assert "parallel_relationships" not in created["p6_snapshot_report"]["unmodelled_settings"]
+    version = str(created["version_id"])
+    assert created["relationship_count"] == 4
+    with SqlAlchemyScenarioUnitOfWork(w.engine) as work:
+        loaded = work.scenarios.load_content(P, version)
+    assert loaded is not None
+    assert content_schema(loaded.content) == CONTENT_SCHEMA_V3
+    assert content_sha256(loaded.content) == created["content_sha256"]
+    keys = {
+        a.published_reference.published_activity_id: a.key
+        for a in loaded.content.activities
+        if a.published_reference is not None
+    }
+    ladder = (keys["SYN-1010"], keys["SYN-1020"])
+    listed = w.ok(ListScheduleScenarioRelationships(version_id=version, page_size=100))
+    pair = [
+        (row["type"], row["lag_minutes"])
+        for row in listed["relationships"]
+        if (row["pred"], row["succ"]) == ladder
+    ]
+    assert pair == [("FF", 480), ("FS", 0)]
+    run = w.ok(CreateScheduleCpmRun(version_id=version, idempotency_key=_key("run")))
+    assert run["engine_version"] == "my-pa-cpm-v1"
+    assert run["status"] == "computed"
+    assert (
+        w.ok(ReadScheduleCpmRun(cpm_run_id=str(run["cpm_run_id"])))["summary"]["relationship_count"]
+        == 4
+    )
+    remove: dict[str, Any] = {"op": "relationship.remove", "pred": ladder[0], "succ": ladder[1]}
+    scenario = str(created["scenario_id"])
+    ambiguous = CreateScheduleScenarioVersion(
+        scenario_id=scenario,
+        expected_head_version_no=1,
+        label="update",
+        change_set=[remove],
+        idempotency_key=_key("append"),
+    )
+    assert w.refused(ambiguous) == ("invalid_request", ["change_set_invalid_field"])
+    appended = w.ok(
+        CreateScheduleScenarioVersion(
+            scenario_id=scenario,
+            expected_head_version_no=1,
+            label="update",
+            change_set=[{**remove, "type": "FF"}],
+            idempotency_key=_key("append"),
+        )
+    )
+    assert appended["relationship_count"] == 3
+    with SqlAlchemyScenarioUnitOfWork(w.engine) as work:
+        child = work.scenarios.load_content(P, str(appended["version_id"]))
+    assert child is not None
+    assert content_schema(child.content) == CONTENT_SCHEMA
+    rerun = w.ok(
+        CreateScheduleCpmRun(version_id=str(appended["version_id"]), idempotency_key=_key("run"))
+    )
+    assert rerun["engine_version"] == "my-pa-cpm-v1"
+
+
+@pytest.mark.parametrize("lag", ["8", "17521"])
+def test_a_pre_s77_p6_snapshot_replays_its_original_report(
+    w: World, monkeypatch: pytest.MonkeyPatch, lag: str
+) -> None:
+    model = _tasks_only(_std())
+    model.table("TASKPRED").rows.append(xer.pred_row("4004", "3002", "3003", "PR_FF", lag))
+    publication = str(w.publish(model, "exports/legacy-ladder.xer")["publication_id"])
+    command = w.create(publication)
+    # Seed a first version and reservation using the pre-S7-7 relationship mapper.
+    with monkeypatch.context() as legacy:
+        legacy.setattr(
+            schedule_p6_snapshot,
+            "snapshot_from_p6",
+            functools.partial(snapshot_from_p6, legacy_relationships=True),
+        )
+        created = w.ok(command)
+    assert created["relationship_count"] == 3
+    counts = created["p6_snapshot_report"]["counts"]
+    assert counts["relationships"] == 3
+    assert counts["relationships_parallel_dropped"] == 1
+    replayed = w.ok(command)
+    assert replayed["replayed"] is True
+    assert replayed["version_id"] == created["version_id"]
+    assert replayed["content_sha256"] == created["content_sha256"]
+    assert replayed["p6_snapshot_report"] == created["p6_snapshot_report"]
 
 
 def test_rcal_project_is_a_fixed_lag_calendar_and_a_replay_reports_the_same(w: World) -> None:

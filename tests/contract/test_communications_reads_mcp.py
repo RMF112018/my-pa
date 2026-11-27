@@ -71,6 +71,9 @@ SEARCH: Final = Capability.COMMUNICATIONS_SEARCH
 READ: Final = Capability.COMMUNICATIONS_READ
 COVERAGE: Final = Capability.COMMUNICATIONS_COVERAGE
 READS: Final = (SEARCH, READ, COVERAGE)
+#: Meeting context WP5-S5 (ruling D2): served under the same switch and purpose,
+#: proved in `tests/contract/test_meeting_context_mcp.py`.
+CONTEXT: Final = Capability.MEETINGS_CONTEXT_READ
 NOW: Final = datetime(2026, 11, 21, 12, tzinfo=UTC)
 WHEN: Final = datetime(2026, 11, 17, 12, tzinfo=UTC)
 OPERATOR: Final = Principal(P, PrincipalKind.OPERATOR, authenticated=True)
@@ -87,7 +90,8 @@ def test_the_three_are_declared_dispatched_built_and_published_as_reads() -> Non
         "communications.read",
         "communications.coverage",
     ]
-    assert frozenset(READS) == COMMUNICATIONS_READ_CAPABILITIES == COMMUNICATIONS_DATA_NAMES
+    assert frozenset(READS) == COMMUNICATIONS_READ_CAPABILITIES
+    assert {*READS, CONTEXT} == COMMUNICATIONS_DATA_NAMES
     commands = {member.capability: member for member in get_args(Command.__value__)}
     assert commands[SEARCH] is SearchCommunications
     assert commands[READ] is ReadCommunications
@@ -105,12 +109,12 @@ def test_the_three_are_declared_dispatched_built_and_published_as_reads() -> Non
         assert facade_kind(capability) == "read"
         assert feature_label(capability.value) == "communications"
     users = {c for c in Capability if Purpose.COMMUNICATIONS_READ in permitted_purposes(c)}
-    assert users == set(READS)
+    assert users == {*READS, CONTEXT}
 
 
 def test_chatllm_classifies_the_three_conditional_on_communications() -> None:
     # Introduced at v17; later profiles (v19, P6 XER import S7-4a; v20, project-report
-    # reads WP4P-S4) contain it.
+    # reads WP4P-S4; v21, meeting context WP5-S5) contain it.
     assert int(CHATLLM_DATA_PROFILE_VERSION.removeprefix("chatllm-data-v")) >= 17
     for capability in READS:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
@@ -127,7 +131,7 @@ def test_chatllm_classifies_the_three_conditional_on_communications() -> None:
     off = composed_capabilities(everything, ChatLLMCompositionPlanes(**base))
     on = composed_capabilities(everything, ChatLLMCompositionPlanes(**base, communications=True))
     assert not off & set(READS)
-    assert on - off == set(READS)
+    assert on - off == {*READS, CONTEXT}
 
 
 def test_the_tool_schemas_publish_the_section_16_bounds() -> None:
@@ -238,7 +242,7 @@ def test_switch_on_serves_the_three(scene: Scene) -> None:
     on = _service(IngestWorld(), enabled=True)
     off = _service(IngestWorld(), enabled=False)
     assert set(READS) <= on.available_capabilities
-    assert on.available_capabilities - off.available_capabilities == set(READS)
+    assert on.available_capabilities - off.available_capabilities == {*READS, CONTEXT}
 
 
 # ---- answers with the switch on -----------------------------------------------------------

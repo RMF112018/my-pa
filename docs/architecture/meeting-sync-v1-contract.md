@@ -269,3 +269,35 @@ Fixed by Manager ruling D1 (WP3b), which registers the source (spec section 1.2)
 ### 8.6 Synthetic values only
 
 Test the collector change with synthetic calendars only: `example.invalid` addresses and hosts, `uid-…@example.invalid` UIDs, `cal-synthetic-…` references and `evt-synthetic-…` ids, as in section 7. Never put a real calendar, address, UID, provider id or join URL in a fixture, a log line, a ticket or this document.
+
+### 8.7 Meeting-context readiness
+
+`meetings.context.read` (communications intelligence WP5; [contract section 15](communications-intelligence-contract.md#15-meeting-context-assembly-wp5)) reads each Meeting's communications in a lookback window that ends at the Meeting's start (default 14 days). What the collector must do so that context is ready when it is read (Manager ruling R-OP-8; WP5 design section 3.13). Counts and specification only:
+
+- [ ] **Forward horizon of at least 14 days.** A Meeting must exist before its prep is read, so publish the events that start in the next 14 days or more; 30 days is recommended. The publication's `coverage.end_utc` states the horizon.
+- [ ] **Publish at least once a day, before the business day starts** (the local morning), so upcoming Meetings and their moves are present when the context is read. Publishing again on the same date is safe (section 8.4).
+- [ ] **Keep titles verbatim.** Add no prefix, suffix or tag. The identifiers in a title (`RFI 174`, `CO #5`, `Submittal 033000-01`) and its words are context inputs.
+- [ ] **Keep sending the full, valid attendee set** (the section 8.2 rules). Today it is validated and not applied: synced Meetings carry no attendees (WP2 decision D2; WP5 ruling D1), so their context answers `no_attendee_address` and rests on identifiers, the Project number and the title. Attendee persistence for synced Meetings is a follow-up work package and needs no collector change.
+- [ ] **Self-check, counts only.** Extend the section 8.5 check with two counts, run the same way from a my-pa source checkout:
+
+  ```
+  PYTHONPATH=src python - FILE <<'PY'
+  import sys
+  from datetime import timedelta
+  from pathlib import Path
+  from my_pa.infrastructure.meeting_sync.parser import parse_publication
+
+  publication = parse_publication(Path(sys.argv[1]).read_bytes()).publication
+  if publication is not None:
+      stamp = publication.generated_at_utc
+      horizon = stamp + timedelta(days=14)
+      events = publication.events
+      print("events_starting_next_14_days",
+            sum(1 for e in events if stamp <= e.start_utc <= horizon))
+      print("events_with_attendees", sum(1 for e in events if e.attendees))
+  PY
+  ```
+
+  On the synthetic fixtures `tests/fixtures/meeting_sync/sync_publication.json` and `tests/fixtures/meeting_sync/sync_publication_v1_1.json` it prints `events_starting_next_14_days 2` and `events_with_attendees 1`. On a real publication, `events_starting_next_14_days` above 0 on a working day and `events_with_attendees` close to the events with invitees are the expectation.
+
+The communications collector is unchanged; its coverage gaps already appear as the context's `coverage.gaps`.

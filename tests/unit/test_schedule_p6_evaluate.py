@@ -214,12 +214,30 @@ def test_usage_errors_exit_2(tmp_path: Path) -> None:
         assert module.main([str(tmp_path)]) == 2
 
 
-def test_a_special_file_is_refused_without_opening_it(tmp_path: Path) -> None:
+def test_a_special_file_is_refused_without_opening_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fifo = tmp_path / "export.xer"
-    os.mkfifo(fifo)  # opening it for reading would block: the type is checked first
+    os.mkfifo(fifo)
+    refusal = "p6_evaluate=refused not a readable regular file"
     code, printed, errors = _run([fifo])
-    assert (code, printed) == (2, "")
-    assert errors.strip() == "p6_evaluate=refused not a readable regular file"
+    assert (code, printed, errors.strip()) == (2, "", refusal)
+
+    module = _script()
+    regular = tmp_path / "regular.xer"
+    regular.touch()
+    real_open = os.open
+
+    def open_replacement(path: Path, flags: int) -> int:
+        assert path == regular
+        assert flags & os.O_NONBLOCK
+        return real_open(fifo, flags)
+
+    # Simulate a replacement after the path check. Only the descriptor sees the FIFO.
+    with monkeypatch.context() as replacement:
+        replacement.setattr(module.os, "open", open_replacement)
+        code, printed, errors = _run([regular], module)
+    assert (code, printed, errors.strip()) == (2, "", refusal)
 
 
 def test_at_most_the_cap_plus_1_byte_is_read(

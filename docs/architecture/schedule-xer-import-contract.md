@@ -1579,9 +1579,10 @@ oracle). It builds version 1 from the parse with
 compares early start, early finish, late start, late finish, total float (`total_float_hr_cnt`
 x 60, half-even, counted `p6_quantized`) and, beyond this section, the remaining early start
 (`restart_date`) against the engine's remaining start, so a P6 convention for progressed work
-shows instead of hiding; every count is split by activity state. A missing P6 value, a value
-off the engine's axis and a missing engine value (a complete activity has no float) are
-counted apart, never as mismatches. Histogram edges: 0, ±1..60, ±61..480, ±481..2400, beyond.
+shows instead of hiding. The compared and equal counts are split by activity state.
+The other counts are aggregate. A missing P6 value, a value off the engine's axis and a missing
+engine value (a complete activity has no float) are counted apart, never as mismatches.
+Histogram edges: 0, ±1..60, ±61..480, ±481..2400, beyond.
 (3) The critical comparison runs over the activities both sides give a float (total float at
 most the 11.5 threshold on each side). (4) `unmodelled_settings` of the oracle is the
 snapshot's 2 (11.5 "As built in S7-4b" item 5) plus `total_float_type` (`sched_float_type` not

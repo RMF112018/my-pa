@@ -36,7 +36,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 
 from my_pa.contracts.v1.base import StrictModel, UtcDatetime
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
@@ -125,6 +125,28 @@ class MeetingAttendeeView(StrictModel):
     is_organizer: bool
     response_status: AttendeeResponseStatus
     added_at: UtcDatetime
+
+    @classmethod
+    def try_from_email(
+        cls,
+        *,
+        attendee_id: str,
+        email: str,
+        is_organizer: bool,
+        response_status: AttendeeResponseStatus,
+        added_at: datetime,
+    ) -> MeetingAttendeeView | None:
+        """Build an email-only attendee, returning None for invalid data."""
+        try:
+            return cls(
+                attendee_id=attendee_id,
+                email=email,
+                is_organizer=is_organizer,
+                response_status=response_status,
+                added_at=added_at,
+            )
+        except ValidationError:
+            return None
 
     @model_validator(mode="after")
     def _check(self) -> MeetingAttendeeView:

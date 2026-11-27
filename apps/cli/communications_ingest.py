@@ -16,6 +16,8 @@ python apps/cli/communications_ingest.py <assertions> aggregate --source isrc_..
 python apps/cli/communications_ingest.py <assertions> rederive [--source isrc_...] \\
     [--limit N] [--dry-run]
 python apps/cli/communications_ingest.py <assertions> measure-fts [--source isrc_...] [--limit N]
+python apps/cli/communications_ingest.py <assertions> measure-context [--meetings 10] \\
+    [--runs 40] [--lookback-days 14] [--per-meeting-limit 15]
 ```
 
 `<assertions>` is `--expected-database NAME --expected-alembic-head REVISION`,
@@ -49,8 +51,8 @@ Exit status (closed):
 Refusal codes: the lifecycle's `IngestRefusalCode` values, plus
 `target_mismatch`, `settings_invalid`, `workspace_misconfigured`,
 `invalid_range`, `lock_held`, `database_unreachable` and `database_unavailable`;
-`measure-fts` also refuses `statement_timeout` when the statement timeout
-cancels it (lower `--limit`).
+`measure-fts` and `measure-context` also refuse `statement_timeout` when the
+statement timeout cancels them (lower `--limit`, or the context bounds).
 `coverage` and `aggregate` refuse `source_not_found` for a source id that names
 no admitted source of the operator.
 
@@ -88,6 +90,19 @@ per-class counts (`identifier`, `name`) of probe terms over stored messages,
 are material (`communications_fts_measurement`). No term, address or id is
 printed.
 
+**The context measurement (WP5-S6, design section 3.12, ruling D16).**
+`measure-context` is read-only and takes no lock. It builds `--meetings`
+in-memory probe Meetings (never persisted) from the corpus and times the
+`meetings.context.read` assembler over them through the `MeetingContextInput`
+seam (`application.meeting_context_measure`): p50, p95 and maximum over
+`--runs` runs and the statements per batch, for 1 and `--meetings` Meetings,
+each with the project-report reads off and on; per probe, the input counts,
+`missing[]`, the matches by tier and by `matched_by` reason, the coverage
+state and gaps and the `pulse` state; the self-address state and count, the
+C9 bridge count and truncation, and `quarantined_identity_kind_mismatch`.
+Counts and closed codes only: no address, subject, snippet, name, title,
+Project number, identifier or id is printed.
+
 **Applying the meeting sync (WP3b-S3).** After `run-once` and `backfill` (not
 `--dry-run`), still under `COMMS_INGEST_LOCK_KEY`, the staged `meeting_sync_v1`
 publications are applied (`MeetingSyncApplier.apply_pending`): nothing applies
@@ -111,22 +126,33 @@ from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
 
 from my_pa.application.ingestion import IngestRefusedError, IngestRunReport
 from my_pa.bootstrap.communications_ingest import (
+    DEFAULT_CONTEXT_RUNS,
+    DEFAULT_LOOKBACK_DAYS,
+    DEFAULT_PER_MEETING_LIMIT,
     DEFAULT_REDERIVE_LIMIT,
     IDENTIFIER_VERSION,
+    MAX_CONTEXT_MEETINGS,
+    MAX_CONTEXT_RUNS,
+    MAX_LOOKBACK_DAYS,
+    MAX_PER_MEETING_LIMIT,
     MAX_REDERIVE_LIMIT,
     communications_rederiver,
     coverage_reader,
     ingest_unit_of_work,
     ingestion_lifecycle,
+    meeting_context_measurement,
     meeting_sync_applier,
 )
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.settings import Settings, load_settings
 from my_pa.contracts.ports import (
+    EvidenceUnavailableError,
     FileWorkspaceRootError,
     IngestConsumer,
     IngestRunOutcome,
     IngestSourceRecord,
+    RepositoryFailureError,
+    TransactionConflictError,
 )
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.jobs.cycle_scheduler import COMMS_INGEST_LOCK_KEY, single_flight
@@ -418,6 +444,28 @@ def _measure_fts(engine: Engine, principal_id: str, args: argparse.Namespace) ->
     return EXIT_OK
 
 
+def _measure_context(engine: Engine, principal_id: str, args: argparse.Namespace) -> int:
+    measurement = meeting_context_measurement(engine, principal_id)
+    try:
+        measured = measurement.measure(
+            principal_id,
+            meetings=args.meetings,
+            runs=args.runs,
+            lookback_days=args.lookback_days,
+            per_meeting_limit=args.per_meeting_limit,
+        )
+    except OperationalError as error:
+        if getattr(error.orig, "sqlstate", None) == _QUERY_CANCELED:
+            raise _RefusalError("statement_timeout") from None
+        raise
+    except EvidenceUnavailableError:
+        raise _RefusalError("database_unreachable") from None
+    except (RepositoryFailureError, TransactionConflictError):
+        raise _RefusalError("database_unavailable") from None
+    _emit({"command": "measure-context", **measured})
+    return EXIT_OK
+
+
 def _dispatch(engine: Engine, settings: Settings, args: argparse.Namespace) -> int:
     principal_id = local_principal().principal_id
     match args.command:
@@ -429,6 +477,8 @@ def _dispatch(engine: Engine, settings: Settings, args: argparse.Namespace) -> i
             return _rederive(engine, settings, principal_id, args)
         case "measure-fts":
             return _measure_fts(engine, principal_id, args)
+        case "measure-context":
+            return _measure_context(engine, principal_id, args)
     lifecycle = ingestion_lifecycle(settings, engine)
     match args.command:
         case "admit":
@@ -592,6 +642,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     measure.add_argument("--source")
     measure.add_argument("--limit", type=_bounded(MAX_MEASURE_LIMIT), default=DEFAULT_MEASURE_LIMIT)
+
+    context = commands.add_parser(
+        "measure-context",
+        help="counts only: meetings.context.read latency over in-memory probe Meetings",
+    )
+    context.add_argument(
+        "--meetings", type=_bounded(MAX_CONTEXT_MEETINGS), default=MAX_CONTEXT_MEETINGS
+    )
+    context.add_argument("--runs", type=_bounded(MAX_CONTEXT_RUNS), default=DEFAULT_CONTEXT_RUNS)
+    context.add_argument(
+        "--lookback-days", type=_bounded(MAX_LOOKBACK_DAYS), default=DEFAULT_LOOKBACK_DAYS
+    )
+    context.add_argument(
+        "--per-meeting-limit",
+        type=_bounded(MAX_PER_MEETING_LIMIT),
+        default=DEFAULT_PER_MEETING_LIMIT,
+    )
     return parser
 
 

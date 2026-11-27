@@ -137,42 +137,43 @@
       "0d4e247d03cb",
       "d8383150cf72",
       "fa18ef3d9bc0",
-      "3b3373d8268e"
+      "3b3373d8268e",
+      "859e93b47a21"
     ],
     "heads": [
-      "3b3373d8268e"
+      "859e93b47a21"
     ],
-    "revision_files": 137
+    "revision_files": 138
   },
   "census": {
-    "architecture": 10507,
-    "database": 7532,
+    "architecture": 10561,
+    "database": 7600,
     "evaluation": 2,
-    "fast_collected": 57009,
+    "fast_collected": 57298,
     "fast_skipped": 138,
-    "mypy_files": 812,
-    "src_modules": 610,
-    "test_modules": 1103
+    "mypy_files": 817,
+    "src_modules": 614,
+    "test_modules": 1119
   },
   "chatllm": {
     "classes": {
       "CHATLLM_COMPATIBILITY_ONLY": 2,
       "CHATLLM_CONTROL_PLANE_EXCLUDED": 33,
-      "CHATLLM_DATA_CONDITIONAL": 191,
+      "CHATLLM_DATA_CONDITIONAL": 192,
       "CHATLLM_DATA_REQUIRED": 88,
       "CHATLLM_OPERATOR_DECISION_REQUIRED": 2,
       "CHATLLM_RETIRED": 0
     },
-    "policy_sha256": "9375c20a3f6b632d6455fe5cb60f29da46ae606d76118f675ba1b930d4d7b0cd",
-    "version": "chatllm-data-v20"
+    "policy_sha256": "c3c82bee4af541c8ecff1ea56adfd763f6147cdf57f67f132256e4c5d37f301f",
+    "version": "chatllm-data-v21"
   },
   "counts": {
-    "alembic_revisions": 137,
-    "capability": 316,
-    "chatllm_policy_entries": 316,
+    "alembic_revisions": 138,
+    "capability": 317,
+    "chatllm_policy_entries": 317,
     "id_kind": 197,
     "purpose": 74,
-    "safe_detail": 475
+    "safe_detail": 478
   },
   "vocabulary": {
     "capability": [
@@ -366,6 +367,7 @@
       "knowledge.read",
       "knowledge.reveal",
       "knowledge.search",
+      "meetings.context.read",
       "meetings.create",
       "meetings.list",
       "meetings.notes.read_version",
@@ -1017,6 +1019,7 @@
       "link_id",
       "linked_external_identifier_id",
       "location_text",
+      "lookback_days",
       "max_bytes",
       "max_capture_characters",
       "max_characters",
@@ -1030,6 +1033,7 @@
       "media_types",
       "meeting_already_provider_bound",
       "meeting_id",
+      "meeting_ids",
       "meeting_not_provider_bound",
       "meeting_series_change_refused_provider_bound",
       "meeting_series_id",
@@ -1086,6 +1090,7 @@
       "path",
       "payload",
       "pending_change_id",
+      "per_meeting_limit",
       "period",
       "person_entity_id",
       "pinned",

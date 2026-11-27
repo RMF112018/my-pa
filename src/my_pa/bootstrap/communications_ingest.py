@@ -25,6 +25,12 @@ the lifecycle differently:
   lazily composed workspace stores and the same parser and byte bound as the
   handler, so a rederive reads a file exactly as ingestion read it. The CLI's
   `rederive` runs it under `COMMS_INGEST_LOCK_KEY`.
+* **The context measurement (WP5-S6).** `meeting_context_measurement()`
+  builds `MeetingContextMeasurement` over the same refusing-audit
+  transactions, with the probe-fact reads (`meeting_context_probe_facts`, the
+  `identity_kind_mismatch` quarantine count) and a statement counter on the
+  engine (`before_cursor_execute`). It reads only; the CLI's
+  `measure-context` takes no lock.
 * **The workspace stores come from settings, once.** `MY_PA_FILES_WORKSPACES`
   (or the single-root form) composed by `bootstrap.gateway.files_workspace_stores`
   with every overlap root, so a `read_only` workspace is refused unless it is
@@ -36,10 +42,10 @@ the lifecycle differently:
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from datetime import datetime
+from collections.abc import Callable, Sequence
+from datetime import datetime, timedelta
 
-from sqlalchemy import Engine
+from sqlalchemy import Engine, event
 
 from my_pa.application.communications_ingest import (
     CommunicationsCoverageReader,
@@ -52,6 +58,15 @@ from my_pa.application.communications_rederive import (
     CommunicationsRederiver,
 )
 from my_pa.application.ingestion import IngestionLifecycle, StabilityMemory
+from my_pa.application.meeting_context_measure import DEFAULT_RUNS as DEFAULT_CONTEXT_RUNS
+from my_pa.application.meeting_context_measure import (
+    MAX_PROBE_ATTENDEES,
+    MIN_PROBE_PARTICIPANTS,
+    PROBE_IDENTIFIERS,
+    MeetingContextMeasurement,
+    ProbeFacts,
+)
+from my_pa.application.meeting_context_measure import MAX_RUNS as MAX_CONTEXT_RUNS
 from my_pa.application.meeting_sync_apply import MeetingSyncApplier
 from my_pa.application.meeting_sync_ingest import MeetingSyncHandler, ParsedMeetingSync
 from my_pa.bootstrap.gateway import files_workspace_stores
@@ -60,17 +75,35 @@ from my_pa.contracts.ports import AuditSink, FileWorkspaceStore, UnitOfWork
 from my_pa.domain.audit.events import AuditEvent
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.communications.identifiers import IDENTIFIER_VERSION
+from my_pa.domain.meeting.context import (
+    DEFAULT_LOOKBACK_DAYS,
+    DEFAULT_PER_MEETING_LIMIT,
+    MAX_CONTEXT_MEETINGS,
+    MAX_LOOKBACK_DAYS,
+    MAX_PER_MEETING_LIMIT,
+)
 from my_pa.infrastructure.communications.evidence_v2 import (
     MAX_PUBLICATION_BYTES,
     PARSER_VERSION,
     parse_publication,
 )
 from my_pa.infrastructure.meeting_sync import parser as meeting_sync_parser
+from my_pa.infrastructure.persistence.communications import (
+    meeting_context_probe_facts,
+    quarantined_reason_count,
+)
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 __all__ = [
+    "DEFAULT_CONTEXT_RUNS",
+    "DEFAULT_LOOKBACK_DAYS",
+    "DEFAULT_PER_MEETING_LIMIT",
     "DEFAULT_REDERIVE_LIMIT",
     "IDENTIFIER_VERSION",
+    "MAX_CONTEXT_MEETINGS",
+    "MAX_CONTEXT_RUNS",
+    "MAX_LOOKBACK_DAYS",
+    "MAX_PER_MEETING_LIMIT",
     "MAX_REDERIVE_LIMIT",
     "communications_handler",
     "communications_rederiver",
@@ -78,6 +111,7 @@ __all__ = [
     "ingest_unit_of_work",
     "ingest_workspace_stores",
     "ingestion_lifecycle",
+    "meeting_context_measurement",
     "meeting_sync_applier",
     "meeting_sync_handler",
     "parse_for_ingestion",
@@ -200,4 +234,46 @@ def communications_rederiver(settings: Settings, engine: Engine) -> Communicatio
         stores=ingest_workspace_stores(settings, engine),
         parse=parse_for_ingestion,
         max_bytes=MAX_PUBLICATION_BYTES,
+    )
+
+
+def meeting_context_measurement(
+    engine: Engine, principal_id: str, *, clock: Callable[[], datetime] = utc_now
+) -> MeetingContextMeasurement:
+    """`measure-context`'s measurement over `engine`, for `principal_id` (read-only)."""
+    issued = 0
+
+    def count(*_args: object) -> None:
+        nonlocal issued
+        issued += 1
+
+    event.listen(engine, "before_cursor_execute", count)
+
+    def probe_facts(
+        anchors: Sequence[datetime], lookback: timedelta, excluded: Sequence[str]
+    ) -> Sequence[ProbeFacts]:
+        with engine.connect() as connection:
+            return meeting_context_probe_facts(
+                connection,
+                principal_id,
+                anchors=anchors,
+                lookback=lookback,
+                excluded_addresses=excluded,
+                identifier_version=IDENTIFIER_VERSION,
+                max_attendees=MAX_PROBE_ATTENDEES,
+                min_participants=MIN_PROBE_PARTICIPANTS,
+                identifiers=PROBE_IDENTIFIERS,
+            )
+
+    def quarantined(reason: str) -> int:
+        with engine.connect() as connection:
+            return quarantined_reason_count(connection, principal_id, reason)
+
+    return MeetingContextMeasurement(
+        unit_of_work=ingest_unit_of_work(engine),
+        probe_facts=probe_facts,
+        quarantined=quarantined,
+        statements=lambda: issued,
+        identifier_version=IDENTIFIER_VERSION,
+        clock=clock,
     )

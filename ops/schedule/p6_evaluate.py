@@ -70,12 +70,13 @@ _TABLES: Final = (
 def _read(path: Path) -> bytes:
     """At most cap + 1 bytes of a regular file (an over-cap file then fails as a bound).
 
-    The type is checked before opening (opening a FIFO would block) and again on
-    the open descriptor.
+    The type is checked before opening and again on the open descriptor. The
+    nonblocking open also covers replacement by a FIFO between those checks.
     """
     if not stat.S_ISREG(path.stat().st_mode):
         raise OSError("not a regular file")
-    with path.open("rb") as handle:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
             raise OSError("not a regular file")
         return handle.read(P6_LIMITS.file_bytes + 1)

@@ -358,8 +358,10 @@ def test_the_audit_before_texts_are_byte_copies_and_at_adds_exactly_the_new_name
 
 def test_the_new_names_are_admitted_and_s7_4a_declares_them() -> None:
     """S7-2 admitted the S7-4 names ahead of the domain; S7-4a declares all of them."""
-    assert admitted_ahead_of_the_domain("capability") == frozenset()
-    assert admitted_ahead_of_the_domain("purpose") == frozenset()
+    # No `schedule_p6` name is still ahead; a later family may be (WP5-S1 admits
+    # `meetings.context.read` ahead of the domain until WP5-S5).
+    assert admitted_ahead_of_the_domain("capability").isdisjoint(NEW_CAPABILITIES)
+    assert admitted_ahead_of_the_domain("purpose").isdisjoint(NEW_PURPOSES)
     assert {member.value for member in Capability} >= NEW_CAPABILITIES
     assert {member.value for member in Purpose} >= NEW_PURPOSES
 

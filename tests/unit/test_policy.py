@@ -593,6 +593,8 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.PROJECT_REPORTS_RECORD_HISTORY, Purpose.PROJECT_REPORTS_READ),
         (Capability.PROJECT_REPORTS_COMPARE, Purpose.PROJECT_REPORTS_READ),
         (Capability.PROJECT_REPORTS_COVERAGE, Purpose.PROJECT_REPORTS_READ),
+        # Meeting context WP5-S5 (ruling D2): the communications read purpose, reused.
+        (Capability.MEETINGS_CONTEXT_READ, Purpose.COMMUNICATIONS_READ),
     }
 )
 

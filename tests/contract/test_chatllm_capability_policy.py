@@ -116,8 +116,10 @@ def test_classification_counts_match_the_approved_plan() -> None:
     # S6-3 (chatllm-data-v13): the 22 client-usable plane names, 137 -> 159.
     # Files workspace WP5 (chatllm-data-v14): the 17 `files.*` names, 159 -> 176.
     # Communications intelligence WP4-S5 (chatllm-data-v17): the 3
-    # `communications.*` reads, 176 -> 179. Project-report reads WP4P-S4
-    # (chatllm-data-v20): the 5 `project_reports.*` reads, 179 -> 184.
+    # `communications.*` reads, 176 -> 179. P6 XER import S7-4a
+    # (chatllm-data-v19): the 7 P6 names, 179 -> 186. Project-report reads
+    # WP4P-S4 (chatllm-data-v20): the 5 `project_reports.*` reads, 186 -> 191.
+    # Meeting context WP5 (chatllm-data-v21): `meetings.context.read`, 191 -> 192.
     assert (
         counts[ChatLLMCapabilityClass.DATA_CONDITIONAL]
         == pins.CHATLLM_CLASS_COUNTS[ChatLLMCapabilityClass.DATA_CONDITIONAL.value]
@@ -215,12 +217,15 @@ def test_report_authoring_writes_are_data_required() -> None:
 def test_the_nine_meeting_capabilities_are_data_required_on_the_core_plane() -> None:
     assert len(_MEETINGS) == 9
     # Record lineage S1's `meetings.notes.*` reads share the family but are an
-    # operator decision (ADR-015, OD-07), not core-plane data.
+    # operator decision (ADR-015, OD-07), not core-plane data. Meeting context
+    # WP5-S5's `meetings.context.read` shares it too, but is DATA_CONDITIONAL on
+    # the communications switch (chatllm-data-v21, ruling D2).
     named = {
         capability
         for capability in Capability
         if capability.value.startswith("meetings.")
         and not capability.value.startswith("meetings.notes.")
+        and capability is not Capability.MEETINGS_CONTEXT_READ
     }
     assert named == _MEETINGS
     for capability in _MEETINGS:

@@ -517,6 +517,10 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.PROJECT_REPORTS_RECORD_HISTORY,
         Capability.PROJECT_REPORTS_COMPARE,
         Capability.PROJECT_REPORTS_COVERAGE,
+        # Meeting context WP5-S5: the batch names the caller's own Meetings and
+        # reads the caller's own communications and project-report rows, never a
+        # configured source or an enrollment.
+        Capability.MEETINGS_CONTEXT_READ,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

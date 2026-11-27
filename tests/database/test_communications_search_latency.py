@@ -102,8 +102,9 @@ def _text(rng: random.Random, n: int) -> str:
     return " ".join(words) + "."
 
 
-def _seed(engine: Engine) -> list[str]:
-    world = World(engine, tag="l")
+def _seed(engine: Engine, principal_id: str = P) -> list[str]:
+    """The synthetic set, under `principal_id` (the WP5 context latency test reuses it)."""
+    world = World(engine, principal_id=principal_id, tag="l")
     rng = random.Random(4)  # noqa: S311 - synthetic data, not security
     days = [17 + d for d in range(4)]
     snapshots = {day: world.snapshot(day) for day in days}
@@ -121,7 +122,7 @@ def _seed(engine: Engine) -> list[str]:
         messages.append(
             {
                 "message_id": message_id,
-                "principal_id": P,
+                "principal_id": principal_id,
                 "mailbox_ref": "mbx-synthetic",
                 "identity_kind": "provider_returned",
                 "identity_value": f"<lat{n}@example.invalid>",
@@ -150,7 +151,7 @@ def _seed(engine: Engine) -> list[str]:
         items.append(
             {
                 "item_id": item_id,
-                "principal_id": P,
+                "principal_id": principal_id,
                 "message_id": message_id,
                 "mailbox_ref": "mbx-synthetic",
                 "provider_id": f"AAMk-lat-{n}",
@@ -162,7 +163,7 @@ def _seed(engine: Engine) -> list[str]:
         observations.append(
             {
                 "observation_id": observation_id,
-                "principal_id": P,
+                "principal_id": principal_id,
                 "item_id": item_id,
                 "snapshot_id": snapshots[day],
                 "record_ordinal": n,
@@ -183,7 +184,7 @@ def _seed(engine: Engine) -> list[str]:
         )
         participants.extend(
             {
-                "principal_id": P,
+                "principal_id": principal_id,
                 "message_id": message_id,
                 "field": "from" if index == 0 else "to",
                 "address": address,
@@ -193,7 +194,7 @@ def _seed(engine: Engine) -> list[str]:
         )
         identifiers.append(
             {
-                "principal_id": P,
+                "principal_id": principal_id,
                 "message_id": message_id,
                 "kind": "rfi",
                 "value": str(n % 400),

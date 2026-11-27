@@ -163,6 +163,8 @@ async def test_full_inventory_catalog_without_execution(scene: Scene) -> None:
         and not c.value.startswith("communications.")
         # Nor WP4P-S4's five project-report reads (chatllm-data-v20).
         and not c.value.startswith("project_reports.")
+        # Nor WP5-S5's meeting context read (chatllm-data-v21).
+        and c.value != "meetings.context.read"
     }
     assert len(deployed) == 191
     assert deployed <= names

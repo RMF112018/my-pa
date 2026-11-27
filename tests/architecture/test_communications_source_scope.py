@@ -109,6 +109,15 @@ IMPORTERS = {
     # WP4-S4: the communications reads normalize identifier queries, parse the
     # quoted phrases, compute coverage and encode the grant-bound cursor.
     "application/communications_search.py",
+    # WP5-S2: the Meeting context inputs extract identifiers from a Meeting's
+    # own text with the versioned extractor (design section 3.4, ruling D4).
+    "domain/meeting/context.py",
+    # WP5-S3: the Meeting context assembly keys attendees with the C9 bridge,
+    # summarizes coverage and maps the matched identifiers.
+    "application/meeting_context.py",
+    # WP5-S6: `measure-context` keys its in-memory probe attendees, bridges
+    # them and writes their identifiers in a surface form the extractor reads.
+    "application/meeting_context_measure.py",
 }
 
 

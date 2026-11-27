@@ -84,6 +84,7 @@ __all__ = [
     "extract_identifiers",
     "identifier_forms",
     "normalize_identifier_query",
+    "surface_form",
 ]
 
 IDENTIFIER_VERSION_V1: Final = "comms_identifiers_v1"
@@ -431,6 +432,18 @@ _SURFACE: Final = {
     IdentifierKind.SUBMITTAL: "Submittal {}",
     IdentifierKind.SPEC_SECTION: "Section {}",
 }
+
+
+def surface_form(identifier: TechnicalIdentifier) -> str | None:
+    """A surface form the extractor reads back as `identifier`, or `None` for a bare kind.
+
+    `measure-context` (WP5-S6) writes a probe Meeting's identifiers into its
+    in-memory text with it, so the capability's own extraction yields them.
+    """
+    surface = _SURFACE.get(identifier.kind)
+    return None if surface is None else surface.format(identifier.value)
+
+
 _NORMALIZED: Final = re.compile(r"(?P<kind>[a-z]+):(?P<value>\S{1,256})")
 
 

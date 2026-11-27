@@ -260,6 +260,7 @@ from my_pa.application.commands import (
     ReadKnowledgeAssertion,
     ReadManagedDocument,
     ReadMeeting,
+    ReadMeetingContext,
     ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
     ReadProgramOverview,
@@ -833,6 +834,9 @@ def _requested_scope(
             | ProjectReportRecordHistory()
             | CompareProjectReports()
             | ProjectReportsCoverage()
+            # WP5-S5: the Meeting context batch names the caller's own Meetings
+            # and reads the caller's own rows, never a configured source.
+            | ReadMeetingContext()
             # `record_events.list` (WP-RE-06) names only the acting Principal's
             # own change feed, never a configured source (G1-RD-011).
             | ListRecordEvents()

@@ -80,6 +80,7 @@ from my_pa.contracts.ports import (
     ProjectReportLineValueRecord,
     ProjectReportReadLine,
     ProjectReportReadsRepository,
+    ProjectReportRfiCandidate,
     ProjectReportRfiTerm,
     ProjectReportStatedTotalRecord,
     ProjectReportVersionRecord,
@@ -191,9 +192,11 @@ __all__ = [
     "CatalogRequest",
     "CompareAnswer",
     "CompareRequest",
+    "ContextSummary",
     "CoverageAnswer",
     "CoverageRequest",
     "IdentifierItem",
+    "MeasureEntry",
     "ProjectReportReads",
     "ProjectSummary",
     "QueryAnswer",
@@ -207,11 +210,15 @@ __all__ = [
     "check_record_history_request",
     "compare_payload",
     "coverage_payload",
+    "measure_entry_payload",
     "normalize_compare",
     "normalize_query",
     "project_summary_payload",
+    "qualifier_values",
     "query_payload",
     "record_history_payload",
+    "rfi_match_payload",
+    "version_block_payload",
 ]
 
 PROJECT_REPORTS_CATALOG: Final = "project_reports.catalog"
@@ -512,6 +519,21 @@ class ProjectSummary:
     counts: tuple[MeasureEntry, ...] = ()
     versions: tuple[VersionBlock, ...] = ()
     qualifiers: tuple[ReportQualifier, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ContextSummary:
+    """One Project of a `context_summaries` batch: what the three per-Project methods answer.
+
+    `availability`, `summary` and `rfis` are, field for field, what
+    `availability`, `project_summary` and `match_rfis` answer for that Project
+    and its numbers (WP5 ruling D7, parity-tested).
+    """
+
+    project_id: str
+    availability: Availability
+    summary: ProjectSummary
+    rfis: tuple[RfiNumberMatch, ...]
 
 
 # --- normalization --------------------------------------------------------------------------
@@ -1709,12 +1731,7 @@ class ProjectReportReads:
         versions = unit.project_report_reads.list_report_versions(
             principal_id, project_ids=[project_id]
         )
-        if not versions:
-            return Availability("unavailable", "never_ingested")
-        latest = [_latest_of(members) for members in _by_series(versions).values()]
-        if all(v.state is DerivationState.QUARANTINED for v in latest):
-            return Availability("unavailable", "all_quarantined")
-        return Availability("available")
+        return _availability_of(bindings, versions)
 
     def project_summary(self, principal_id: str, project_id: str) -> ProjectSummary:
         """Latest-version record counts by status class for observations, issues and RFIs."""
@@ -1725,33 +1742,11 @@ class ProjectReportReads:
             if state.state != "available":
                 return ProjectSummary(project_id, state)
             reads = unit.project_report_reads
-            versions = [
-                v
-                for v in reads.list_report_versions(principal_id, project_ids=[project_id])
-                if v.record_family in _SUMMARY_FAMILIES
-            ]
-            series = _by_series(versions)
-            latest = [_latest_of(members) for members in series.values()]
-            mismatched = _mismatched(
-                reads,
-                principal_id,
-                [v.derivation_id for v in latest if v.state is DerivationState.CLASSIFIED],
+            latest, series = _summary_latest(
+                reads.list_report_versions(principal_id, project_ids=[project_id])
             )
-            cache: dict[str, list[ProjectReportReadLine]] = {}
-            counts = tuple(
-                _measure(
-                    reads,
-                    principal_id,
-                    MEASURES[f"{version.family_view.value}.record_count"],
-                    version,
-                    mismatched,
-                    cache,
-                )
-                for version in latest
-                if version.family_view is not None
-            )
-        blocks = tuple(_block(version, series) for version in latest)
-        return ProjectSummary(project_id, state, counts, blocks, _qualifiers(blocks))
+            mismatched = _mismatched(reads, principal_id, _classified(latest))
+            return _summary(reads, principal_id, project_id, state, latest, series, mismatched, {})
 
     def match_rfis(
         self,
@@ -1760,11 +1755,7 @@ class ProjectReportReads:
         numbers: Sequence[tuple[str | None, int]],
     ) -> tuple[RfiNumberMatch, ...]:
         """Each `(prefix or None, suffix)` matched exactly in the latest RFI versions (<= 10)."""
-        if len(numbers) > MAX_RFI_NUMBERS or any(
-            type(suffix) is not int or suffix < 0 or not (prefix is None or isinstance(prefix, str))
-            for prefix, suffix in numbers
-        ):
-            raise InvalidRequestError(SafeDetail.IDENTIFIERS)
+        _check_rfi_numbers(numbers)
         if not self._reads_enabled or not numbers:
             return ()
         with self._unit_of_work() as unit:
@@ -1772,12 +1763,231 @@ class ProjectReportReads:
             versions = reads.list_report_versions(
                 principal_id, project_ids=[project_id], record_family=RecordFamily.RFIS
             )
-            latest = [_latest_of(members) for members in _by_series(versions).values()]
-            readable = [v.derivation_id for v in latest if v.state is DerivationState.CLASSIFIED]
+            readable = _rfi_readable(versions)
             return _match_numbers(reads, principal_id, readable, numbers)
+
+    def context_summaries(
+        self,
+        principal_id: str,
+        requests: Sequence[tuple[str, Sequence[tuple[str | None, int]]]],
+    ) -> tuple[ContextSummary, ...]:
+        """`availability`, `project_summary` and `match_rfis` for a batch (WP5 ruling D7).
+
+        Each request is a Project and the RFI numbers asked of it (at most
+        `MAX_RFI_NUMBERS`, as `match_rfis` takes them); a Project may be asked
+        more than once (two Meetings of one Project), and there are at most
+        `MAX_PROJECT_IDS` requests. The answer is one `ContextSummary` per
+        request, in order, each exactly what the three per-Project methods
+        answer for it, in four reads for the whole batch plus the line reads:
+
+        1. the Principal's bindings;
+        2. the current versions of every Project that is bound or asked a
+           number (`list_report_versions`, itself 1 to 3 statements);
+        3. the current cross-checks of every available Project's latest
+           classified summary versions (skipped when there are none);
+        4. the RFI candidates of every asked Project's latest classified RFI
+           versions for the union of the numbers (skipped when none is asked);
+
+        then L line reads: each latest classified summary version's detail
+        lines, in batches of 1,000 (`_all_lines`; two statements a batch, the
+        lines and then their values), once per version however many requests
+        name its Project -- the reads `project_summary` makes. Nothing but L
+        grows with the batch: 6 + 2L statements for a batch whose versions are
+        each under 1,000 lines. Every version is the current derivation's
+        (`project_report_current_derivations`, through the read repository);
+        nothing here names a derivation table.
+
+        Equivalence: each Project's versions are its own subset of the batch's,
+        put in the repository's series order again (`_project_order`); a
+        cross-check of the union names a Project's derivation only if the
+        per-Project read would have returned it; RFI candidates are filtered to
+        the Project's own latest RFI derivations, in the repository's order.
+        """
+        asked = [(project_id, tuple(numbers)) for project_id, numbers in requests]
+        if len(asked) > MAX_PROJECT_IDS:
+            raise InvalidRequestError(SafeDetail.PROJECT_IDS)
+        for _project_id, numbers in asked:
+            _check_rfi_numbers(numbers)
+        if not self._reads_enabled:
+            off = Availability("unavailable", "reads_disabled")
+            return tuple(
+                ContextSummary(project_id, off, ProjectSummary(project_id, off), ())
+                for project_id, _numbers in asked
+            )
+        if not asked:
+            return ()
+        projects = list(dict.fromkeys(project_id for project_id, _numbers in asked))
+        numbered = {project_id for project_id, numbers in asked if numbers}
+        with self._unit_of_work() as unit:
+            reads = unit.project_report_reads
+            bindings = self._bindings(unit, principal_id)
+            bound = {
+                project_id
+                for project_id in projects
+                if any(b.state is BindingState.ACTIVE for b in bindings.get(project_id, []))
+            }
+            # A bound Project's versions decide its availability; an unbound
+            # Project asked a number is matched all the same, as `match_rfis` is.
+            wanted = sorted(bound | numbered)
+            versions = (
+                reads.list_report_versions(principal_id, project_ids=wanted) if wanted else ()
+            )
+            of_project: dict[str, list[ProjectReportVersionRecord]] = {}
+            for version in versions:
+                of_project.setdefault(version.project_id, []).append(version)
+            mine = {
+                project_id: _project_order(of_project.get(project_id, []))
+                for project_id in projects
+            }
+            states = {
+                project_id: (
+                    _availability_of(bindings.get(project_id, []), mine[project_id])
+                    if project_id in bound
+                    else Availability("unavailable", "unbound")
+                )
+                for project_id in projects
+            }
+            latest_of = {
+                project_id: _summary_latest(mine[project_id])
+                for project_id in projects
+                if states[project_id].state == "available"
+            }
+            mismatched = _mismatched(
+                reads,
+                principal_id,
+                [d for latest, _series in latest_of.values() for d in _classified(latest)],
+            )
+            cache: dict[str, list[ProjectReportReadLine]] = {}
+            summaries = {
+                project_id: (
+                    _summary(
+                        reads,
+                        principal_id,
+                        project_id,
+                        states[project_id],
+                        *latest_of[project_id],
+                        mismatched,
+                        cache,
+                    )
+                    if project_id in latest_of
+                    else ProjectSummary(project_id, states[project_id])
+                )
+                for project_id in projects
+            }
+            readable = {
+                project_id: frozenset(
+                    _rfi_readable(
+                        v for v in mine[project_id] if v.record_family is RecordFamily.RFIS
+                    )
+                )
+                for project_id in numbered
+            }
+            union = sorted({d for derivations in readable.values() for d in derivations})
+            suffixes = sorted({s for _project_id, numbers in asked for _p, s in numbers})
+            candidates = reads.rfi_candidates(principal_id, union, suffixes) if union else ()
+        return tuple(
+            ContextSummary(
+                project_id,
+                states[project_id],
+                summaries[project_id],
+                _matched(
+                    numbers, [c for c in candidates if c.derivation_id in readable[project_id]]
+                )
+                if numbers
+                else (),
+            )
+            for project_id, numbers in asked
+        )
 
 
 # --- module helpers -----------------------------------------------------------------------
+
+
+def _check_rfi_numbers(numbers: Sequence[tuple[str | None, int]]) -> None:
+    if len(numbers) > MAX_RFI_NUMBERS or any(
+        type(suffix) is not int or suffix < 0 or not (prefix is None or isinstance(prefix, str))
+        for prefix, suffix in numbers
+    ):
+        raise InvalidRequestError(SafeDetail.IDENTIFIERS)
+
+
+def _availability_of(
+    bindings: Sequence[ProjectReportBindingRecord],
+    versions: Sequence[ProjectReportVersionRecord],
+) -> Availability:
+    """The facade's availability of one Project from its bindings and current versions."""
+    if not any(b.state is BindingState.ACTIVE for b in bindings):
+        return Availability("unavailable", "unbound")
+    if not versions:
+        return Availability("unavailable", "never_ingested")
+    latest = [_latest_of(members) for members in _by_series(versions).values()]
+    if all(v.state is DerivationState.QUARANTINED for v in latest):
+        return Availability("unavailable", "all_quarantined")
+    return Availability("available")
+
+
+def _project_order(
+    versions: Sequence[ProjectReportVersionRecord],
+) -> list[ProjectReportVersionRecord]:
+    """One Project's versions in the order the repository answers them for that Project alone.
+
+    The read repository orders series by their first first-seen instant
+    among the versions it answers, then by id (`_in_series_order`); a batch's
+    answer orders them over every Project's versions, so a series that spans
+    two Projects (a source re-bound) could sort apart. Re-sorting a Project's
+    own subset restores its per-Project order exactly; the versions of a series
+    are put in the D10 order by `_by_series`, as before.
+    """
+    series: dict[str, list[ProjectReportVersionRecord]] = {}
+    for version in versions:
+        series.setdefault(version.series_id, []).append(version)
+    ordered = sorted(
+        series.items(), key=lambda item: (min(v.first_seen_at for v in item[1]), item[0])
+    )
+    return [version for _key, members in ordered for version in members]
+
+
+def _summary_latest(
+    versions: Sequence[ProjectReportVersionRecord],
+) -> tuple[list[ProjectReportVersionRecord], dict[str, list[ProjectReportVersionRecord]]]:
+    """The latest version of each summary-family series, and the series."""
+    series = _by_series(v for v in versions if v.record_family in _SUMMARY_FAMILIES)
+    return [_latest_of(members) for members in series.values()], series
+
+
+def _classified(versions: Iterable[ProjectReportVersionRecord]) -> list[str]:
+    return [v.derivation_id for v in versions if v.state is DerivationState.CLASSIFIED]
+
+
+def _rfi_readable(versions: Iterable[ProjectReportVersionRecord]) -> list[str]:
+    """The latest classified derivation of each RFI series."""
+    return _classified(_latest_of(members) for members in _by_series(versions).values())
+
+
+def _summary(
+    reads: ProjectReportReadsRepository,
+    principal_id: str,
+    project_id: str,
+    state: Availability,
+    latest: Sequence[ProjectReportVersionRecord],
+    series: Mapping[str, list[ProjectReportVersionRecord]],
+    mismatched: frozenset[str],
+    cache: dict[str, list[ProjectReportReadLine]],
+) -> ProjectSummary:
+    counts = tuple(
+        _measure(
+            reads,
+            principal_id,
+            MEASURES[f"{version.family_view.value}.record_count"],
+            version,
+            mismatched,
+            cache,
+        )
+        for version in latest
+        if version.family_view is not None
+    )
+    blocks = tuple(_block(version, series) for version in latest)
+    return ProjectSummary(project_id, state, counts, blocks, _qualifiers(blocks))
 
 
 def _match_numbers(
@@ -1791,6 +2001,12 @@ def _match_numbers(
         if derivation_ids
         else ()
     )
+    return _matched(numbers, candidates)
+
+
+def _matched(
+    numbers: Sequence[tuple[str | None, int]], candidates: Sequence[ProjectReportRfiCandidate]
+) -> tuple[RfiNumberMatch, ...]:
     found: list[RfiNumberMatch] = []
     for prefix, suffix in numbers:
         pool = [c for c in candidates if c.suffix == suffix]
@@ -2024,6 +2240,30 @@ def _row_payload(row: RowEntry) -> dict[str, object]:
         },
         "truncated_fields": list(row.truncated_fields),
     }
+
+
+# The WP5 meeting context renders its `pulse` section with these: each answers
+# exactly what the project-report reads answer for the same element.
+
+
+def rfi_match_payload(match: RfiNumberMatch) -> dict[str, object]:
+    """One RFI number's match as `project_reports.query` answers it."""
+    return _rfi_payload(match)
+
+
+def measure_entry_payload(entry: MeasureEntry) -> dict[str, object]:
+    """One measure as `project_reports.query` and `project_summary_payload` answer it."""
+    return _measure_payload(entry)
+
+
+def version_block_payload(block: VersionBlock) -> dict[str, object]:
+    """One `versions[]` entry as every project-report read answers it."""
+    return _version_payload(block)
+
+
+def qualifier_values(qualifiers: Iterable[ReportQualifier]) -> list[str]:
+    """An answer's `qualifiers[]`."""
+    return _qualifier_list(qualifiers)
 
 
 def _rfi_payload(match: RfiNumberMatch) -> dict[str, object]:

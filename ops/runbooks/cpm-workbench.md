@@ -336,12 +336,12 @@ operator-run; an agent performs none of them.
 
    ```sh
    python apps/cli/remote_mcp.py profile-diff --oauth-client-id "$CLIENT" --scope my-pa.read \
-       --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v20
+       --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v21
    python apps/cli/remote_mcp.py profile-plan --oauth-client-id "$CLIENT" --scope my-pa.read \
-       --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v20
+       --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v21
    # operator-gated; only after the go/no-go below
    python apps/cli/remote_mcp.py profile-apply --oauth-client-id "$CLIENT" --scope my-pa.read \
-       --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v20 --apply
+       --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v21 --apply
    ```
 
    **Go/no-go is a set rule, not a count** (R10-F05, R10-N02): (i) the diff shows **no
@@ -622,10 +622,10 @@ field is captured only with `include_personal: true` and served only to a holder
 - **Reading the oracle.** It builds version 1 with every §11.5 default, runs the engine at
   the data date and compares each activity, joined by Activity ID, with P6's own early start,
   early finish, late start, late finish, total float (hours × 60) and remaining early start:
-  per quantity the compared and equal counts, `equal_share`, a histogram of `engine − P6` in
-  minutes (0, ±1..60, ±61..480, ±481..2400, beyond), the largest absolute difference, and the
-  activities with no P6 value, a value off the engine's axis or no engine value (none is a
-  mismatch), each split by activity state; then the critical sets (total float at most the
+  per quantity the compared and equal counts by activity state, plus aggregate `equal_share`,
+  a histogram of `engine − P6` in minutes (0, ±1..60, ±61..480, ±481..2400, beyond), the
+  largest absolute difference, and counts for no P6 value, a value off the engine's axis or
+  no engine value (none is a mismatch); then the critical sets (total float at most the
   project threshold, over the activities both give a float). It is **a check, not a claim of
   equivalence**: `unmodelled_settings` names the P6 options the export sets that the engine
   does not model (`ss_lag_from_early_start`, `use_expected_finish`, `total_float_type`,

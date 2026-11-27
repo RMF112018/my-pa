@@ -56,6 +56,10 @@ from tests.conftest import (
     staged_search,
 )
 from tests.files_workspace_samples import FILES_WORKSPACE_CAPABILITIES, files_commands
+from tests.meeting_context_samples import (
+    MEETING_CONTEXT_CAPABILITIES,
+    meeting_context_commands,
+)
 from tests.project_reports_reads_samples import (
     PROJECT_REPORTS_READ_CAPABILITIES,
     project_reports_commands,
@@ -1680,6 +1684,7 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         **communications_commands("policy"),
         **schedule_p6_commands("policy"),
         **project_reports_commands("policy"),
+        **meeting_context_commands("policy"),
     }
 
 
@@ -2203,6 +2208,8 @@ SCOPED_CAPABILITIES = [
         *SCHEDULE_P6_CAPABILITIES,
         # Project-report reads WP4P-S4: the 5 reads (scopeless, read switch off).
         *PROJECT_REPORTS_READ_CAPABILITIES,
+        # Meeting context WP5-S5: the one read (scopeless, communications switch off).
+        *MEETING_CONTEXT_CAPABILITIES,
     }
 ]
 
@@ -2576,6 +2583,8 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         *SCHEDULE_P6_CAPABILITIES,
         # Project-report reads WP4P-S4: the 5 reads (scopeless, read switch off).
         *PROJECT_REPORTS_READ_CAPABILITIES,
+        # Meeting context WP5-S5: the one read (scopeless, communications switch off).
+        *MEETING_CONTEXT_CAPABILITIES,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

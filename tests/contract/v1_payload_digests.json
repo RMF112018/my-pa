@@ -132,9 +132,17 @@
       "reason": "ADR-023 (S7-4b: p6 create option, P6 change kinds)",
       "section": "tools",
       "to": "767176274ac0aa50cf329a3ec1f76bbbf3bac0844e15bd1c865003a1969a8c81"
+    },
+    {
+      "date": "2026-11-26",
+      "kind": "added",
+      "names": [
+        "meetings.context.read"
+      ],
+      "section": "tools"
     }
   ],
-  "seal": "ef636bd1c45fe76a5f925362146f67e1a14600d52085cf954fae768de83ff193",
+  "seal": "a4ebbc82e3ea69433d7768665dfc2d8a28b78b23e2c0891f557077b15faeabf6",
   "tools": {
     "canvas.workspace.get": "65876ad8f7197a4e8465b3a9019dd234b782f605dfda37d10c1026b660941fb3",
     "canvas.workspace.put": "985bbd6cd28bbaffe0520daa1883b0503a592f4369171a366ca14de8b43a5a8b",
@@ -326,6 +334,7 @@
     "knowledge.read": "3fd14338a32589a1bac799a547ebc1b76245035791ec25f08545b001e6236d85",
     "knowledge.reveal": "3b6382065901930ab2bd17a4c5e2f0c03e9a562e73917a77373e9d6cbf9ef580",
     "knowledge.search": "91bfa2a647992147e862a63622fdddada3a845228e80812ab1509836de0a6960",
+    "meetings.context.read": "8e4403a17b85c46ae1dbcf17d4956b02891152aab1e1e4afb605118181d95f0f",
     "meetings.create": "91e75e369dd1b3890f5963a5f8193e94c121292aa1a2365c3d223ca1a93ef4d7",
     "meetings.list": "fd6b857004d8905d125a22fc4afba8ee5121cac22c7d87a34bd9c47ddba18cb2",
     "meetings.notes.read_version": "6d33ed547df8c869cd05db054a28740fd7f0be2d107ab9b64e152441d7b753ea",

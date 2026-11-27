@@ -409,7 +409,8 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
         # workspace store (`MY_PA_FILES_WORKSPACE_ROOT`, unset by default).
         or capability in FILE_WORKSPACE_CAPABILITIES
         # Communications intelligence WP4-S5: the 3 `communications.*` reads,
-        # behind `MY_PA_COMMUNICATIONS_ENABLED` (default off).
+        # behind `MY_PA_COMMUNICATIONS_ENABLED` (default off), and meeting
+        # context WP5-S5's `meetings.context.read` behind the same switch.
         or capability in _COMMUNICATIONS_CAPABILITIES
         # P6 XER import S7-4a: the 7 P6 names, behind `MY_PA_SCHEDULE_P6_ENABLED`
         # on top of the Schedule switch (default off).
@@ -421,7 +422,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
     assert implemented == total
-    assert len(withheld_families) == 189
+    assert len(withheld_families) == 190
     assert unwired == set()
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
@@ -501,7 +502,10 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # Project-report reads WP4P-S4's five `project_reports.*` reads are a
     # twelfth withheld family (default-off switch): the default is unchanged
     # and the withheld figure grows by five.
-    assert default == 127 and withheld == 189
+    # Meeting context WP5-S5's `meetings.context.read` joins the tenth family
+    # (no switch of its own, ruling D2): the default is unchanged and the
+    # withheld figure grows by one.
+    assert default == 127 and withheld == 190
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured

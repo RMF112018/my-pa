@@ -65,6 +65,8 @@ _P6_PARSER: Final = (
     "my_pa.domain.schedule.p6.values",
     "my_pa.domain.schedule.p6.calendar",
     "my_pa.domain.schedule.p6.profile",
+    # S7-5: the engine-vs-P6 oracle reaches the parser; it is an operator-script module.
+    "my_pa.domain.schedule.p6.oracle",
 )
 
 
@@ -331,3 +333,30 @@ def test_the_s5b2_contract_crosswalk_names_tests_that_exist() -> None:
     assert modules, "the crosswalk names no module?"
     absent = sorted(module for module in modules if not (ROOT / module).is_file())
     assert not absent, f"the contract names test modules that do not exist: {absent}"
+
+
+P6_RUNBOOK: Final = ROOT / "ops" / "runbooks" / "cpm-workbench.md"
+
+
+def test_the_runbook_import_example_is_a_valid_request_shape() -> None:
+    """S7-5 runbook section 10.5: the worked `import_p6` input names the request's fields."""
+    from my_pa.domain.schedule.p6_import import P6_IMPORT_FIELDS
+
+    text = P6_RUNBOOK.read_text(encoding="utf-8")
+    section = text[text.index("### 10.5 How a client imports") : text.index("### 10.6 Statuses")]
+    block = section.split("```json", 1)[1].split("```", 1)[0]
+    example = json.loads(block)
+    assert set(example) <= P6_IMPORT_FIELDS
+    assert set(example) >= {
+        "project_id",
+        "workspace_id",
+        "path",
+        "expected_version",
+        "expected_sha256",
+        "format",
+        "idempotency_key",
+    }
+    assert sum(key in example for key in ("series_id", "series_name", "series_auto")) == 1
+    assert example["format"] == "p6_xer"
+    assert '"include_sha256": true' in section
+    assert "`accept_project_identity_change`" in section

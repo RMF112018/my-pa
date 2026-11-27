@@ -8,9 +8,11 @@
   slice S7-4a (the 7 P6 capabilities, switch, policy, ChatLLM `chatllm-data-v19`, field registry,
   reads and the format-aware S5 reads, no migration) is merged (#391); slice S7-4b (the delta
   `cpm-workbench-p6-delta-v1` and the P6 scenario snapshot, no migration, no new capability) is
-  implemented on `feat/schedule-xer-handoff`, not merged; nothing else is implemented, and
-  nothing is migrated on any shared database, granted, switched on or deployed. Every other
-  slice (S7-5, S7-6),
+  merged (#392); slice S7-5 (the operator runbook, the engine-vs-P6 oracle and the read-only
+  evaluation script, no migration, no capability) is implemented on
+  `feat/schedule-xer-evaluation`, not merged; nothing else is implemented, and
+  nothing is migrated on any shared database, granted, switched on or deployed. The optional
+  slice S7-6,
   gate G-1 and every other operator gate in the contract stays open. The operator answered the contract's open
   questions on 2026-11-23 (recorded below and in contract section 17); only S7-6 stays
   undecided.
@@ -229,11 +231,15 @@ of contract section 10.1 behind `MY_PA_SCHEDULE_P6_ENABLED` (on every closed sur
 writes idempotent and client-bound remotely), ChatLLM `chatllm-data-v19`, the field registry and
 the compare-and-swap capture chain, the P6 reads with the section 7.7 filter grammar, the S5
 reads format-aware for P6 publications, and the snapshot quota and import budgets. S7-4b
-implemented on `feat/schedule-xer-handoff` (not merged; no migration, no new capability): the
+merged (#392; no migration, no new capability): the
 P6 delta `cpm-workbench-p6-delta-v1` (`schedule_changes.list` and `schedule_baselines.compare`
 choose the algorithm by the Series' format) and the P6 scenario snapshot of contract section
 11.5 (`schedule_scenarios.create` with its `p6` options); the S6 engine, content schemas and
 stored version columns are unchanged.
-Gate G-1 (the script on the operator's sample) is not run. S7-5 (and the optional
-S7-6) are not implemented; the contract defines their acceptance tests, the prove-red plan and
-the operator gates.
+S7-5 implemented on `feat/schedule-xer-evaluation` (not merged; no migration, no capability):
+the runbook section (`ops/runbooks/cpm-workbench.md` section 10), the engine-vs-P6 oracle
+`src/my_pa/domain/schedule/p6/oracle.py` (a check, never a claim of equivalence) and the
+read-only, stats-only `ops/schedule/p6_evaluate.py`; its acceptance (gate G-7, the real-corpus
+run) is operator-run.
+Gate G-1 (the script on the operator's sample) is not run. The optional S7-6 is not
+implemented; the contract defines its acceptance tests and the operator gates.

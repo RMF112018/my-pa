@@ -90,7 +90,7 @@ injection mechanism. Grant setup and remote deployment are outside Issue #365.
 
 ## Storage protocol
 
-**Proposed ADR-021 interoperability hold (not commissioned):** This Issue #365 publisher currently writes session artifacts at `artifacts/<relative-path>` plus session-root metadata. The separate Issue #369 default-off placement candidate proposes typed `artifacts/<role>/<artifact-id>__<filename>` and operator-registered ownership. The present publisher has **not** been qualified against that future guard, so activating `MY_PA_FILES_SDCR_POLICY_FILE`, ratifying ADR-021, or representing the two layouts as compatible requires a separately authorized alignment and client/receiver qualification. No source records, policy status, credentials, grants, or production settings are changed by this notice.
+**Proposed ADR-021 remains uncommissioned.** The publisher now derives each artifact path through `route_session_artifact` as `artifacts/<role>/<artifact-id>__<safe-filename>` when the caller supplies a trusted `--registration` map whose program and workstream match the session spec. The original relative path stays in manifest metadata. An unregistered work item or a conflicting owner claim is refused before any write. Unknown or withheld roles use `unclassified` and cannot become `READY_FOR_HANDOFF`. This does not set `MY_PA_FILES_SDCR_POLICY_FILE`, accept ADR-021, or enable the server placement gate. The server still admits a path only when that separate policy file is explicitly configured.
 
 - Canonical owner path:
   `mcp:SDCR/20-Programs/<program>/workstreams/<workstream>/work-items/<id>/sessions/<session-id>/`.

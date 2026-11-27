@@ -143,8 +143,11 @@ def payload(workspace: SyntheticFilesWorkspace, path: str) -> dict:
     return json.loads(workspace.entries[path].decode("utf-8"))
 
 
+REGISTRATION = {"365": {"program": "shared-platform", "workstream": "cross-client-publication"}}
+
+
 def run(pub: SyntheticFilesWorkspace, folder: Path, data: dict) -> dict:
-    return asyncio.run(publish(pub, folder, data))
+    return asyncio.run(publish(pub, folder, data, registration=REGISTRATION))
 
 
 def test_end_to_end_text_binary_failed_evidence_and_handoff(tmp_path: Path) -> None:
@@ -952,7 +955,7 @@ def test_f01_in_place_mutation_during_multichunk_transfer_uses_only_sealed_bytes
             self.seal_write_refused = False
 
         async def upload(self, local: Path, destination: str, digest: str, size: int) -> dict:
-            if destination.endswith("/report.bin"):
+            if destination.endswith("__report.bin"):
                 with local.open("rb") as reader:
                     first = reader.read(1024)
                     original.write_bytes(b"R" * len(approved))
@@ -970,7 +973,7 @@ def test_f01_in_place_mutation_during_multichunk_transfer_uses_only_sealed_bytes
     assert store.seal_write_refused
     assert result["status"] == "PUBLICATION_INCOMPLETE"
     assert result["verified"] == 0
-    remote = f"{publisher._session_path(data)}/artifacts/report.bin"
+    remote = next(path for path in store.entries if path.endswith("__report.bin"))
     assert store.entries[remote] == approved
     assert payload(store, result["receipt_path"])["disposition"] == "PUBLICATION_INCOMPLETE"
 
@@ -1195,3 +1198,29 @@ def test_cancelled_transfer_ignores_recycled_descriptor_bytes(
         asyncio.run(scenario(admitted_fd, unadmitted_fd))
     assert transmitted == [admitted]
     assert unadmitted not in b"".join(transmitted)
+
+
+def test_unregistered_or_conflicting_owner_writes_nothing(tmp_path: Path) -> None:
+    (tmp_path / "report.bin").write_bytes(b"synthetic")
+    data = spec()
+    data["artifact_statuses"] = {}
+    store = SyntheticFilesWorkspace()
+    with pytest.raises(PublicationError, match="work_item_not_registered"):
+        asyncio.run(publish(store, tmp_path, data, registration={}))
+    data["program"] = "moss-pcc"
+    with pytest.raises(PublicationError, match="owner_claim_conflict"):
+        asyncio.run(publish(store, tmp_path, data, registration=REGISTRATION))
+    assert all(value is None for value in store.entries.values())
+    from my_pa.domain.files.sdcc_placement import route_session_artifact
+
+    artifact_id, filename = publisher._artifact_names("report.bin")
+    routed = route_session_artifact(
+        publisher._placement_policy(None),
+        REGISTRATION,
+        work_item_id="365",
+        session_id="SESSION-20261119-365-001",
+        category="evidence",
+        artifact_id=artifact_id,
+        filename=filename,
+    )
+    assert "/artifacts/evidence/" in routed and routed.endswith("__report.bin")

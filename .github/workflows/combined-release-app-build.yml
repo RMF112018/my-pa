@@ -1,0 +1,91 @@
+name: Combined release app archive
+
+on:
+  push:
+    branches:
+      - bf/combined-release-app-build
+
+permissions:
+  contents: read
+
+jobs:
+  app-archive:
+    if: github.repository == 'RMF112018/my-pa' && github.ref == 'refs/heads/bf/combined-release-app-build' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out build verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: diagnostic
+          persist-credentials: false
+
+      - name: Check out exact release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 64f53d4ac0f819f93aab05a2bae653647320ffd3
+          path: release
+          persist-credentials: false
+
+      - name: Build and verify the app archive
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+
+          commit=64f53d4ac0f819f93aab05a2bae653647320ffd3
+          tree=c503df2b844e8d87e053d98ea6060117eee4371d
+          test "$(git -C diagnostic rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C release rev-parse HEAD)" = "$commit"
+          test "$(git -C release rev-parse 'HEAD^{tree}')" = "$tree"
+          test -z "$(git -C release status --porcelain=v1 --untracked-files=all)"
+          test "$(uname -sm)" = "Linux x86_64"
+
+          build_root="$(mktemp -d "$RUNNER_TEMP/my-pa-build.XXXXXX")"
+          context="$build_root/context"
+          output="$build_root/output"
+          export DOCKER_CONFIG="$build_root/docker"
+          mkdir "$context" "$output" "$DOCKER_CONFIG"
+          git -C release archive "$commit" | tar -xf - -C "$context"
+          lock_sha="$(sha256sum "$context/ops/docker/python-runtime.lock" | awk '{print $1}')"
+          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          [[ "$lock_sha" =~ ^[0-9a-f]{64}$ ]]
+
+          if ! docker buildx build \
+            --platform linux/amd64 \
+            --file "$context/ops/docker/app.Dockerfile" \
+            --tag "my-pa-app:$commit" \
+            --label "org.opencontainers.image.revision=$commit" \
+            --label "io.my-pa.repository-tree=$tree" \
+            --label "org.opencontainers.image.created=$built_at" \
+            --label "io.my-pa.target-platform=linux/amd64" \
+            --build-arg "SOURCE_COMMIT=$commit" \
+            --build-arg "SOURCE_TREE=$tree" \
+            --build-arg "BUILD_TIMESTAMP=$built_at" \
+            --build-arg "PYTHON_RUNTIME_LOCK_SHA256=$lock_sha" \
+            --metadata-file "$build_root/app.raw.metadata.json" \
+            --output "type=docker,dest=$output/app.tar" \
+            "$context" >/dev/null 2>&1; then
+            echo "::error title=Combined release app build::BuildKit failed"
+            exit 1
+          fi
+
+          python3 diagnostic/.github/diagnostics/verify_release_app.py \
+            --output "$output" --raw-metadata "$build_root/app.raw.metadata.json" \
+            --built-at "$built_at" --lock-sha "$lock_sha"
+          test -z "$(git -C release status --porcelain=v1 --untracked-files=all)"
+          echo "output=$output" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the verified app package for local receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: combined-release-app-64f53d4ac0f819f93aab05a2bae653647320ffd3
+          path: |
+            ${{ steps.package.outputs.output }}/app.tar
+            ${{ steps.package.outputs.output }}/app.metadata.json
+            ${{ steps.package.outputs.output }}/app-build-receipt.json
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error

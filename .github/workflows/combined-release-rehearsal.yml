@@ -1,0 +1,82 @@
+name: Combined release migration rehearsal
+
+on:
+  push:
+    branches:
+      - bf/combined-release-rehearsal
+
+permissions:
+  contents: read
+
+jobs:
+  combined-release-rehearsal:
+    if: github.repository == 'RMF112018/my-pa' && github.ref == 'refs/heads/bf/combined-release-rehearsal' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: combined_rehearsal
+          POSTGRES_DB: combined_rehearsal_app
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - "127.0.0.1:5432:5432"
+        options: >-
+          --health-cmd "pg_isready --username combined_rehearsal --dbname combined_rehearsal_app"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out diagnostic driver
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: diagnostic
+          persist-credentials: false
+
+      - name: Check out exact release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: cbf57bf3823a8f4399c67282f91c1596b1713d24
+          path: release
+          persist-credentials: false
+
+      - name: Verify checkout identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C diagnostic rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C release rev-parse HEAD)" = cbf57bf3823a8f4399c67282f91c1596b1713d24
+          test "$(git -C release rev-parse 'HEAD^{tree}')" = c503df2b844e8d87e053d98ea6060117eee4371d
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.1
+        with:
+          python-version: "3.12"
+
+      - name: Install the release's declared dependencies
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! python -m pip --disable-pip-version-check install -e '.[dev]' >/dev/null 2>&1; then
+            echo "::error title=Combined release rehearsal::Dependency setup failed"
+            exit 1
+          fi
+
+      - name: Rehearse the combined release
+        shell: bash
+        env:
+          DIAGNOSTIC_SERVICE_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          [[ "$DIAGNOSTIC_SERVICE_CONTAINER" =~ ^[a-f0-9]{64}$ ]]
+          SYSTEM_IDENTIFIER="$(
+            docker exec "$DIAGNOSTIC_SERVICE_CONTAINER" psql -X --no-password \
+              --username combined_rehearsal --dbname combined_rehearsal_app --tuples-only --no-align \
+              --set ON_ERROR_STOP=1 --command 'SELECT system_identifier::text FROM pg_control_system()'
+          )"
+          [[ "$SYSTEM_IDENTIFIER" =~ ^[0-9]{1,20}$ ]]
+          python diagnostic/.github/diagnostics/combined_release_rehearsal.py \
+            --release release --port 5432 --expected-system-identifier "$SYSTEM_IDENTIFIER"

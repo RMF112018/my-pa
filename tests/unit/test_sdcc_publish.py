@@ -994,7 +994,11 @@ def test_f01_rechecks_secret_eligibility_on_the_sealed_snapshot(
     result = run(store, output, data)
     assert result["status"] == "PUBLICATION_INCOMPLETE"
     assert result["verified"] == 0
-    assert not any("/artifacts/" in path for path in store.entries)
+    # The typed category directory is created before sealing. Refusal must still
+    # store no artifact bytes.
+    assert not any(
+        value is not None and "/artifacts/" in path for path, value in store.entries.items()
+    )
 
 
 def test_f01_source_changed_at_fd_open_refuses_before_egress(
@@ -1024,7 +1028,9 @@ def test_f01_source_changed_at_fd_open_refuses_before_egress(
     assert modified
     assert result["status"] == "PUBLICATION_INCOMPLETE"
     assert result["verified"] == 0
-    assert not any("/artifacts/" in path for path in store.entries)
+    assert not any(
+        value is not None and "/artifacts/" in path for path, value in store.entries.items()
+    )
 
 
 def test_f01_inventory_scanner_race_refuses_before_remote_writes(

@@ -146,8 +146,10 @@ from my_pa.infrastructure.persistence.jobs import (
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     matching_partition_criterion,
-    partition_criterion,
     principal_bound_values,
+)
+from my_pa.infrastructure.persistence.smoke_fixture_visibility import (
+    visible_fixture_partition,
 )
 from my_pa.infrastructure.persistence.tables import (
     JobState,
@@ -204,7 +206,7 @@ _HEX: Final = frozenset("0123456789abcdef")
 
 
 def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
-    return partition_criterion(table, capture_context(principal_id))
+    return visible_fixture_partition(table, principal_id)
 
 
 def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[str, object]:

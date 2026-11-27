@@ -50,8 +50,10 @@ from my_pa.contracts.ports import (
 )
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
-    partition_criterion,
     principal_bound_values,
+)
+from my_pa.infrastructure.persistence.smoke_fixture_visibility import (
+    visible_fixture_partition,
 )
 from my_pa.infrastructure.persistence.tables import (
     ingest_coverage_windows,
@@ -66,7 +68,7 @@ __all__ = ["SqlIngestionRepository", "ingest_aggregate"]
 
 
 def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
-    return partition_criterion(table, capture_context(principal_id))
+    return visible_fixture_partition(table, principal_id)
 
 
 def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[str, object]:

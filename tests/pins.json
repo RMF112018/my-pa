@@ -146,10 +146,10 @@
     "revision_files": 138
   },
   "census": {
-    "architecture": 10546,
+    "architecture": 10547,
     "database": 7600,
     "evaluation": 2,
-    "fast_collected": 57236,
+    "fast_collected": 57237,
     "fast_skipped": 138,
     "mypy_files": 815,
     "src_modules": 613,

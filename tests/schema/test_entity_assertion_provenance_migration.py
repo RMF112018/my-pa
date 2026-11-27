@@ -382,6 +382,7 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "schedule_p6_calendars",
         "schedule_p6_field_values",
         "schedule_p6_observed_fields",
+        "smoke_fixture_retirements",
     }
     assert {
         "entities",

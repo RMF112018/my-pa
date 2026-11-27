@@ -672,6 +672,7 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "schedule_p6_observed_fields",
         }
     ),
+    "7f4d9ac28631": frozenset({"smoke_fixture_retirements"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

@@ -456,6 +456,7 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "schedule_p6_calendars",
         "schedule_p6_field_values",
         "schedule_p6_observed_fields",
+        "smoke_fixture_retirements",
     }
 )
 

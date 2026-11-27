@@ -6,10 +6,19 @@ Eleven tables are reached here and nowhere else: `meeting_series`, `meetings`,
 `meeting_series_history`, `meeting_write_requests`, and the communications
 intelligence WP2 provider bindings `meeting_provider_bindings` and
 `meeting_series_provider_bindings`.
-Three tables of other planes are read and never written: `entities` (the
-attendee Person references, share-locked), `projects` (ownership only) and the
-managed-document tables (ownership, state and the safe title/media projection of
-an attachment).
+Tables of other planes are read and never written: `entities` (the
+attendee Person references, share-locked), `projects` (ownership, and the
+Project number for the Meeting context batch), the managed-document tables
+(ownership, state and the safe title/media projection of an attachment) and,
+for the Meeting context batch only (WP5), `meeting_provider_review_marks`
+(whether a Meeting is marked `no_provider_event`).
+
+**The Meeting context batch is set-based.** `read_context_inputs` reads every
+named Meeting in seven statements whatever their number (core, attendees,
+note heads, prep heads, bindings with their series, review marks, Projects),
+each `meeting_id IN (...)` under the partition guard. The description and the
+note and prep heads are read as `left(content, 20000)` with a longer-than flag:
+the identifier scan's inputs (ruling D14), never a body the answer returns.
 
 **The partition is reached through the guard, never written by hand.** The
 `persistence/constraints.py` idiom, exactly: every SELECT is built through
@@ -82,6 +91,7 @@ from my_pa.contracts.ports import (
     CoveredProviderBinding,
     MeetingAttachmentRecord,
     MeetingAttendeeRecord,
+    MeetingContextInput,
     MeetingCursorAnchor,
     MeetingEntityState,
     MeetingListPage,
@@ -103,11 +113,13 @@ from my_pa.contracts.v1.meetings import (
     MeetingHistoryView,
     MeetingListEntry,
     MeetingNoteView,
+    MeetingProviderBindingView,
     MeetingSeriesHistoryView,
     MeetingSeriesView,
     MeetingView,
 )
 from my_pa.domain.documents.managed import DocumentState, LifecycleTransition
+from my_pa.domain.meeting.context import IDENTIFIER_SCAN_CHARACTERS, ContextText
 from my_pa.domain.meeting.model import (
     AttendeeResponseStatus,
     MeetingActor,
@@ -141,6 +153,7 @@ from my_pa.infrastructure.persistence.tables import (
     meeting_note_versions,
     meeting_prep_versions,
     meeting_provider_bindings,
+    meeting_provider_review_marks,
     meeting_series,
     meeting_series_history,
     meeting_series_provider_bindings,
@@ -1229,6 +1242,193 @@ class SqlMeetingRepository(MeetingRepository):
             notes=self.current_note(principal_id, meeting_id),
         )
 
+    def read_context_inputs(
+        self, principal_id: str, meeting_ids: Sequence[str]
+    ) -> tuple[MeetingContextInput, ...]:
+        """Seven statements for the whole batch, each `meeting_id IN (...)` (WP5 design 3.10)."""
+        wanted = list(dict.fromkeys(meeting_ids))
+        context = capture_context(principal_id)
+        cores = self._connection.execute(
+            principal_scoped(
+                select(
+                    meetings.c.meeting_id,
+                    meetings.c.meeting_series_id,
+                    _series_title().label("series_title"),
+                    meetings.c.title,
+                    meetings.c.status,
+                    meetings.c.start_at,
+                    meetings.c.end_at,
+                    meetings.c.timezone_name,
+                    meetings.c.project_id,
+                    meetings.c.version,
+                    *_scan_head(meetings.c.description),
+                ),
+                meetings,
+                context,
+            ).where(meetings.c.meeting_id.in_(wanted))
+        ).all()
+        attendees: dict[str, list[MeetingAttendeeView]] = {}
+        for row in self._connection.execute(
+            principal_scoped(
+                select(
+                    meeting_attendees.c.meeting_id,
+                    meeting_attendees.c.attendee_id,
+                    meeting_attendees.c.entity_id,
+                    meeting_attendees.c.display_name,
+                    meeting_attendees.c.email_normalized,
+                    meeting_attendees.c.is_organizer,
+                    meeting_attendees.c.response_status,
+                    meeting_attendees.c.added_at,
+                ),
+                meeting_attendees,
+                context,
+            )
+            .where(
+                meeting_attendees.c.meeting_id.in_(wanted),
+                meeting_attendees.c.removed_at.is_(None),
+            )
+            .order_by(meeting_attendees.c.meeting_id.asc(), meeting_attendees.c.attendee_id.asc())
+        ):
+            attendees.setdefault(row.meeting_id, []).append(
+                MeetingAttendeeView(
+                    attendee_id=row.attendee_id,
+                    entity_id=row.entity_id,
+                    display_name=row.display_name,
+                    email=row.email_normalized,
+                    is_organizer=row.is_organizer,
+                    response_status=AttendeeResponseStatus(row.response_status),
+                    added_at=row.added_at,
+                )
+            )
+        notes = self._scan_heads(meeting_note_versions, _has_no_successor(), principal_id, wanted)
+        preps = self._scan_heads(
+            meeting_prep_versions, _prep_has_no_successor(), principal_id, wanted
+        )
+        bindings = self._binding_views(principal_id, wanted)
+        marked = set(
+            self._connection.execute(
+                principal_scoped(
+                    select(meeting_provider_review_marks.c.meeting_id),
+                    meeting_provider_review_marks,
+                    context,
+                ).where(meeting_provider_review_marks.c.meeting_id.in_(wanted))
+            ).scalars()
+        )
+        project_ids = sorted({row.project_id for row in cores if row.project_id is not None})
+        numbers: dict[str, str | None] = {
+            row.project_id: row.project_number
+            for row in self._connection.execute(
+                principal_scoped(
+                    select(projects.c.project_id, projects.c.project_number),
+                    projects,
+                    context,
+                ).where(projects.c.project_id.in_(project_ids))
+            )
+        }
+        by_id = {row.meeting_id: row for row in cores}
+        return tuple(
+            MeetingContextInput(
+                meeting_id=row.meeting_id,
+                meeting_series_id=row.meeting_series_id,
+                series_title=row.series_title,
+                title=row.title,
+                status=MeetingStatus(row.status),
+                start_at=row.start_at,
+                end_at=row.end_at,
+                timezone_name=row.timezone_name,
+                project_id=row.project_id,
+                version=row.version,
+                # `MeetingView`'s order: the organizer first, then attendee id.
+                attendees=tuple(
+                    sorted(
+                        attendees.get(row.meeting_id, ()),
+                        key=lambda attendee: (not attendee.is_organizer, attendee.attendee_id),
+                    )
+                ),
+                description=_context_text(row.scan_text, row.scan_truncated),
+                note=notes.get(row.meeting_id),
+                prep=preps.get(row.meeting_id),
+                provider_binding=bindings.get(row.meeting_id),
+                review_marked=row.meeting_id in marked,
+                project_number=(None if row.project_id is None else numbers.get(row.project_id)),
+            )
+            for row in (by_id[meeting_id] for meeting_id in wanted if meeting_id in by_id)
+        )
+
+    def _scan_heads(
+        self,
+        table: Table,
+        is_head: ColumnElement[bool],
+        principal_id: str,
+        meeting_ids: Sequence[str],
+    ) -> dict[str, ContextText]:
+        """The current note or prep head of each Meeting, capped for the identifier scan."""
+        rows = self._connection.execute(
+            principal_scoped(
+                select(table.c.meeting_id, *_scan_head(table.c.content_markdown)),
+                table,
+                capture_context(principal_id),
+            ).where(table.c.meeting_id.in_(meeting_ids), is_head)
+        ).all()
+        heads: dict[str, ContextText] = {}
+        for row in rows:
+            text = _context_text(row.scan_text, row.scan_truncated)
+            if row.meeting_id in heads or text is None:
+                # One head per Meeting is the chain's invariant.
+                raise RepositoryFailureError
+            heads[row.meeting_id] = text
+        return heads
+
+    def _binding_views(
+        self, principal_id: str, meeting_ids: Sequence[str]
+    ) -> dict[str, MeetingProviderBindingView]:
+        """Each Meeting's binding with the series its UID is bound to (`_binding_view`, batched)."""
+        binding = meeting_provider_bindings
+        series = meeting_series_provider_bindings
+        rows = self._connection.execute(
+            principal_scoped(
+                select(
+                    *_BINDING_COLUMNS,
+                    series.c.meeting_series_id.label("bound_series_id"),
+                ).select_from(
+                    binding.outerjoin(
+                        series,
+                        and_(
+                            _mine(series, principal_id),
+                            matching_partition_criterion(series, binding),
+                            series.c.calendar_ref == binding.c.calendar_ref,
+                            series.c.series_ical_uid == binding.c.series_ical_uid,
+                        ),
+                    )
+                ),
+                binding,
+                capture_context(principal_id),
+            ).where(binding.c.meeting_id.in_(meeting_ids))
+        ).all()
+        views: dict[str, MeetingProviderBindingView] = {}
+        for row in rows:
+            record = _to_binding(row)
+            if record.series_ical_uid is not None and row.bound_series_id is None:
+                # The composite foreign key keeps an occurrence's series bound.
+                raise RepositoryFailureError
+            views[record.meeting_id] = MeetingProviderBindingView(
+                binding_id=record.binding_id,
+                meeting_id=record.meeting_id,
+                calendar_ref=record.calendar_ref,
+                ical_uid=record.ical_uid,
+                occurrence_original_start_utc=record.occurrence_original_start_utc,
+                series_ical_uid=record.series_ical_uid,
+                meeting_series_id=row.bound_series_id,
+                provider_event_id=record.provider_event_id,
+                provider_event_id_format=record.provider_event_id_format,
+                provider_state=record.provider_state,
+                last_seen_at=record.last_seen_at,
+                version=record.version,
+                created_at=record.created_at,
+                updated_at=record.updated_at,
+            )
+        return views
+
     def list_meetings(
         self, principal_id: str, request: MeetingListRequest, *, now: datetime
     ) -> MeetingListPage:
@@ -1739,6 +1939,18 @@ _BINDING_COLUMNS: Final = (
     meeting_provider_bindings.c.created_at,
     meeting_provider_bindings.c.updated_at,
 )
+
+
+def _scan_head(column: ColumnElement[Any]) -> tuple[ColumnElement[Any], ColumnElement[Any]]:
+    """`left(column, 20000)` and whether the stored text is longer (ruling D14)."""
+    return (
+        func.left(column, IDENTIFIER_SCAN_CHARACTERS).label("scan_text"),
+        (func.char_length(column) > IDENTIFIER_SCAN_CHARACTERS).label("scan_truncated"),
+    )
+
+
+def _context_text(text: str | None, truncated: bool | None) -> ContextText | None:
+    return None if text is None else ContextText(text=text, truncated=bool(truncated))
 
 
 def _to_binding(row: Row[Any]) -> MeetingProviderBindingRecord:

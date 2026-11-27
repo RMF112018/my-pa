@@ -384,6 +384,8 @@ def test_capability_names_match_the_published_contract() -> None:
         "project_reports.record_history",
         "project_reports.compare",
         "project_reports.coverage",
+        # Meeting context WP5-S5 (communications contract sections 15-16).
+        "meetings.context.read",
     }
 
 

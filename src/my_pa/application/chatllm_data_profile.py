@@ -107,7 +107,8 @@ class ChatLLMCompositionPlanes:
     files_workspace: bool = False
     #: Communications intelligence WP4-S5 (chatllm-data-v17):
     #: `MY_PA_COMMUNICATIONS_ENABLED`. Default off, as the switch is; needs no
-    #: other plane.
+    #: other plane. Meeting context WP5-S5 (chatllm-data-v21) composes
+    #: `meetings.context.read` on it too.
     communications: bool = False
     #: P6 XER import S7-4a (chatllm-data-v19): `MY_PA_SCHEDULE_P6_ENABLED`, which
     #: stacks on the Schedule switch. Default off, as the switch is.

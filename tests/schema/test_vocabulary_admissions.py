@@ -122,7 +122,8 @@ def test_the_ahead_families_are_exactly_the_rows_the_domain_does_not_declare() -
             else:
                 assert names <= declared[kind], (kind, family)
         assert admitted_ahead_of_the_domain(kind).isdisjoint(declared[kind])
-    # P6 XER import S7-4a declared the `schedule_p6` family, the last ahead.
+    # P6 XER import S7-4a declared the `schedule_p6` family. WP5-S1 admitted
+    # `meetings.context.read` ahead of the domain; WP5-S5 declared it, the last ahead.
     assert len(admitted_ahead_of_the_domain("capability")) == 0
     assert len(admitted_ahead_of_the_domain("purpose")) == 0
 

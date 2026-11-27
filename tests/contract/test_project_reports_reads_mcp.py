@@ -171,7 +171,8 @@ def test_the_five_are_declared_dispatched_built_and_published_as_reads() -> None
 
 
 def test_chatllm_classifies_the_five_conditional_on_project_reports() -> None:
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v20"
+    # Introduced at v20; meeting context WP5-S5 (v21) contains it.
+    assert int(CHATLLM_DATA_PROFILE_VERSION.removeprefix("chatllm-data-v")) >= 20
     for capability in READS:
         policy = CHATLLM_CAPABILITY_POLICY[capability]
         assert policy.classification is ChatLLMCapabilityClass.DATA_CONDITIONAL

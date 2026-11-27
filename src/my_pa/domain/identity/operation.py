@@ -1267,6 +1267,14 @@ class Capability(StrEnum):
     #: WP4P-S4: per-source coverage of the Principal's report series. Same
     #: purpose, scope and switch as the catalog.
     PROJECT_REPORTS_COVERAGE = "project_reports.coverage"
+    #: Meeting context WP5-S5 (communications contract sections 15-16; Manager
+    #: rulings D2, D9): the communications context of a batch of the
+    #: Principal's own Meetings -- attendee, identifier, Project-number and
+    #: title-term matches in each Meeting's lookback window, with coverage and
+    #: the `pulse` section. A read under `Purpose.COMMUNICATIONS_READ` only (no
+    #: purpose of its own, ruling D2); scopeless; not operator-only; withheld
+    #: unless `MY_PA_COMMUNICATIONS_ENABLED` (no switch of its own).
+    MEETINGS_CONTEXT_READ = "meetings.context.read"
 
 
 class NativeSourceCapability(StrEnum):
@@ -2022,6 +2030,9 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.PROJECT_REPORTS_RECORD_HISTORY: frozenset({Purpose.PROJECT_REPORTS_READ}),
         Capability.PROJECT_REPORTS_COMPARE: frozenset({Purpose.PROJECT_REPORTS_READ}),
         Capability.PROJECT_REPORTS_COVERAGE: frozenset({Purpose.PROJECT_REPORTS_READ}),
+        # Meeting context WP5-S5 (ruling D2): the communications read purpose,
+        # reused; never a purpose of its own.
+        Capability.MEETINGS_CONTEXT_READ: frozenset({Purpose.COMMUNICATIONS_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

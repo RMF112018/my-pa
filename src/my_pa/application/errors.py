@@ -932,6 +932,11 @@ class SafeDetail(StrEnum):
     INCLUDE_ROWS = "include_rows"
     RECORD_IDS = "record_ids"
     IDENTITY_KEY = "identity_key"
+    #: Meeting context (WP5 design section 3.1, WP5-S3): the request fields of
+    #: `meetings.context.read`.
+    MEETING_IDS = "meeting_ids"
+    LOOKBACK_DAYS = "lookback_days"
+    PER_MEETING_LIMIT = "per_meeting_limit"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

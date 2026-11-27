@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v20"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v21"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -410,6 +410,10 @@ _DATA_CONDITIONAL: Final[frozenset[Capability]] = frozenset(
         Capability.COMMUNICATIONS_SEARCH,
         Capability.COMMUNICATIONS_READ,
         Capability.COMMUNICATIONS_COVERAGE,
+        # Meeting context WP5-S5 (chatllm-data-v21; ruling D2): conditional on
+        # the same switch, by explicit name in `COMMUNICATIONS_DATA_NAMES`.
+        # Derived text only, never a raw body.
+        Capability.MEETINGS_CONTEXT_READ,
         # P6 XER import S7-4a (chatllm-data-v19; contract section 10.7): the 7 P6
         # names (2 writes, 5 reads), conditional on the P6 switch by explicit
         # name (`SCHEDULE_P6_DATA_NAMES`). None is operator-only; the 2 writes
@@ -661,12 +665,16 @@ FILES_WORKSPACE_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
 
 #: Communications intelligence WP4-S5 (chatllm-data-v17; communications contract
 #: section 16, ruling D7): the 3 `communications.*` reads, composed only when
-#: `MY_PA_COMMUNICATIONS_ENABLED` is on. None is operator-only.
+#: `MY_PA_COMMUNICATIONS_ENABLED` is on. Meeting context WP5-S5
+#: (chatllm-data-v21; ruling D2): `meetings.context.read` joins them, on the
+#: same switch -- no prerequisite of its own. None is operator-only. Equals the
+#: service's `_COMMUNICATIONS_CAPABILITIES`.
 COMMUNICATIONS_DATA_NAMES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.COMMUNICATIONS_SEARCH,
         Capability.COMMUNICATIONS_READ,
         Capability.COMMUNICATIONS_COVERAGE,
+        Capability.MEETINGS_CONTEXT_READ,
     }
 )
 

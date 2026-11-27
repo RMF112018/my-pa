@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -39,6 +40,7 @@ from my_pa.contracts.ports import (
     CommunicationSearchQuery,
     CommunicationSearchQueryShape,
     CommunicationSearchRow,
+    CommunicationSelfAddresses,
     CommunicationSnapshotTally,
     CommunicationsRepository,
     FileWorkspaceEntry,
@@ -54,6 +56,8 @@ from my_pa.contracts.ports import (
     IngestSnapshotRecord,
     IngestSnapshotStatus,
     IngestSourceRecord,
+    MeetingContextCandidateQuery,
+    MeetingContextCandidateRow,
     RepositoryFailureError,
     UnitOfWork,
 )
@@ -99,6 +103,9 @@ class IngestWorld:
     search_rows: list[CommunicationSearchRow] = field(default_factory=list)
     search_queries: list[str] = field(default_factory=list)
     search_calls: list[CommunicationSearchQuery] = field(default_factory=list)
+    #: The WP5 context statement's answers, canned per Meeting ordinal, and its calls.
+    context_rows: list[MeetingContextCandidateRow] = field(default_factory=list)
+    context_calls: list[MeetingContextCandidateQuery] = field(default_factory=list)
 
     def write(self, name: str) -> None:
         self.writes.append(name)
@@ -720,6 +727,65 @@ class FakeCommunications(CommunicationsRepository):
                 }
             )
         )
+
+    # --- the WP5 context reads: the plain ones modelled; the statement canned -------------
+
+    def context_self_addresses(
+        self, principal_id: str, *, limit: int
+    ) -> CommunicationSelfAddresses:
+        # `self_from_sent_lane_v2`: message -> whether any of its `sent` lanes is verified.
+        sent: dict[str, bool] = {}
+        for item in self.w.mine(principal_id, self.w.items):
+            for observation in self.w.mine(principal_id, self.w.observations):
+                if observation.item_id == item.item_id and observation.folder_role == "sent":
+                    sent[item.message_id] = sent.get(item.message_id, False) or (
+                        observation.lane_verification == "verified"
+                    )
+        verified: dict[str, bool] = {}
+        for p in self.w.mine(principal_id, self.w.participants):
+            if p.field == "from" and p.message_id in sent:
+                verified[p.address] = verified.get(p.address, False) or sent[p.message_id]
+        any_verified = any(verified.values())
+        owners = sorted(a for a, v in verified.items() if v == any_verified)
+        return CommunicationSelfAddresses(
+            addresses=tuple(owners[:limit]), total=len(owners), verified=any_verified
+        )
+
+    def bridge_participant_addresses(
+        self, principal_id: str, *, pattern: str, limit: int
+    ) -> tuple[str, ...]:
+        found = {
+            p.address
+            for p in self.w.mine(principal_id, self.w.participants)
+            if re.search(pattern, p.address)
+        }
+        return tuple(sorted(found)[:limit])
+
+    def context_candidates(
+        self, principal_id: str, query: MeetingContextCandidateQuery
+    ) -> tuple[MeetingContextCandidateRow, ...]:
+        self.w.context_calls.append(query)
+        ordinals = {meeting.ordinal for meeting in query.meetings}
+        kept: dict[int, int] = {}
+        rows: list[MeetingContextCandidateRow] = []
+        for row in self.w.context_rows:
+            if row.ordinal in ordinals and kept.get(row.ordinal, 0) < query.limit:
+                kept[row.ordinal] = kept.get(row.ordinal, 0) + 1
+                rows.append(row)
+        return tuple(rows)
+
+    def list_message_identifiers(
+        self, principal_id: str, message_ids: Sequence[str], *, kind: str, version: str
+    ) -> Mapping[str, tuple[str, ...]]:
+        found: dict[str, set[str]] = {}
+        for identifier in self.w.mine(principal_id, self.w.identifiers):
+            if (
+                identifier.message_id in message_ids
+                and identifier.kind == kind
+                and identifier.extractor_version == version
+            ):
+                found.setdefault(identifier.message_id, set()).add(identifier.value)
+        return {message_id: tuple(sorted(values)) for message_id, values in sorted(found.items())}
 
 
 class IngestUnitOfWork(FakeUnitOfWork):

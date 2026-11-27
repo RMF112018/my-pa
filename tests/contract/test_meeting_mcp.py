@@ -167,6 +167,9 @@ def test_the_six_capabilities_are_declared_dispatched_built_and_published() -> N
         # (`tests/contract/test_meeting_provider_reconcile_mcp.py`).
         and capability
         not in {Capability.MEETINGS_PROVIDER_REVIEW, Capability.MEETINGS_PROVIDER_RECONCILE}
+        # WP5-S5: the context batch is its own capability
+        # (`tests/contract/test_meeting_context_mcp.py`).
+        and capability is not Capability.MEETINGS_CONTEXT_READ
     }
     assert declared == MEETING_CAPABILITIES
     assert set(_HANDLERS) >= MEETING_CAPABILITIES

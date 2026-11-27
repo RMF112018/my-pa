@@ -275,7 +275,7 @@ Everything here is part of the R-OP-7 consolidated activation and is unexecuted.
      `coverage` is omitted. Never an empty or partial object: it rejects the whole publication
      (`invalid_coverage`). Without `coverage` my-pa never marks a binding `not_seen`.
 3. **The client (R-OP-2, D13).** The reconciliation pass runs through the operator's connected
-   client: activate ChatLLM profile `chatllm-data-v20` (instead of v15; it contains v16 and v17) and grant
+   client: activate ChatLLM profile `chatllm-data-v21` (instead of v15; it contains v16 and v17) and grant
    `meetings.provider.review` and `meetings.provider.reconcile`, with
    `meetings.provider.bind`, to the **operator profile only**, as part of the consolidated
    activation's grants.
@@ -508,7 +508,7 @@ is the operator's:
    names `available`. A restricted MCP database role composition never serves them (its roles
    hold no privilege on the communications tables).
 4. **The grants and the profile.** The client is the operator's connected client. Activate the
-   ChatLLM profile `chatllm-data-v20` (it contains v16 and v17) and grant, to the **operator profile
+   ChatLLM profile `chatllm-data-v21` (it contains v16 and v17) and grant, to the **operator profile
    only**, each with purpose `communications_read`:
 
    | Capability | Purpose |
@@ -533,7 +533,80 @@ withheld or truncated body has no text, and no raw body is ever returned.
 **Disabling.** Set the switch off and recreate the gateway; the 3 names disappear and calls
 answer `unsupported`. Rows and grants are untouched; revoke the grants separately if wanted.
 
-## 13. Residuals
+## 13. Meeting-context reads (WP5)
+
+### 13.1 What it answers
+
+`meetings.context.read` takes 1 to 10 of the caller's Meeting ids (`lookback_days` 1–90,
+default 14; `per_meeting_limit` 1–50, default 15) and answers, per Meeting, its core and
+attendees, the provider binding state, a `communications` section and a `pulse` section
+(communications contract section 15). The communications section is the messages that share a
+participant with the Meeting's attendees, carry an identifier of its title, prep, notes or
+description, carry its Project's number, or match its title terms, in the lookback window
+before its start; with the reasons each matched (`matched_by`), the tier, a 300-character
+snippet of the derived text (never a raw body), the coverage of the window and its gaps, and
+the closed `missing[]` codes. The `pulse` section is the linked Project's latest project-report
+counts and the RFIs whose numbers the Meeting or its messages name.
+
+- **Synced Meetings have no attendees** (WP5 ruling D1, risk K1): calendar sync stores none, so
+  a synced Meeting's context rests on its identifiers, its Project number and its title, and
+  says `no_attendee_address`. Attendees added by hand are used.
+- The owner's own addresses are excluded from the participant match (`self_from_sent_lane_v2`);
+  without a sent lane every Meeting says `self_unknown`.
+- A PULSE read error fails the whole request (ruling D-7): it is never answered as a partial.
+
+### 13.2 Switches, purpose, profile and grants
+
+- **Switch.** No switch of its own (ruling D2): it is served exactly when
+  `MY_PA_COMMUNICATIONS_ENABLED` is on (section 12.3); off, it is withheld and an invocation
+  answers `unsupported`. The `pulse` section is read only with `MY_PA_PROJECT_REPORTS_ENABLED`
+  on; off, each Meeting answers `pulse.state` `unavailable` with reason `reads_disabled`.
+- **Purpose.** `communications_read`, the only purpose it permits; no new purpose.
+- **Profile.** ChatLLM `chatllm-data-v21` is v20 plus `meetings.context.read`, `DATA_CONDITIONAL`
+  on the existing `COMMUNICATIONS` prerequisite. With the switch off, v21 desires exactly the
+  v20 set.
+- **Grants (documented, not issued).** At the consolidated activation, after the read switch,
+  the operator grants to the **operator profile only**:
+
+  | Capability | Purpose |
+  | --- | --- |
+  | `meetings.context.read` | `communications_read` |
+
+  No grant goes to a non-operator principal, and no change in the repository writes one.
+
+### 13.3 `measure-context` (counts only)
+
+The Manager's latency measurement on the isolated database that holds the corpora. It is
+read-only and takes no lock. The isolated database holds no real Meeting, so the command builds
+`--meetings` in-memory probe Meetings, never persisted, from the corpus (anchors spaced over the
+covered range, the participants of a message before each anchor as attendees, the window's 2
+most frequent identifiers, a fixed synthetic title, the Projects with an active project-report
+binding round-robin) and times the capability's own assembler over them:
+
+```sh
+PYTHONPATH=src python apps/cli/communications_ingest.py \
+  --expected-database <DATABASE> --expected-alembic-head <HEAD> \
+  measure-context --meetings 10 --runs 40 --lookback-days 14 --per-meeting-limit 15
+```
+
+The 4 bounds are optional (those values are the defaults; at most 10 Meetings, 500 runs,
+90 days and 50 per Meeting). Run it a second time with `--lookback-days 90
+--per-meeting-limit 50` for the maximum shape.
+
+It prints one JSON line: `latency` (p50, nearest-rank p95 and maximum in milliseconds, and the
+statements per batch, for 1 and `--meetings` Meetings, each with the project-report reads off
+and on; the statements exclude the 7 Meeting input reads that in-memory probes do not make);
+`targets` (whether ruling D15's targets are met for the shapes measured; a target, not a gate);
+`per_probe` (the input counts, `missing[]`, `matched_total`, `returned`, the matches by tier and
+by `matched_by` reason, the coverage state and gaps, the `pulse` state and its RFI states);
+`coverage` and `pulse` totals; `self_addresses` (state and count); `bridge` (the stored
+non-ASCII participant addresses, their truncation and the bridged spellings, ruling D11); and
+`quarantined_identity_kind_mismatch` (question Q5: D11 reopens only if it is above 0). It never
+prints an address, subject, snippet, name, title, Project number, identifier or id. It refuses
+`target_mismatch` on a database or head mismatch, as the other commands do, and
+`statement_timeout` when the statement timeout cancels it.
+
+## 14. Residuals
 
 - `poll_enabled` stops at the first source whose workspace is unavailable; the poll is then
   logged `comms_ingest.failed` and retried after the interval.
@@ -571,4 +644,7 @@ answer `unsupported`. Rows and grants are untouched; revoke the grants separatel
 - Identifiers (WP4-C ruling): the prefixed RFI number form `RFI CON-132` is recognized by neither
   version, so such an RFI is found by full text only; a later extractor version may add it.
 - Reads: the stop-word fallback costs about 470 ms at p50 at real-corpus size (accepted for
-  interactive search); WP5 measures the 10-Meeting context latency.
+  interactive search); WP5 measures the 10-Meeting context latency (`measure-context`,
+  section 13.3).
+- Meeting context: synced Meetings carry no attendees, so their context has no participant
+  match (`no_attendee_address`); attendee sync is a follow-up WP (ruling D1).

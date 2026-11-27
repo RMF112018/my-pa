@@ -1,6 +1,6 @@
 # Communications intelligence — implementation contract
 
-**Status:** implementation contract under [ADR-022](../decisions/ADR-022-communications-intelligence.md) (Accepted under operator delegation 2026-11-22, Manager ruling R-OP-1; effective on merge of WP2). **WP1 is implemented** (the pure source contract, this spec, the ADR and the corpus evidence; merged to `main` in #371). **WP2 is implemented and merged** (#373): section 12 and the [`meeting_sync_v1` producer contract](meeting-sync-v1-contract.md). **WP3a is implemented and merged** (#376): the shared ingestion lifecycle, the communications tables, ingestion, backfill, coverage, the cycles-plane poll step, the operator command and the runbook (section 0.2); its migration `52a829ef718a` (on `6418b57081c3`). **WP3b is implemented and merged** (#382): `meeting_sync_v1` as a staging lifecycle consumer, the latch-gated applier, the reconciliation pass, the unbind tombstone, `not_seen` and the snapshot foreign keys (section 0.4); its migration `61fafdfd2986` (on `52a829ef718a`). **WP3P is implemented and merged** (#383): the project-report sources on the shared lifecycle (ADR-024); its migration `0d4e247d03cb`. **WP4 is implemented on branch `feat/comms-search` (not merged)**: search text v2, identifiers v2, the operator `rederive` and `measure-fts`, and the three reads `communications.search`, `communications.read` and `communications.coverage` behind `MY_PA_COMMUNICATIONS_ENABLED` (section 0.5); its migration `fa18ef3d9bc0` (on `0d4e247d03cb`) has been applied to disposable databases only. Every other section is design for WP4P–WP5, which each need their own PR, review and, where marked, operator decision. Nothing is granted, activated or deployed: migrations, grants, the ChatLLM profile and schedulers are applied in one consolidated activation at the end of the goal (section 20.6).
+**Status:** implementation contract under [ADR-022](../decisions/ADR-022-communications-intelligence.md) (Accepted under operator delegation 2026-11-22, Manager ruling R-OP-1; effective on merge of WP2). **WP1 is implemented** (the pure source contract, this spec, the ADR and the corpus evidence; merged to `main` in #371). **WP2 is implemented and merged** (#373): section 12 and the [`meeting_sync_v1` producer contract](meeting-sync-v1-contract.md). **WP3a is implemented and merged** (#376): the shared ingestion lifecycle, the communications tables, ingestion, backfill, coverage, the cycles-plane poll step, the operator command and the runbook (section 0.2); its migration `52a829ef718a` (on `6418b57081c3`). **WP3b is implemented and merged** (#382): `meeting_sync_v1` as a staging lifecycle consumer, the latch-gated applier, the reconciliation pass, the unbind tombstone, `not_seen` and the snapshot foreign keys (section 0.4); its migration `61fafdfd2986` (on `52a829ef718a`). **WP3P is implemented and merged** (#383): the project-report sources on the shared lifecycle (ADR-024); its migration `0d4e247d03cb`. **WP4 is implemented and merged** (#388): search text v2, identifiers v2, the operator `rederive` and `measure-fts`, and the three reads `communications.search`, `communications.read` and `communications.coverage` behind `MY_PA_COMMUNICATIONS_ENABLED` (section 0.5); its migration `fa18ef3d9bc0` (on `0d4e247d03cb`) has been applied to disposable databases only. **WP4P is implemented and merged** (#390): the PULSE read capabilities under [ADR-024](../decisions/ADR-024-project-report-source-evidence.md), with migration `3b3373d8268e` and ChatLLM `chatllm-data-v20`. **WP5 is implemented on branch `feat/meeting-context` (not merged)**: `meetings.context.read`, ChatLLM `chatllm-data-v21`, the operator `measure-context` and the collector directive (section 0.6); its migration `859e93b47a21` (on `3b3373d8268e`) has been applied to disposable databases only. Nothing is granted, activated or deployed: migrations, grants, the ChatLLM profile and schedulers are applied in one consolidated activation at the end of the goal (section 20.6).
 
 **Basis:** contract head measured: branch `feat/comms-intelligence` at `80208caabe92de03be676a93fae8984d31d2b8c1` (tree `057703650c1f7b8976a86ccebc3da0a62f70d1a6`), the WP1 head after fix F2, on `origin/main@092610d36b7d1493fc7fda6e352a4bd06e914f61`; Alembic single head `640aaacc78e8` (129 revision files); 298 `Capability` members and 70 `Purpose` members. PR #368 (ADR-020, meeting prep, migration on `640aaacc78e8`) is open and not on this branch: WP2's migration must chain after whichever head is current when it is written. WP3a basis: branch `feat/comms-ingestion` on `origin/main@354cdebae60723f2f315578b494d2d6f9f32214c` (the WP2 merge), Alembic single head `52a829ef718a`. All counts here are digits on purpose (spelled-count guard). Paths to files that do not exist yet are not written as links (CI relative-link check).
 
@@ -15,9 +15,9 @@
 | WP3a | Shared ingestion lifecycle (section 1) + communications persistence (section 5), ingestion (sections 10–11), coverage (section 9), backfill, scheduled ingestion on the cycles plane, monitoring, operator command, runbook (section 0.2) | **implemented**, merged to `main` (#376): migration `52a829ef718a`; nothing granted, activated or deployed; the poll switch is off |
 | WP3b | `meeting_sync_v1` as a lifecycle consumer (stage-then-apply); the batch Meeting review/reconcile pass that gates calendar sync (section 12.7, R-OP-6) and its one-way latch; the R1-1 unbind tombstone and `adopt_provider_series`; `not_seen` (C10) from the 1.1.0 `coverage`; the deterministic sync apply order and the binding-writer lock; audit routing; snapshot foreign keys on the binding (D8); the runbook. The `provider_id_only` / Message-ID join (section 3, check (e)) is **out of scope** (ruling D11, section 0.4) | **implemented**, merged to `main` (#382): migration `61fafdfd2986`; ChatLLM `chatllm-data-v16`; nothing admitted, granted, activated or deployed (section 0.4) |
 | WP3P | Procore PULSE persistence and ingestion on the WP3 lifecycle ([ADR-024](../decisions/ADR-024-project-report-source-evidence.md); runbook [`ops/runbooks/project-reports-ingestion.md`](../../ops/runbooks/project-reports-ingestion.md)) | **implemented**, merged to `main` (#383): migration `0d4e247d03cb`; nothing admitted, granted, activated or deployed |
-| WP4 | Search text v2 and identifiers v2 (sections 6, 7), the operator `rederive` and `measure-fts` (section 18), the communications search service and its 3 MCP reads (sections 13, 14, 16) | **implemented** on branch `feat/comms-search` (not merged): migration `fa18ef3d9bc0`; ChatLLM `chatllm-data-v17`; the read switch off; nothing granted, activated or deployed (section 0.5) |
-| WP4P | PULSE retrieval MCP | planned |
-| WP5 | Batch meeting-context retrieval with PULSE evidence (section 15) + MCP + performance measurements + ChatLLM collector directive + final report; communications-only must work when PULSE is absent | planned |
+| WP4 | Search text v2 and identifiers v2 (sections 6, 7), the operator `rederive` and `measure-fts` (section 18), the communications search service and its 3 MCP reads (sections 13, 14, 16) | **implemented**, merged to `main` (#388): migration `fa18ef3d9bc0`; ChatLLM `chatllm-data-v17`; the read switch off; nothing granted, activated or deployed (section 0.5) |
+| WP4P | PULSE retrieval MCP ([ADR-024](../decisions/ADR-024-project-report-source-evidence.md)) | **implemented**, merged to `main` (#390): migration `3b3373d8268e`; ChatLLM `chatllm-data-v20`; the read switch off; nothing granted, activated or deployed |
+| WP5 | Batch meeting-context retrieval with PULSE evidence (section 15) + MCP + performance measurements + ChatLLM collector directive + final report; communications-only must work when PULSE is absent | **implemented** on branch `feat/meeting-context` (not merged): migration `859e93b47a21` (on `3b3373d8268e`, vocabulary only); `meetings.context.read` under `communications_read`, served only with `MY_PA_COMMUNICATIONS_ENABLED`; ChatLLM `chatllm-data-v21`; the operator `measure-context`; the collector directive ([meeting-sync contract section 8.7](meeting-sync-v1-contract.md#87-meeting-context-readiness)); nothing granted, activated or deployed (section 0.6). **Synced Meetings carry no attendees** (ruling D1, risk K1) |
 
 After each WP the Manager runs the aggregate validation against the real corpus in an isolated local database, then an independent exact-head review, then the merge decision.
 
@@ -121,7 +121,7 @@ The Manager ruled on the WP3b investigation on 2026-11-23 (rulings D1–D14); th
 
 **Known residuals (WP3b).** Post-latch hand-made duplicates (no delete or merge; cancel by hand); `not_seen` is only as good as the producer's completeness claim; no release of a tombstone; staging is never pruned; the `meetings.provider.review` event list is paged (200 per page, with a total, a truncated flag and an `events_after` cursor) and the review is a pass tool, not a calendar browser; a producer clock regression skips whole publications visibly (`publications_skipped_stale`).
 
-### 0.5 What WP4 contains (branch `feat/comms-search`, not merged)
+### 0.5 What WP4 contains (merged in #388)
 
 The Manager's pre-design rulings (D1–D11), the rulings on the design report (R1–R18) and on each slice are summarized in section 21; the operator procedure is section 12 of [`ops/runbooks/communications-ingestion.md`](../../ops/runbooks/communications-ingestion.md).
 
@@ -136,6 +136,22 @@ The Manager's pre-design rulings (D1–D11), the rulings on the design report (R
 | `src/my_pa/infrastructure/persistence/communications.py` | the search, read, thread, provenance, observation, version and rederive statements, every one under the partition guard |
 | `apps/cli/communications_ingest.py` | `rederive` and `measure-fts` |
 | `src/my_pa/application/service.py`, `commands.py`, the policy and ChatLLM tables | the 3 `communications.*` reads, the `communications_read` purpose, the read switch `MY_PA_COMMUNICATIONS_ENABLED` and `chatllm-data-v17` (section 16) |
+
+### 0.6 What WP5 contains (branch `feat/meeting-context`, not merged)
+
+Design: the WP5-W1 report (sections 3.1–3.16) and the Manager's WP5 rulings D1–D16, Q1–Q5 and the slice rulings A-1 to E-5, with the operator amendment to D15 (quality and completeness before speed; D15 is a measured target, not an acceptance gate). Built in slices S1–S6. The operator procedure is section 13 of [`ops/runbooks/communications-ingestion.md`](../../ops/runbooks/communications-ingestion.md).
+
+| Module or file | Responsibility |
+| --- | --- |
+| `migrations/versions/20261126_859e93b47a21_meeting_context_read.py` | revision `859e93b47a21` (down `3b3373d8268e`): the audit capability set restated with `meetings.context.read` (328 names); no purpose restatement; the downgrade refuses while an audit event names it |
+| `src/my_pa/domain/communications/addresses.py` | the C9 match key `address_match_key` (casefold) and the bridge, rule `casefold_bridge_v1` (ruling D11) |
+| `src/my_pa/domain/meeting/context.py` | the window (`clipped_to_now`), the title terms (`meeting_title_terms_v1`), the identifier selection (bare `gmp`/`fpl` excluded, at most 20, the 20,000-character scan cap) |
+| `src/my_pa/infrastructure/persistence/meetings.py` | `read_context_inputs`: the batch's Meetings, attendees, note and prep heads, bindings, review marks and Project numbers in 7 statements |
+| `src/my_pa/infrastructure/persistence/communications.py` | the self addresses, the C9 bridge, the one candidate statement for the batch, the lanes and the `rfi` identifiers of the returned messages; the `measure-context` probe facts |
+| `src/my_pa/application/project_reports_reads.py` | `context_summaries`, the batched PULSE facade (ruling D7), parity-tested against the per-Project methods |
+| `src/my_pa/application/meeting_context.py` | the assembler and renderers of `meetings.context.read` (sections 15, 16) |
+| `src/my_pa/application/meeting_context_measure.py`, `apps/cli/communications_ingest.py` | `measure-context`, counts only (ruling D16, section 20.5) |
+| `src/my_pa/application/service.py`, `commands.py`, the policy and ChatLLM tables | the capability, its policy, the `MY_PA_COMMUNICATIONS_ENABLED` gate and `chatllm-data-v21` (section 16) |
 
 ## 1. Source acquisition and version control (shared ingestion lifecycle)
 
@@ -274,7 +290,7 @@ No raw HTML, body content or display names are stored (ADR-022 decision 10). Dis
 
 Section 12.1.
 
-## 6. Full-text search (WP4, implemented on branch; text derivation WP1)
+## 6. Full-text search (WP4; text derivation WP1)
 
 **Indexed text** is `comms_search_text_v1` output, never the raw body: basis `unique_body` (rich), else digest-verified producer text, else the stored body; html reduced to text nodes; quoted chains cut (`-----Original Message-----`, `On … wrote:`, a `From:` header block, `>` lines; a cut that would leave nothing keeps the text and flags `quoted_chain_retained`); signature/disclaimer paragraphs removed (an RFC 3676 `-- ` delimiter near the end, a line starting `Disclaimer` or "if you have received this … in error", and a paragraph that *starts* with "confidentiality notice", "if you are not the intended recipient" or "This email … confidential" only in the trailing region of at most 15 non-blank lines; a line directly under a signature break — exactly `-- ` or a rule of five or more `-`, itself in the trailing region — also starts a paragraph, and the cut is then at the break line, so the body paragraph above the break is kept (review R3, finding R3-1), and a break earlier in the text never lifts the trailing-region limit; so a mid-paragraph sentence never truncates body text); capped at 262,144 characters. Withheld, truncated and empty bodies yield no text (`metadata_only`).
 
@@ -477,7 +493,7 @@ D1–D12 and rule 7 below were Manager rulings, previously not operator-ratified
 - **R1-1 closed.** The unbind tombstone (WP3b-S3, D5) suppresses a re-create; `adopt_provider_series` (D6) lets a rebind after a series move succeed by moving the Meeting into the provider series' MeetingSeries, or creates a series for a standalone Meeting.
 - **Counts.** `Capability` 299 → 301 (the audit capability set was restated to 312 by the WP3b revision); `Purpose` unchanged (70); three `SafeDetail` field tokens (`adopt_provider_series`, `items`, `provider_event_ref`); ChatLLM `chatllm-data-v16` = v15 plus both names, `DATA_REQUIRED` (D13), activated at the consolidated deploy instead of v15 with operator-profile grants (R-OP-2).
 
-## 13. Retrieval (WP4, implemented on branch)
+## 13. Retrieval (WP4)
 
 - **Search** (`communications.search`): text query (section 6), identifier terms (section 7, exact), participant addresses (any/all), time range (inclusive), folder role, conversation; results are messages, optionally collapsed to one per conversation (`collapse: conversation`, default on).
 - **Read** (`communications.read`): a batch of message ids → metadata, canonical participants (addresses), flags, coverage of the message's snapshot, source pointer, and bounded search text. Never raw HTML, never a withheld body.
@@ -494,7 +510,7 @@ D1–D12 and rule 7 below were Manager rulings, previously not operator-ratified
 - **Cursors** (`my_pa.domain.communications.cursor`): opaque, bound to the capability, the Principal, the normalized request (without cursor and limit) and the identifier version, and scoped to the caller's grants on the 3 names. A malformed token is `invalid_request` `cursor`; another Principal's or another request's is `conflict` `cursor`; a cursor whose grant scope changed answers `cursor_state: "scope_changed_restart_required"` with nothing else (C2), not a refusal.
 - **Latency** (synthetic set of real-corpus size, `tests/database/test_communications_search_latency.py`): the figures are recorded per read shape; the stop-word fallback is the slowest (about 470 ms at p50), accepted for interactive search (C1).
 
-## 14. Ranking (WP4, implemented on branch)
+## 14. Ranking (WP4)
 
 Deterministic, explainable, no learned weights:
 
@@ -517,9 +533,22 @@ Within a tier: integer `rank = floor(ts_rank_cd(search_document, query) * 100000
 
 Attendees with no address and Meetings with no provider binding still work (title, Project and identifier terms only); the answer says which inputs were missing.
 
-## 16. Batch MCP contracts (WP4 built on branch, WP5)
+**As built in WP5 (rulings D1–D16, Q1, A-4, B-3, C-1, D-1, D-7, F-1 to F-4).** The text above is the design; where it differs, this paragraph is the contract.
 
-Neutral names, accepted as proposals by Manager ruling 2026-11-21 (R4, section 21). **The three `communications.*` names are built in WP4** (below); `meetings.context.read` is WP5's and not in `Capability` yet. All read-only, Principal-scoped, behind `MY_PA_COMMUNICATIONS_ENABLED` (default off), one new purpose `communications_read`, ChatLLM profile data-conditional on a new `COMMUNICATIONS` prerequisite.
+- **Inputs of a Meeting.** Participants: its active attendees' stored EMAIL keys, less the owner's own addresses. Identifiers: those of its title, prep, notes and description (ruling Q2), each field scanned to 20,000 characters (`identifier_scan_truncated`, ruling D14), the bare `gmp` and `fpl` excluded (D4), at most 20. The Project number as one exact `simple` term (D6), skipped for a Meeting without one (F-1). The title terms under `english`, always, as the lowest tier (D13, A-3).
+- **Attendees live on the Meeting; the binding is state only (Q1, amending the paragraph above).** Attendees are used whenever the Meeting has them, bound or not. `provider_binding.state` is `bound`, `no_provider_event` (unbound with a review mark) or `unbound`, and an unbound Meeting also says `provider_unbound` in `missing[]`; the binding never gates any input.
+- **Synced Meetings have no attendees (risk K1, ruling D1).** Calendar sync stores none (WP2 decision D2), so the context of a synced Meeting rests on its identifiers, its Project number and its title, and it says `no_attendee_address`. Attendee persistence for synced Meetings is a follow-up WP; the collector already sends attendees (meeting-sync contract section 8.7).
+- **Window (A-4).** `[floor_s(start) − lookback, min(floor_s(start), now)]`, both ends inclusive; a future Meeting gets the single-instant window at the read instant with `clipped_to_now: true`, so its lookback is not falsely `partial`.
+- **Self rule v2 (D3, B-3).** `self_from_sent_lane_v2`: the distinct `from` addresses of messages with a **verified** `sent` observation are the owner's; only when there is none, those of `unverified_lane_claim` sent observations, with `self_addresses.state` `derived_unverified` and `self_unverified` on every Meeting; with no sent lane, `unknown` and `self_unknown`. At most 20 are used; the answer states the count, never an address. Self keys are excluded from the participant criterion and the overlap, and their attendees are flagged `is_self`.
+- **C9-R1 (D11).** The match key is the Meeting's casefold form. Stored addresses are untouched: the bridge statement reads the partition's stored addresses whose casefold differs from their lowercase (at most 1,000, in code-point order) and adds each, in Python, under the attendee key it casefolds to. Past the cap every Meeting's `inputs.bridge_truncated` is true (F-4). `versions.address_rule` is `casefold_bridge_v1`.
+- **Order and collapse (D5).** Tier (1: an identifier or Project-number match and a participant match; 2: identifier or number only; 3: participants only; 4: title terms only), then `participant_overlap`, then the title rank, then `message_time` descending, then `message_id`; one message per conversation with `conversation_hits`. Each message states `tier`, `rank`, `participant_overlap` and `matched_by`.
+- **Statements (C-1, D-1).** A batch costs 14 statements plus 1 per communications source, constant in the number of Meetings (1 to 10): the 7 Meeting input reads, 2 version reads, the coverage reads (1 plus 1 per source), the self addresses, the C9 bridge, 1 candidate statement for every Meeting and the lanes of the returned messages (the last two skipped when nothing is asked or returned). With the project-report reads on and a linked Meeting, the `pulse` section adds 1 (the returned messages' `rfi` identifiers) + 6 + 2L, where L is the latest classified summary versions of the batch's Projects. A constant count is not a constant cost (F-9).
+- **The `pulse` section (D7, D8, D12, PULSE-AC-16).** As section 3.5 of the design: `unavailable` / `reads_disabled` with `MY_PA_PROJECT_REPORTS_ENABLED` off, `not_linked`, `unavailable` with the facade's reason, or `available` with at most 5 counts and at most 10 RFI numbers asked. The communications section is assembled first and never reads a project-report value. **A PULSE read error fails the request (D-7)**: a PostgreSQL error aborts the transaction, so the failure is reported, never hidden behind a partial answer.
+- **Bounds and errors.** As section 16 and design section 3.6: `invalid_request` with one SafeDetail token; unknown and foreign ids alike in `not_found`; snippets a plain 300-character prefix of the derived text, `null` for a withheld or truncated body (D8, R-OP-3).
+
+## 16. Batch MCP contracts (WP4 and WP5)
+
+Neutral names, accepted as proposals by Manager ruling 2026-11-21 (R4, section 21). **The three `communications.*` names are built in WP4** (below); `meetings.context.read` is built in WP5 (below, with its own switch and purpose rulings). All read-only, Principal-scoped, behind `MY_PA_COMMUNICATIONS_ENABLED` (default off), one new purpose `communications_read`, ChatLLM profile data-conditional on a new `COMMUNICATIONS` prerequisite.
 
 | Name | Request | Response | Bounds |
 | --- | --- | --- | --- |
@@ -531,6 +560,8 @@ Neutral names, accepted as proposals by Manager ruling 2026-11-21 (R4, section 2
 Cursors are opaque, grant-bound and keyed on the section 14 order (precedent: S3 grant-bound cursors). Unknown or foreign ids are `not_found`, indistinguishably. Ingestion, source admission and backfill are operator CLI commands, not capabilities.
 
 **As built in WP4 (rulings D7, D8; WP4-S5).** `Capability` gains `communications.search`, `communications.read` and `communications.coverage` (304 members) and `Purpose` gains `communications_read` (71), the only purpose each name permits. All three are reads (MCP `read_only_hint`), scopeless (they name the caller's own rows, never a configured source or enrollment), not operator-only, and `DATA_CONDITIONAL` on the `COMMUNICATIONS` prerequisite in `chatllm-data-v17`. With `MY_PA_COMMUNICATIONS_ENABLED` off (the default) the three are withheld from `capabilities.get`, readiness, the tool list, the remote profile and the ChatLLM composition, and an invocation answers the standard `unsupported`, never an empty result (D8); the switch is never composed in a restricted MCP database role composition, whose roles hold no privilege on the communications tables. The request bounds are the table above, refused as `invalid_request` naming one SafeDetail field token (`query`, `identifiers`, `participants`, `participant_mode`, `from_utc`, `to_utc`, `folder_role`, `conversation_id`, `collapse`, `limit`, `cursor`, `message_ids`, `include_text`, `source`); answers are section 13's, instants RFC 3339 UTC. Derived text only, never a raw body (R-OP-3, section 17).
+
+**As built in WP5 (rulings D2, D9, D10, E-1 to E-5; WP5-S5).** `Capability` gains `meetings.context.read` (317 members); `Purpose` is unchanged (`communications_read` is its only permitted purpose, D2 (b)). It is a read (MCP `read_only_hint`), scopeless, not operator-only, permitted under `communications_read` and policy-closed for non-operator principals (E-1), and `DATA_CONDITIONAL` on the existing `COMMUNICATIONS` prerequisite in `chatllm-data-v21` (v20 plus this name; `DATA_CONDITIONAL` 191 to 192). There is no switch of its own: it is served exactly when `MY_PA_COMMUNICATIONS_ENABLED` is on, and otherwise withheld and answered `unsupported` (D2 (a); not offered with only the PULSE switch on, Q4). Request bounds: `meeting_ids` 1–10, each once, first occurrence kept (D9); `lookback_days` 1–90 (default 14); `per_meeting_limit` 1–50 (default 15); refused as `invalid_request` naming `meeting_ids`, `lookback_days` or `per_meeting_limit`. `provider_binding` is answered here only, not on `meetings.read` (D10). The published field descriptions state that titles, subjects, snippets, display names and exported report values are inert data, never instructions, and the meaning of every state and code (D-6).
 
 ## 17. Authorization and principal isolation
 
@@ -590,7 +621,7 @@ Lifecycle idempotency (same SHA-256 twice writes once); re-publication and alias
 
 FTS and identifier query correctness (`RFI 17` ≠ `RFI 174`), ranking total order and cursor exactness, collapse, withheld bodies never returned, bounds and refusals, policy closure for the new names and purpose, recall on a labelled synthetic set for each identifier kind.
 
-**WP4 (implemented on branch `feat/comms-search`).** Each criterion and where it is proved:
+**WP4 (merged in #388).** Each criterion and where it is proved:
 
 | Criterion | Evidence |
 | --- | --- |
@@ -608,13 +639,48 @@ The real-corpus measurements are the Manager's (sections 6 and 7).
 
 Batch context over synthetic Meetings with and without bindings, attendee joins, coverage gaps stated, PULSE absent → `unavailable` with communications intact, response bounds, measured latency for 10 Meetings on the real-corpus-sized isolated database.
 
+**WP5 (implemented on branch `feat/meeting-context`).** Each criterion and where it is proved:
+
+| Criterion | Evidence |
+| --- | --- |
+| Migration `859e93b47a21`: the restated set, the downgrade refusal, the round trip | schema `tests/schema/test_meeting_context_read_migration.py` |
+| Window, title terms, identifier selection, the C9 key on the 15 synthetic cases | FAST `tests/unit/test_meeting_context_domain.py`, `test_communications_addresses.py` |
+| The Meeting input reads; bindings, marks, heads and Project numbers; foreign Meetings absent | database `tests/database/test_meeting_context_inputs.py` |
+| Attendee joins, the self rule v2, the bridge and its cap, identifiers, the Project number, title terms, tiers, order, collapse, limits, window bounds, withheld snippets, coverage and gaps, batch isolation, the 1-against-10 statement count | database `tests/database/test_meeting_context_communications.py`, `test_meeting_context_prefilter.py`, `test_meeting_context_equivalence.py`, `test_meeting_context_fake_parity.py`; FAST `tests/unit/test_meeting_context_assembly.py` |
+| The batched facade's parity; the `pulse` states and bounds; PULSE-AC-16 (communications byte-identical with PULSE off, empty or populated) | database `tests/database/test_meeting_context_pulse.py`; FAST `tests/unit/test_meeting_context_pulse.py` |
+| Wiring: the switch, bounds and tokens, `not_found`, the payload, the descriptions; policy closure, transport parity, negative evidence; v21 with the switch off desires exactly v20 | contract `tests/contract/test_meeting_context_mcp.py` and the suites it names; database `tests/database/test_meeting_context_wired.py`; FAST `tests/unit/test_remote_mcp_chatllm_profile.py` |
+| Latency on the WP4 seed (3,500 messages, 28,000 participant rows), PULSE off and on, with the loose 3 s p95 ceiling | database `tests/database/test_meeting_context_latency.py` |
+| `measure-context`: output shape, counts only (no address, subject, snippet, name, number or id), refusals | FAST `tests/unit/test_communications_measure_context_cli.py`; database `tests/database/test_communications_measure_context_cli.py` |
+
+**Latency (section 3.12 of the design; ruling D15 as amended).** D15's budget is a **target**, not an acceptance gate: 10 Meetings at the defaults p50 ≤ 300 ms and p95 ≤ 750 ms; at the maximum (90 days, 50 per Meeting) p95 ≤ 2,000 ms; 1 Meeting p95 ≤ 300 ms. The test tier asserts the exact statement count and a 3 s p95 ceiling; no match, tier, coverage or limit is trimmed to meet a timing. Seed measurements, p50 / p95 in ms over 20 runs on a disposable C-locale cluster (WP5-S6, synthetic):
+
+| Shape | p50 | p95 | Target |
+| --- | --- | --- | --- |
+| 1 Meeting, defaults | 106.8 | 119.4 | met |
+| 10 Meetings, defaults | 371.3 | 381.9 | p95 met, p50 above 300 |
+| 1 Meeting, maximum | 108.0 | 111.9 | — |
+| 10 Meetings, maximum | 390.3 | 411.2 | met |
+| 1 Meeting, defaults, PULSE on | 109.8 | 114.1 | met |
+| 10 Meetings, defaults, PULSE on (3 Projects) | 463.6 | 473.2 | p95 met, p50 above 300 |
+
+On an en_US cluster the earlier slices measured 10 Meetings at the defaults at p95 653–671 ms (WP5-C) and with PULSE on at p95 835 ms (WP5-D, ruling D-9). The authority is the Manager's real-corpus run of `measure-context` (runbook section 13.3); a target missed with the correct form is widened by ruling with the figures.
+
 ### 20.6 Consolidated activation (goal acceptance; Manager ruling R-OP-7)
 
 There is **one** consolidated activation, at the end of the goal, not one per WP. One runbook and **one operator command** apply, in order:
 
 1. the migrations of every merged WP (WP2's `6418b57081c3` and the later heads);
-2. the grants: every comms and meeting-context capability (`meetings.provider.bind`, `meetings.provider.review`, `meetings.provider.reconcile`, `communications.*`, the meetings context batch, `project_reports.*`) to the **operator profile only**, with purpose defaults, so the connected client needs no per-call grant prompts (R-OP-2); nothing goes to a non-operator principal. The WP4 grants are exactly three, each with purpose `communications_read`: `communications.search`, `communications.read` and `communications.coverage`, written only after the read switch is on (the communications activation order: the migration, the rederive, the switch, then the grants; the runbook section 12.3). No slice writes a grant;
-3. the ChatLLM profile `chatllm-data-v17` (v16 plus the 3 `communications.*` reads, `DATA_CONDITIONAL` on `MY_PA_COMMUNICATIONS_ENABLED`; v16 is v15 plus `meetings.provider.review` and `meetings.provider.reconcile`, both `DATA_REQUIRED`; activated instead of v15, Manager rulings D13 and D7; or the version current at that time; R-OP-4);
+2. the grants: every comms and meeting-context capability (`meetings.provider.bind`, `meetings.provider.review`, `meetings.provider.reconcile`, `communications.*`, the meetings context batch, `project_reports.*`) to the **operator profile only**, with purpose defaults, so the connected client needs no per-call grant prompts (R-OP-2); nothing goes to a non-operator principal. The WP4 grants are exactly three, each with purpose `communications_read`: `communications.search`, `communications.read` and `communications.coverage`, written only after the read switch is on (the communications activation order: the migration, the rederive, the switch, then the grants; the runbook section 12.3). WP5 adds one, after the same switch (ruling E-4; runbook section 13.2):
+
+   | Capability | Purpose |
+   | --- | --- |
+   | `communications.search` | `communications_read` |
+   | `communications.read` | `communications_read` |
+   | `communications.coverage` | `communications_read` |
+   | `meetings.context.read` | `communications_read` |
+
+   No slice writes a grant;
+3. the ChatLLM profile `chatllm-data-v21` (v20 plus `meetings.context.read`, `DATA_CONDITIONAL` on `COMMUNICATIONS`, WP5 ruling D2; with the switch off it desires exactly v20), which contains `chatllm-data-v17` (v16 plus the 3 `communications.*` reads, `DATA_CONDITIONAL` on `MY_PA_COMMUNICATIONS_ENABLED`; v16 is v15 plus `meetings.provider.review` and `meetings.provider.reconcile`, both `DATA_REQUIRED`; activated instead of v15, Manager rulings D13 and D7; or the version current at that time; R-OP-4);
 4. the schedulers (the cycles-plane poll steps of section 19; calendar sync still waits for the batch reconciliation of section 12.7).
 
 **Project reports (WP3P, ADR-024), within the same activation.** After the migrations (which include `0d4e247d03cb`, applied with the cycles worker stopped): the operator's bindings file is placed (mode `0600`, outside the repository and the image), then `bindings check`, `bindings apply`, a dry-run backfill and a backfill per source, the stored `aggregate --expect` against the evidence figures, and only then `MY_PA_PROJECT_REPORTS_INGEST_ENABLED`. The `project_reports.*` grants arrive with WP4P. The steps are in [`ops/runbooks/project-reports-ingestion.md`](../../ops/runbooks/project-reports-ingestion.md) section 10.

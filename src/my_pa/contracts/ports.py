@@ -54,9 +54,11 @@ from typing import Any, ClassVar, Final, Protocol
 
 from my_pa.contracts.v1.disclosure import Disclosure
 from my_pa.contracts.v1.meetings import (
+    MeetingAttendeeView,
     MeetingHistoryView,
     MeetingListEntry,
     MeetingNoteView,
+    MeetingProviderBindingView,
     MeetingSeriesHistoryView,
     MeetingSeriesView,
     MeetingView,
@@ -132,6 +134,7 @@ from my_pa.domain.lineage.vocabulary import (
     RelationType,
     SituationKind,
 )
+from my_pa.domain.meeting.context import ContextText
 from my_pa.domain.meeting.model import (
     MeetingListRequest,
     MeetingSearchRequest,
@@ -487,6 +490,7 @@ __all__ = [
     "CommunicationSearchQuery",
     "CommunicationSearchQueryShape",
     "CommunicationSearchRow",
+    "CommunicationSelfAddresses",
     "CommunicationSnapshotTally",
     "CommunicationsRepository",
     "ConstraintManagementRepository",
@@ -588,6 +592,10 @@ __all__ = [
     "ManagedWriteRequest",
     "MeetingAttachmentRecord",
     "MeetingAttendeeRecord",
+    "MeetingContextCandidateInput",
+    "MeetingContextCandidateQuery",
+    "MeetingContextCandidateRow",
+    "MeetingContextInput",
     "MeetingCursorAnchor",
     "MeetingEntityState",
     "MeetingListPage",
@@ -11546,6 +11554,41 @@ class CoveredProviderBinding:
     meeting_start_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class MeetingContextInput:
+    """What one Meeting contributes to `meetings.context.read` (communications intelligence WP5).
+
+    The core is `meetings.read`'s, less the location, the URL and the bodies:
+    the description, the current note head and the current prep head are
+    carried only as identifier-scan inputs, each capped at
+    `IDENTIFIER_SCAN_CHARACTERS` with `truncated` stating a longer field (ruling
+    D14), and `None` when the Meeting has none. `attendees` are the active
+    ones, in `meetings.read` order. `provider_binding` is the Meeting's binding
+    view (ruling D10: answered by the context read only) or `None`;
+    `review_marked` says a `no_provider_event` review mark exists.
+    `project_number` is the linked Project's number, `None` without a Project
+    or without a number.
+    """
+
+    meeting_id: str
+    meeting_series_id: str | None
+    series_title: str | None
+    title: str
+    status: MeetingStatus
+    start_at: datetime
+    end_at: datetime | None
+    timezone_name: str
+    project_id: str | None
+    version: int
+    attendees: tuple[MeetingAttendeeView, ...]
+    description: ContextText | None
+    note: ContextText | None
+    prep: ContextText | None
+    provider_binding: MeetingProviderBindingView | None
+    review_marked: bool
+    project_number: str | None
+
+
 class MeetingRepository(ABC):
     """The Meeting records tables, on the general unit of work's connection.
 
@@ -11790,6 +11833,18 @@ class MeetingRepository(ABC):
     @abstractmethod
     def read_meeting(self, principal_id: str, meeting_id: str) -> MeetingView | None:
         """The Meeting's full current view, or `None` when absent or foreign."""
+
+    @abstractmethod
+    def read_context_inputs(
+        self, principal_id: str, meeting_ids: Sequence[str]
+    ) -> tuple[MeetingContextInput, ...]:
+        """The context inputs of every named Meeting of this Principal, set-based (WP5).
+
+        In first-occurrence request order, duplicates dropped; an absent or
+        foreign id is simply missing from the answer. The statement count is
+        fixed (seven: core, attendees, note heads, prep heads, bindings, review
+        marks, Projects), whatever the number of Meetings.
+        """
 
     @abstractmethod
     def list_meetings(
@@ -15018,6 +15073,98 @@ class CommunicationSearchRow:
     snippet: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class CommunicationSelfAddresses:
+    """The mailbox owner's addresses under `self_from_sent_lane_v2` (WP5 rulings D3, B-3).
+
+    Two tiers, chosen in the one statement. When any message's `sent`
+    observation is `verified`, the tier is the distinct `from` participant
+    addresses of messages with a verified `sent` observation, and `verified` is
+    true. Only when there is none, the tier falls back to the `from` addresses
+    of messages with any (`unverified_lane_claim`) `sent` observation, and
+    `verified` is false. `addresses` are the first `limit` of the tier by
+    address, in their stored form; `total` is the tier's size before the cap.
+    No address at all is `addresses == ()`, `total == 0`, `verified` false.
+    """
+
+    addresses: tuple[str, ...]
+    total: int
+    verified: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingContextCandidateInput:
+    """One Meeting's criteria in the set-based context statement (WP5 design 3.10, #16).
+
+    `ordinal` names the Meeting in the batch. The window is
+    `[window_start, window_end]`, inclusive of both whole seconds.
+    `addresses` are `(stored spelling, attendee key)` pairs: each non-self
+    attendee key under its own spelling and under every bridged non-ASCII
+    spelling (ruling D11); the participant overlap counts distinct keys.
+    `identifiers` are `(kind, value)` pairs under the query's
+    `identifier_version`. `title_terms` are OR'ed, each under the `english`
+    configuration (Manager ruling A-3); `project_number` is one exact `simple`
+    term (ruling D6), `None` without one.
+    """
+
+    ordinal: int
+    window_start: datetime
+    window_end: datetime
+    addresses: tuple[tuple[str, str], ...]
+    identifiers: tuple[tuple[str, str], ...]
+    title_terms: tuple[str, ...]
+    project_number: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingContextCandidateQuery:
+    """Every Meeting of one context batch, read in one statement; `limit` per Meeting."""
+
+    meetings: tuple[MeetingContextCandidateInput, ...]
+    identifier_version: str
+    limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingContextCandidateRow:
+    """One returned message of one Meeting, collapsed by conversation (ruling D5).
+
+    `tier`: 1 an identifier or project-number match and a participant match,
+    2 the former only, 3 a participant match only, 4 title terms only.
+    `overlap` counts the distinct attendee keys matched (`matched_keys`);
+    `rank` is the integer title-terms rank (0 without a title match).
+    `conversation_hits` counts the Meeting's matches in the conversation before
+    the collapse; `matched_total` the Meeting's messages after it. `snippet` is
+    the first 300 characters of the derived text, `None` for a withheld or
+    truncated body (ruling D8).
+    """
+
+    ordinal: int
+    message_id: str
+    conversation_id: str | None
+    message_time: datetime
+    subject: str | None
+    sender_address: str | None
+    has_attachments: bool | None
+    body_state: str
+    search_text_version: str
+    search_text_flags: tuple[str, ...]
+    identity_conflict: bool
+    participants_reconciled: bool
+    participants_disagreed: bool
+    source_unavailable: bool
+    tier: int
+    overlap: int
+    rank: int
+    matched_keys: tuple[str, ...]
+    matched_identifiers: tuple[tuple[str, str], ...]
+    title_hit: bool
+    project_number_hit: bool
+    conversation_hits: int
+    matched_total: int
+    snippet: str | None
+
+
 class CommunicationsRepository(ABC):
     """The communications tables (contract sections 5.1 and 5.2), inside one transaction.
 
@@ -15250,6 +15397,47 @@ class CommunicationsRepository(ABC):
     @abstractmethod
     def list_search_text_versions(self, principal_id: str) -> tuple[str, ...]:
         """The distinct stored `search_text_version` values, sorted."""
+
+    # --- the Meeting context reads (WP5 design sections 3.8-3.11; WP5-S3) ----------
+
+    @abstractmethod
+    def context_self_addresses(
+        self, principal_id: str, *, limit: int
+    ) -> CommunicationSelfAddresses:
+        """The owner's addresses under `self_from_sent_lane_v2`, at most `limit` (one statement)."""
+
+    @abstractmethod
+    def bridge_participant_addresses(
+        self, principal_id: str, *, pattern: str, limit: int
+    ) -> tuple[str, ...]:
+        """The distinct participant addresses matching `pattern`, sorted, at most `limit`.
+
+        The C9 bridge (ruling D11; WP5-R1 F-4): `pattern` is
+        `domain.communications.addresses.bridge_pattern()`, a regular-expression
+        bracket expression of the code points whose casefold differs from them,
+        so only an address that needs a bridge is read; sorted by code point.
+        The caller passes it, so persistence never imports the communications
+        slice (`test_communications_source_scope`).
+        """
+
+    @abstractmethod
+    def context_candidates(
+        self, principal_id: str, query: MeetingContextCandidateQuery
+    ) -> tuple[MeetingContextCandidateRow, ...]:
+        """Every Meeting's returned messages in one statement, by ordinal, then the D5 order.
+
+        A Meeting's candidates are the union of its participant, identifier,
+        project-number and title-term matches inside its window, one row per
+        message; collapsed by conversation to the best by the D5 total order
+        (tier, overlap descending, rank descending, time descending, id
+        descending); at most `query.limit` per Meeting.
+        """
+
+    @abstractmethod
+    def list_message_identifiers(
+        self, principal_id: str, message_ids: Sequence[str], *, kind: str, version: str
+    ) -> Mapping[str, tuple[str, ...]]:
+        """Per message, its values of one identifier kind under one version, sorted."""
 
 
 # --- Communications intelligence WP3b: meeting sync staging and reconciliation

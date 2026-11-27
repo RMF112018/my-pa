@@ -283,6 +283,7 @@ from my_pa.application.commands import (
     ReadKnowledgeAssertion,
     ReadManagedDocument,
     ReadMeeting,
+    ReadMeetingContext,
     ReadMeetingNoteVersion,
     ReadPortfolioConstraintOverview,
     ReadProgramOverview,
@@ -2947,6 +2948,18 @@ def _communications_shapes(payload: Mapping[str, Any]) -> dict[str, Any]:
     return converted
 
 
+def _read_meeting_context(payload: Mapping[str, Any]) -> Command:
+    """`meetings.context.read` (WP5-S5): the id array becomes a tuple.
+
+    Nothing else converts; the command checks every shape and bound.
+    """
+    converted = dict(payload)
+    supplied = converted.get("meeting_ids")
+    if isinstance(supplied, list):
+        converted["meeting_ids"] = tuple(supplied)
+    return ReadMeetingContext(**converted)
+
+
 def _project_reports_shapes(payload: Mapping[str, Any]) -> dict[str, Any]:
     """The project-report reads (WP4P-S4): ISO dates become `date`, arrays tuples.
 
@@ -3256,6 +3269,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.PROJECT_REPORTS_COVERAGE: lambda payload: ProjectReportsCoverage(
             **_project_reports_shapes(payload)
         ),
+        Capability.MEETINGS_CONTEXT_READ: _read_meeting_context,
         Capability.RECORD_EVENTS_LIST: _list_record_events,
         Capability.RECORD_EVENTS_PROVENANCE: lambda payload: GetRecordEventProvenance(**payload),
         Capability.KNOWLEDGE_ASSERTIONS_READ: lambda payload: ReadKnowledgeAssertion(**payload),

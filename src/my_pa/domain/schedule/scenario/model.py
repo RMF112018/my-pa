@@ -18,6 +18,13 @@ edged milestone kinds `start_milestone` and `finish_milestone`, the fixed lag
 calendar `calendar:<key>` and the optional inert `published_reference.fields`.
 A content that uses none of them is exactly an S6 content: `uses_v2_features`
 is false and nothing about it changes.
+
+S7-7 (section 11.7, amendment to ADR-017 in ADR-023) admits parallel
+relationships: at most one relationship per (predecessor, successor, type)
+instead of per ordered pair, so a P6 ladder (an SS and an FF between the same
+two activities) is kept whole. Relationships sort by `(pred, succ, type)`; a
+content with one relationship per ordered pair sorts exactly as before
+(`has_parallel_relationships` is false and nothing about it changes).
 """
 
 from __future__ import annotations
@@ -85,6 +92,7 @@ __all__ = [
     "constraint_fits_kind",
     "content_problem",
     "format_instant",
+    "has_parallel_relationships",
     "is_added_activity_key",
     "is_calendar_key",
     "is_captured_field_key",
@@ -92,6 +100,7 @@ __all__ = [
     "milestone_progress_fits",
     "parse_instant",
     "parse_lag_calendar",
+    "relationship_order",
     "uses_v2_features",
 ]
 
@@ -695,13 +704,21 @@ class ScenarioRelationship:
             raise ValueError("a lag is -1051200..1051200 minutes")
 
 
+def relationship_order(item: ScenarioRelationship) -> tuple[str, str, str]:
+    """The canonical relationship order `(pred, succ, type)` (S7-7); with one
+    relationship per ordered pair it is exactly the S6 `(pred, succ)` order."""
+    return (item.pred, item.succ, item.type.value)
+
+
 # --- the content -------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class ScenarioContent:
-    """One version's `schedule-scenario-content-v1` document (section 2.3), or a
-    `schedule-scenario-content-v2` one when it uses an S7-0 feature (section 11.7)."""
+    """One version's `schedule-scenario-content-v1` document (section 2.3), a
+    `schedule-scenario-content-v2` one when it uses an S7-0 feature, or a
+    `schedule-scenario-content-v3` one when it holds parallel relationships
+    (S7-7, section 11.7)."""
 
     data_date: int
     settings: ScenarioSettings
@@ -716,7 +733,7 @@ class ScenarioContent:
             raise ValueError("settings is a ScenarioSettings record")
         calendars = tuple(sorted(self.calendars, key=lambda item: item.key))
         activities = tuple(sorted(self.activities, key=lambda item: item.key))
-        relationships = tuple(sorted(self.relationships, key=lambda item: (item.pred, item.succ)))
+        relationships = tuple(sorted(self.relationships, key=relationship_order))
         object.__setattr__(self, "calendars", calendars)
         object.__setattr__(self, "activities", activities)
         object.__setattr__(self, "relationships", relationships)
@@ -750,6 +767,16 @@ def uses_v2_features(content: ScenarioContent) -> bool:
     )
 
 
+def has_parallel_relationships(content: ScenarioContent) -> bool:
+    """S7-7 (section 11.7): 2 or more relationships between one ordered pair.
+
+    True selects the `schedule-scenario-content-v3` document; the engine stays the
+    one `uses_v2_features` chooses (the per-relationship maths is unchanged).
+    """
+    pairs = [(item.pred, item.succ) for item in content.relationships]
+    return _duplicated(pairs)
+
+
 def content_problem(content: ScenarioContent) -> str | None:
     """The first cross-reference or bound a stored version must satisfy, else `None`.
 
@@ -775,10 +802,11 @@ def content_problem(content: ScenarioContent) -> str | None:
     if any(a.calendar is not None and a.calendar not in known for a in content.activities):
         return "an activity calendar exists"
     present = set(keys)
-    pairs = [(item.pred, item.succ) for item in content.relationships]
-    if len(pairs) > MAX_RELATIONSHIPS or _duplicated(pairs):
-        return "at most 100000 relationships, one per ordered pair"
-    for pred, succ in pairs:
+    # S7-7: every relationship counts against the cap; one per (pred, succ, type).
+    links = [(item.pred, item.succ, item.type) for item in content.relationships]
+    if len(links) > MAX_RELATIONSHIPS or _duplicated(links):
+        return "at most 100000 relationships, one per ordered pair and type"
+    for pred, succ, _ in links:
         if pred == succ:
             return "a relationship joins two different activities"
         if pred not in present or succ not in present:

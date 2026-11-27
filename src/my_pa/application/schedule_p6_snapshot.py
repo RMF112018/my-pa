@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from decimal import Decimal
+from functools import partial
 from typing import Any, Final
 
 from my_pa.application.errors import (
@@ -36,6 +37,7 @@ from my_pa.application.errors import (
 from my_pa.contracts.ports import ScheduleP6Repository
 from my_pa.domain.schedule.p6.parser import default_capture_keys
 from my_pa.domain.schedule.p6_reads import P6PublicationRef, is_personal_key
+from my_pa.domain.schedule.scenario.canonical import content_sha256
 from my_pa.domain.schedule.scenario.model import (
     MAX_ACTIVITIES,
     MAX_RELATIONSHIPS,
@@ -207,6 +209,8 @@ def build_p6_snapshot(
     principal_id: str,
     publication_id: str,
     options: Mapping[str, Any],
+    *,
+    replay_content_sha256: str | None = None,
 ) -> P6Snapshot:
     """Read the accepted run, resolve the options and map it (one read transaction)."""
     publication = p6.p6_publication(principal_id, publication_id)
@@ -244,19 +248,32 @@ def build_p6_snapshot(
     relationships = p6.p6_relationship_rows(
         principal_id, run, offset=0, limit=MAX_RELATIONSHIPS + 1
     )
+    build = partial(
+        snapshot_from_p6,
+        publication_id=publication_id,
+        project=_project(project),
+        calendars=tuple(_calendar(row) for row in calendars),
+        activities=tuple(
+            _activity(row, values.get(str(row["activity_id"]), {})) for row in activities
+        ),
+        relationships=tuple(_relationship(row) for row in relationships),
+        request=request,
+    )
     refusal: P6SnapshotRefusal | None = None
     snapshot: P6Snapshot | None = None
     try:
-        snapshot = snapshot_from_p6(
-            publication_id=publication_id,
-            project=_project(project),
-            calendars=tuple(_calendar(row) for row in calendars),
-            activities=tuple(
-                _activity(row, values.get(str(row["activity_id"]), {})) for row in activities
-            ),
-            relationships=tuple(_relationship(row) for row in relationships),
-            request=request,
-        )
+        try:
+            snapshot = build()
+        except P6SnapshotRefusalError as refused:
+            if replay_content_sha256 is None or refused.reason is not P6SnapshotRefusal.ROWS:
+                raise
+        if replay_content_sha256 is not None and (
+            snapshot is None or content_sha256(snapshot.content) != replay_content_sha256
+        ):
+            # Rebuild with the mapping that could have produced the stored version.
+            snapshot = build(legacy_relationships=True)
+            if content_sha256(snapshot.content) != replay_content_sha256:
+                raise InternalError()
     except P6SnapshotRefusalError as refused:
         refusal = refused.reason
     if refusal is not None:

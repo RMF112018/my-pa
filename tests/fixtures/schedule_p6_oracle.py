@@ -24,6 +24,10 @@ Cases:
   calendar `502` (a fixed lag calendar, content v2).
 - `progress`: a complete activity (P6 leaves its late dates empty), an
   in-progress one under retained logic, and a not-started one.
+- `ladder` (S7-7): an SS (8 h lag) and an FF (16 h lag) between one pair,
+  the SS row first in the file; the FF drives. Content v3 on `my-pa-cpm-v1`.
+  Before S7-7 the snapshot kept only the first row (the SS) and the successor
+  moved a day early.
 """
 
 from __future__ import annotations
@@ -33,7 +37,7 @@ from typing import Final
 
 from tests.fixtures import schedule_p6_xer as fx
 
-__all__ = ["CASES", "build", "exact_full", "model", "task"]
+__all__ = ["CASES", "build", "exact_full", "ladder_preds", "ladder_tasks", "model", "task"]
 
 WORKDAY: Final = (("08:00", "12:00"), ("13:00", "17:00"))
 MON_FRI: Final = dict.fromkeys(range(2, 7), WORKDAY)
@@ -252,6 +256,29 @@ def _progress() -> fx.Model:
     return model(tasks, preds, data_date="2030-01-09 08:00")
 
 
+def ladder_tasks() -> list[dict[str, str]]:
+    # SYN-6010 16 h Mon-Tue. SYN-6020 16 h: the SS + 8 h bound is Mon 17:00 (Tue 08:00
+    # once snapped); the FF + 16 h bound is a finish at Thu 17:00, so a start at Wed
+    # 08:00, which drives. Backward: through the FF, Thu 17:00 - 16 h = Wed 08:00 (Tue
+    # 17:00 snapped back); through the SS, Wed 08:00 - 8 h = Tue 08:00, + 16 h = Wed
+    # 17:00. SYN-6010 late Mon 08:00 - Tue 17:00: both floats 0, both critical.
+    return [
+        task("3002", "SYN-6020", "16", ("2030-01-09 08:00", "2030-01-10 17:00")),
+        task("3001", "SYN-6010", "16", ("2030-01-07 08:00", "2030-01-08 17:00")),
+    ]
+
+
+def ladder_preds() -> list[dict[str, str]]:
+    return [
+        fx.pred_row("4001", "3001", "3002", "PR_SS", lag="8"),
+        fx.pred_row("4002", "3001", "3002", "PR_FF", lag="16"),
+    ]
+
+
+def _ladder() -> fx.Model:
+    return model(ladder_tasks(), ladder_preds())
+
+
 def exact_full() -> fx.Model:
     """`exact` with every sample table and optional field (for the planted-marker test)."""
     return _exact("full")
@@ -263,6 +290,7 @@ CASES: Final[Mapping[str, Callable[[], fx.Model]]] = {
     "milestones": _milestones,
     "rcal_project": _rcal_project,
     "progress": _progress,
+    "ladder": _ladder,
 }
 
 

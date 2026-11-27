@@ -147,13 +147,13 @@
   },
   "census": {
     "architecture": 10561,
-    "database": 7600,
+    "database": 7603,
     "evaluation": 2,
-    "fast_collected": 57300,
+    "fast_collected": 57362,
     "fast_skipped": 138,
     "mypy_files": 817,
     "src_modules": 614,
-    "test_modules": 1119
+    "test_modules": 1120
   },
   "chatllm": {
     "classes": {

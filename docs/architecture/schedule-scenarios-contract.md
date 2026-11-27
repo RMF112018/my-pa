@@ -7,7 +7,10 @@ and S6-3 (capabilities, handlers, façade, catalog, ChatLLM, remote policy, line
 guidance) implementers code against. S6-1 (the pure domain and engine) is implemented and
 merged (#348, section 9.1.1); S6-2 (schema, revision A `2a90f91dd786`, persistence, worker
 hook; section 14) is implemented and merged (#349); S6-3 (section 15) was implemented by
-packages I10-A, I10-B and I10-C (section 15.19) and is merged (#354). Merging grants no
+packages I10-A, I10-B and I10-C (section 15.19) and is merged (#354). The S7-7 amendment (parallel
+relationships, at most 1 per ordered pair and type, content `schedule-scenario-content-v3`;
+sections 2.3, 2.6, 2.9 and S6-D05, specified in the import contract section 11.7) is
+implemented in PR #396. Merging grants no
 capability and deploys nothing; deployment follows `ops/runbooks/cpm-workbench.md` and is an operator
 action. It authorizes
 **no** production migration, grant, `profile-apply`, OAuth change or deployment, and its
@@ -240,7 +243,7 @@ The content of one version is the canonical object `schedule-scenario-content-v1
 | Rule | Value |
 |---|---|
 | Fixed keys | every key above is present; absent values are explicit `null`; `constraints` is a list |
-| Ordering | `calendars` by `key`; `exceptions` by `date`; `activities` by `key`; `constraints` by `SNET, FNET, SNLT, FNLT, MSO, MFO`; `relationships` by `(pred, succ)`; Python `str` order (code points) |
+| Ordering | `calendars` by `key`; `exceptions` by `date`; `activities` by `key`; `constraints` by `SNET, FNET, SNLT, FNLT, MSO, MFO`; `relationships` by `(pred, succ)`, then `type` (S7-7; with 1 relationship per pair the `(pred, succ)` order is unchanged); Python `str` order (code points) |
 | Strings | NFC (`normalize_display_text` for `name` and each `wbs_path` label) |
 | Numbers | Python `int` only (never `bool`); no `float`, no `Decimal` |
 | Instants | `YYYY-MM-DDTHH:MM`, minute resolution, naive (S6-D07) |
@@ -290,7 +293,10 @@ original_missing, remaining_missing}`.
 ### 2.6 Relationships
 
 `{pred, succ, type ∈ FS|SS|FF|SF, lag_minutes}`; both keys exist; `pred ≠ succ`; ≤ 1
-relationship per ordered pair (S6-D05); `lag_minutes ∈ [−1,051,200, 1,051,200]` working
+relationship per ordered pair (S6-D05) **and type** (amended by S7-7: parallel
+relationships of different types between one pair, such as a P6 SS + FF ladder, are admitted
+and make the content `schedule-scenario-content-v3`; every one counts against the 100,000
+cap; see the import contract section 11.7); `lag_minutes ∈ [−1,051,200, 1,051,200]` working
 minutes on the lag calendar (on a 480-minute-per-day calendar that is about 8.4 calendar
 years; the horizon check of section 3.2 still bounds it, R8-F19). Cycles are storable and
 reported by the run.
@@ -350,7 +356,7 @@ allowed and recorded.
 | `activity.remove` | `key` | also removes its relationships (`application_report.relationships_removed`) |
 | `duration.set` | `key`, `original_minutes` and/or `remaining_minutes` | — |
 | `distribution.set` / `.clear` | `key`, `distribution` | — |
-| `relationship.add` / `.edit` / `.remove` | `pred`, `succ`, `type`, `lag_minutes` | existing pair, self-loop, missing key refused |
+| `relationship.add` / `.edit` / `.remove` | `pred`, `succ`, `type`, `lag_minutes`; S7-7: `add` takes optional `parallel` (boolean), `remove` optional `type` | existing pair, self-loop, missing key refused; S7-7 (import contract section 11.7): `add` with `parallel: true` refuses only the same type; on a pair holding 2 or more, `edit` needs `type` (which one) and `lag_minutes`, `remove` needs `type`, else `invalid_field` |
 | `calendar.put` / `.remove` | calendar / `key` | default or referenced calendar not removable |
 | `calendar.exception.put` / `.remove` | `key`, `date`, `intervals` | — |
 | `constraint.set` / `.clear` | `key`, `type`, `at` | slot rules |
@@ -1155,7 +1161,7 @@ lockstep count pins, runbook and client guidance.
 | S6-D02 | structural facts are native virtual edges | ADR-015 decision 2 |
 | S6-D03 | version 1 is the exact snapshot or copy; edits from version 2; no blank Scenario | provable baseline provenance |
 | S6-D04 | a Scenario is linear; branching is a new Scenario | one CAS head |
-| S6-D05 | ≤ 1 relationship per ordered pair | unambiguous slack |
+| S6-D05 | ≤ 1 relationship per ordered pair (amended by S7-7: per ordered pair and type) | unambiguous slack (S7-7: each relationship result row is named by `(pred, succ, type)`) |
 | S6-D06 | integer minutes, horizon 2000–2099 | exactness |
 | S6-D07 | no time zones or DST | wall-clock schedules |
 | S6-D08 | open-end bound when step 2 yields none | R8 R-2 accepted; reported via `dangling_finish` |

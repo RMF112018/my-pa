@@ -90,7 +90,7 @@ injection mechanism. Grant setup and remote deployment are outside Issue #365.
 
 ## Storage protocol
 
-**Proposed ADR-021 remains uncommissioned.** The publisher now derives each artifact path through `route_session_artifact` as `artifacts/<role>/<artifact-id>__<safe-filename>` when the caller supplies a trusted `--registration` map whose program and workstream match the session spec. The original relative path stays in manifest metadata. An unregistered work item or a conflicting owner claim is refused before any write. Unknown or withheld roles use `unclassified` and cannot become `READY_FOR_HANDOFF`. This does not set `MY_PA_FILES_SDCR_POLICY_FILE`, accept ADR-021, or enable the server placement gate. The server still admits a path only when that separate policy file is explicitly configured.
+**Proposed ADR-021 remains uncommissioned.** The publisher now derives each artifact path through `route_session_artifact` as `artifacts/<role>/<artifact-id>__<safe-filename>` when the caller supplies a trusted `--registration` map whose program and workstream match the session spec. The original relative path stays in manifest metadata. The safe filename is truncated to 128 characters so it satisfies the placement identifier grammar. An unregistered work item or a conflicting owner claim is refused before any write. Unknown or withheld roles use `unclassified` and cannot become `READY_FOR_HANDOFF`. This does not set `MY_PA_FILES_SDCR_POLICY_FILE`, accept ADR-021, or enable the server placement gate. The server still admits a path only when that separate policy file is explicitly configured.
 
 - Canonical owner path:
   `mcp:SDCR/20-Programs/<program>/workstreams/<workstream>/work-items/<id>/sessions/<session-id>/`.

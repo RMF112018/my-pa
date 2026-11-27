@@ -776,7 +776,9 @@ def _artifact_names(relative: str) -> tuple[str, str]:
     cleaned = re.sub(r"[^A-Za-z0-9._-]", ".", flattened).strip(".")
     if not cleaned or not cleaned[0].isalnum():
         cleaned = f"f.{cleaned}" if cleaned else "file"
-    return f"a{digest}", cleaned[:180]
+    # route_session_artifact requires IDENT, which is 128 characters, not the
+    # 181-character combined ARTIFACT filename half.
+    return f"a{digest}", cleaned[:128]
 
 
 def _typed_remote(

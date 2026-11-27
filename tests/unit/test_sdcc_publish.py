@@ -224,7 +224,7 @@ def test_partial_upload_failure_keeps_successful_evidence_and_reports_incomplete
     data = spec()
     data["artifact_statuses"] = {}
     store = SyntheticFilesWorkspace()
-    store.fail_upload_relative = "/b.pdf"
+    store.fail_upload_relative = "__b.pdf"
     result = run(store, tmp_path, data)
     assert result["status"] == "PUBLICATION_INCOMPLETE"
     assert result["verified"] == 1 and result["total"] == 2
@@ -261,7 +261,7 @@ def test_secret_in_zip_withheld(tmp_path: Path) -> None:
     result = run(store, tmp_path, data)
     assert result["status"] == "PUBLICATION_INCOMPLETE"
     assert len(payload(store, result["manifest_path"])["artifacts"]) == 1
-    assert all(not p.endswith("/artifacts/package.zip") for p in store.entries)
+    assert all(not p.endswith("__package.zip") for p in store.entries)
 
 
 def test_invalid_spec_or_paths_are_rejected_without_writes(tmp_path: Path) -> None:
@@ -573,7 +573,7 @@ def test_unverified_artifact_version_blocks_ready(tmp_path: Path) -> None:
     data = spec()
     data["artifact_statuses"] = {}
     store = SyntheticFilesWorkspace()
-    store.hide_version_relative = "/one.md"
+    store.hide_version_relative = "__one.md"
     result = run(store, tmp_path, data)
     assert result["status"] == "PUBLICATION_INCOMPLETE"
     assert payload(store, result["receipt_path"])["disposition"] == "PUBLICATION_INCOMPLETE"
@@ -909,7 +909,7 @@ def test_f01_source_substitution_after_inventory_has_zero_unqualified_egress(
         async def call(self, capability: str, payload: dict, *, write: bool = False) -> dict:
             if (
                 capability == "files.mkdir"
-                and str(payload.get("path", "")).endswith("/artifacts")
+                and str(payload.get("path", "")).endswith("/artifacts/evidence")
                 and not self.swapped
             ):
                 self.swapped = True
@@ -1224,3 +1224,20 @@ def test_unregistered_or_conflicting_owner_writes_nothing(tmp_path: Path) -> Non
         filename=filename,
     )
     assert "/artifacts/evidence/" in routed and routed.endswith("__report.bin")
+
+
+def test_long_relative_path_uses_a_128_character_filename(tmp_path: Path) -> None:
+    relative = "nested/" + ("n" * 150) + ".bin"
+    path = tmp_path / relative
+    path.parent.mkdir()
+    path.write_bytes(b"synthetic-long-name")
+    data = spec()
+    data["artifact_statuses"] = {relative: "FINAL"}
+    result = run(store := SyntheticFilesWorkspace(), tmp_path, data)
+    artifact = payload(store, result["manifest_path"])["artifacts"][0]
+    leaf = artifact["path"].rsplit("/", 1)[-1]
+    filename = leaf.split("__", 1)[1]
+    assert "/artifacts/evidence/" in artifact["path"]
+    assert len(filename) == 128
+    assert filename.startswith("n")
+    assert artifact["relative_path"] == relative

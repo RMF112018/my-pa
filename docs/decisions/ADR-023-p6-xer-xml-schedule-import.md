@@ -9,11 +9,9 @@
   reads and the format-aware S5 reads, no migration) is merged (#391); slice S7-4b (the delta
   `cpm-workbench-p6-delta-v1` and the P6 scenario snapshot, no migration, no new capability) is
   merged (#392); slice S7-5 (the operator runbook, the engine-vs-P6 oracle and the read-only
-  evaluation script, no migration, no capability) is implemented on
-  `feat/schedule-xer-evaluation`, not merged; slice S7-7 (parallel relationships, content
-  `schedule-scenario-content-v3`, the second amendment to ADR-017 below; no migration, no
-  capability) is implemented on `feat/scenario-parallel-relationships`, stacked on S7-5, not
-  merged; nothing else is implemented, and
+  evaluation script, no migration, no capability) is implemented in PR #395. Slice S7-7
+  (parallel relationships in `schedule-scenario-content-v3`, the second amendment to ADR-017
+  below; no migration, no capability) is implemented in PR #396. Nothing else is implemented, and
   nothing is migrated on any shared database, granted, switched on or deployed. The optional
   slice S7-6,
   gate G-1 and every other operator gate in the contract stays open. The operator answered the contract's open
@@ -261,13 +259,13 @@ P6 delta `cpm-workbench-p6-delta-v1` (`schedule_changes.list` and `schedule_base
 choose the algorithm by the Series' format) and the P6 scenario snapshot of contract section
 11.5 (`schedule_scenarios.create` with its `p6` options); the S6 engine, content schemas and
 stored version columns are unchanged.
-S7-5 implemented on `feat/schedule-xer-evaluation` (not merged; no migration, no capability):
-the runbook section (`ops/runbooks/cpm-workbench.md` section 10), the engine-vs-P6 oracle
+S7-5 is implemented in PR #395 (no migration, no capability). It adds the runbook section
+(`ops/runbooks/cpm-workbench.md` section 10), the engine-vs-P6 oracle
 `src/my_pa/domain/schedule/p6/oracle.py` (a check, never a claim of equivalence) and the
-read-only, stats-only `ops/schedule/p6_evaluate.py`; its acceptance (gate G-7, the real-corpus
-run) is operator-run.
-S7-7 implemented on `feat/scenario-parallel-relationships` (stacked on S7-5, not merged; no
-migration, no capability): content `schedule-scenario-content-v3` for parallel
+read-only, stats-only `ops/schedule/p6_evaluate.py`. The operator runs the real-corpus acceptance
+at gate G-7.
+S7-7 is implemented in PR #396 (no migration, no capability). It adds content
+`schedule-scenario-content-v3` for parallel
 relationships (model, canonical form and digest, decoder, change sets, the engine's
 critical-path edges and typed result rows, the P6 snapshot keeping every relationship, and
 the oracle's `parallel_relationships` cause narrowed to a repeated type).

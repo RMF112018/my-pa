@@ -10,7 +10,7 @@ hook; section 14) is implemented and merged (#349); S6-3 (section 15) was implem
 packages I10-A, I10-B and I10-C (section 15.19) and is merged (#354). The S7-7 amendment (parallel
 relationships, at most 1 per ordered pair and type, content `schedule-scenario-content-v3`;
 sections 2.3, 2.6, 2.9 and S6-D05, specified in the import contract section 11.7) is
-implemented on `feat/scenario-parallel-relationships`, not merged. Merging grants no
+implemented in PR #396. Merging grants no
 capability and deploys nothing; deployment follows `ops/runbooks/cpm-workbench.md` and is an operator
 action. It authorizes
 **no** production migration, grant, `profile-apply`, OAuth change or deployment, and its

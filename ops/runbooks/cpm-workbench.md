@@ -16,8 +16,9 @@ record is [`ADR-016`](../../docs/decisions/ADR-016-cpm-workbench-schedule-eviden
 P6 XER import of
 [`docs/architecture/schedule-xer-import-contract.md`](../../docs/architecture/schedule-xer-import-contract.md)
 under [`ADR-023`](../../docs/decisions/ADR-023-p6-xer-xml-schedule-import.md) is merged
-through S7-4b (#392); its S7-5 procedure and evaluation script (section 10) are implemented on
-`feat/schedule-xer-evaluation`, not merged; its operator gates are section 15 of that contract.
+through S7-4b (#392). The S7-5 procedure and evaluation script (section 10) are implemented in
+PR #395, and parallel relationships in scenario content v3 (S7-7) are implemented in PR #396.
+The operator gates are in section 15 of the contract.
 
 ## 1. What the plane does
 

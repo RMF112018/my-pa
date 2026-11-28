@@ -43,6 +43,16 @@ WORKSPACE_ID = "mcp"
 SESSION_ROOT = "SDCR/20-Programs"
 REGISTRY_ROOT = "SDCR/40-Publication/sessions"
 SCHEMA = "sdcr.session.v2"
+_PLACEMENT_POLICY_PATH = (
+    Path(__file__).resolve().parents[1] / "docs/architecture/sdcc-placement-policy.v1.json"
+)
+_STATUS_ROLE = {
+    "FINAL": "evidence",
+    "DRAFT": "evidence",
+    "SOURCE": "source",
+    "SUPERSEDED": "evidence",
+    "FAILED_EVIDENCE": "evidence",
+}
 RECEIPT_SCHEMA = "sdcr.session.receipt.v1"
 RECOVERY_SCHEMA = "sdcr.session.recovery.v1"
 MAX_FILES = 10_000
@@ -400,6 +410,25 @@ def _spec(spec_path: Path) -> dict[str, Any]:
     return obj
 
 
+def _registration(path: Path) -> dict[str, dict[str, str]]:
+    """Trusted owner map. This file is not the live MY_PA_FILES_SDCR_POLICY_FILE."""
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        raise PublicationError("invalid_registration") from None
+    if not isinstance(loaded, dict) or not loaded:
+        raise PublicationError("invalid_registration")
+    owners: dict[str, dict[str, str]] = {}
+    for work_item, owner in loaded.items():
+        if not isinstance(owner, dict):
+            raise PublicationError("invalid_registration")
+        owners[_id(work_item)] = {
+            "program": _id(owner.get("program")),
+            "workstream": _id(owner.get("workstream")),
+        }
+    return owners
+
+
 def inventory(
     source: Path, statuses: Mapping[str, str]
 ) -> tuple[list[Artifact], list[dict[str, Any]]]:
@@ -717,6 +746,67 @@ def _session_path(spec: Mapping[str, Any]) -> str:
     )
 
 
+def _placement_policy(policy: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    """Path grammar from the proposed placement document. This does not enable the server gate."""
+    if policy is not None:
+        return policy
+    loaded = json.loads(_PLACEMENT_POLICY_PATH.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise PublicationError("placement_policy_invalid")
+    return loaded
+
+
+def _trusted_owner(
+    spec: Mapping[str, Any], registration: Mapping[str, Mapping[str, str]] | None
+) -> None:
+    """Refuse a write when the spec owner is not the trusted registration."""
+    work_item = _id(spec["work_item_id"])
+    owner = None if registration is None else registration.get(work_item)
+    if not isinstance(owner, Mapping):
+        raise PublicationError("work_item_not_registered")
+    if _id(owner.get("program")) != _id(spec["program"]) or _id(owner.get("workstream")) != _id(
+        spec["workstream"]
+    ):
+        raise PublicationError("owner_claim_conflict")
+
+
+def _artifact_names(relative: str) -> tuple[str, str]:
+    digest = hashlib.sha256(relative.encode("utf-8")).hexdigest()[:16]
+    flattened = relative.replace("/", ".")
+    cleaned = re.sub(r"[^A-Za-z0-9._-]", ".", flattened).strip(".")
+    if not cleaned or not cleaned[0].isalnum():
+        cleaned = f"f.{cleaned}" if cleaned else "file"
+    # route_session_artifact requires IDENT, which is 128 characters, not the
+    # 181-character combined ARTIFACT filename half.
+    return f"a{digest}", cleaned[:128]
+
+
+def _typed_remote(
+    spec: Mapping[str, Any],
+    item: Artifact,
+    registration: Mapping[str, Mapping[str, str]],
+    policy: Mapping[str, Any],
+) -> str:
+    from my_pa.domain.files.sdcc_placement import PlacementDeniedError, route_session_artifact
+
+    role = _STATUS_ROLE.get(item.status)
+    if role is None:
+        role = "unclassified"
+    artifact_id, filename = _artifact_names(item.relative)
+    try:
+        return route_session_artifact(
+            policy,
+            registration,
+            work_item_id=_id(spec["work_item_id"]),
+            session_id=_id(spec["session_id"]),
+            category=role,
+            artifact_id=artifact_id,
+            filename=filename,
+        )
+    except PlacementDeniedError:
+        raise PublicationError("placement_denied") from None
+
+
 async def _write_metadata(api: FilesAPI, path: str, text: str) -> dict[str, Any]:
     """Use inline UTF-8 only within the real MCP limit; ticket larger metadata."""
     encoded = text.encode("utf-8")
@@ -799,8 +889,19 @@ async def _begin_recovery(
     return recovery_path, locator_path, locator_stat
 
 
-async def publish(api: FilesAPI, source: Path, spec: Mapping[str, Any]) -> dict[str, Any]:
+async def publish(
+    api: FilesAPI,
+    source: Path,
+    spec: Mapping[str, Any],
+    *,
+    registration: Mapping[str, Mapping[str, str]] | None = None,
+    policy: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Publish discoverable artifacts; only the verified terminal receipt can be READY."""
+    _trusted_owner(spec, registration)
+    if registration is None:
+        raise PublicationError("work_item_not_registered")
+    active_policy = _placement_policy(policy)
     statuses = spec.get("artifact_statuses", {})
     artifacts, exclusions = inventory(source, statuses)
     session_root = _session_path(spec)
@@ -816,7 +917,9 @@ async def publish(api: FilesAPI, source: Path, spec: Mapping[str, Any]) -> dict[
     incomplete = False
     try:
         for item in artifacts:
-            remote = f"{session_root}/artifacts/{item.relative}"
+            if item.status not in _STATUS_ROLE:
+                incomplete = True
+            remote = _typed_remote(spec, item, registration, active_policy)
             representation = mimetypes.guess_type(item.relative)[0] or "application/octet-stream"
             entry: dict[str, Any] = {
                 "artifact_id": f"{spec['session_id']}:{item.relative}",
@@ -1124,7 +1227,9 @@ async def _main(args: argparse.Namespace) -> int:
                         expected_root_fd=output_fd,
                     )
                 _bound_output_root(output_root, output_fd)
-                result = await publish(api, args.source_dir, spec)
+                result = await publish(
+                    api, args.source_dir, spec, registration=_registration(args.registration)
+                )
         except PublicationError:
             raise
         except Exception:
@@ -1147,6 +1252,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--spec", required=True, type=Path, help="Nonsecret session identity/status JSON"
+    )
+    parser.add_argument(
+        "--registration",
+        required=True,
+        type=Path,
+        help="Trusted work-item owner map. Does not activate the server placement policy.",
     )
     parser.add_argument(
         "--repo-dir", type=Path, help="Read-only Git diff capture from this repository"

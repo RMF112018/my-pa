@@ -174,10 +174,10 @@ from my_pa.domain.schedule.plane import (
     writer_bucket,
 )
 from my_pa.domain.schedule.scenario.canonical import (
-    CONTENT_SCHEMA_V2,
     ScenarioDecodeError,
     activity_object,
     calendar_from_object,
+    carries_captured_fields,
     content_bytes,
     content_object,
     content_schema,
@@ -194,6 +194,7 @@ from my_pa.domain.schedule.scenario.model import (
     ScenarioContent,
     VersionLabel,
     parse_instant,
+    relationship_order,
 )
 from my_pa.domain.schedule.scenario.outputs import (
     BaseRunBinding,
@@ -1154,13 +1155,26 @@ class ScheduleScenarioApplication:
             raise InternalError()
         return snapshot.content, snapshot.report
 
-    def _p6_snapshot(self, principal_id: str, publication_id: str, options: object) -> P6Snapshot:
+    def _p6_snapshot(
+        self,
+        principal_id: str,
+        publication_id: str,
+        options: object,
+        *,
+        replay_content_sha256: str | None = None,
+    ) -> P6Snapshot:
         """Section 11.5: the P6 snapshot, read on the P6 unit of work outside any write."""
         factory = self._p6_unit_of_work
         if factory is None or not isinstance(options, dict):  # pragma: no cover
             raise UnsupportedError(SafeDetail.SOURCE_FORMAT)
         with factory() as work:
-            return build_p6_snapshot(work.p6, principal_id, publication_id, options)
+            return build_p6_snapshot(
+                work.p6,
+                principal_id,
+                publication_id,
+                options,
+                replay_content_sha256=replay_content_sha256,
+            )
 
     @staticmethod
     def _absent[T](body: Callable[[], T], detail: SafeDetail) -> T:
@@ -1299,10 +1313,11 @@ class ScheduleScenarioApplication:
             scenario = work.scenarios.get_scenario(principal_id, first.scenario_id)
             origin = None if scenario is None else scenario.origin_publication_id
         if command is not None and command.from_version_id is None and origin is not None:
-            # The P6 report is recomputed: the same request over the same
-            # immutable rows (S7-4b persistence decision, no migration).
+            # Recompute the P6 report for the original version from its immutable source.
             if command.p6 is not None:
-                built = self._p6_snapshot(principal_id, origin, command.p6)
+                built = self._p6_snapshot(
+                    principal_id, origin, command.p6, replay_content_sha256=first.content_sha256
+                )
                 extra = {"p6_snapshot_report": p6_snapshot_report_shape(built.p6_report)}
             else:
                 extra = _pdf_snapshot_extra(command)
@@ -2031,7 +2046,7 @@ class ScheduleScenarioApplication:
             version, content, roots = self._content(work, principal_id, command.version_id)
         ordered = sorted(content.activities, key=lambda activity: activity.key)
         page, truncation = _page_offset(paging, ordered)
-        v2 = content_schema(content) == CONTENT_SCHEMA_V2
+        v2 = carries_captured_fields(content_schema(content))
         payload = {
             "version_id": version.version_id,
             "activities": [activity_object(activity, v2=v2) for activity in page],
@@ -2047,7 +2062,7 @@ class ScheduleScenarioApplication:
         paging = _paging(authorization, command, ScheduleCursorOrder.SCENARIO_CONTENT)
         with self._unit_of_work() as work:
             version, content, roots = self._content(work, principal_id, command.version_id)
-        ordered = sorted(content.relationships, key=lambda item: (item.pred, item.succ))
+        ordered = sorted(content.relationships, key=relationship_order)
         page, truncation = _page_offset(paging, ordered)
         payload = {
             "version_id": version.version_id,

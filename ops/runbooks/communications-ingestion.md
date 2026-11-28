@@ -535,6 +535,9 @@ answer `unsupported`. Rows and grants are untouched; revoke the grants separatel
 
 ## 13. Meeting-context reads (WP5)
 
+Follow the operator-gated [WP5 deployment runbook](communications-wp5-deployment.md) for the
+release sequence and approval handoff within the consolidated activation.
+
 ### 13.1 What it answers
 
 `meetings.context.read` takes 1 to 10 of the caller's Meeting ids (`lookback_days` 1–90,

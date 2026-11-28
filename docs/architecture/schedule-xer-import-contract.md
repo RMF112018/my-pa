@@ -5,7 +5,7 @@ S7-2 (revision `d8383150cf72`) is merged (#387), S7-3 (the admission service `im
 and the `schedule` worker's P6 path, no migration, no capability) is merged (#389); its bounds-maximal synthetic measurement (25,000
 activities, 100,000 relationships, 25,000 WBS rows, 8,526,632 bytes) ran the handler in 50.7 s
 (the contained parse 6.1 s) against the 240 s budget on a local PostgreSQL 15 scratch cluster.
-S7-4a (the 7 P6 capabilities, the switch composition, policy, ChatLLM `chatllm-data-v19`, the field registry and selection chain, the P6 reads, the format-aware S5 reads and the section 7.7 quota and import budgets; no migration) is merged (#391); S7-4b (the delta `cpm-workbench-p6-delta-v1` and the P6 scenario snapshot, acceptance D5 and D6; no migration, no new capability) is implemented on `feat/schedule-xer-handoff`, not merged (its corrections are the "As built in S7-4b" block after section 11.5).
+S7-4a (the 7 P6 capabilities, the switch composition, policy, ChatLLM `chatllm-data-v19`, the field registry and selection chain, the P6 reads, the format-aware S5 reads and the section 7.7 quota and import budgets; no migration) is merged (#391); S7-4b (the delta `cpm-workbench-p6-delta-v1` and the P6 scenario snapshot, acceptance D5 and D6; no migration, no new capability) is merged (#392; its corrections are the "As built in S7-4b" block after section 11.5). S7-5 (the runbook section, the engine-vs-P6 oracle and the read-only evaluation script; no migration, no capability) is implemented in PR #395 (its decisions are the "As built in S7-5" block in section 14). S7-7 (parallel relationships: content `schedule-scenario-content-v3`, the "Parallel relationships" block of section 11.7; no migration, no capability) is implemented in PR #396.
 Nothing else in it is implemented, and nothing is migrated on a shared database, granted,
 switched on or deployed. The decision record is
 [`ADR-023`](../decisions/ADR-023-p6-xer-xml-schedule-import.md), which loosens
@@ -1163,7 +1163,7 @@ calendars (below); everything else is mapped:
 | durations | `remaining_minutes = remaining_hours × 60`, `original_minutes = original_hours × 60`; a non-integral product is rounded half-even and counted `durations_quantized`; milestones 0 and 0 |
 | constraints | `CS_MSOA` → SNET, `CS_MEOA` → FNET, `CS_MSOB` → SNLT, `CS_MEOB` → FNLT, `CS_MANDSTART` → MSO, `CS_MANDFIN` → MFO; `CS_MSO`, `CS_MEO`, `CS_ALAP` not representable: dropped and counted `constraints_unsupported`; a primary + secondary pair the engine's slot rule refuses keeps the primary and counts `constraints_dropped`. On a milestone the constraint is put on the milestone's own side (section 11.7): a finish-side constraint on a start milestone becomes its start-side twin (FNET → SNET, FNLT → SNLT, MFO → MSO) and vice versa, counted `milestone_constraints_converted`; the date is unchanged, so nothing is lost (a milestone has one date) |
 | progress | `actual_start`/`actual_finish`; a start milestone takes `actual_start` (its actual finish is the same instant), a finish milestone `actual_finish`; `TK_Complete` without the needed actual date is refused `invalid_request(ROWS)` |
-| relationships | every same-project relationship between included activities; `lag_minutes = lag_hours × 60`; external ones counted `external_relationships_dropped` |
+| relationships | every same-project relationship between included activities; `lag_minutes = lag_hours × 60`; external ones counted `external_relationships_dropped`; parallel relationships (2 or more between the same ordered pair, which P6 allows, for example an SS and an FF) are **all kept** (S7-7: at most 1 per `(pred, succ, type)`, content `schedule-scenario-content-v3`, section 11.7), so the content never depends on the export's row order; only a repeated `(pred, succ, type)`, which P6 does not write, is dropped, keeping the largest lag (the binding one in both passes, in any row order), and counted `relationships_parallel_dropped` (0 whenever everything is kept; the key stays for compatibility) |
 | `published_reference` | publication id, Activity ID, the published hours (original, remaining) and the derived start/finish dates, and the request's `include_fields` (≤ 50 captured keys) as `fields`; P6's own early/late dates and floats stay on the publication (`schedule_p6_activities.list`, by Activity ID): the S7-0 content schema has no field for them (corrected in S7-4b, below) |
 
 S7-4 obligations for this mapping: `published_reference.fields` is emitted as null (never
@@ -1174,7 +1174,9 @@ Content schema: a document that uses none of the S7-0 additions (edged milestone
 `calendar:` lag calendar, `published_reference.fields`) is a byte-identical
 `schedule-scenario-content-v1` document; one that uses any of them is
 `schedule-scenario-content-v2` (section 11.7). A P6 snapshot with any milestone or with
-`rcal_Project` is therefore v2. The engine never reads captured fields: they are inert data.
+`rcal_Project` is therefore v2. A snapshot holding parallel relationships is
+`schedule-scenario-content-v3` (S7-7, section 11.7), whatever else it uses. The engine never
+reads captured fields: they are inert data.
 The snapshot report lists every count above.
 
 **PDF snapshots (S7-0 change):** the S6 snapshot input's `calendars` and `default_calendar`
@@ -1226,7 +1228,9 @@ the run's project finish and `must_finish_by`).
 default); a constraint without a date or off the engine's axis is `constraints_unsupported`; a
 complete activity with remaining hours is given 0 (`complete_remaining_zeroed`); a WBS path over 32
 labels is null (`wbs_paths_dropped`); seconds are truncated (`instants_truncated`); a relationship
-to an excluded activity is `relationships_excluded`; a repeated (code) value travels by its first
+to an excluded activity, or of an unknown type, is `relationships_excluded` (a parallel one is
+`relationships_parallel_dropped`, apart; added in the S7-5 review, an additive count; since
+S7-7 only a repeated `(pred, succ, type)` is counted there); a repeated (code) value travels by its first
 ordinal; a non-integral lag is rounded half-even (`lags_quantized`).
 (8) Delta: a publication's capture set is its admission's selection, or under the defaults the
 default-captured keys plus the UDF and code keys the run captured; a personal key is never
@@ -1339,6 +1343,51 @@ P6 `rcal_Project`. It cannot be removed while named (`calendar_in_use`).
   accepts `calendar:<key>`; `op_error` gains no member (wrong-side constraints use
   `constraint_conflict`).
 - Client-asserted outputs: `OutputEngine` gains `my-pa-cpm-v2`.
+
+**Parallel relationships: content `schedule-scenario-content-v3` (S7-7, amendment to ADR-017
+in ADR-023).** P6 allows 2 or more relationships between the same ordered pair (an SS + FF or
+SS + FS "ladder"); S6-D05 allowed 1, so the snapshot kept whichever came first in the file and
+a re-export in another row order gave another network (proven on 2 real exports, stats only:
+26 of 91 remaining-work floats differed on one, and restoring the dropped links through
+zero-duration connector activities matched all 91).
+
+- **Rule.** At most 1 relationship per `(pred, succ, type)`, so 1 to 4 per ordered pair (S6
+  §2.6 as amended). Relationships sort by `(pred, succ, type)` (type text in code-point order:
+  `FF`, `FS`, `SF`, `SS`); with 1 per pair this is exactly the S6 `(pred, succ)` order.
+- **Schema, selected by content only.** A content holding 2 or more relationships between one
+  ordered pair is `schedule-scenario-content-v3`, whatever else it uses; otherwise it is v2
+  (it uses a v2 feature) or v1, byte-identical and with the same digest as before. The v3
+  shape is exactly the v2 shape (`fields` on every non-null `published_reference`); hash
+  `sha256(b"schedule-scenario-content-v3\n" + canonical)`. The decoder refuses a v3 label on a
+  content without parallel relationships and a v1 or v2 label on one with them, so every
+  content still has one canonical form. A change set that adds a parallel relationship gives
+  a v3 child; one that leaves every pair with 1 gives a v1 or v2 child again.
+- **Engine.** A v3 content runs on the engine its other content requires: `my-pa-cpm-v2` iff
+  it uses a v2 feature (an edged milestone, a fixed lag calendar or captured fields), else
+  `my-pa-cpm-v1`. The engine maths was always per relationship (each bound, slack, warning
+  and count is indexed by relationship position), so nothing about it changes and every v1
+  and v2 result stays byte-identical. Two pair-keyed details are made exact, each a no-op
+  when every pair holds 1 relationship: a critical-path edge is recorded once per activity
+  pair (2 zero-slack links between 2 critical activities are 1 step of a path), and a result
+  holding parallel relationships names each relationship row by `type` as well (the result
+  document adds `type` to every row only then).
+- **Change sets (additive; every request valid before behaves as before; `op_error` gains no
+  member).** `relationship.add` still refuses an occupied pair (`relationship_exists`) unless
+  it carries `"parallel": true`, and then refuses only the same type. `relationship.edit` on a
+  pair holding 1 relationship is unchanged (`type` is its new type); on a pair holding 2 or
+  more, `type` names the relationship and `lag_minutes` is its new lag, both required
+  (`invalid_field` otherwise; a type the pair does not hold is `relationship_absent`); to
+  change a parallel relationship's type, remove it and add the new one. `relationship.remove`
+  takes an optional `type`: required on a pair holding 2 or more (`invalid_field` without
+  it), and when given it must match. Every refusal is the public `invalid_request` with
+  `change_set_<op_error>`. `activity.remove` counts every relationship it removes.
+- **Caps unchanged.** 100,000 relationships per version, every parallel relationship counted;
+  the change-set, content-byte and CPM operation bounds are unchanged (the S6 §3.11 bound is
+  linear in relationships, not pairs, so the maxima still bound the work at 2,100,000).
+- **No migration.** No stored column holds a content schema name (it is the digest prefix
+  only, re-derived on read over `-v1`, `-v2`, `-v3`), and `a_cpm_run_engine_version_is_known`
+  already admits both engines; the reads, the MCP tool input schemas and the capability set do
+  not change.
 
 **Effect on existing S6 pieces.**
 
@@ -1567,6 +1616,44 @@ of every nominated export; per export: verdict, issue counts by code, activity/r
 counts equal to the file's, delta counts between consecutive versions, and the engine-vs-P6
 oracle (early dates and total float of an unmodified version 1: share of activities equal, the
 distribution of differences in minutes, and `unmodelled_settings`).
+
+**As built in S7-5 (decisions, no migration, no capability, no new MCP tool; no spec error
+found):** (1) The oracle is the pure `src/my_pa/domain/schedule/p6/oracle.py`
+(`p6-engine-oracle-v1`), the only `p6` module that imports beyond the package (the pure
+scenario package and `p6_compare`; no other `p6` module imports it, so the parser front end
+never loads the engine and the worker parent, guarded like the parser, never loads the
+oracle). It builds version 1 from the parse with
+`snapshot_from_p6` and every 11.5 default, runs `run_cpm` and joins by Activity ID. (2) It
+compares early start, early finish, late start, late finish, total float (`total_float_hr_cnt`
+x 60, half-even, counted `p6_quantized`) and, beyond this section, the remaining early start
+(`restart_date`) against the engine's remaining start, so a P6 convention for progressed work
+shows instead of hiding. The compared and equal counts are split by activity state.
+The other counts are aggregate. A missing P6 value, a value off the engine's axis and a missing
+engine value (a complete activity has no float) are counted apart, never as mismatches.
+Histogram edges: 0, ±1..60, ±61..480, ±481..2400, beyond.
+(3) The critical comparison runs over the activities both sides give a float (total float at
+most the 11.5 threshold on each side). (4) `unmodelled_settings` of the oracle is the
+snapshot's 2 (11.5 "As built in S7-4b" item 5) plus `total_float_type` (`sched_float_type` not
+`FT_FF`, the finish float the engine computes [A]), `open_ends_critical`,
+`float_from_project_finish`, `critical_path_longest_path` (`critical_path_type` not
+`CT_TotFloat` [A]), `multiple_float_paths` (the optional
+`xer:SCHEDOPTIONS.enable_multiple_longest_path_calc`, read by the oracle's own parse, which
+captures only that key), `external_relationships` (any dropped), `parallel_relationships`
+(any `relationships_parallel_dropped`; since S7-7 a P6 ladder is kept whole, so this names only
+a repeated `(pred, succ, type)`, which P6 does not write),
+`in_progress_start_links` (a considered SS or SF link whose predecessor is in progress: the
+engine skips its backward-pass bound, S6 section 3.6, while P6 applies it less the work done
+since the actual start, so late dates and floats can differ) and `progress_actual_dates`
+(neither progress flag: 11.5's retained-logic default); the last 2 network causes were added in
+the S7-5 review from real-corpus findings. The capability's create answer keeps
+its 2. (5) The script `ops/schedule/p6_evaluate.py` (`p6-evaluation-v1`) parses each file with
+the default capture for the profile, the counts and the delta, and once more for the oracle;
+a consecutive pair is compared when the 2 exports share the project short name or GUID
+(11.1), or always under `--assume-same-project` (P6 update files exported as separate project
+copies carry another project id, short name and GUID), and reports `same_project` (the 11.1
+rule), `earlier → later`, with the earlier exports of the run as the `reintroduced` history.
+It prints counts, shares, minute distributions, codes and option names only (a planted-marker
+test, as A7). Procedure: `ops/runbooks/cpm-workbench.md` section 10.
 
 ### S7-6 — re-capture (optional)
 

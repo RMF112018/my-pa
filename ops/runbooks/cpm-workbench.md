@@ -13,11 +13,12 @@ disposable per-test clones on an isolated scratch PostgreSQL 15 cluster
 repository's test tiers on synthetic PDFs. The current-state description is
 [`docs/architecture/cpm-workbench.md`](../../docs/architecture/cpm-workbench.md); the decision
 record is [`ADR-016`](../../docs/decisions/ADR-016-cpm-workbench-schedule-evidence.md). The
-proposed P6 XER/XML import (design only, not implemented) is
+P6 XER import of
 [`docs/architecture/schedule-xer-import-contract.md`](../../docs/architecture/schedule-xer-import-contract.md)
-under [`ADR-023`](../../docs/decisions/ADR-023-p6-xer-xml-schedule-import.md); its operator
-gates are section 15 of that contract, and no procedure for it exists here until its S7-5
-slice adds one.
+under [`ADR-023`](../../docs/decisions/ADR-023-p6-xer-xml-schedule-import.md) is merged
+through S7-4b (#392). The S7-5 procedure and evaluation script (section 10) are implemented in
+PR #395, and parallel relationships in scenario content v3 (S7-7) are implemented in PR #396.
+The operator gates are in section 15 of the contract.
 
 ## 1. What the plane does
 
@@ -402,3 +403,244 @@ operator-run; an agent performs none of them.
    very large criticality or Monte Carlo output may not fit at all.
 7. **Operator-gated and not performed by an agent:** revisions A and B, both switches,
    every `profile-apply` and `grant`, the measurements, and the deployment.
+
+## 10. P6 XER/XML schedule import (S7)
+
+**UNEXECUTED / OPERATOR-GATED. Nothing in this section was run against any real system.**
+The P6 XER import of
+[`schedule-xer-import-contract.md`](../../docs/architecture/schedule-xer-import-contract.md)
+(cited "contract §n" here) under
+[`ADR-023`](../../docs/decisions/ADR-023-p6-xer-xml-schedule-import.md) is merged through
+S7-4b (#384, #386, #387, #389, #391, #392); S7-5 adds this procedure and the evaluation script.
+The XML format (`p6_xml_v1`, contract §16) and re-capture (S7-6, undecided) are not built:
+`format` `p6_xml` answers `unsupported(format)`. Every command below is operator-run; an
+agent performs none of them. The operator gates are contract §15 (G-1 to G-10).
+
+### 10.1 What it is
+
+A client admits one P6 XER export that already sits in the files workspace
+(`schedule_publications.import_p6`, a client-usable additive write); the bytes are snapshotted
+into the database at admission, so the worker never reads the mutable workspace path. The
+`schedule` worker parses the snapshot in the contained child under profile `p6_xer_v1`
+(catalogue `p6-field-catalogue-v1`), stores typed projects, WBS, activities, relationships and
+calendars, the captured optional fields and the observed-field statistics, and links each
+activity to its Stable Activity by exact Activity ID (`task_code`) inside the Series. The reads
+serve it; the P6 delta `cpm-workbench-p6-delta-v1` compares 2 publications of a Series; a
+Scenario's version 1 can be built from a P6 publication (contract §11.5).
+
+### 10.2 Prerequisites
+
+1. **Schema.** The schedule plane revisions (sections 2, 8 and 9 above) and the P6 storage
+   revision `d8383150cf72` (the 7 P6 tables and the audit vocabulary for the 7 names) are
+   applied; read it with the existing Alembic control plane
+   ([`postgres-operations.md`](postgres-operations.md)), never from this runbook. **No further
+   migration**: S7-3, S7-4a, S7-4b and S7-5 add none. The downgrade of `d8383150cf72` refuses
+   (`restrict_violation`) once any P6 table holds a row, any publication is not `pdf`, or any
+   audit row names a P6 capability or purpose (contract §8.3): decide on it before the first
+   audited probe, as in section 2 step 2.
+2. **Build.** An image from merged `main` carrying S7-4b or later, deployed with
+   `MY_PA_SCHEDULE_P6_ENABLED` **absent** first (gate G-4). The deploy and recreate steps are
+   those of [`gateway-operations.md`](gateway-operations.md),
+   [`worker-operations.md`](worker-operations.md) and
+   [`remote-mcp-cloudflare.md`](remote-mcp-cloudflare.md); the combined release sequence is
+   kept outside this repository and is not repeated here.
+3. **Files workspace.** The plane of [`files-workspace.md`](files-workspace.md) is
+   commissioned (an export reaches the workspace by `files.upload.*` or `files.write_text`).
+
+### 10.3 Switches, worker, quotas
+
+1. **Order.** `MY_PA_SCHEDULE_ENABLED` → `MY_PA_SCHEDULE_P6_ENABLED` →
+   `MY_PA_SCHEDULE_SCENARIOS_ENABLED`. The P6 switch is effective only with the schedule
+   switch on and an unrestricted composition; off, the 7 names are absent everywhere, each
+   handler answers `unsupported`, and the worker fails a `p6_*` job closed as a transient
+   `unavailable` without parsing. A Scenario over a P6 publication additionally needs the
+   scenario switch (section 9). Set each on the gateway **and** on the schedule worker, then
+   restart both (gate G-5). Turning a switch on or off changes no row.
+2. **Worker.** The same `schedule` plane as PDFs, with a lease of at least 300 s:
+
+   ```sh
+   MY_PA_SCHEDULE_ENABLED=true MY_PA_SCHEDULE_P6_ENABLED=true \
+       .venv/bin/python apps/worker.py run --plane schedule --lease-seconds 300
+   ```
+
+3. **Quotas** (contract §7.7, placeholders kept by operator decision 2026-11-23).
+   `MY_PA_SCHEDULE_P6_SNAPSHOT_QUOTA_BYTES` (default 8 GiB, 1 byte to 1 TiB) bounds the
+   retained snapshot bytes per Principal; an import past it answers
+   `rate_limited(storage_quota)` and writes nothing; identical bytes are stored once per
+   Principal. Import budgets: at most 60 imports an hour and 500 a day per Principal
+   (`rate_limited`). File cap 16 MiB (`unsupported(max_bytes)` before any byte is read).
+
+### 10.4 Grants and ChatLLM (gate G-6)
+
+The 7 names: writes `schedule_publications.import_p6` (purpose `schedule_p6_import`) and
+`schedule_p6_fields.set_captured` (purpose `schedule_p6_configuration`), both granted with
+`--write` and served only to a client with `writes_enabled` (`set-client-writes
+--writes-enabled`); reads `schedule_p6_fields.available`, `schedule_p6_activities.list`,
+`schedule_p6_relationships.list`, `schedule_p6_calendars.list`,
+`schedule_p6_field_values.list` (purpose `schedule_read`). None is operator-only; the remote
+principal is the operator, so a grant is the operator's admission decision per client. For a
+ChatLLM client the 7 are `DATA_CONDITIONAL` under the prerequisite `SCHEDULE_P6`, from data
+profile `chatllm-data-v19` onwards: converge it on the current profile with the
+`profile-diff` / `profile-plan` / `profile-apply` form of section 9 step 2 (with the P6 switch
+off a profile desires exactly the previous profile's set). For another remote client grant
+each name with `apps/cli/remote_mcp.py grant` as in
+[`files-workspace.md`](files-workspace.md) section 5.
+
+### 10.5 How a client imports
+
+1. Upload the export into the workspace, then read its version token and digest:
+   `files.stat` with `{"workspace_id": "<workspace>", "path": "<dir>/<export>.xer",
+   "include_sha256": true}` answers `version` (`fv1_…`) and `sha256`.
+2. Before the first import of a new project, the operator runs the conformance script on the
+   file (section 10.10); `fail` stops the import.
+3. Call `schedule_publications.import_p6` with exactly one of `series_id`, `series_name` or
+   `series_auto` (placeholders, never real values):
+
+   ```json
+   {
+     "project_id": "<prj_…>",
+     "series_name": "<series name>",
+     "workspace_id": "<workspace>",
+     "path": "<dir>/<export>.xer",
+     "expected_version": "<the fv1_… version from files.stat>",
+     "expected_sha256": "<the 64-hex sha256 from files.stat>",
+     "format": "p6_xer",
+     "idempotency_key": "<client key>"
+   }
+   ```
+
+   Optional: `accept_project_identity_change` (default `false`) and
+   `supersedes_publication_id`.
+
+   **P6 update files exported as separate project copies.** Such a copy carries another P6
+   project id, project short name and project GUID than the earlier exports, so the contract
+   §11.1 identity rule finds no shared identity and the import becomes `review_required`
+   (`p6_project_identity_changed`). Every update import of such a copy into the same Series
+   therefore needs `"accept_project_identity_change": true` **on its first call**: the check
+   compares with the Series' earlier `complete` publications, and an accepted copy adds yet
+   another identity, so the next copy needs the flag again. The flag waives the only guard
+   against importing another project into the Series: confirm first with the evaluation
+   script (section 10.10, `--assume-same-project`: `same_project` `false` and a delta with
+   few `added` and `removed` activities). The very first import of a Series is never a
+   change. A file that moved after the stat answers
+   `conflict(expected_version)`, other bytes `conflict(expected_sha256)`, a Series holding a PDF
+   publication `conflict(series_format)`; the same bytes already in the Series answer
+   `already_present: true` (also for a failed publication of those bytes: a retry needs a
+   re-export or another Series). The answer names the publication; the parse runs on the
+   worker.
+
+### 10.6 Statuses
+
+| Status | Meaning |
+|---|---|
+| `queued`, `processing` | admitted; the worker has not finished |
+| `complete` | parsed; non-fatal issues are listed (at most 10,000) with their counts by code |
+| `review_required` | `p6_project_identity_changed`: no earlier complete P6 publication of the Series shares the project short name or the GUID (contract §11.1); it is never served by the P6 reads and never becomes the identity reference. The same bytes cannot be imported again into that Series (content idempotency answers `already_present: true` with this publication), so set `accept_project_identity_change: true` on the first import of each update copy (section 10.5); after a `review_required`, re-export the file from P6 (new bytes) and import it with the flag and a new `idempotency_key`, or use another Series |
+| `failed` | a fatal issue of contract §5.5: `p6_encoding_invalid`, `p6_header_invalid`, `p6_structure_invalid`, `p6_record_width_mismatch`, `p6_bound_exceeded`, `p6_required_table_missing`, `p6_required_field_missing`, `p6_multiple_projects`, `p6_value_invalid` or `p6_unknown_enum_value` on an R field, `p6_duplicate_activity_id`, `p6_reference_dangling`, `p6_wbs_cycle` |
+
+`last_error_code` stays one of the 11 public codes; the `p6_*` codes are the publication's
+issues. A transient failure (switch off, worker unavailable) releases the job for retry and,
+after 3 attempts, reads as effective `failed`.
+
+### 10.7 Reading the results
+
+- `schedule_publications.read` carries the `p6` block (project identity, export version, data
+  date, settings, counts, `source_format`, `capture_event_id`, `encoding`,
+  `catalogue_version`); `schedule_publications.list`, `schedule_activities.list` and
+  `schedule_activities.history` serve P6 publications too.
+- The 5 P6 reads (section 10.4) page at 25 by default (1 to 100), take at most 50 `fields`,
+  at most 3 filter predicates and 1 sort key (contract §7.7).
+- `schedule_changes.list` between 2 P6 publications of a Series is the P6 delta (contract
+  §11.4); a cross-format pair is `unsupported(source_format)`.
+- `schedule_scenarios.create` from a P6 publication takes the `p6` object (`{}` for every
+  default; `calendars` as `{publication_id, calendar_id}` references, `default_calendar`,
+  `calendar_map`, `include_fields`) and answers `p6_snapshot_report` (every contract §11.5
+  count, `unmodelled_settings`, `standard_calendar_horizon_exceeded`). The lag calendar and
+  progress policy are changed on version 2 with `settings.set`.
+
+### 10.8 Field capture (gate G-8 for personal fields)
+
+`schedule_p6_fields.available` lists the catalogue and the observed fields of a Series with
+their capture status; `schedule_p6_fields.set_captured` sets the Series' selection (at most
+300 keys, compare-and-swap on `expected_sequence`, `conflict(sequence)` otherwise). A selection
+applies from the **next** import; earlier publications keep what they captured. A personal
+field is captured only with `include_personal: true` and served only to a holder of the
+`schedule_p6_field_values.list` grant.
+
+### 10.9 Troubleshooting by issue code
+
+| Code | What to do |
+|---|---|
+| `p6_encoding_invalid`, `p6_header_invalid`, `p6_structure_invalid`, `p6_record_width_mismatch` | re-export the XER from P6 unchanged; never edit the file by hand |
+| `p6_bound_exceeded` | the issue names the bound (contract §5.4); split the project or reduce the export |
+| `p6_required_table_missing`, `p6_required_field_missing` | re-export with the default XER options; run the conformance script and compare its field report |
+| `p6_multiple_projects` | export 1 project per file |
+| `p6_duplicate_activity_id` | an Activity ID is repeated or empty; fix it in P6 and re-export |
+| `p6_reference_dangling`, `p6_wbs_cycle` | the export is inconsistent; re-export |
+| `p6_unknown_table`, `p6_unknown_field`, `p6_unknown_enum_value` (T/O) | findings only; report the conformance output (stats only) so the catalogue can be reviewed |
+| `p6_export_version_untested` | a P6 version outside the tested range; run the evaluation (section 10.10) before relying on it |
+| `p6_calendar_missing`, `p6_calendar_invalid`, `p6_calendar_base_substituted` | the activity keeps its P6 calendar id; a Scenario gives it `my-pa-us-40h-v1` (counted `calendars_defaulted`) unless the request maps it |
+| `p6_external_relationship` | stored and flagged; a Scenario drops it (counted) |
+| `p6_capture_cap_reached` | optional capture stopped for that publication; reduce the selection |
+| `p6_project_identity_changed` | section 10.6 |
+
+### 10.10 Retention, downgrade, conformance and evaluation
+
+- **Retention.** Every snapshot is retained (operator decision 2026-11-23, contract §7.6);
+  there is no deletion path. The quota of section 10.3 bounds it.
+- **Downgrade.** Section 10.2 step 1. Rollback is the switches off: no row changes, the 7
+  names are `unsupported`, stored P6 publications stay readable through the S5 reads while the
+  schedule switch is on.
+- **Conformance script** (contract §12), read-only and stats only (counts, lengths, shapes,
+  names, codes; never a value), one file:
+
+  ```sh
+  .venv/bin/python ops/schedule/p6_export_profile.py <export.xer>
+  ```
+
+  It prints 1 JSON object: per table and per field the tier, presence, lengths, shapes and
+  unknown enum tokens of the P6 vocabulary, the issues with their codes and lines, and the
+  verdict `pass`, `pass_with_findings` (exit 0) or `fail` (exit 1); 2 is a usage error.
+- **Evaluation script** (S7-5, contract §14), read-only and stats only, the exports of 1
+  Project oldest first:
+
+  ```sh
+  .venv/bin/python ops/schedule/p6_evaluate.py <v1.xer> <v2.xer> <v3.xer>
+  .venv/bin/python ops/schedule/p6_evaluate.py --assume-same-project <v1.xer> <v2.xer> <v3.xer>
+  ```
+
+  It prints 1 JSON object (`p6-evaluation-v1`). Per export: the profile verdict and issue
+  counts by code; the activity, relationship, WBS and calendar counts and whether each equals
+  the records of the file's own table; the contract §11.5 snapshot report (every count,
+  `unmodelled_settings`, the number of outrun standard calendars, the content schema, or the
+  refusal token); and the engine-vs-P6 oracle (`p6-engine-oracle-v1`). Per consecutive pair of
+  the same project (short name or GUID), or every consecutive pair under
+  `--assume-same-project` (update files exported as separate project copies, section 10.5):
+  `same_project` (the §11.1 rule; `false` means the import needs
+  `accept_project_identity_change`) and the delta's counts by change kind, `earlier → later`,
+  with `reintroduced` across the run. Exit 1 when any verdict is `fail` (the object is still
+  printed) or on an unexpected error (its type only), 0 otherwise, 2 on usage.
+- **Reading the oracle.** It builds version 1 with every §11.5 default, runs the engine at
+  the data date and compares each activity, joined by Activity ID, with P6's own early start,
+  early finish, late start, late finish, total float (hours × 60) and remaining early start:
+  per quantity the compared and equal counts by activity state, plus aggregate `equal_share`,
+  a histogram of `engine − P6` in minutes (0, ±1..60, ±61..480, ±481..2400, beyond), the
+  largest absolute difference, and counts for no P6 value, a value off the engine's axis or
+  no engine value (none is a mismatch); then the critical sets (total float at most the
+  project threshold, over the activities both give a float). It is **a check, not a claim of
+  equivalence**: `unmodelled_settings` names the P6 options the export sets that the engine
+  does not model (`ss_lag_from_early_start`, `use_expected_finish`, `total_float_type`,
+  `open_ends_critical`, `float_from_project_finish`, `critical_path_longest_path`,
+  `multiple_float_paths`, `external_relationships`, `parallel_relationships`,
+  `in_progress_start_links`, `progress_actual_dates`). The Scenario keeps links of different
+  types between the same ordered pair, such as SS and FF. The oracle flags
+  `parallel_relationships` when links of the same type repeat for that pair. The Scenario
+  keeps the largest lag and counts the other links in `relationships_parallel_dropped`.
+  For `in_progress_start_links`, the engine skips the backward-pass bound of an SS or SF
+  link whose predecessor is in progress. P6 applies the bound after subtracting the work
+  done since the actual start, so late dates and floats can differ. A difference
+  concentrated in progressed activities points at a P6 progress convention, not at an error.
+- **Acceptance (gate G-7).** For every nominated export: verdict not `fail`, the 4 counts
+  equal, the delta counts between consecutive versions, and the oracle's shares with their
+  `unmodelled_settings`; only the stats output leaves the NAS. The scratch-database import of
+  each export is the same `import_p6` call on a scratch deployment.

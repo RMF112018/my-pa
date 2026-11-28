@@ -19,6 +19,7 @@ from my_pa.domain.schedule.model import ScheduleCellState
 from my_pa.domain.schedule.scenario.canonical import (
     CONTENT_SCHEMA,
     CONTENT_SCHEMA_V2,
+    CONTENT_SCHEMA_V3,
     content_bytes,
     content_from_object,
     content_object,
@@ -100,6 +101,7 @@ def snap(
     activities: tuple[P6SnapshotActivity, ...] = (act("SYN-1010", 2), act("SYN-1020", 3)),
     relationships: tuple[P6SnapshotRelationship, ...] = (rel("SYN-1010", "SYN-1020"),),
     request: P6SnapshotRequest | None = None,
+    legacy_relationships: bool = False,
 ) -> P6Snapshot:
     return snapshot_from_p6(
         publication_id=PUBLICATION,
@@ -108,6 +110,7 @@ def snap(
         activities=activities,
         relationships=relationships,
         request=request,
+        legacy_relationships=legacy_relationships,
     )
 
 
@@ -544,6 +547,84 @@ def test_relationships_lags_and_external_ones() -> None:
     c = counts(built)
     assert c["external_relationships_dropped"] == 1
     assert c["lags_quantized"] == 1
+
+
+def test_parallel_relationships_are_all_kept_and_make_the_content_v3() -> None:
+    # S7-7: P6 allows an SS and an FF between the same 2 activities; the content keeps
+    # both (one per (pred, succ, type)), so nothing is counted parallel-dropped, and
+    # the external and unknown-endpoint exclusions are counted as before.
+    built = snap(
+        activities=(act("SYN-1010", 2), act("SYN-1020", 3)),
+        relationships=(
+            rel("SYN-1010", "SYN-1020", "PR_SS", "8"),
+            rel("SYN-1010", "SYN-1020", "PR_FF", "0"),
+            rel("SYN-1020", "SYN-1010", "PR_FS", "0"),
+            rel("SYN-1010", "SYN-9999"),
+        ),
+    )
+    links = {(r.pred, r.succ, r.type) for r in built.content.relationships}
+    assert links == {
+        ("sact_p6snap0002", "sact_p6snap0003", RelationshipType.SS),
+        ("sact_p6snap0002", "sact_p6snap0003", RelationshipType.FF),
+        ("sact_p6snap0003", "sact_p6snap0002", RelationshipType.FS),
+    }
+    assert content_schema(built.content) == CONTENT_SCHEMA_V3
+    c = counts(built)
+    assert c["relationships"] == 3
+    assert c["relationships_parallel_dropped"] == 0
+    assert c["relationships_excluded"] == 1
+    assert c["external_relationships_dropped"] == 0
+
+
+def test_either_file_order_of_a_ladder_gives_the_same_content() -> None:
+    # S7-7: before, the first of the two rows survived, so the export's row order chose
+    # the network. Now both file orders give one content (bytes and digest).
+    ladder = (
+        rel("SYN-1010", "SYN-1020", "PR_SS", "8"),
+        rel("SYN-1010", "SYN-1020", "PR_FF", "16"),
+    )
+    forward = snap(relationships=ladder)
+    backward = snap(relationships=ladder[::-1])
+    assert content_bytes(forward.content) == content_bytes(backward.content)
+    assert content_schema(forward.content) == CONTENT_SCHEMA_V3
+    assert counts(forward) == counts(backward)
+    assert counts(forward)["relationships_parallel_dropped"] == 0
+    assert run_cpm(forward.content) == run_cpm(backward.content)
+
+
+def test_a_repeated_type_on_one_pair_keeps_the_largest_lag_in_any_order() -> None:
+    # P6 does not write the same type twice between one pair; if an export does, the
+    # largest lag binds both passes, so it is kept whatever the row order and the
+    # other is counted `relationships_parallel_dropped`.
+    rows = (
+        rel("SYN-1010", "SYN-1020", "PR_FS", "8"),
+        rel("SYN-1010", "SYN-1020", "PR_FS", "16"),
+    )
+    for ordered in (rows, rows[::-1]):
+        built = snap(relationships=ordered)
+        assert [(r.type, r.lag_minutes) for r in built.content.relationships] == [
+            (RelationshipType.FS, 960)
+        ]
+        assert content_schema(built.content) == CONTENT_SCHEMA
+        assert counts(built)["relationships_parallel_dropped"] == 1
+
+
+@pytest.mark.parametrize(
+    ("first_lag", "second_lag"), [("8", "0.01"), ("8.001", "8"), ("8", "8.001")]
+)
+def test_matching_legacy_and_current_snapshots_count_only_the_winning_lag(
+    first_lag: str, second_lag: str
+) -> None:
+    rows = (
+        rel("SYN-1010", "SYN-1020", "PR_FS", first_lag),
+        rel("SYN-1010", "SYN-1020", "PR_FS", second_lag),
+    )
+    legacy = snap(relationships=rows, legacy_relationships=True)
+    current = snap(relationships=rows)
+    assert content_bytes(current.content) == content_bytes(legacy.content)
+    assert current.p6_report == legacy.p6_report
+    assert counts(current)["relationships_parallel_dropped"] == 1
+    assert counts(current)["lags_quantized"] == int(first_lag == "8.001")
 
 
 # ---- published reference and content schema -------------------------------------------

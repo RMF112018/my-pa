@@ -8,9 +8,12 @@
   slice S7-4a (the 7 P6 capabilities, switch, policy, ChatLLM `chatllm-data-v19`, field registry,
   reads and the format-aware S5 reads, no migration) is merged (#391); slice S7-4b (the delta
   `cpm-workbench-p6-delta-v1` and the P6 scenario snapshot, no migration, no new capability) is
-  implemented on `feat/schedule-xer-handoff`, not merged; nothing else is implemented, and
-  nothing is migrated on any shared database, granted, switched on or deployed. Every other
-  slice (S7-5, S7-6),
+  merged (#392); slice S7-5 (the operator runbook, the engine-vs-P6 oracle and the read-only
+  evaluation script, no migration, no capability) is implemented in PR #395. Slice S7-7
+  (parallel relationships in `schedule-scenario-content-v3`, the second amendment to ADR-017
+  below; no migration, no capability) is implemented in PR #396. Nothing else is implemented, and
+  nothing is migrated on any shared database, granted, switched on or deployed. The optional
+  slice S7-6,
   gate G-1 and every other operator gate in the contract stays open. The operator answered the contract's open
   questions on 2026-11-23 (recorded below and in contract section 17); only S7-6 stays
   undecided.
@@ -142,6 +145,28 @@ ADR-017 decision 2 (deterministic server CPM `my-pa-cpm-v1`) is extended, not re
 - It is delivered as slice S7-0, a separate PR on the merged S6 modules, before the P6
   scenario hand-off (contract section 11.7).
 
+## Amendment to ADR-017: parallel relationships (content v3, S7-7)
+
+ADR-017's scenario content (S6-D05: at most 1 relationship per ordered pair) is extended, not
+replaced:
+
+- P6 allows 2 or more relationships between the same ordered pair (an SS + FF or SS + FS
+  ladder). With 1 per pair the P6 snapshot kept whichever came first in the file, so the
+  export's row order chose the network: a silent correctness defect (proven on 2 real
+  exports, stats only). A scenario content now holds at most 1 relationship per
+  `(pred, succ, type)`, and the P6 snapshot keeps every relationship between included
+  activities.
+- A content holding parallel relationships is `schedule-scenario-content-v3` (the v2 shape,
+  its own digest prefix), chosen by content only; every v1 and v2 document keeps its bytes
+  and digest. It runs on the engine its other content requires (`my-pa-cpm-v2` iff it uses a
+  v2 feature, else `my-pa-cpm-v1`): the engine maths was already per relationship, so no
+  engine id is added and every v1 and v2 result stays byte-identical.
+- Change sets name a parallel relationship by its `type` (additive: every earlier request
+  behaves as before); the 100,000-relationship cap counts every relationship.
+- No migration (no stored column holds a content schema name); the capability set, the MCP
+  tool input schemas and the ChatLLM profile do not change. Contract: import contract
+  section 11.7, "Parallel relationships".
+
 ## What changes against ADR-016 decision 4, and what does not
 
 | ADR-016 decision 4 says | For XER/XML (this ADR) | For PDF |
@@ -229,11 +254,20 @@ of contract section 10.1 behind `MY_PA_SCHEDULE_P6_ENABLED` (on every closed sur
 writes idempotent and client-bound remotely), ChatLLM `chatllm-data-v19`, the field registry and
 the compare-and-swap capture chain, the P6 reads with the section 7.7 filter grammar, the S5
 reads format-aware for P6 publications, and the snapshot quota and import budgets. S7-4b
-implemented on `feat/schedule-xer-handoff` (not merged; no migration, no new capability): the
+merged (#392; no migration, no new capability): the
 P6 delta `cpm-workbench-p6-delta-v1` (`schedule_changes.list` and `schedule_baselines.compare`
 choose the algorithm by the Series' format) and the P6 scenario snapshot of contract section
 11.5 (`schedule_scenarios.create` with its `p6` options); the S6 engine, content schemas and
 stored version columns are unchanged.
-Gate G-1 (the script on the operator's sample) is not run. S7-5 (and the optional
-S7-6) are not implemented; the contract defines their acceptance tests, the prove-red plan and
-the operator gates.
+S7-5 is implemented in PR #395 (no migration, no capability). It adds the runbook section
+(`ops/runbooks/cpm-workbench.md` section 10), the engine-vs-P6 oracle
+`src/my_pa/domain/schedule/p6/oracle.py` (a check, never a claim of equivalence) and the
+read-only, stats-only `ops/schedule/p6_evaluate.py`. The operator runs the real-corpus acceptance
+at gate G-7.
+S7-7 is implemented in PR #396 (no migration, no capability). It adds content
+`schedule-scenario-content-v3` for parallel
+relationships (model, canonical form and digest, decoder, change sets, the engine's
+critical-path edges and typed result rows, the P6 snapshot keeping every relationship, and
+the oracle's `parallel_relationships` cause narrowed to a repeated type).
+Gate G-1 (the script on the operator's sample) is not run. The optional S7-6 is not
+implemented; the contract defines its acceptance tests and the operator gates.

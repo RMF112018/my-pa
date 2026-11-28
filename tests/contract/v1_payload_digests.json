@@ -113,9 +113,18 @@
         "meetings.context.read"
       ],
       "section": "tools"
+    },
+    {
+      "date": "2026-11-28",
+      "from": "8e4403a17b85c46ae1dbcf17d4956b02891152aab1e1e4afb605118181d95f0f",
+      "kind": "changed",
+      "name": "meetings.context.read",
+      "reason": "WP5-R3 F1 (ruling D-6): field descriptions",
+      "section": "tools",
+      "to": "a0f9c6080e11eae33b731c5984f3153d73b402bc2fd60490922aca547c087764"
     }
   ],
-  "seal": "5e60d22585314e1ac1d89f1dd31f01c2f725a4018269ab95438379b328eb8138",
+  "seal": "ad550a0e5558bd71e078033bad13c399afe56984633bdb28848e76d8028d9edf",
   "tools": {
     "canvas.workspace.get": "65876ad8f7197a4e8465b3a9019dd234b782f605dfda37d10c1026b660941fb3",
     "canvas.workspace.put": "985bbd6cd28bbaffe0520daa1883b0503a592f4369171a366ca14de8b43a5a8b",
@@ -307,7 +316,7 @@
     "knowledge.read": "3fd14338a32589a1bac799a547ebc1b76245035791ec25f08545b001e6236d85",
     "knowledge.reveal": "3b6382065901930ab2bd17a4c5e2f0c03e9a562e73917a77373e9d6cbf9ef580",
     "knowledge.search": "91bfa2a647992147e862a63622fdddada3a845228e80812ab1509836de0a6960",
-    "meetings.context.read": "8e4403a17b85c46ae1dbcf17d4956b02891152aab1e1e4afb605118181d95f0f",
+    "meetings.context.read": "a0f9c6080e11eae33b731c5984f3153d73b402bc2fd60490922aca547c087764",
     "meetings.create": "91e75e369dd1b3890f5963a5f8193e94c121292aa1a2365c3d223ca1a93ef4d7",
     "meetings.list": "fd6b857004d8905d125a22fc4afba8ee5121cac22c7d87a34bd9c47ddba18cb2",
     "meetings.notes.read_version": "6d33ed547df8c869cd05db054a28740fd7f0be2d107ab9b64e152441d7b753ea",

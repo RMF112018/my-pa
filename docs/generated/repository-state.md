@@ -47,7 +47,7 @@ plans link here instead of restating them.
 |---|---|
 | Published tools with an accepted payload digest | 317 |
 | v1 view models with an accepted field digest | 40 |
-| Acceptance ledger entries | 12 |
+| Acceptance ledger entries | 13 |
 
 ## Test tiers and corpora
 

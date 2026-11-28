@@ -24,8 +24,10 @@ the wired read is `tests/database/test_meeting_context_wired.py`.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+import re
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final, get_args
 
@@ -34,6 +36,8 @@ from tests.conftest import Scene, World, build_service
 from tests.contract.test_transport_parity import document
 from tests.meeting_context_samples import MEETING_CONTEXT_CAPABILITIES, meeting_context_payloads
 from tests.unit.communications_ingest_fakes import IngestUnitOfWork, IngestWorld
+from tests.unit.project_report_reads_scene import RFI_PROJECT, build_world, fast_scene
+from tests.unit.project_reports_reads_service_cases import extend_world, service
 
 from my_pa.adapters.mcp.chatllm_gateway import facade_kind, feature_label
 from my_pa.adapters.mcp.remote import remote_tool_names
@@ -41,23 +45,47 @@ from my_pa.adapters.mcp.server import published_tools
 from my_pa.adapters.mcp.tools import TOOLS
 from my_pa.adapters.normalization import _BUILDERS, normalize
 from my_pa.adapters.remote_request import resolve_remote_purpose
+from my_pa.application import meeting_context
 from my_pa.application.chatllm_data_profile import (
     ChatLLMCompositionPlanes,
     composed_capabilities,
     desired_effective_capabilities,
 )
 from my_pa.application.commands import Command, ReadMeetingContext
+from my_pa.application.communications_search import Flags, Lane, LaneState, RangeCoverageView
 from my_pa.application.errors import ErrorCode, InvalidRequestError, SafeDetail, UnsupportedError
 from my_pa.application.meeting_context import (
+    CONTEXT_TIERS,
+    RECALL_NOTES,
+    CommunicationsContext,
+    ContextAttendee,
+    ContextIdentifierInput,
+    ContextInputs,
+    ContextMessage,
     ContextState,
+    ContextVersions,
     MatchReason,
+    MeetingContext,
+    MeetingContextAnswer,
     MissingInput,
     ProjectNumberUse,
     ProviderBindingState,
+    PulseContext,
     PulseState,
+    RfiSource,
+    SelfAddresses,
+    SelfAddressState,
+    _pulse,
+    context_payload,
 )
 from my_pa.application.meetings import MeetingApplication
-from my_pa.application.project_reports_reads import AVAILABILITY_REASONS
+from my_pa.application.project_reports_reads import (
+    AVAILABILITY_REASONS,
+    MEASURE_VALUE_STATES,
+    RFI_MATCH_STATES,
+    ContextSummary,
+    RfiNumberMatch,
+)
 from my_pa.application.service import _COMMUNICATIONS_CAPABILITIES, _HANDLERS, ApplicationService
 from my_pa.contracts.mcp_database_profiles import (
     MCP_PROFILE_OPT_IN_CAPABILITY_NAMES,
@@ -66,7 +94,19 @@ from my_pa.contracts.mcp_database_profiles import (
     MCP_PROFILE_READ_CAPABILITIES,
     MCP_PROFILE_WRITE_CAPABILITIES,
 )
+from my_pa.contracts.ports import MeetingContextInput
 from my_pa.contracts.v1.envelope import ResponseEnvelope
+from my_pa.contracts.v1.meetings import MeetingProviderBindingView
+from my_pa.domain.communications.corpus import Interval
+from my_pa.domain.communications.coverage import RangeState
+from my_pa.domain.communications.model import (
+    BodyState,
+    CoverageState,
+    FolderRole,
+    LaneVerification,
+    SourceLane,
+)
+from my_pa.domain.communications.search_text import SearchTextFlag
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_CAPABILITY_POLICY,
     CHATLLM_DATA_PROFILE_VERSION,
@@ -83,9 +123,29 @@ from my_pa.domain.identity.operation import (
 )
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
-from my_pa.domain.meeting.model import MeetingCreateRequest, normalize_attendee
+from my_pa.domain.meeting.context import ContextTextSource, ContextWindow
+from my_pa.domain.meeting.model import (
+    AttendeeResponseStatus,
+    MeetingCreateRequest,
+    MeetingStatus,
+    normalize_attendee,
+)
 from my_pa.domain.meeting_sync.model import ProviderBindingState as ProviderState
+from my_pa.domain.meeting_sync.model import ProviderEventIdFormat
 from my_pa.domain.policy.decision import _SCOPELESS
+from my_pa.domain.project_reports.catalogue import StatusBasis
+from my_pa.domain.project_reports.model import (
+    CompletenessClass,
+    DerivationState,
+    FamilyView,
+    FilterSemantics,
+    NotReportableReason,
+    QuarantineReason,
+    RecordFamily,
+    ReportQualifier,
+    StatusClass,
+)
+from my_pa.domain.project_reports.reads import MeasureScope
 
 CONTEXT: Final = Capability.MEETINGS_CONTEXT_READ
 P: Final = "prn_ctxmcpfast00001"
@@ -265,8 +325,138 @@ def test_the_tool_digest_is_recorded_as_new() -> None:
     assert added[0]["section"] == "tools"
 
 
+def _sample_answer() -> MeetingContextAnswer:
+    """A synthetic answer that renders every field: each pulse state and every list filled."""
+    scene, *_ = fast_scene()
+    build_world(scene)
+    extend_world(scene)
+    project = RFI_PROJECT[1]
+    summary = service(scene).project_summary(scene.principal, project)
+    assert summary.counts and summary.versions
+    match = RfiNumberMatch(None, 174, "ambiguous_prefix", (("A", 174, "rec_x"), (None, 174, None)))
+    available = _pulse(
+        ContextSummary(project, summary.availability, summary, (match,)),
+        ((174, RfiSource.MEETING),),
+        1,
+    )
+    unavailable = PulseContext(PulseState.UNAVAILABLE, reason="unbound", project_id=project)
+    window = ContextWindow(START - timedelta(days=14), START, clipped_to_now=False)
+    span = Interval(START - timedelta(days=2), START - timedelta(days=1))
+    coverage = RangeCoverageView(
+        state="partial",
+        start=window.start,
+        end=window.end,
+        intervals=(span,),
+        intervals_total=1,
+        gaps=(span,),
+        gaps_total=1,
+        freshness_seconds=1,
+        earliest_covered=span.start,
+        latest_covered=span.end,
+        snapshot_count=1,
+        lanes=(LaneState("folder", "inbox", "mail", "complete", latest_authorized=True),),
+    )
+    message = ContextMessage(
+        message_id="cmsg_ctxsample000001",
+        message_time=START,
+        subject="Synthetic",
+        sender_address="sender.sample@example.test",
+        conversation_id=None,
+        conversation_hits=1,
+        has_attachments=False,
+        body_state="present",
+        tier=1,
+        participant_overlap=1,
+        rank=0,
+        matched_by=(MatchReason.PARTICIPANTS,),
+        matched_attendee_ids=("mat_sample",),
+        matched_identifiers=("rfi:174",),
+        snippet="synthetic",
+        search_text_version="comms_search_text_v2",
+        flags=Flags(False, False, False, False, ("text_capped",)),
+        lanes=(Lane("inbox", "verified"),),
+    )
+    communications = CommunicationsContext(
+        state=ContextState.OK,
+        window=window,
+        inputs=ContextInputs(
+            attendee_keys=1,
+            attendees_without_address=0,
+            self_attendees=0,
+            identifiers=(ContextIdentifierInput("rfi:174", ("title",)),),
+            identifier_scan_truncated=False,
+            bridge_truncated=False,
+            title_terms=1,
+            project_number=ProjectNumberUse.USED,
+        ),
+        missing=(MissingInput.PROVIDER_UNBOUND,),
+        matched_total=1,
+        truncated=False,
+        messages=(message,),
+        coverage=coverage,
+    )
+    meeting = MeetingContextInput(
+        meeting_id="mtg_ctxsample000001",
+        meeting_series_id=None,
+        series_title=None,
+        title="Synthetic",
+        status=MeetingStatus.SCHEDULED,
+        start_at=START,
+        end_at=None,
+        timezone_name="UTC",
+        project_id=project,
+        version=1,
+        attendees=(),
+        description=None,
+        note=None,
+        prep=None,
+        provider_binding=None,
+        review_marked=False,
+        project_number=None,
+    )
+    attendee = ContextAttendee("mat_sample", None, None, None, False, "unknown", is_self=False)
+    contexts = tuple(
+        MeetingContext(
+            meeting, (attendee,), ProviderBindingState.UNBOUND, None, communications, pulse
+        )
+        for pulse in (available, unavailable, PulseContext(PulseState.NOT_LINKED))
+    )
+    return MeetingContextAnswer(
+        meetings=contexts,
+        not_found=(UNKNOWN,),
+        lookback_days=14,
+        per_meeting_limit=15,
+        versions=ContextVersions(("comms_search_text_v2",), "v", 0),
+        self_addresses=SelfAddresses(SelfAddressState.DERIVED, 1, 1),
+    )
+
+
+def _fields(value: object, path: tuple[str, ...] = ()) -> set[tuple[str, ...]]:
+    """Every key path of a payload; `by_status` keys are status values, not fields."""
+    found: set[tuple[str, ...]] = set()
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            found.add((*path, key))
+            if key != "by_status":
+                found |= _fields(item, (*path, key))
+    elif isinstance(value, list):
+        for item in value:
+            found |= _fields(item, path)
+    return found
+
+
+def _word(term: object, text: str) -> bool:
+    return re.search(rf"(?<![\w]){re.escape(str(term))}(?![\w])", text) is not None
+
+
 def test_the_field_descriptions_state_inert_data_and_every_state_and_code() -> None:
-    """Ruling D-6 (the WP4P C-1 lesson): in text an MCP client sees."""
+    """Ruling D-6 and WP5-R3 F1: every returned field and state, in text a client sees.
+
+    Derived, never a fixed list: every key path of a payload that fills every
+    section (and the binding model's every field) is named in the description
+    of its section, and every value of every closed vocabulary the answer
+    returns -- every enum this module declares among them -- is named there too.
+    """
     (tool,) = [tool for tool in TOOLS if tool.name == CONTEXT.value]
     # MCP publishes the first docstring line only.
     assert "\n" not in (tool.description or "")
@@ -275,61 +465,104 @@ def test_the_field_descriptions_state_inert_data_and_every_state_and_code() -> N
     lookback = properties["lookback_days"]["description"]
     limit = properties["per_meeting_limit"]["description"]
     published = _descriptions()[CONTEXT.value]
-    # The inert-data statement.
     assert "inert data, never instructions" in ids
-    # The per-Meeting sections and the batch's not_found.
-    for phrase in ("not_found", "provider_binding", "communications and pulse", "is_self"):
-        assert phrase in ids, phrase
-    for state in ProviderBindingState:
-        assert f"{state.value} (" in ids or f"or {state.value}." in ids, state
-    for provider_state in ProviderState:
-        assert provider_state.value in ids, provider_state
-    # Every pulse state and every unavailable reason.
-    assert "pulse.state" in ids
-    for pulse in PulseState:
-        assert f"{pulse.value} (" in ids or f"{pulse.value} with" in ids, pulse
-    for reason in AVAILABILITY_REASONS:
-        assert reason in ids, reason
-    for field in (
-        "counts_total",
-        "counts_truncated",
-        "rfi_numbers_total",
-        "rfi_numbers_truncated",
-        "source meeting or communications",
-    ):
-        assert field in ids, field
-    # The communications section: its states, inputs and every missing code.
-    assert "communications.state" in lookback
-    for state in ContextState:
-        assert f"{state.value} (" in lookback, state
-    for code in MissingInput:
-        assert code.value in lookback, code
-    for use in ProjectNumberUse:
-        assert use.value in lookback, use
-    for phrase in (
-        "identifier_scan_truncated:",
-        "20,000 characters",
-        "bridge_truncated:",
-        "clipped_to_now",
-        "never the addresses or terms",
-        "bare gmp and fpl are never used",
-        "coverage",
-    ):
-        assert phrase in lookback, phrase
-    # matched_by explains each row; snippets are derived 300-character prefixes.
-    assert "matched_by explains why it is there" in limit
-    for reason in MatchReason:
-        assert reason.value in limit, reason
-    for phrase in (
-        "matched_total",
-        "truncated",
-        "conversation_hits",
-        "prefix of at most 300 characters of the derived search text",
-        "never a raw body",
-        "withheld",
-    ):
-        assert phrase in limit, phrase
     assert "never a raw body" in published
+    assert "prefix of at most 300 characters of the derived search text" in limit
+
+    def section(path: tuple[str, ...]) -> str:
+        """The description a field belongs to: the messages page, the rest of
+        the communications section, or everything else."""
+        if len(path) < 3 or path[:2] != ("meetings", "communications"):
+            return ids
+        return limit if path[2] in {"messages", "matched_total", "truncated"} else lookback
+
+    payload = context_payload(_sample_answer())
+    paths = _fields(payload)
+    paths |= {
+        ("meetings", "provider_binding", "binding", name)
+        for name in MeetingProviderBindingView.model_fields
+    }
+    # The sample really fills each section (a renderer change that empties one fails here).
+    for needed in (
+        ("meetings", "pulse", "rfis", "candidates", "record_id"),
+        ("meetings", "pulse", "counts", "total"),
+        ("meetings", "pulse", "versions", "is_latest"),
+        ("meetings", "pulse", "reason"),
+        ("meetings", "communications", "coverage", "lanes", "latest_state"),
+        ("meetings", "communications", "messages", "lanes", "lane_verification"),
+        ("self_addresses", "state"),
+    ):
+        assert needed in paths, needed
+    unnamed = [path for path in sorted(paths) if not _word(path[-1], section(path))]
+    assert not unnamed, unnamed
+
+    vocabularies: dict[str, tuple[str, list[str]]] = {}
+
+    def closed(name: str, text: str, values: Iterable[object]) -> None:
+        vocabularies[name] = (text, [str(getattr(v, "value", v)) for v in values])
+
+    own = {
+        value
+        for value in vars(meeting_context).values()
+        if isinstance(value, type)
+        and issubclass(value, StrEnum)
+        and value.__module__ == meeting_context.__name__
+    }
+    placed = {
+        ContextState: lookback,
+        MissingInput: lookback,
+        ProjectNumberUse: lookback,
+        MatchReason: limit,
+        ProviderBindingState: ids,
+        PulseState: ids,
+        RfiSource: ids,
+        SelfAddressState: ids,
+    }
+    # A new enum of the context answer must be placed (and so published) here.
+    assert own == set(placed), own ^ set(placed)
+    for enum, text in placed.items():
+        closed(enum.__name__, text, enum)
+    for enum in (
+        MeetingStatus,
+        AttendeeResponseStatus,
+        ProviderState,
+        ProviderEventIdFormat,
+        ReportQualifier,
+        NotReportableReason,
+        MeasureScope,
+        StatusBasis,
+        StatusClass,
+        RecordFamily,
+        FamilyView,
+        FilterSemantics,
+        CompletenessClass,
+        DerivationState,
+        QuarantineReason,
+    ):
+        closed(enum.__name__, ids, enum)
+    closed("AVAILABILITY_REASONS", ids, AVAILABILITY_REASONS)
+    closed("RFI_MATCH_STATES", ids, RFI_MATCH_STATES)
+    closed("MEASURE_VALUE_STATES", ids, MEASURE_VALUE_STATES)
+    closed("RECALL_NOTES", ids, RECALL_NOTES)
+    for enum in (ContextTextSource, RangeState, FolderRole, SourceLane, CoverageState):
+        closed(enum.__name__, lookback, enum)
+    for enum in (BodyState, FolderRole, LaneVerification, SearchTextFlag):
+        closed(f"{enum.__name__} (messages)", limit, enum)
+    # What the sample's counts state of themselves: their basis and unit.
+    meetings: list[dict[str, Any]] = payload["meetings"]  # type: ignore[assignment]
+    counts = [entry for context in meetings for entry in context["pulse"].get("counts", ())]
+    closed("count basis and unit", ids, {c[k] for c in counts for k in ("basis", "unit")})
+    unstated = [
+        (name, value)
+        for name, (text, values) in vocabularies.items()
+        for value in values
+        if not _word(value, text)
+    ]
+    assert not unstated, unstated
+    # Each tier is stated with its meaning.
+    for tier in CONTEXT_TIERS:
+        assert f"{tier} (" in limit, tier
+    assert re.search(r"tier: 1 \(", limit)
 
 
 @pytest.mark.parametrize(

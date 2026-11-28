@@ -181,11 +181,15 @@ __all__ = [
     "MAX_SOURCE_TOTALS",
     "MAX_TEXT_CHARACTERS",
     "MAX_VERSIONS",
+    "MEASURE_VALUE_STATES",
     "PROJECT_REPORTS_CATALOG",
     "PROJECT_REPORTS_COMPARE",
     "PROJECT_REPORTS_COVERAGE",
     "PROJECT_REPORTS_QUERY",
     "PROJECT_REPORTS_RECORD_HISTORY",
+    "RFI_EXACT",
+    "RFI_MATCH_STATES",
+    "RFI_NONE",
     "SCOPE_CHANGED_RESTART_REQUIRED",
     "Availability",
     "CatalogAnswer",
@@ -252,6 +256,12 @@ _LINE_BATCH: Final = 1_000
 
 #: Why the WP5 facade finds a Project's reports unavailable (closed).
 AVAILABILITY_REASONS: Final = ("reads_disabled", "unbound", "never_ingested", "all_quarantined")
+#: An RFI number's match state (closed): one prefix, two or more, or no record.
+RFI_EXACT: Final = "exact"
+RFI_NONE: Final = "none"
+RFI_MATCH_STATES: Final = (RFI_EXACT, AMBIGUOUS_PREFIX, RFI_NONE)
+#: A measure value's state (closed): a value, or closed reasons and never a zero.
+MEASURE_VALUE_STATES: Final = ("reportable", "not_reportable")
 #: The families `project_summary` counts (design section 2.12).
 _SUMMARY_FAMILIES: Final = (
     RecordFamily.OBSERVATIONS,
@@ -2017,11 +2027,11 @@ def _matched(
             key=lambda c: (c[0] or "", c[2] or ""),
         )
         if not result.matches:
-            state = "none"
+            state = RFI_NONE
         elif result.flag == AMBIGUOUS_PREFIX:
             state = AMBIGUOUS_PREFIX
         else:
-            state = "exact"
+            state = RFI_EXACT
         found.append(RfiNumberMatch(prefix, suffix, state, tuple(matched)))
     return tuple(found)
 
@@ -2163,10 +2173,13 @@ def _amount(value: Decimal, *, money: bool, currency: str | None) -> object:
 def _measure_value(value: MeasureValue, *, money: bool, currency: str | None) -> dict[str, object]:
     if value.reportable and value.value is not None:
         return {
-            "state": "reportable",
+            "state": MEASURE_VALUE_STATES[0],
             "value": _amount(value.value, money=money, currency=currency),
         }
-    return {"state": "not_reportable", "reasons": sorted(reason.value for reason in value.reasons)}
+    return {
+        "state": MEASURE_VALUE_STATES[1],
+        "reasons": sorted(reason.value for reason in value.reasons),
+    }
 
 
 def _measure_payload(entry: MeasureEntry) -> dict[str, object]:

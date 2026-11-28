@@ -103,6 +103,7 @@ from my_pa.application.communications_search import (
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.application.project_reports_reads import (
     MAX_RFI_NUMBERS,
+    RFI_NONE,
     ContextSummary,
     MeasureEntry,
     ProjectReportReads,
@@ -152,6 +153,7 @@ from my_pa.domain.meeting.context import (
 from my_pa.domain.project_reports.model import RecordFamily
 
 __all__ = [
+    "CONTEXT_TIERS",
     "MAX_BRIDGE_ADDRESSES",
     "MAX_PULSE_COUNTS",
     "MAX_PULSE_RFI_NUMBERS",
@@ -194,6 +196,10 @@ MAX_BRIDGE_ADDRESSES: Final = 1000
 #: What the identifier inputs cannot recall, stated on every answer (WP4P report 2.12).
 RECALL_NOTES: Final = ("rfi_prefixed_number_unrecognized", "identifier_recall_bounded_by_extractor")
 _NO_TEXT_BODY_STATES: Final = frozenset({"withheld", "truncated"})
+#: A message's `tier` (ruling D5; the candidate statement's CASE): 1 an identifier
+#: or the Project number and a participant, 2 an identifier or the number only,
+#: 3 participants only, 4 title terms only. The published text states each.
+CONTEXT_TIERS: Final = (1, 2, 3, 4)
 #: The `pulse` section's bounds (PULSE plan section 10): at most this many
 #: counts and this many RFI numbers asked per Meeting.
 MAX_PULSE_COUNTS: Final = 5
@@ -662,7 +668,7 @@ def _pulse(
         rfis=tuple(
             PulseRfi(match, sources[match.suffix])
             for match in summary.rfis
-            if match.state != "none"
+            if match.state != RFI_NONE
         ),
         rfi_numbers_total=found,
     )

@@ -952,6 +952,34 @@ def case_the_batched_facade_keeps_each_projects_series_order_across_a_rebinding(
     assert {m.state for m in answered[1].rfis} == {"exact"}
 
 
+def case_the_batched_facade_matches_an_unbound_projects_rfi_numbers(scene: ReadsScene) -> None:
+    """WP5 D7 (WP5-R3 F2): an unbound Project asked numbers is matched, as `match_rfis` matches.
+
+    `match_rfis` reads a Project's current RFI versions whatever its binding
+    state, so a Project left without an active binding by a re-bind (its
+    versions stay its own until a re-derivation) still matches. The batch
+    reads the versions of every Project that is bound **or asked a number**.
+    """
+    scene.add_project(scene.principal, MOVED_PROJECT[1], MOVED_PROJECT[2])
+    _rebind(scene, "rfis", MOVED_PROJECT)
+    reads = service(scene)
+    asked = ((None, 174), ("GMP", 174), (None, 170), (None, 1741))
+    assert reads.availability(scene.principal, RFI_PROJECT[1]).reason == "unbound"
+    alone = reads.match_rfis(scene.principal, RFI_PROJECT[1], asked)
+    assert {m.state for m in alone} == {"exact", "ambiguous_prefix", "none"}
+    for batch in (
+        [(RFI_PROJECT[1], asked)],
+        [(MOVED_PROJECT[1], ((None, 174),)), (RFI_PROJECT[1], asked)],
+        [(RFI_PROJECT[1], asked), (OBS_PROJECT[1], ((None, 174),)), (RFI_PROJECT[1], ())],
+    ):
+        answered = reads.context_summaries(scene.principal, batch)
+        for one, (project_id, numbers) in zip(answered, batch, strict=True):
+            assert one.availability == reads.availability(scene.principal, project_id)
+            assert one.summary == reads.project_summary(scene.principal, project_id)
+            assert one.rfis == reads.match_rfis(scene.principal, project_id, numbers)
+        assert answered[[p for p, _n in batch].index(RFI_PROJECT[1])].rfis == alone
+
+
 def case_coverage_carries_per_version_filter_semantics(scene: ReadsScene) -> None:
     payload = coverage_payload(
         service(scene).coverage(
@@ -1176,6 +1204,7 @@ CASES: Final = (
     case_the_facade_answers_absent_unbound_and_quarantined_projects,
     case_the_batched_facade_answers_as_the_per_project_methods,
     case_the_batched_facade_keeps_each_projects_series_order_across_a_rebinding,
+    case_the_batched_facade_matches_an_unbound_projects_rfi_numbers,
     case_coverage_carries_per_version_filter_semantics,
     case_rows_carry_typed_fields_and_raw_text,
     case_filtered_measures_sum_only_the_selected_lines,

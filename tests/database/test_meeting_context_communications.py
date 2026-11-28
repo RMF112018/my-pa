@@ -1085,3 +1085,38 @@ def test_the_payload_states_rules_and_never_an_input_address(scene: Scene) -> No
         "used": 1,
     }
     assert SELF not in repr(payload)
+
+
+def test_retired_message_is_excluded_without_removing_its_evidence(scene: Scene) -> None:
+    from sqlalchemy import select
+
+    from my_pa.infrastructure.persistence.tables import (
+        communication_messages,
+        smoke_fixture_retirements,
+    )
+
+    retired = scene.mail.message(40, subject="Fixture anchor", text="", when=at(17, 10))
+    retained = scene.mail.message(41, subject="Fixture anchor", text="", when=at(17, 11))
+    meeting = scene.meeting("retirement", title="Fixture anchor")
+    assert set(_ids(scene.one(meeting))) == {retired, retained}
+
+    markers = smoke_fixture_retirements
+    with scene.engine.begin() as connection:
+        connection.execute(
+            markers.insert().values(
+                principal_id=scene.principal_id,
+                record_id=retired,
+                plan_sha256="a" * 64,
+            )
+        )
+    assert _ids(scene.one(meeting)) == [retained]
+    with scene.engine.begin() as connection:
+        assert (
+            connection.execute(
+                select(communication_messages.c.message_id).where(
+                    communication_messages.c.principal_id == scene.principal_id,
+                    communication_messages.c.message_id == retired,
+                )
+            ).scalar_one()
+            == retired
+        )

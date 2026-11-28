@@ -114,9 +114,11 @@ from my_pa.infrastructure.persistence.principal_scope import (
     PrincipalContext,
     capture_context,
     matching_partition_criterion,
-    partition_criterion,
     principal_bound_values,
     principal_scoped,
+)
+from my_pa.infrastructure.persistence.smoke_fixture_visibility import (
+    visible_fixture_partition,
 )
 from my_pa.infrastructure.persistence.tables import (
     capture_versions,
@@ -202,7 +204,7 @@ _LIVE_STATES: Final = tuple(sorted(state.value for state in LIVE_LINK_STATES))
 
 
 def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
-    return partition_criterion(table, capture_context(principal_id))
+    return visible_fixture_partition(table, principal_id)
 
 
 def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[str, object]:
@@ -486,10 +488,8 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         self, principal_id: str, family: RecordFamily, record_id: str
     ) -> LineageEndpoint | None:
         table, column = _NATIVE[family]
-        statement = principal_scoped(
-            select(table.c[column], *_endpoint_columns(family)).where(table.c[column] == record_id),
-            table,
-            capture_context(principal_id),
+        statement = select(table.c[column], *_endpoint_columns(family)).where(
+            table.c[column] == record_id, _mine(table, principal_id)
         )
         if family not in _UNLOCKED_FAMILIES:
             statement = statement.with_for_update(read=True)
@@ -508,12 +508,8 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         for family, identifiers in sorted(by_family.items()):
             table, column = _NATIVE[family]
             rows = self._rows(
-                principal_scoped(
-                    select(table.c[column], *_endpoint_columns(family)).where(
-                        table.c[column].in_(sorted(identifiers))
-                    ),
-                    table,
-                    capture_context(principal_id),
+                select(table.c[column], *_endpoint_columns(family)).where(
+                    table.c[column].in_(sorted(identifiers)), _mine(table, principal_id)
                 )
             )
             for row in rows:
@@ -938,7 +934,6 @@ class SqlRecordLineageRepository(RecordLineageRepository):
         by_family: dict[RecordFamily, list[str]] = {}
         for ref in refs:
             by_family.setdefault(ref.family, []).append(ref.record_id)
-        context = capture_context(principal_id)
         for family, identifiers in sorted(by_family.items()):
             table, column = _NATIVE[family]
             wanted = sorted(set(identifiers))
@@ -949,8 +944,8 @@ class SqlRecordLineageRepository(RecordLineageRepository):
                 columns.append(meeting_note_versions.c.meeting_id)
             elif family is RecordFamily.CAPTURE_VERSION:
                 columns.append(capture_versions.c.capture_id)
-            statement = principal_scoped(
-                select(*columns).where(table.c[column].in_(wanted)), table, context
+            statement = select(*columns).where(
+                table.c[column].in_(wanted), _mine(table, principal_id)
             )
             rows = self._rows(statement)
             for row in rows:

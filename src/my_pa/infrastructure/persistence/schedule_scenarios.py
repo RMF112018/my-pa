@@ -188,13 +188,15 @@ from my_pa.infrastructure.persistence import schedule as _s5
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     matching_partition_criterion,
-    partition_criterion,
     principal_bound_values,
 )
 from my_pa.infrastructure.persistence.schedule_plane_codec import (
     compress_canonical,
     verified_canonical,
     verified_document,
+)
+from my_pa.infrastructure.persistence.smoke_fixture_visibility import (
+    visible_fixture_partition,
 )
 from my_pa.infrastructure.persistence.tables import (
     schedule_baseline_events,
@@ -257,7 +259,7 @@ def _seam(stage: str) -> None:
 
 
 def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
-    return partition_criterion(table, capture_context(principal_id))
+    return visible_fixture_partition(table, principal_id)
 
 
 def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[str, object]:

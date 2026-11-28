@@ -24813,3 +24813,16 @@ file_workspace_receipts = Table(
         name="one_file_receipt_per_key",
     ),
 )
+
+
+smoke_fixture_retirements = Table(
+    "smoke_fixture_retirements",
+    METADATA,
+    Column("principal_id", Text, primary_key=True),
+    Column("record_id", Text, primary_key=True),
+    Column("plan_sha256", Text, nullable=False),
+    Column("retired_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("record_id ~ '^(cmsg|isrc|spub|sscn|sscv|sser)_[A-Za-z0-9]{8,64}$'"),
+    CheckConstraint("plan_sha256 ~ '^[a-f0-9]{64}$'"),
+)

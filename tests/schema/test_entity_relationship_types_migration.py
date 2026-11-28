@@ -450,6 +450,7 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "schedule_p6_calendars",
         "schedule_p6_field_values",
         "schedule_p6_observed_fields",
+        "smoke_fixture_retirements",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

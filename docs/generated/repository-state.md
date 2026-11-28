@@ -21,8 +21,8 @@ plans link here instead of restating them.
 
 | Figure | Current |
 |---|---|
-| Alembic head | `859e93b47a21` |
-| Alembic revisions | 138 |
+| Alembic head | `7f4d9ac28631` |
+| Alembic revisions | 139 |
 
 ## Vocabulary
 
@@ -57,10 +57,10 @@ measurable at collection and is carried (`regen --measure --fast-skipped N`).
 
 | Tier or corpus | Selection | Collected | A green execution requires |
 | --- | --- | --- | --- |
-| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 57,362 | 57,224 passed, 138 skipped |
-| Architecture | `pytest tests/architecture` | 10,561 | 10,561 passed, 0 skipped |
-| Database | `pytest -m "database or recovery or e2e"` | 7,603 | 7,603 passed, 0 skipped |
+| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 57,387 | 57,249 passed, 138 skipped |
+| Architecture | `pytest tests/architecture` | 10,586 | 10,586 passed, 0 skipped |
+| Database | `pytest -m "database or recovery or e2e"` | 7,606 | 7,606 passed, 0 skipped |
 | Evaluation | `pytest -m "evaluation"` | 2 | 2 passed |
-| mypy corpus | `mypy` (`[tool.mypy] files`) | 817 files | no issues found |
-| Source modules | `find src/my_pa -name "*.py"` | 614 |  |
+| mypy corpus | `mypy` (`[tool.mypy] files`) | 821 files | no issues found |
+| Source modules | `find src/my_pa -name "*.py"` | 616 |  |
 | Test modules | `find tests -name "test_*.py"` | 1,120 |  |

@@ -162,6 +162,9 @@ COMMANDS = {
     "auth.py": PERMITTED_AUTH_NAMES,
     "knowledge_source_profiles.py": PERMITTED_KNOWLEDGE_PROFILE_NAMES,
     "mcp_interactions.py": PERMITTED_MCP_INTERACTION_NAMES,
+    "retire_smoke_fixtures.py": frozenset(
+        {"RetirementRefusalError", "SmokeFixtureTarget", "retire_smoke_fixtures"}
+    ),
 }
 
 #: Every other program in `apps/cli/`, and the test that governs it instead.

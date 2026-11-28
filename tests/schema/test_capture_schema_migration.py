@@ -1743,6 +1743,8 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "schedule_p6_observed_fields_are_stored_while_their_run_runs",
             "a_p6_activity_changes_only_by_linking",
             "a_p6_capture_event_extends_its_chain",
+            "refuse_smoke_retirement_change",
+            "refuse_smoke_retirement_truncate",
             "meeting_series_history_rows_are_append_only",
             "meeting_write_requests_complete_once",
             # WP-RE-01. The Record Event revision installs the feed's append-only

@@ -234,6 +234,7 @@ def test_a_role_without_reach_stops(
         assert (q2.status, q2.detail) == (CheckStatus.STOP, "retired_role_rows=unreadable")
     else:
         assert "schedule_scenario_write_requests:UPDATE" in found.detail
+        assert "smoke_fixture_retirements:SELECT" in found.detail
 
 
 def test_the_after_phase_stops_without_the_before_digest(db_engine: Engine) -> None:

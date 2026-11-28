@@ -161,6 +161,8 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # hand-written partition comparison.
         "infrastructure/persistence/ingestion.py",
         "infrastructure/persistence/communications.py",
+        "infrastructure/persistence/smoke_fixture_visibility.py",
+        "infrastructure/persistence/smoke_fixture_retirement.py",
         # Communications intelligence WP3b's meeting sync staging and
         # reconciliation rows, in the same shape: every SELECT and UPDATE
         # composes `_mine`, every INSERT (the idempotent review mark included)
@@ -524,6 +526,12 @@ STATEMENT_LEVEL: Final = frozenset(
 #: modules is reached only through an application path that has already resolved
 #: the Principal, which is the same argument the `QUARANTINED` entries make.
 PER_MODULE_ONLY: Final = {
+    "infrastructure/persistence/smoke_fixture_visibility.py": (
+        "The predicate scopes each correlated retirement alias using the same Principal."
+    ),
+    "infrastructure/persistence/smoke_fixture_retirement.py": (
+        "A transaction projects exact fixture metadata and stamps only its operator partition."
+    ),
     "infrastructure/persistence/reports.py": (
         "Reports Modernization WP02: every SELECT composes `_mine` over "
         "`partition_criterion` on each table it names (the association-target "

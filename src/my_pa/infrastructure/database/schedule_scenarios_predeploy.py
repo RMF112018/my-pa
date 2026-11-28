@@ -53,6 +53,7 @@ __all__ = [
 ]
 
 SCHEMA: Final = "knowledge"
+RETIREMENT_MARKERS_TABLE: Final = "smoke_fixture_retirements"
 
 #: The 7 S5 tables revision A requires (`621ef6786c64` applied first).
 S5_TABLES: Final = (
@@ -500,7 +501,7 @@ def _vocabulary_at_head(connection: Connection) -> PredeployCheck:
 
 
 def _runtime_reach(connection: Connection) -> PredeployCheck:
-    """Q8: the connecting role holds `SELECT, INSERT` on the 11 tables, `UPDATE` on the ledger."""
+    """Q8: prove the runtime role can reach the Scenario plane and retirement filter."""
     missing = _absent_plane_tables(connection)
     if missing:
         return PredeployCheck(
@@ -516,6 +517,17 @@ def _runtime_reach(connection: Connection) -> PredeployCheck:
             connection, "runtime_reach", privilege=privilege, schema=SCHEMA, table=table
         )[0]["holds"]
     ]
+    if (
+        _present(connection, (RETIREMENT_MARKERS_TABLE,))
+        and not _select(
+            connection,
+            "runtime_reach",
+            privilege="SELECT",
+            schema=SCHEMA,
+            table=RETIREMENT_MARKERS_TABLE,
+        )[0]["holds"]
+    ):
+        lacking.append(f"{RETIREMENT_MARKERS_TABLE}:SELECT")
     if lacking:
         return PredeployCheck("Q8", "runtime_reach", CheckStatus.STOP, ",".join(lacking))
     return PredeployCheck("Q8", "runtime_reach", CheckStatus.HOLDS, f"tables={len(PLANE_TABLES)}")

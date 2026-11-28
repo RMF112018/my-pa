@@ -283,7 +283,7 @@ string.
 | Q5 ACL snapshot | both | SHA-256 over `relacl` of `record_links`, `schedule_publications`, `schedule_series` | after ≠ before, or no before digest |
 | Q6 no extra grant | after | `has_table_privilege` for `public` and each existing MCP role on the 11 tables; the refusal sequence's `relacl` | any privilege, or the sequence not owner-only |
 | Q7 vocabulary at head | after | `pg_get_constraintdef` of `a_record_link_pair_is_admitted`, `a_record_link_from_family_is_known`, `a_schedule_publication_role_is_known` | an S6 relation or family missing, or `reference` still admitted |
-| Q8 runtime reach | after | `has_table_privilege(current_user, …)` | `SELECT`/`INSERT` lacking on any of the 11 tables, or `UPDATE` on `schedule_scenario_write_requests` |
+| Q8 runtime reach | after | `has_table_privilege(current_user, …)` | `SELECT`/`INSERT` lacking on any of the 11 tables, `UPDATE` lacking on `schedule_scenario_write_requests`, or `SELECT` lacking on `smoke_fixture_retirements` when installed |
 | Q9 plane objects | after | `pg_class`, `pg_proc`, `pg_trigger` | a plane table, one of the 15 plane functions, or trigger G10 absent |
 
 ## 9. Schedule Scenarios capabilities, switch and client exposure (S6-3)

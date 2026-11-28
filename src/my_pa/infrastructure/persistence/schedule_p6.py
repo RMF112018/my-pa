@@ -98,7 +98,11 @@ from my_pa.domain.schedule.p6_reads import (
 )
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.jobs import SCHEDULE_JOBS, enqueue_job
-from my_pa.infrastructure.persistence.principal_scope import matching_partition_criterion
+from my_pa.infrastructure.persistence.principal_scope import (
+    capture_context,
+    matching_partition_criterion,
+    partition_criterion,
+)
 from my_pa.infrastructure.persistence.schedule import (
     SqlScheduleRepository,
     _bound,
@@ -305,8 +309,18 @@ class SqlScheduleP6Repository(SqlScheduleRepository, ScheduleP6Repository):
             size_bytes=snapshot.size_bytes,
         )
 
-    def _p6_publication_row(self, principal_id: str, *criteria: Any) -> RowMapping | None:  # noqa: ANN401
+    def _p6_publication_row(
+        self,
+        principal_id: str,
+        *criteria: ColumnElement[bool],
+        include_retired: bool = False,
+    ) -> RowMapping | None:
         pubs, snaps = schedule_publications, schedule_p6_snapshots
+        principal_filter = (
+            partition_criterion(pubs, capture_context(principal_id))
+            if include_retired
+            else _mine(pubs, principal_id)
+        )
         return (
             self._connection.execute(
                 select(pubs, snaps.c.sha256.label("snapshot_sha256"), snaps.c.size_bytes)
@@ -319,7 +333,7 @@ class SqlScheduleP6Repository(SqlScheduleRepository, ScheduleP6Repository):
                         ),
                     )
                 )
-                .where(_mine(pubs, principal_id), *criteria)
+                .where(principal_filter, *criteria)
             )
             .mappings()
             .one_or_none()
@@ -347,12 +361,24 @@ class SqlScheduleP6Repository(SqlScheduleRepository, ScheduleP6Repository):
         self, principal_id: str, idempotency_key: str, request_digest: str
     ) -> P6Admission | None:
         found = self._p6_publication_row(
-            principal_id, schedule_publications.c.idempotency_key == idempotency_key
+            principal_id,
+            schedule_publications.c.idempotency_key == idempotency_key,
+            include_retired=True,
         )
         if found is None:
             return None
         if found["request_digest"] != request_digest:
             raise P6AdmissionRejectedError(P6AdmissionRefusal.IDEMPOTENCY_KEY_CONFLICT)
+        pubs = schedule_publications
+        if (
+            self._connection.execute(
+                select(pubs.c.publication_id).where(
+                    _mine(pubs, principal_id), pubs.c.publication_id == found["publication_id"]
+                )
+            ).scalar_one_or_none()
+            is None
+        ):
+            raise P6AdmissionRejectedError(P6AdmissionRefusal.SERIES_NOT_FOUND)
         return self._p6_admission(principal_id, found, P6AdmissionOutcome.REPLAYED)
 
     def _series_holds_pdf(self, principal_id: str, series_id: str) -> bool:

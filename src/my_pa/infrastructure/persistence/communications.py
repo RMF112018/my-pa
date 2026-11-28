@@ -90,6 +90,9 @@ from my_pa.infrastructure.persistence.principal_scope import (
     partition_criterion,
     principal_bound_values,
 )
+from my_pa.infrastructure.persistence.smoke_fixture_visibility import (
+    visible_fixture_partition,
+)
 from my_pa.infrastructure.persistence.tables import (
     communication_identifiers,
     communication_mailbox_items,
@@ -118,6 +121,10 @@ __all__ = [
 
 
 def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
+    return visible_fixture_partition(table, principal_id)
+
+
+def _owned(table: Table, principal_id: str) -> ColumnElement[bool]:
     return partition_criterion(table, capture_context(principal_id))
 
 
@@ -319,7 +326,7 @@ class SqlCommunicationsRepository(CommunicationsRepository):
     ) -> CommunicationMessageRecord | None:
         return self._message(
             select(*_MESSAGE_COLUMNS).where(
-                _mine(communication_messages, principal_id),
+                _owned(communication_messages, principal_id),
                 communication_messages.c.mailbox_ref == mailbox_ref,
                 communication_messages.c.identity_kind == identity_kind,
                 communication_messages.c.identity_value == identity_value,
@@ -332,7 +339,7 @@ class SqlCommunicationsRepository(CommunicationsRepository):
     ) -> CommunicationMailboxItemRecord | None:
         row = self._connection.execute(
             select(*_ITEM_COLUMNS).where(
-                _mine(communication_mailbox_items, principal_id),
+                _owned(communication_mailbox_items, principal_id),
                 communication_mailbox_items.c.mailbox_ref == mailbox_ref,
                 communication_mailbox_items.c.provider_id == provider_id,
             )
@@ -356,7 +363,7 @@ class SqlCommunicationsRepository(CommunicationsRepository):
                 & (items.c.message_id == communication_messages.c.message_id),
             )
             .where(
-                _mine(communication_messages, principal_id),
+                _owned(communication_messages, principal_id),
                 items.c.mailbox_ref == mailbox_ref,
                 items.c.provider_id == provider_id,
             ),
@@ -369,7 +376,7 @@ class SqlCommunicationsRepository(CommunicationsRepository):
         rows = self._connection.execute(
             select(*_ITEM_COLUMNS)
             .where(
-                _mine(communication_mailbox_items, principal_id),
+                _owned(communication_mailbox_items, principal_id),
                 communication_mailbox_items.c.message_id == message_id,
             )
             .order_by(communication_mailbox_items.c.item_id)

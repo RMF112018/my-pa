@@ -307,6 +307,8 @@ _PERSISTENCE_ALLOWED: Final = frozenset(
         "my_pa.infrastructure.persistence.jobs",
         "my_pa.infrastructure.persistence.tables",
         "my_pa.infrastructure.persistence.principal_scope",
+        # Shared read predicate for operator-retired fixtures.
+        "my_pa.infrastructure.persistence.smoke_fixture_visibility",
         # Schedule Scenarios S6-2 (schedule scenarios contract sections 14.8.5 and
         # 14.8.7): the admission writes its import-time approval through the plane
         # module, and the worker's H8 and fail paths run in the plane's unit of
@@ -344,6 +346,28 @@ def test_no_cross_domain_link_frontend_or_legacy_write() -> None:
                 or name.split(".")[0] == "sqlite3"
             ):
                 wrong.append(f"{path.name} imports {name}")
+    visibility = _tree(SRC / "infrastructure/persistence/smoke_fixture_visibility.py")
+    assert not [node for node in ast.walk(visibility) if isinstance(node, ast.Import)]
+    imports = [node for node in ast.walk(visibility) if isinstance(node, ast.ImportFrom)]
+    assert all(
+        node.level == 0 and all(alias.asname is None for alias in node.names) for node in imports
+    )
+    assert {(node.module, alias.name) for node in imports for alias in node.names} <= {
+        ("typing", "cast"),
+        ("sqlalchemy", "ColumnElement"),
+        ("sqlalchemy", "Table"),
+        ("sqlalchemy", "and_"),
+        ("sqlalchemy", "exists"),
+        ("my_pa.infrastructure.persistence.principal_scope", "capture_context"),
+        ("my_pa.infrastructure.persistence.principal_scope", "partition_criterion"),
+        ("my_pa.infrastructure.persistence.tables", "smoke_fixture_retirements"),
+    }
+    assert not [
+        call
+        for call in _calls(visibility)
+        if call.rsplit(".", 1)[-1]
+        in {"insert", "update", "delete", "execute", "exec_driver_sql", "commit", "text"}
+    ]
     persistence = _tree(PERSISTENCE)
     imported_tables = {
         alias.name

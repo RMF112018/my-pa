@@ -1033,3 +1033,142 @@ def test_the_standard_calendar_horizon_is_reported_by_the_snapshot_and_the_run(w
     )
     read = w.ok(ReadScheduleCpmRun(cpm_run_id=str(run["cpm_run_id"])))
     assert read["standard_calendar_horizon_exceeded"] == ["my-pa-us-40h-v1"]
+
+
+def test_retired_publication_and_scenario_reads_are_withheld(w: World) -> None:
+    from sqlalchemy import select
+
+    from my_pa.infrastructure.persistence.tables import (
+        schedule_scenarios,
+        smoke_fixture_retirements,
+    )
+
+    publication = w.publish(_tasks_only(_std()), "exports/retired.xer")
+    imported = str(publication["publication_id"])
+    created = w.ok(w.create(imported))
+    scenario_id = str(created["scenario_id"])
+    version_id = str(created["version_id"])
+    relationships = ListScheduleScenarioRelationships(version_id=version_id)
+    assert w.ok(relationships)["relationships"]
+    markers = smoke_fixture_retirements
+    with w.engine.begin() as connection:
+        connection.execute(
+            markers.insert(),
+            [
+                {"principal_id": P, "record_id": record_id, "plan_sha256": "a" * 64}
+                for record_id in (imported, scenario_id, version_id)
+            ],
+        )
+    assert w.refused(relationships)[0] == "not_found"
+    with SqlAlchemyScenarioUnitOfWork(w.engine) as work:
+        assert work.scenarios.get_scenario(P, scenario_id) is None
+        assert work.scenarios.load_content(P, version_id) is None
+    with w.engine.begin() as connection:
+        assert (
+            connection.execute(
+                select(schedule_scenarios.c.scenario_id).where(
+                    schedule_scenarios.c.principal_id == P,
+                    schedule_scenarios.c.scenario_id == scenario_id,
+                )
+            ).scalar_one()
+            == scenario_id
+        )
+
+
+def test_retirement_requires_exact_preview_and_preserves_fixture_rows(w: World) -> None:
+    from dataclasses import replace
+
+    from sqlalchemy import select
+
+    from my_pa.bootstrap.communications_ingest import ingestion_lifecycle
+    from my_pa.bootstrap.settings import load_settings
+    from my_pa.contracts.ports import IngestConsumer
+    from my_pa.infrastructure.persistence.smoke_fixture_retirement import (
+        RetirementRefusalError,
+        SmokeFixtureTarget,
+        retire_smoke_fixtures,
+    )
+    from my_pa.infrastructure.persistence.tables import (
+        communication_messages,
+        projects,
+        smoke_fixture_retirements,
+    )
+    from tests.fixtures.communications_evidence import synthetic as mail
+
+    project_name = "Qzxsmokefixtureintegration"
+    fixture_title = "Retirement test"
+    prefix = "mypa-smoke-wp5-test"
+    fixture_path = f"{prefix}/synthetic-title-match.json"
+    w.store.mkdir(prefix)
+    message = mail.message(1, subject=fixture_title)
+    mailbox = "synthetic_wp5_integration"
+    message.update(mailbox_ref=mailbox, dedup_key=mailbox + "|" + message["id"])
+    document = mail.publication(
+        [message], mail.window("2026-11-17T11:00:00Z", "2026-11-17T13:00:00Z", 2, "synthetic")
+    )
+    document["mailbox_ref"] = mailbox
+    body = mail.encode(document)
+    w.store.write_text(fixture_path, body.decode())
+    settings = load_settings().model_copy(
+        update={"files_workspaces": f"mcp={w.root};mode=direct", "files_workspace_root": ""}
+    )
+    ingestor = ingestion_lifecycle(settings, w.engine)
+    source = ingestor.admit(
+        P,
+        consumer=IngestConsumer.COMMUNICATIONS_EVIDENCE_V2,
+        workspace_id="mcp",
+        path_prefix=prefix + "/",
+        file_pattern="synthetic-title-match.json",
+        enabled=False,
+    )
+    report = ingestor.backfill(P, source.ingest_source_id, paths=[fixture_path])
+    assert report.counts["messages_created"] == 1
+
+    p6_path = "exports/smoke-retirement.xer"
+    publication = str(w.publish(_tasks_only(_std()), p6_path)["publication_id"])
+    scenario = w.ok(replace(w.create(publication), name=project_name + " parallel relationships"))
+    with w.engine.begin() as connection:
+        connection.execute(
+            projects.update()
+            .where(projects.c.principal_id == P, projects.c.project_id == PROJECT)
+            .values(
+                name=project_name,
+                description="Dedicated synthetic WP5 and P6 smoke fixture",
+                state="closed",
+                closed_at=datetime.now(UTC),
+            )
+        )
+        msg = connection.execute(
+            select(communication_messages.c.message_id).where(
+                communication_messages.c.principal_id == P,
+                communication_messages.c.mailbox_ref == mailbox,
+            )
+        ).scalar_one()
+    target = SmokeFixtureTarget(
+        msg,
+        source.ingest_source_id,
+        publication,
+        str(scenario["scenario_id"]),
+        hashlib.sha256(body).hexdigest(),
+        hashlib.sha256((w.root / p6_path).read_bytes()).hexdigest(),
+        None,
+    )
+    expected = ("disposable", "synthetic", "7f4d9ac28631")
+    with w.engine.begin() as connection:
+        connection.exec_driver_sql("SET TRANSACTION READ ONLY")
+        preview = retire_smoke_fixtures(connection, P, expected, target)
+        assert preview["retired"] == []
+    markers = smoke_fixture_retirements
+    with w.engine.begin() as connection:
+        with pytest.raises(RetirementRefusalError, match="preview_digest_mismatch"):
+            retire_smoke_fixtures(
+                connection, P, expected, replace(target, apply_plan_sha256="1" * 64)
+            )
+        assert not connection.execute(
+            select(markers.c.record_id).where(markers.c.principal_id == P)
+        ).all()
+        apply = replace(target, apply_plan_sha256=str(preview["plan_sha256"]))
+        assert retire_smoke_fixtures(connection, P, expected, apply)["retired"] == preview["ids"]
+        assert retire_smoke_fixtures(connection, P, expected, apply)["retired"] == preview["ids"]
+    with SqlAlchemyScenarioUnitOfWork(w.engine) as work:
+        assert work.scenarios.get_scenario(P, str(scenario["scenario_id"])) is None

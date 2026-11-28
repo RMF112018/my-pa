@@ -30,6 +30,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
 from my_pa.application.meeting_context import MeetingContextReads
+from my_pa.bootstrap import communications_ingest as bootstrap
 from my_pa.bootstrap.communications_ingest import meeting_context_measurement
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.project_reports import project_reports_unit_of_work
@@ -200,5 +201,57 @@ def test_measure_context_is_read_only_and_takes_no_lock(
         }
         with runtime.work_engine.connect() as connection:
             assert connection.execute(text(written)).scalar_one() == 0
+    finally:
+        runtime.close()
+
+
+def test_every_connection_the_measurement_opens_is_read_only(
+    disposable_database: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WP5-R4 R4-3: the probe-fact and quarantine reads run READ ONLY too.
+
+    Each read is wrapped, through the real CLI run, to record the
+    connection's `transaction_read_only` before it runs; both reads are made
+    and every one of them is `on`. A plain checkout afterwards is `off`
+    again, so the pool's reset holds.
+    """
+    runtime = Runtime(disposable_database)
+    try:
+        principal_id = local_principal().principal_id
+        _seed(runtime.work_engine, principal_id)
+        monkeypatch.setenv("MY_PA_DATABASE_URL", disposable_database)
+        database = make_url(disposable_database).database
+        with runtime.work_engine.connect() as connection:
+            head = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        expect = ["--expected-database", str(database), "--expected-alembic-head", str(head)]
+        seen: dict[str, list[str]] = {"probe_facts": [], "quarantined": []}
+
+        def recording(name: str, read: Any) -> Any:  # noqa: ANN401
+            def wrapped(connection: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+                state = connection.execute(text("SHOW transaction_read_only")).scalar_one()
+                seen[name].append(state)
+                return read(connection, *args, **kwargs)
+
+            return wrapped
+
+        monkeypatch.setattr(
+            bootstrap,
+            "meeting_context_probe_facts",
+            recording("probe_facts", bootstrap.meeting_context_probe_facts),
+        )
+        monkeypatch.setattr(
+            bootstrap,
+            "quarantined_reason_count",
+            recording("quarantined", bootstrap.quarantined_reason_count),
+        )
+        code, out, _line = _run(capsys, expect, "--runs", "1", "--meetings", "2")
+        assert code == cli.EXIT_OK, out
+        assert seen["probe_facts"], seen
+        assert seen["quarantined"], seen
+        assert set(seen["probe_facts"]) | set(seen["quarantined"]) == {"on"}, seen
+        with runtime.work_engine.connect() as connection:
+            assert connection.execute(text("SHOW transaction_read_only")).scalar_one() == "off"
     finally:
         runtime.close()

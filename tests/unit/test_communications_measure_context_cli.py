@@ -28,18 +28,22 @@ from __future__ import annotations
 
 import itertools
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, cast
+from unittest.mock import MagicMock
 
 import pytest
 from apps.cli import communications_ingest as cli
+from sqlalchemy import Engine
+from sqlalchemy.exc import DBAPIError, OperationalError, ProgrammingError
 
 from my_pa.application.meeting_context_measure import (
     PROBE_TITLE,
     MeetingContextMeasurement,
     probe_anchors,
 )
+from my_pa.bootstrap.communications_ingest import ingest_unit_of_work
 from my_pa.contracts.ports import (
     EvidenceUnavailableError,
     MeetingContextCandidateRow,
@@ -117,7 +121,13 @@ def _row(ordinal: int, n: int, address: str) -> MeetingContextCandidateRow:
 class _Measured:
     """The scene: the CLI fakes, a general world with a bound Project, and the measurement."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        *,
+        timer: Callable[[], float] | None = None,
+    ) -> None:
         self.scene = _Scene(monkeypatch)
         source = self.scene.admit(capsys)
         self.scene.put_fixtures()
@@ -155,6 +165,9 @@ class _Measured:
         self.anchors: list[Sequence[datetime]] = []
         ticks = itertools.count()
 
+        def synthetic_timer() -> float:
+            return next(ticks) / 1000
+
         def unit() -> UnitOfWork:
             return IngestUnitOfWork(world, meetings=self.general)
 
@@ -174,7 +187,7 @@ class _Measured:
                 quarantined=lambda reason: 2 if reason == "identity_kind_mismatch" else 99,
                 statements=lambda: len(world.context_calls) * 17,
                 clock=lambda: NOW,
-                timer=lambda: next(ticks) / 1000,
+                timer=timer if timer is not None else synthetic_timer,
             )
 
         monkeypatch.setattr(cli, "meeting_context_measurement", build)
@@ -215,6 +228,20 @@ def _measure(capsys: pytest.CaptureFixture[str], *argv: str) -> tuple[int, dict[
     lines = captured.out.splitlines()
     assert len(lines) == 1, captured.out
     return code, json.loads(lines[0]), lines[0]
+
+
+def test_p95_counts_the_slower_sample_in_a_two_run_measurement(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ticks = iter((0.0, 0.1, 1.0, 2.0) * 2)
+    _Measured(monkeypatch, capsys, timer=lambda: next(ticks))
+
+    code, out, _text = _measure(capsys, "--meetings", "1", "--runs", "2")
+
+    assert code == cli.EXIT_OK
+    for shape in out["latency"].values():
+        assert (shape["p50_ms"], shape["p95_ms"], shape["max_ms"]) == (550.0, 1000.0, 1000.0)
+    assert out["targets"]["meetings_1_defaults"] == {"off": False, "on": False}
 
 
 def test_the_output_shape(
@@ -294,9 +321,12 @@ def test_the_output_carries_no_address_subject_snippet_name_number_or_id(
 ) -> None:
     """Prove-red m19: printing one address (or any content) makes this red."""
     measured = _Measured(monkeypatch, capsys)
+    malformed_address = "oversized" * 40 + "@example.invalid"
+    measured.addresses = (malformed_address, *measured.addresses)
     for argv in ((), ("--meetings", "1", "--runs", "1")):
-        code, _out, text = _measure(capsys, *argv)
+        code, out, text = _measure(capsys, *argv)
         assert code == cli.EXIT_OK
+        assert out["probe_attendees_skipped"] == out["probes"]
         forbidden = measured.forbidden()
         assert len(forbidden) > 20  # the check decides something
         leaked = sorted(value for value in forbidden if value in text)
@@ -365,8 +395,6 @@ def test_out_of_range_bounds_are_usage_errors(
 def test_a_statement_timeout_is_its_own_code(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from sqlalchemy.exc import OperationalError
-
     class _CancelledError(Exception):
         sqlstate = "57014"
 
@@ -458,6 +486,43 @@ def test_a_store_failure_is_its_own_code_never_a_traceback(
         cli.EXIT_REFUSED,
         {"command": "measure-context", "refused": code},
     )
+
+
+@pytest.mark.parametrize(
+    ("failure", "refusal"),
+    # The unit of work translates the failure to open it (`_read`): an
+    # OperationalError to EvidenceUnavailableError, which cannot say whether the
+    # connection was lost, and anything else to RepositoryFailureError (WP5-R3 F6).
+    [(OperationalError, "evidence_unavailable"), (ProgrammingError, "measurement_failed")],
+)
+def test_refusal_if_the_store_fails_after_identity_verification(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: type[DBAPIError],
+    refusal: str,
+) -> None:
+    engine = _Engine()
+    transaction = MagicMock()
+    transaction.__enter__.side_effect = failure("SELECT :subject", {"subject": SUBJECT}, OSError())
+    monkeypatch.setattr(engine, "begin", lambda: transaction, raising=False)
+    _Scene(monkeypatch, engine)
+    monkeypatch.setattr(
+        cli,
+        "meeting_context_measurement",
+        lambda *_args: MeetingContextMeasurement(
+            unit_of_work=ingest_unit_of_work(cast(Engine, engine)),
+            probe_facts=lambda *_args: (),
+            quarantined=lambda _reason: 0,
+            statements=lambda: 0,
+        ),
+    )
+
+    code, out, output = _measure(capsys)
+
+    assert transaction.__enter__.call_count == 1
+    assert engine.disposed
+    assert (code, out) == (cli.EXIT_REFUSED, {"command": "measure-context", "refused": refusal})
+    assert SUBJECT not in output
 
 
 # ---- the pure probe parts ------------------------------------------------------------

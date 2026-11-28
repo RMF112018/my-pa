@@ -595,9 +595,9 @@ The 4 bounds are optional (those values are the defaults; at most 10 Meetings, 5
 90 days and 50 per Meeting). Run it a second time with `--lookback-days 90
 --per-meeting-limit 50` for the maximum shape.
 
-It prints one JSON line: `latency` (p50, p95 and maximum in milliseconds, and the statements per
-batch, for 1 and `--meetings` Meetings, each with the project-report reads off and on; the
-statements exclude the 7 Meeting input reads that in-memory probes do not make);
+It prints one JSON line: `latency` (p50, nearest-rank p95 and maximum in milliseconds, and the
+statements per batch, for 1 and `--meetings` Meetings, each with the project-report reads off
+and on; the statements exclude the 7 Meeting input reads that in-memory probes do not make);
 `targets` (whether ruling D15's targets are met for the shapes measured; a target, not a gate);
 `per_probe` (the input counts, `missing[]`, `matched_total`, `returned`, the matches by tier and
 by `matched_by` reason, the coverage state and gaps, the `pulse` state and its RFI states);

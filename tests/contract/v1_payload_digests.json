@@ -108,6 +108,33 @@
     },
     {
       "date": "2026-11-26",
+      "from": "72f09234239a758a53bdcfaf7e3b588b6d482fabe3afb4fcaee9d30389a21065",
+      "kind": "changed",
+      "name": "schedule_baselines.compare",
+      "reason": "ADR-023 (S7-4b: p6 create option, P6 change kinds)",
+      "section": "tools",
+      "to": "e477476d87effb302e5594224164a1bf94f4a3aa8e957e546aca80a81ef0ef01"
+    },
+    {
+      "date": "2026-11-26",
+      "from": "6903a7660e582b44d44b3865f1256dbaec9e77ceb642cd610fb53189c7127440",
+      "kind": "changed",
+      "name": "schedule_changes.list",
+      "reason": "ADR-023 (S7-4b: p6 create option, P6 change kinds)",
+      "section": "tools",
+      "to": "51c6f6cfd79c8e509b77683c5d393bb094040ed4ff43334e79586fd0ebdd2e25"
+    },
+    {
+      "date": "2026-11-26",
+      "from": "b959110480ccc7f1730fa079c4522607ee5d73391277b488945202b87bdc252b",
+      "kind": "changed",
+      "name": "schedule_scenarios.create",
+      "reason": "ADR-023 (S7-4b: p6 create option, P6 change kinds)",
+      "section": "tools",
+      "to": "767176274ac0aa50cf329a3ec1f76bbbf3bac0844e15bd1c865003a1969a8c81"
+    },
+    {
+      "date": "2026-11-26",
       "kind": "added",
       "names": [
         "meetings.context.read"
@@ -124,7 +151,7 @@
       "to": "a0f9c6080e11eae33b731c5984f3153d73b402bc2fd60490922aca547c087764"
     }
   ],
-  "seal": "ad550a0e5558bd71e078033bad13c399afe56984633bdb28848e76d8028d9edf",
+  "seal": "9fcfd6328959218f042f358f40c4bbc6a52e90a4baab75669fd808dac943bdee",
   "tools": {
     "canvas.workspace.get": "65876ad8f7197a4e8465b3a9019dd234b782f605dfda37d10c1026b660941fb3",
     "canvas.workspace.put": "985bbd6cd28bbaffe0520daa1883b0503a592f4369171a366ca14de8b43a5a8b",
@@ -390,7 +417,7 @@
     "schedule_activities.history": "6fab0a4eadefc663554bccff8aceb2b4d2f9d1093da21cbfc775da94fd1983cb",
     "schedule_activities.list": "80694ee17431eccd7143c980d2a67d2efddb6cc4c296515bbb02ad29e1201fef",
     "schedule_baselines.approve": "a68a1cfab04d1f568b32d3497a8ee9fe654b0802a67a3771e32b3c7150496dd6",
-    "schedule_baselines.compare": "72f09234239a758a53bdcfaf7e3b588b6d482fabe3afb4fcaee9d30389a21065",
+    "schedule_baselines.compare": "e477476d87effb302e5594224164a1bf94f4a3aa8e957e546aca80a81ef0ef01",
     "schedule_baselines.governing": "30581008ddd63af07fc5e3883631507d042ebe645ee092f7bf016884777e8acf",
     "schedule_baselines.list": "a0b417eb5842c9001b50f472860634f64836238e4fc6092a786aaecb29802b3c",
     "schedule_baselines.propose": "e4e7eec2b2667910437c62f31535268f43f50b3c6f6b1a4ec92b803050f60689",
@@ -399,7 +426,7 @@
     "schedule_baselines.revoke": "eed2106eb1298facc7dc74523acfaf4d265ae5eeccec9676eb02ba719293a287",
     "schedule_baselines.set_governing": "9c1f65a6a3df2744a92094b4481a4f613b781ebe54867c363d1087bfc6171ad9",
     "schedule_baselines.withdraw": "217e68e0bc72799edcb49cf4aed65ba74a3a9c980f78501bd464a3aa92e661f5",
-    "schedule_changes.list": "6903a7660e582b44d44b3865f1256dbaec9e77ceb642cd610fb53189c7127440",
+    "schedule_changes.list": "51c6f6cfd79c8e509b77683c5d393bb094040ed4ff43334e79586fd0ebdd2e25",
     "schedule_cpm_runs.activities": "76f15e8c092dac34713e19646cffb6bb3e0d46c125b45711ee87f0e8f6922fd4",
     "schedule_cpm_runs.create": "d8516505e03f07aaf291f343be71e4fbba02194e940f031a438ede56941a1699",
     "schedule_cpm_runs.read": "1d860a54722de9bc496bc24a16d1fe8a647a42423a3dc5181532bba9ea067f35",
@@ -421,7 +448,7 @@
     "schedule_scenario_versions.create": "1ce9715af323595d6a6c6dbf202a118b73ccfba8cadd82c71e3d8d981345f852",
     "schedule_scenario_versions.read": "96ba575bb033a3361536bbd713ea33c189bf14c72e80c0e5a22570f965691302",
     "schedule_scenario_versions.relationships": "ab220c5411db068e2b2ef7779f0312376fcf93bcda523de473420413ab975794",
-    "schedule_scenarios.create": "b959110480ccc7f1730fa079c4522607ee5d73391277b488945202b87bdc252b",
+    "schedule_scenarios.create": "767176274ac0aa50cf329a3ec1f76bbbf3bac0844e15bd1c865003a1969a8c81",
     "schedule_scenarios.list": "57604a7eed7a4a8d0df1ecb0777e380aa63755c8307bc199cbd532e1b50d2c14",
     "schedule_scenarios.read": "9d86ae5d158af4d7a73e46b1905329681b03fbdb56d48549393bc2294324ad1d",
     "schedule_series.current": "23546bf68c80f289a3a8c964c8b4f5060ae4f0fb4b3b136f0685e90f42563862",

@@ -3,9 +3,8 @@
 - **Status:** Proposed — directive-selected by the operator on 2026-11-03; not ratified for
   production. S6-1 is merged (#348) and S6-2 is merged (#349); S6-3 (packages I10-A, I10-B
   and I10-C: the 26 plane capability names, revision B `b77334135653`, the lineage families and read
-  shapes, ChatLLM `chatllm-data-v13`, the facade and the runbook) is implemented on the branch
-  `feat/schedule-scenarios-capabilities` and not merged. Nothing is migrated, granted or
-  deployed. Its switch
+  shapes, ChatLLM `chatllm-data-v13`, the facade and the runbook) is implemented and merged (#354).
+  Merging migrates, grants and deploys nothing. Its switch
   `MY_PA_SCHEDULE_SCENARIOS_ENABLED` is default off and effective only together with
   `MY_PA_SCHEDULE_ENABLED`. Live migration, grants, `profile-apply`, enabling either switch
   and any certified use remain operator gates.
@@ -126,9 +125,10 @@ a publication, to sample on the server, or to turn the plane on by default.
 ## Implementation status
 
 S6-1 (the pure domain and the CPM engine, contract section 9.1) is implemented and merged
-(#348; contract section 9.1.1 records what was executed). S6-2 (persistence) is designed in
-contract section 14 and not implemented; S6-3 (capabilities) is not implemented. Nothing is
-deployed, migrated or granted, and no switch exists yet.
+(#348; contract section 9.1.1 records what was executed). S6-2 (persistence) is implemented and
+merged (#349; contract section 14), and S6-3 (capabilities, switch, policy, lineage, façade and
+ChatLLM) is implemented and merged (#354; contract section 15). Merging authorizes no migration,
+grant or deployment: those remain operator actions under `ops/runbooks/cpm-workbench.md`.
 
 ## Amended by ADR-023 (2026-11-23)
 

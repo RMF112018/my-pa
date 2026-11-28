@@ -722,7 +722,7 @@ _TITLE_CASES: Final = (
     ("Façade mockup", "The façade panel."),
     ("Straße", "A Straße detour."),
 )
-#: Upper-case non-ASCII text: lowered by the server only under a Unicode locale.
+#: Upper-case non-ASCII text, exercised when English full-text search lowercases it.
 _UNICODE_LOCALE_TITLE_CASES: Final = (
     ("ΟΔΟΣ", "ΟΔΟΣ NOTICE."),
     ("Ärger", "ÄRGER ENTRY."),
@@ -732,12 +732,15 @@ _UNICODE_LOCALE_TITLE_CASES: Final = (
 def test_non_ascii_title_terms_match_as_the_stored_text_is_normalized(scene: Scene) -> None:
     """WP5-R1 F-6: title terms are lowered, never casefolded, so `Straße` matches.
 
-    The upper-case cases run on the en_US.UTF-8 cluster: under the C locale
-    the server lowers ASCII only, in the stored document and the query alike.
+    Run the upper-case cases when the server's English full-text configuration
+    lowers non-ASCII text in the stored document and the query alike.
     """
     with scene.engine.connect() as connection:
-        ctype = connection.exec_driver_sql("SHOW lc_ctype").scalar_one()
-    cases = _TITLE_CASES + (() if ctype in ("C", "POSIX") else _UNICODE_LOCALE_TITLE_CASES)
+        unicode_fts = connection.exec_driver_sql(
+            "SELECT to_tsvector('english', 'ÄRGER') @@ to_tsquery('english', 'ärger')"
+        ).scalar_one()
+    assert isinstance(unicode_fts, bool)
+    cases = _TITLE_CASES + (_UNICODE_LOCALE_TITLE_CASES if unicode_fts else ())
     for n, (title, body) in enumerate(cases, start=1):
         message = scene.mail.message(n, subject="Note", text=body, when=at(17, n))
         context = scene.one(scene.meeting(f"title-{n}", title=title))

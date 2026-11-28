@@ -92,6 +92,7 @@ from my_pa.application.lineage_visibility import (
     require_write_grant,
     withhold_client_ids,
 )
+from my_pa.application.schedule_p6_snapshot import build_p6_snapshot, p6_snapshot_report_shape
 from my_pa.application.schedules import ScheduleApplication
 from my_pa.contracts.ports import (
     BaselineWriteRefusedError,
@@ -107,8 +108,10 @@ from my_pa.contracts.ports import (
     ScenarioIntegrityError,
     ScenarioRecordBuilders,
     ScenarioRepository,
+    ScenarioSnapshotSource,
     ScenarioUnitOfWork,
     ScheduleBaselineRaceError,
+    ScheduleP6UnitOfWork,
     ScheduleUnitOfWork,
     SeriesMatchRecord,
     StoredBaseline,
@@ -117,6 +120,7 @@ from my_pa.contracts.ports import (
     StoredScenario,
     StoredScenarioOutput,
     StoredScenarioVersion,
+    VerifiedScenarioContent,
 )
 from my_pa.contracts.v1.disclosure import (
     Coverage,
@@ -189,6 +193,7 @@ from my_pa.domain.schedule.scenario.model import (
     ScenarioCalendar,
     ScenarioContent,
     VersionLabel,
+    parse_instant,
 )
 from my_pa.domain.schedule.scenario.outputs import (
     BaseRunBinding,
@@ -196,11 +201,14 @@ from my_pa.domain.schedule.scenario.outputs import (
     OutputRefusal,
     validate_output,
 )
+from my_pa.domain.schedule.scenario.p6_snapshot import P6Snapshot
 from my_pa.domain.schedule.scenario.snapshot import (
     SnapshotRefusalError,
     SnapshotRefusalReason,
+    SnapshotReport,
     snapshot_from_publication,
 )
+from my_pa.domain.schedule.scenario.standard_calendar import standard_calendar_horizon_exceeded
 
 __all__ = [
     "BUCKET_BYTES_PER_DAY",
@@ -711,6 +719,33 @@ _SNAPSHOT_REFUSALS: Final[Mapping[SnapshotRefusalReason, ApplicationError]] = {
 }
 
 
+def _horizon_exceeded(verified: VerifiedScenarioContent | None, run: StoredCpmRun) -> list[str]:
+    """Section 11.6 (surfaced by S7-4b): the standard calendars this run outran.
+
+    The run reaches its project finish (or `must_finish_by`, whichever is
+    later); a standard calendar missing an observed holiday before that
+    instant is listed, and the client may extend it with `calendar.exception.put`.
+    """
+    if verified is None:
+        return []
+    content = verified.content
+    reached = [content.data_date]
+    if run.project_finish is not None:
+        reached.append(parse_instant(run.project_finish))
+    if content.settings.must_finish_by is not None:
+        reached.append(content.settings.must_finish_by)
+    return list(standard_calendar_horizon_exceeded(content, max(reached)))
+
+
+def _pdf_snapshot_extra(command: CreateScheduleScenario) -> dict[str, Any]:
+    """S7-0/S7-4b: whether the request named no calendar, so the standard one is the default.
+
+    Not a stored column (no migration): it follows from the request, so the
+    replay answers it too, and the stored content's default calendar shows it.
+    """
+    return {"default_calendar_standard": command.calendars is None}
+
+
 def _snapshot_refusal(reason: SnapshotRefusalReason) -> ApplicationError:
     template = _SNAPSHOT_REFUSALS[reason]
     return type(template)(*template.safe_details)
@@ -750,12 +785,16 @@ class ScheduleScenarioApplication:
         schedule_unit_of_work: Callable[[], ScheduleUnitOfWork],
         *,
         builders: ScenarioWriteBuilders | None = None,
+        schedule_p6_unit_of_work: Callable[[], ScheduleP6UnitOfWork] | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._cpm_runner = cpm_runner
         self._records = records
         self._schedule_unit_of_work = schedule_unit_of_work
         self._builders = builders or ScenarioWriteBuilders()
+        # P6 XER S7-4b (import contract sections 11.4, 11.5): a P6 origin's
+        # accepted run and the P6 delta of `schedule_baselines.compare`.
+        self._p6_unit_of_work = schedule_p6_unit_of_work
 
     # ---- the write prologue (steps 2-4) and the refusal record (step 7) ----------------
 
@@ -1002,7 +1041,7 @@ class ScheduleScenarioApplication:
             )
             _refuse_a_conflict(replay)
         if replay is not None:
-            return self._replayed_scenario(authorization, replay)
+            return self._replayed_scenario(authorization, replay, command=command)
         if command.from_version_id is not None:
             return self._fork(authorization, command, writer, scenario, label, note, digest)
         # Step 5: the snapshot source, then the decode, outside any write transaction.
@@ -1018,14 +1057,7 @@ class ScheduleScenarioApplication:
                 publication_id = stored.publication_id
             if publication_id is None:  # pragma: no cover - the command named one origin
                 raise InternalError()
-            # P6 XER import S7-4a: the P6 snapshot mapping (contract section
-            # 11.5, acceptance D6) is S7-4b; until then a P6 origin is refused
-            # rather than snapshotted from rows it does not have.
-            if work.schedules.source_format(principal_id, publication_id) not in (
-                None,
-                SCHEDULE_PDF_FORMAT,
-            ):
-                raise UnsupportedError(SafeDetail.SOURCE_FORMAT)
+            source_format = work.schedules.source_format(principal_id, publication_id)
             source = work.scenarios.snapshot_source(principal_id, publication_id)
             state = (
                 None
@@ -1037,30 +1069,21 @@ class ScheduleScenarioApplication:
             if state is None or state[1]:
                 raise NotFoundError(SafeDetail.FROM_PUBLICATION_ID)
             raise ConflictError(SafeDetail.STATUS)
-        # S7-0 (import contract section 11.5): no calendars and no default (the
-        # command admits only both or neither) is the MY-PA standard calendar.
-        calendars = None if command.calendars is None else self._calendars(command.calendars)
-        snapshot = None
-        refusal: SnapshotRefusalReason | None = None
-        try:
-            snapshot = snapshot_from_publication(
-                publication_id=publication_id,
-                data_date=source.data_date,
-                rows=source.rows,
-                minutes_per_source_unit=int(command.minutes_per_source_unit or 0),
-                calendars=calendars,
-                default_calendar=command.default_calendar,
-                data_date_time=command.data_date_time or "00:00",
-            )
-        except SnapshotRefusalError as refused:
-            refusal = refused.reason
-        if refusal is not None:
-            raise _snapshot_refusal(refusal)
-        if snapshot is None:  # pragma: no cover
-            raise InternalError()
-        version = self._new_version(
-            snapshot.content, label=label, note=note, snapshot=snapshot.report
-        )
+        # P6 XER S7-4b (import contract section 11.5): a P6 origin is mapped
+        # from its export with the request's `p6` options; a PDF origin takes
+        # the S6 fields. Options of the other format are refused.
+        p6_origin = source_format not in (None, SCHEDULE_PDF_FORMAT)
+        if p6_origin != (command.p6 is not None):
+            raise InvalidRequestError(SafeDetail.SOURCE_FORMAT)
+        extra: dict[str, Any]
+        if p6_origin:
+            built = self._p6_snapshot(principal_id, publication_id, command.p6)
+            content, report = built.content, built.report
+            extra = {"p6_snapshot_report": p6_snapshot_report_shape(built.p6_report)}
+        else:
+            content, report = self._pdf_snapshot(command, publication_id, source)
+            extra = _pdf_snapshot_extra(command)
+        version = self._new_version(content, label=label, note=note, snapshot=report)
         scenario = NewScenario(
             name=scenario.name,
             description=scenario.description,
@@ -1096,8 +1119,48 @@ class ScheduleScenarioApplication:
                     created=True,
                     stored_bytes=version.content_size_bytes,
                 )
-                return self._scenario_answer(authorization, work, stored_version, replayed=False)
-        return self._replayed_scenario(authorization, reservation)
+                return self._scenario_answer(
+                    authorization, work, stored_version, replayed=False, extra=extra
+                )
+        return self._replayed_scenario(authorization, reservation, command=command)
+
+    def _pdf_snapshot(
+        self,
+        command: CreateScheduleScenario,
+        publication_id: str,
+        source: ScenarioSnapshotSource,
+    ) -> tuple[ScenarioContent, SnapshotReport]:
+        """The S6 snapshot of a PDF publication (S7-0: no calendars = the standard calendar)."""
+        # S7-0 (import contract section 11.5): no calendars and no default (the
+        # command admits only both or neither) is the MY-PA standard calendar.
+        calendars = None if command.calendars is None else self._calendars(command.calendars)
+        snapshot = None
+        refusal: SnapshotRefusalReason | None = None
+        try:
+            snapshot = snapshot_from_publication(
+                publication_id=publication_id,
+                data_date=source.data_date,
+                rows=source.rows,
+                minutes_per_source_unit=int(command.minutes_per_source_unit or 0),
+                calendars=calendars,
+                default_calendar=command.default_calendar,
+                data_date_time=command.data_date_time or "00:00",
+            )
+        except SnapshotRefusalError as refused:
+            refusal = refused.reason
+        if refusal is not None:
+            raise _snapshot_refusal(refusal)
+        if snapshot is None:  # pragma: no cover
+            raise InternalError()
+        return snapshot.content, snapshot.report
+
+    def _p6_snapshot(self, principal_id: str, publication_id: str, options: object) -> P6Snapshot:
+        """Section 11.5: the P6 snapshot, read on the P6 unit of work outside any write."""
+        factory = self._p6_unit_of_work
+        if factory is None or not isinstance(options, dict):  # pragma: no cover
+            raise UnsupportedError(SafeDetail.SOURCE_FORMAT)
+        with factory() as work:
+            return build_p6_snapshot(work.p6, principal_id, publication_id, options)
 
     @staticmethod
     def _absent[T](body: Callable[[], T], detail: SafeDetail) -> T:
@@ -1193,6 +1256,7 @@ class ScheduleScenarioApplication:
         version: StoredScenarioVersion,
         *,
         replayed: bool,
+        extra: Mapping[str, Any] | None = None,
     ) -> ScenarioAnswer:
         principal_id = authorization.principal.principal_id
         scenario = work.scenarios.get_scenario(principal_id, version.scenario_id)
@@ -1206,6 +1270,7 @@ class ScheduleScenarioApplication:
             "origin": _scenario(scenario)["origin"],
             **_content_fields(version),
             "snapshot_report": _snapshot_report(version),
+            **(extra or {}),
             "replayed": replayed,
             "labels": _SCENARIO_LABELS,
         }
@@ -1214,9 +1279,14 @@ class ScheduleScenarioApplication:
         )
 
     def _replayed_scenario(
-        self, authorization: Authorization, reservation: PlaneReservation
+        self,
+        authorization: Authorization,
+        reservation: PlaneReservation,
+        *,
+        command: CreateScheduleScenario | None = None,
     ) -> ScenarioAnswer:
         principal_id = authorization.principal.principal_id
+        extra: dict[str, Any] | None = None
         with self._unit_of_work() as work:
             scenario_id = reservation.result_id
             first = (
@@ -1226,7 +1296,18 @@ class ScheduleScenarioApplication:
             )
             if first is None:
                 raise InternalError()
-            return self._scenario_answer(authorization, work, first, replayed=True)
+            scenario = work.scenarios.get_scenario(principal_id, first.scenario_id)
+            origin = None if scenario is None else scenario.origin_publication_id
+        if command is not None and command.from_version_id is None and origin is not None:
+            # The P6 report is recomputed: the same request over the same
+            # immutable rows (S7-4b persistence decision, no migration).
+            if command.p6 is not None:
+                built = self._p6_snapshot(principal_id, origin, command.p6)
+                extra = {"p6_snapshot_report": p6_snapshot_report_shape(built.p6_report)}
+            else:
+                extra = _pdf_snapshot_extra(command)
+        with self._unit_of_work() as work:
+            return self._scenario_answer(authorization, work, first, replayed=True, extra=extra)
 
     # ---- schedule_scenario_versions.create --------------------------------------------
 
@@ -2028,8 +2109,10 @@ class ScheduleScenarioApplication:
         principal_id = self._read(authorization, command.capability)
         with self._unit_of_work() as work:
             run, document, roots = self._run_document(work, principal_id, command.cpm_run_id)
+            content = work.scenarios.load_content(principal_id, run.version_id)
         payload = {
             **_run(run),
+            "standard_calendar_horizon_exceeded": _horizon_exceeded(content, run),
             "summary": document.get("summary"),
             "issue_counts": document.get("issue_counts"),
             "issues": document.get("issues"),
@@ -2312,7 +2395,9 @@ class ScheduleScenarioApplication:
                 raise NotFoundError(SafeDetail.TO_PUBLICATION_ID)
             if target.publication.series_id != stored.series_id:
                 raise InvalidRequestError(SafeDetail.TO_PUBLICATION_ID)
-        delta = ScheduleApplication(self._schedule_unit_of_work).list_changes(
+        delta = ScheduleApplication(
+            self._schedule_unit_of_work, self._p6_unit_of_work
+        ).list_changes(
             authorization,
             ListScheduleChanges(
                 from_publication_id=stored.publication_id,

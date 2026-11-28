@@ -1118,7 +1118,7 @@ def _text_criteria(
     ]
     text_hit = and_(or_(*matches), *confirmed)
     rank = ranks[0] if len(ranks) == 1 else func.greatest(*ranks)
-    return text_hit, case((text_hit, rank), else_=literal(0, BigInteger))
+    return text_hit, rank
 
 
 def _not_excluded(excluded: str) -> ColumnElement[bool]:
@@ -1208,16 +1208,22 @@ def _search_statement(principal_id: str, query: CommunicationSearchQuery) -> Sel
 
     # The criteria: a requested identifier, or the text; neither asked is a browse (R8).
     text_hit: ColumnElement[bool] | None = None
+    result_text_hit: ColumnElement[bool] = literal(False)
     rank: ColumnElement[Any] = literal(0, BigInteger)
     if query.query is not None:
         text_hit, rank = _text_criteria(query)
     criteria: list[ColumnElement[bool]] = []
     if n_ids and text_hit is not None:
         criteria.append(or_(id_hit > 0, text_hit))
+        result_text_hit = text_hit
+        rank = case((text_hit, rank), else_=literal(0, BigInteger))
     elif n_ids:
         criteria.append(id_hit > 0)
     elif text_hit is not None:
+        # Every retained row passed the text criterion, so don't evaluate it
+        # again for the snippet or to guard its rank.
         criteria.append(text_hit)
+        result_text_hit = literal(True)
     # WP4-R2 G4: a negated term excludes in every tier, an identifier match too.
     if query.excluded is not None:
         criteria.append(_not_excluded(query.excluded))
@@ -1281,7 +1287,7 @@ def _search_statement(principal_id: str, query: CommunicationSearchQuery) -> Sel
             messages.c.participants_reconciled,
             messages.c.participants_disagreed,
             messages.c.source_unavailable,
-            (text_hit if text_hit is not None else literal(False)).label("text_hit"),
+            result_text_hit.label("text_hit"),
             tier.label("tier"),
             rank.label("rank"),
             overlap.label("overlap"),

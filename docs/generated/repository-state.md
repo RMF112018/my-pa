@@ -57,7 +57,7 @@ measurable at collection and is carried (`regen --measure --fast-skipped N`).
 
 | Tier or corpus | Selection | Collected | A green execution requires |
 | --- | --- | --- | --- |
-| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 57,385 | 57,247 passed, 138 skipped |
+| FAST | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` | 57,387 | 57,249 passed, 138 skipped |
 | Architecture | `pytest tests/architecture` | 10,586 | 10,586 passed, 0 skipped |
 | Database | `pytest -m "database or recovery or e2e"` | 7,606 | 7,606 passed, 0 skipped |
 | Evaluation | `pytest -m "evaluation"` | 2 | 2 passed |

@@ -719,6 +719,7 @@ def predeploy_role(rt: ScheduleRuntime) -> Iterator[str]:
     for table in PLANE_TABLES:
         privileges = "SELECT, INSERT" + (", UPDATE" if table == Q8_UPDATED_TABLE else "")
         grants.append(f"GRANT {privileges} ON knowledge.{table} TO {role}")
+    grants.append(f"GRANT SELECT ON knowledge.smoke_fixture_retirements TO {role}")
     rt.execute(f"CREATE ROLE {role} NOLOGIN")
     try:
         for grant in grants:
@@ -747,6 +748,13 @@ def test_the_probe_role_holds_no_update_on_the_five_tables(
             table=f"knowledge.{table}",
         )
         assert holds is update, table
+    for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE"):
+        holds = rt.scalar(
+            "SELECT has_table_privilege(:role, 'knowledge.smoke_fixture_retirements', :privilege)",
+            role=predeploy_role,
+            privilege=privilege,
+        )
+        assert holds is (privilege == "SELECT"), privilege
 
 
 @pytest.mark.parametrize("family", SCHEDULE_FAMILIES)

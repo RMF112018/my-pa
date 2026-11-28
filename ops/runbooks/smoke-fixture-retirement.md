@@ -39,3 +39,10 @@ Scenario and that the fixture message is absent from meeting context. Check a
 separately authorized unaffected fixture in the same Principal. A successful
 apply is idempotent. The historical rows continue to be available to
 authorized database and audit operators. There is no purge or undo command.
+
+Application database roles that serve the filtered reads need `SELECT` on
+`knowledge.smoke_fixture_retirements`. For a separate reader role, use the
+approved database role procedure to verify the table privilege before rollout.
+Schedule Scenarios preflight Q8 checks this
+dependency when the table exists. Keep retirement writes on the operator
+database route.

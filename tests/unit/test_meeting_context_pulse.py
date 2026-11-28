@@ -3,6 +3,8 @@
 * `pulse_rfi_numbers`: the Meeting's own `rfi:N` ascending, then the returned
   messages' by how many carry each, then `N`; each number once; at most
   `MAX_PULSE_RFI_NUMBERS` asked, with the total found;
+* `_pulse_payload`: `counts_truncated` and `rfi_numbers_truncated` are true
+  exactly past their caps (5 counts, 10 numbers) and false at them;
 * `_pulse`: the counts in family order (observations, coordination issues,
   RFIs; the repository's order within one), at most `MAX_PULSE_COUNTS` with
   the total; `none` matches dropped, the others with their source; an
@@ -20,6 +22,7 @@ from my_pa.application.meeting_context import (
     PulseState,
     RfiSource,
     _pulse,
+    _pulse_payload,
     pulse_rfi_numbers,
 )
 from my_pa.application.project_reports_reads import (
@@ -136,3 +139,41 @@ def test_an_unavailable_project_states_its_reason_and_nothing_else() -> None:
         "prj_synpulse0001x",
     )
     assert (section.summary, section.counts, section.rfis) == (None, (), ())
+
+
+def test_each_truncation_flag_is_true_exactly_past_its_cap() -> None:
+    """WP5-R3 F4: 5 counts and 10 numbers are not truncated; 6 and 11 are."""
+    rfis, observations = _summaries()
+    many = (*rfis.counts, *observations.counts, *rfis.counts, *observations.counts)
+    assert len(many) > MAX_PULSE_COUNTS
+
+    def payload(counts: int, numbers: int) -> dict[str, object]:
+        summary = ProjectSummary(
+            RFI_PROJECT[1],
+            Availability("available"),
+            counts=many[:counts],
+            versions=(*rfis.versions, *observations.versions),
+            qualifiers=rfis.qualifiers,
+        )
+        section = _pulse(
+            ContextSummary(RFI_PROJECT[1], summary.availability, summary, ()), (), numbers
+        )
+        return _pulse_payload(section)
+
+    for counts, truncated in (
+        (MAX_PULSE_COUNTS - 1, False),
+        (MAX_PULSE_COUNTS, False),
+        (MAX_PULSE_COUNTS + 1, True),
+    ):
+        answered = payload(counts, 0)
+        assert answered["counts_total"] == counts
+        assert len(answered["counts"]) == min(counts, MAX_PULSE_COUNTS)  # type: ignore[arg-type]
+        assert answered["counts_truncated"] is truncated, counts
+    for numbers, truncated in (
+        (MAX_PULSE_RFI_NUMBERS, False),
+        (MAX_PULSE_RFI_NUMBERS + 1, True),
+        (MAX_PULSE_RFI_NUMBERS + 2, True),
+    ):
+        answered = payload(1, numbers)
+        assert answered["rfi_numbers_total"] == numbers
+        assert answered["rfi_numbers_truncated"] is truncated, numbers

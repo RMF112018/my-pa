@@ -27,9 +27,13 @@ import pytest
 from apps.cli import communications_ingest as cli
 from sqlalchemy import text, update
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import DBAPIError
 
+from my_pa.application.meeting_context import MeetingContextReads
+from my_pa.bootstrap.communications_ingest import meeting_context_measurement
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.project_reports import project_reports_unit_of_work
+from my_pa.infrastructure.jobs.cycle_scheduler import COMMS_INGEST_LOCK_KEY
 from my_pa.infrastructure.persistence.tables import projects
 from tests.database.communications_search_world import OTHER, World, at
 from tests.database.test_communications_search_latency import _seed
@@ -133,5 +137,68 @@ def test_measure_context_on_the_seed(
             "command": "measure-context",
             "refused": "target_mismatch",
         }
+    finally:
+        runtime.close()
+
+
+def test_measure_context_is_read_only_and_takes_no_lock(
+    disposable_database: str,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """WP5-R3 F6: every transaction is READ ONLY, and the poll's lock never stops it.
+
+    A write the measurement attempted -- injected into the seam, on the
+    measurement's own unit of work -- fails with SQLSTATE 25006: the command
+    refuses `read_only_violation` (never `database_unreachable`) and nothing is
+    written. With
+    `COMMS_INGEST_LOCK_KEY` held by another session the command still runs.
+    """
+    runtime = Runtime(disposable_database)
+    try:
+        principal_id = local_principal().principal_id
+        _seed(runtime.work_engine, principal_id)
+        monkeypatch.setenv("MY_PA_DATABASE_URL", disposable_database)
+        database = make_url(disposable_database).database
+        with runtime.work_engine.connect() as connection:
+            head = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+        expect = ["--expected-database", str(database), "--expected-alembic-head", str(head)]
+        written = "SELECT count(*) FROM knowledge.communication_messages WHERE subject = 'written'"
+
+        # The poll's lock, held by another session for the whole run.
+        with runtime.work_engine.connect() as holder:
+            assert holder.execute(
+                text("SELECT pg_try_advisory_lock(:key)"), {"key": COMMS_INGEST_LOCK_KEY}
+            ).scalar_one()
+            code, out, _line = _run(capsys, expect, "--runs", "1", "--meetings", "2")
+            assert code == cli.EXIT_OK, out
+            holder.execute(text("SELECT pg_advisory_unlock_all()"))
+            holder.commit()
+
+        # The bootstrap's own connections refuse a write.
+        measurement = meeting_context_measurement(runtime.work_engine, principal_id)
+        with pytest.raises(DBAPIError) as refused, measurement._unit_of_work() as unit:
+            unit._open.execute(  # type: ignore[attr-defined]
+                text("UPDATE knowledge.communication_messages SET subject = 'written'")
+            )
+        assert getattr(refused.value.orig, "sqlstate", None) == "25006"
+
+        # A write inside the measurement, through the CLI.
+        original = MeetingContextReads.read_inputs
+
+        def writing(self: MeetingContextReads, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            with self._unit_of_work() as unit:
+                unit._open.execute(  # type: ignore[attr-defined]
+                    text("UPDATE knowledge.communication_messages SET subject = 'written'")
+                )
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(MeetingContextReads, "read_inputs", writing)
+        assert _run(capsys, expect, "--runs", "1", "--meetings", "1")[1] == {
+            "command": "measure-context",
+            "refused": "read_only_violation",
+        }
+        with runtime.work_engine.connect() as connection:
+            assert connection.execute(text(written)).scalar_one() == 0
     finally:
         runtime.close()

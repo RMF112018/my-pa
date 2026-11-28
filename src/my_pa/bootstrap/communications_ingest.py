@@ -240,7 +240,16 @@ def communications_rederiver(settings: Settings, engine: Engine) -> Communicatio
 def meeting_context_measurement(
     engine: Engine, principal_id: str, *, clock: Callable[[], datetime] = utc_now
 ) -> MeetingContextMeasurement:
-    """`measure-context`'s measurement over `engine`, for `principal_id` (read-only)."""
+    """`measure-context`'s measurement over `engine`, for `principal_id` (read-only).
+
+    Read-only by the database, not only by construction (WP5-R3 F6): every
+    transaction and connection the measurement opens is `READ ONLY`
+    (`postgresql_readonly`, set on each connection before its transaction
+    begins), so any write it attempted would fail with SQLSTATE 25006 and
+    nothing would be written. It takes no lock: it never waits for, or
+    blocks, the poll's `COMMS_INGEST_LOCK_KEY`.
+    """
+    readonly = engine.execution_options(postgresql_readonly=True)
     issued = 0
 
     def count(*_args: object) -> None:
@@ -252,7 +261,7 @@ def meeting_context_measurement(
     def probe_facts(
         anchors: Sequence[datetime], lookback: timedelta, excluded: Sequence[str]
     ) -> Sequence[ProbeFacts]:
-        with engine.connect() as connection:
+        with readonly.connect() as connection:
             return meeting_context_probe_facts(
                 connection,
                 principal_id,
@@ -266,11 +275,11 @@ def meeting_context_measurement(
             )
 
     def quarantined(reason: str) -> int:
-        with engine.connect() as connection:
+        with readonly.connect() as connection:
             return quarantined_reason_count(connection, principal_id, reason)
 
     return MeetingContextMeasurement(
-        unit_of_work=ingest_unit_of_work(engine),
+        unit_of_work=ingest_unit_of_work(readonly),
         probe_facts=probe_facts,
         quarantined=quarantined,
         statements=lambda: issued,

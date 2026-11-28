@@ -41,8 +41,11 @@ from my_pa.application.meeting_context_measure import (
     probe_anchors,
 )
 from my_pa.contracts.ports import (
+    EvidenceUnavailableError,
     MeetingContextCandidateRow,
     ProjectReportBindingRecord,
+    RepositoryFailureError,
+    TransactionConflictError,
     UnitOfWork,
 )
 from my_pa.domain.communications.coverage import WindowFact, summarize_coverage
@@ -376,6 +379,84 @@ def test_a_statement_timeout_is_its_own_code(
     assert run(capsys, "measure-context") == (
         cli.EXIT_REFUSED,
         {"command": "measure-context", "refused": "statement_timeout"},
+    )
+
+
+def _database_error(kind: str, sqlstate: str | None) -> Exception:
+    from sqlalchemy.exc import InterfaceError, InternalError, OperationalError
+
+    class _OrigError(Exception):
+        pass
+
+    orig = _OrigError()
+    orig.sqlstate = sqlstate  # type: ignore[attr-defined]
+    raised = {
+        "operational": OperationalError,
+        "interface": InterfaceError,
+        "internal": InternalError,
+    }
+    return raised[kind]("SELECT 1", {}, orig)
+
+
+@pytest.mark.parametrize(
+    ("raised", "code"),
+    [
+        # A lost or refused connection, and only that, is database_unreachable.
+        (("operational", None), "database_unreachable"),
+        (("operational", "08006"), "database_unreachable"),
+        (("interface", None), "database_unreachable"),
+        # The database answered: never "unreachable" (WP5-R3 F6).
+        (("operational", "55P03"), "measurement_failed"),
+        (("operational", "53200"), "measurement_failed"),
+        (("internal", "25006"), "read_only_violation"),
+        (("internal", "XX000"), "measurement_failed"),
+        (("operational", "57014"), "statement_timeout"),
+    ],
+)
+def test_a_database_error_is_classified_honestly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    raised: tuple[str, str | None],
+    code: str,
+) -> None:
+    """WP5-R3 F6: only a connection failure is `database_unreachable`; counts-only codes else."""
+    error = _database_error(*raised)
+
+    class _Measurement:
+        def measure(self, *_a: object, **_k: object) -> dict[str, object]:
+            raise error
+
+    _Scene(monkeypatch)
+    monkeypatch.setattr(cli, "meeting_context_measurement", lambda *_a: _Measurement())
+    assert run(capsys, "measure-context") == (
+        cli.EXIT_REFUSED,
+        {"command": "measure-context", "refused": code},
+    )
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (EvidenceUnavailableError("the store could not be read"), "evidence_unavailable"),
+        (RepositoryFailureError("the request could not be completed"), "measurement_failed"),
+        (TransactionConflictError("the transaction lost a race"), "measurement_failed"),
+    ],
+)
+def test_a_store_failure_is_its_own_code_never_a_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    error: Exception,
+    code: str,
+) -> None:
+    class _Measurement:
+        def measure(self, *_a: object, **_k: object) -> dict[str, object]:
+            raise error
+
+    _Scene(monkeypatch)
+    monkeypatch.setattr(cli, "meeting_context_measurement", lambda *_a: _Measurement())
+    assert run(capsys, "measure-context") == (
+        cli.EXIT_REFUSED,
+        {"command": "measure-context", "refused": code},
     )
 
 

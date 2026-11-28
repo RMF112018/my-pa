@@ -577,7 +577,9 @@ counts and the RFIs whose numbers the Meeting or its messages name.
 ### 13.3 `measure-context` (counts only)
 
 The Manager's latency measurement on the isolated database that holds the corpora. It is
-read-only and takes no lock. The isolated database holds no real Meeting, so the command builds
+read-only and takes no lock: every transaction and connection it opens is `READ ONLY`, so a
+write would fail and nothing is written, and it runs while the poll holds
+`COMMS_INGEST_LOCK_KEY` (WP5-R3 F6). The isolated database holds no real Meeting, so the command builds
 `--meetings` in-memory probe Meetings, never persisted, from the corpus (anchors spaced over the
 covered range, the participants of a message before each anchor as attendees, the window's 2
 most frequent identifiers, a fixed synthetic title, the Projects with an active project-report
@@ -604,7 +606,10 @@ non-ASCII participant addresses, their truncation and the bridged spellings, rul
 `quarantined_identity_kind_mismatch` (question Q5: D11 reopens only if it is above 0). It never
 prints an address, subject, snippet, name, title, Project number, identifier or id. It refuses
 `target_mismatch` on a database or head mismatch, as the other commands do, and
-`statement_timeout` when the statement timeout cancels it.
+`statement_timeout` when the statement timeout cancels it. Only a lost or refused connection is
+`database_unreachable`; any other database error during the measurement is
+`read_only_violation` (a write was attempted), `evidence_unavailable` (a store read failed) or
+`measurement_failed`, counts-only codes.
 
 ## 14. Residuals
 

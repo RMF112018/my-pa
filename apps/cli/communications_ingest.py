@@ -53,6 +53,10 @@ Refusal codes: the lifecycle's `IngestRefusalCode` values, plus
 `invalid_range`, `lock_held`, `database_unreachable` and `database_unavailable`;
 `measure-fts` and `measure-context` also refuse `statement_timeout` when the
 statement timeout cancels them (lower `--limit`, or the context bounds).
+`measure-context` reports only a lost connection as `database_unreachable`
+(WP5-R3 F6); any other database error during the measurement is
+`read_only_violation` (a write was attempted, SQLSTATE 25006),
+`evidence_unavailable` (a store read failed) or `measurement_failed`.
 `coverage` and `aggregate` refuse `source_not_found` for a source id that names
 no admitted source of the operator.
 
@@ -91,7 +95,8 @@ are material (`communications_fts_measurement`). No term, address or id is
 printed.
 
 **The context measurement (WP5-S6, design section 3.12, ruling D16).**
-`measure-context` is read-only and takes no lock. It builds `--meetings`
+`measure-context` is read-only and takes no lock: every transaction it opens
+is `READ ONLY` (WP5-R3 F6), so a write would fail and nothing is written. It builds `--meetings`
 in-memory probe Meetings (never persisted) from the corpus and times the
 `meetings.context.read` assembler over them through the `MeetingContextInput`
 seam (`application.meeting_context_measure`): p50, p95 and maximum over
@@ -122,7 +127,13 @@ from datetime import UTC, datetime
 from typing import Final, Protocol
 
 from sqlalchemy import Connection, Engine, text
-from sqlalchemy.exc import OperationalError, ProgrammingError, SQLAlchemyError
+from sqlalchemy.exc import (
+    DBAPIError,
+    InterfaceError,
+    OperationalError,
+    ProgrammingError,
+    SQLAlchemyError,
+)
 
 from my_pa.application.ingestion import IngestRefusedError, IngestRunReport
 from my_pa.bootstrap.communications_ingest import (
@@ -146,10 +157,13 @@ from my_pa.bootstrap.communications_ingest import (
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.settings import Settings, load_settings
 from my_pa.contracts.ports import (
+    EvidenceUnavailableError,
     FileWorkspaceRootError,
     IngestConsumer,
     IngestRunOutcome,
     IngestSourceRecord,
+    RepositoryFailureError,
+    TransactionConflictError,
 )
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.jobs.cycle_scheduler import COMMS_INGEST_LOCK_KEY, single_flight
@@ -174,6 +188,8 @@ MAX_MEASURE_LIMIT: Final = 100_000
 
 #: SQLSTATE `query_canceled`, raised when `statement_timeout` cancels a statement.
 _QUERY_CANCELED: Final = "57014"
+#: SQLSTATE 25006 `read_only_sql_transaction`: a write inside a READ ONLY transaction.
+_READ_ONLY_TRANSACTION: Final = "25006"
 
 
 class _RefusalError(Exception):
@@ -441,6 +457,27 @@ def _measure_fts(engine: Engine, principal_id: str, args: argparse.Namespace) ->
     return EXIT_OK
 
 
+def _measurement_refusal(error: DBAPIError) -> str:
+    """The closed code of a database error during `measure-context` (WP5-R3 F6).
+
+    `database_unreachable` only for a lost or refused connection: an
+    `OperationalError` or `InterfaceError` with no SQLSTATE or one of class
+    08, or an invalidated connection. The database answered every other
+    error, so it is never called unreachable.
+    """
+    sqlstate = getattr(error.orig, "sqlstate", None)
+    if sqlstate == _QUERY_CANCELED:
+        return "statement_timeout"
+    if sqlstate == _READ_ONLY_TRANSACTION:
+        return "read_only_violation"
+    if error.connection_invalidated or (
+        isinstance(error, (OperationalError, InterfaceError))
+        and (sqlstate is None or str(sqlstate).startswith("08"))
+    ):
+        return "database_unreachable"
+    return "measurement_failed"
+
+
 def _measure_context(engine: Engine, principal_id: str, args: argparse.Namespace) -> int:
     measurement = meeting_context_measurement(engine, principal_id)
     try:
@@ -451,10 +488,12 @@ def _measure_context(engine: Engine, principal_id: str, args: argparse.Namespace
             lookback_days=args.lookback_days,
             per_meeting_limit=args.per_meeting_limit,
         )
-    except OperationalError as error:
-        if getattr(error.orig, "sqlstate", None) == _QUERY_CANCELED:
-            raise _RefusalError("statement_timeout") from None
-        raise
+    except DBAPIError as error:
+        raise _RefusalError(_measurement_refusal(error)) from None
+    except EvidenceUnavailableError:
+        raise _RefusalError("evidence_unavailable") from None
+    except (RepositoryFailureError, TransactionConflictError):
+        raise _RefusalError("measurement_failed") from None
     _emit({"command": "measure-context", **measured})
     return EXIT_OK
 
